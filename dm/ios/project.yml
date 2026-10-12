@@ -104,8 +104,8 @@ targets:
       DM_UPDATE_URL: ""                             # tools/adhoc.sh 在环境里有 DM_UPDATE_URL 时传入；本地构建缺省空 | Passed in by tools/adhoc.sh when DM_UPDATE_URL is in the environment; empty by default for local builds
       DEVELOPMENT_TEAM: ${DM_TEAM_ID}
       CODE_SIGN_STYLE: Automatic
-      TARGETED_DEVICE_FAMILY: $(DM_DEVICE_FAMILY)   # 设备族：缺省只面向 iPhone（"1"）；给 iPad 用的直装包出包时传 DM_DEVICE_FAMILY=1,2。Mac 冒烟 / 开发包不传，窗口与坐标换算不变 | Device family: defaults to iPhone only ("1"); pass DM_DEVICE_FAMILY=1,2 when building the direct-install package for iPad. Mac smoke test / development builds do not pass it; window and coordinate conversion are unchanged
-      DM_DEVICE_FAMILY: "1"
+      TARGETED_DEVICE_FAMILY: $(DM_DEVICE_FAMILY)   # 设备族：缺省 iPhone 与 iPad（"1,2"）。只要 iPhone 时构建传 DM_DEVICE_FAMILY=1 | Device family: defaults to iPhone and iPad ("1,2"). Pass DM_DEVICE_FAMILY=1 when building for iPhone only
+      DM_DEVICE_FAMILY: "1,2"
       ENABLE_BITCODE: NO
       GCC_C_LANGUAGE_STANDARD: gnu11
       OTHER_CFLAGS: $(inherited) -mcpu=apple-a18   # 只给 iPhone 17 Pro Max（A19）用；宿主汇编里有 LSE 原子指令，默认 a10 基线不认 | Only for iPhone 17 Pro Max (A19); the host assembly contains LSE atomic instructions, which the default a10 baseline does not accept
@@ -132,8 +132,8 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: ${DM_BUNDLE_ID}.romfs-downloader
       DEVELOPMENT_TEAM: ${DM_TEAM_ID}
       CODE_SIGN_STYLE: Automatic
-      TARGETED_DEVICE_FAMILY: $(DM_DEVICE_FAMILY)   # 设备族：缺省只面向 iPhone（"1"）；给 iPad 用的直装包出包时传 DM_DEVICE_FAMILY=1,2。Mac 冒烟 / 开发包不传，窗口与坐标换算不变 | Device family: defaults to iPhone only ("1"); pass DM_DEVICE_FAMILY=1,2 when building the direct-install package for iPad. Mac smoke test / development builds do not pass it; window and coordinate conversion are unchanged
-      DM_DEVICE_FAMILY: "1"
+      TARGETED_DEVICE_FAMILY: $(DM_DEVICE_FAMILY)   # 设备族：缺省 iPhone 与 iPad（"1,2"）。只要 iPhone 时构建传 DM_DEVICE_FAMILY=1 | Device family: defaults to iPhone and iPad ("1,2"). Pass DM_DEVICE_FAMILY=1 when building for iPhone only
+      DM_DEVICE_FAMILY: "1,2"
       IPHONEOS_DEPLOYMENT_TARGET: "26.4"
       SWIFT_VERSION: "6.0"
       MARKETING_VERSION: "1.0"
