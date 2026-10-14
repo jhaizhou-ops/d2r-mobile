@@ -11,6 +11,8 @@ run: \
 	$(B)/subsdk0.orig.bin \
 	$(B)/t_altstack \
 	$(B)/t_audio \
+	$(B)/t_audio_mix \
+	$(B)/t_audio_render \
 	$(B)/t_audio_spsc \
 	$(B)/t_cloudsync \
 	$(B)/t_condvar \
@@ -59,6 +61,8 @@ run: \
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	DM_ROMFS="$(DM_ROOT)/data/switch/3.3.94012/Update/RomFS" $(B)/t_romfs_validate
 	$(B)/t_audio
+	$(B)/t_audio_mix
+	$(B)/t_audio_render
 	$(B)/t_audio_spsc
 	$(B)/t_swkbd
 	$(B)/t_altstack
@@ -103,11 +107,11 @@ $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_touch.c ../hle_touch.c
 $(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../dm_i18n.c
-$(B)/t_audio: t_audio.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio: t_audio.c ../hle_audio.c ../dm_audio_mix.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio.c -framework AudioToolbox
-$(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../dm_audio_mix.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox
-$(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../dm_audio_mix.h ../hle.h ../dm.h | $(B)
 	clang -O1 -g -O1 -fsanitize=thread -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox
 $(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_swkbd.c ../hle_swkbd.c
@@ -152,3 +156,8 @@ $(B)/t_rift_oldrun: t_rift_oldrun.c ../dm_rift.c ../dm_rift.h ../hle_os.c ../hle
 	clang -O1 -Wall -Wno-unused-function -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. -o $@ t_rift_oldrun.c ../hle_os.c
 $(B)/t_thread_leak: t_thread_leak.c ../thread.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -I../../ios/Sources -o $@ t_thread_leak.c
+
+$(B)/t_audio_mix: t_audio_mix.c ../dm_audio_mix.h | $(B)
+	clang -O1 -Wall -Wextra -Werror -o $@ t_audio_mix.c
+$(B)/t_audio_render: t_audio_render.c ../hle_audio.c ../dm_audio_mix.h ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_audio_render.c -framework AudioToolbox

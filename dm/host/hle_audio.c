@@ -7,6 +7,7 @@
 //       iOS defaults to real audio output (the product must have sound), tests that want silence set DM_AUDIO=0 explicitly; Mac defaults to the silent sink (replay / gate checks are silent), DM_AUDIO=1 for real audio output.
 // The contents of AudioOut / AudioOutBuffer / AudioOutParameter are read and written only through the interfaces below; the host defines its own internal layout and only writes the front part of the structs.
 #include "hle.h"
+#include "dm_audio_mix.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <TargetConditionals.h>
 #include <dispatch/dispatch.h>
@@ -90,10 +91,24 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
 static _Atomic uint64_t g_render_calls;   // 声卡回调累计（生命周期验证：恢复后须继续增长） | Cumulative sound card callbacks (lifecycle verification: must keep growing after resume)
 uint64_t dm_audio_render_calls(void) { return atomic_load_explicit(&g_render_calls, memory_order_relaxed); }
 static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
-    (void)f; (void)ts; (void)bus; (void)frames;
+    (void)f; (void)ts; (void)bus;
     aout *a = ctx;
     atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed);
-    pull(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
+    // 客体仍交付六声道；仅出声端混成双声道，pull 按原始字节数收回缓冲。
+    // The guest still submits six channels; downmix only at the output, consuming guest bytes through pull.
+    if (a->ch == 6) {
+        int16_t scratch[256 * 6];
+        int16_t *dst = bl->mBuffers[0].mData;
+        UInt32 remaining = frames;
+        while (remaining) {
+            UInt32 n = remaining > 256 ? 256 : remaining;
+            pull(a, (uint8_t *)scratch, (uint64_t)n * 6 * sizeof(int16_t));
+            for (UInt32 i = 0; i < n; i++) dm_audio_mix_frame(scratch + i * 6, 6, dst + i * 2);
+            dst += n * 2; remaining -= n;
+        }
+    } else {
+        pull(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
+    }
     return noErr;
 }
 static void au_open(aout *a) {
@@ -106,10 +121,14 @@ static void au_open(aout *a) {
                                    .componentManufacturer = kAudioUnitManufacturer_Apple};
     AudioComponent c = AudioComponentFindNext(NULL, &d);
     if (!c || AudioComponentInstanceNew(c, &a->au)) die("AudioUnit 建不出来");
+    // 六声道明确输出立体声，避免依赖设备的隐式声道转换；其它格式照旧。
+    // Explicit stereo output for six-channel input avoids relying on device-specific implicit conversion; other formats are unchanged.
+    int output_ch = a->ch == 6 ? 2 : a->ch;
+    LOG("audio output: guest channels %d, device stream channels %d", a->ch, output_ch);
     AudioStreamBasicDescription f = {.mSampleRate = RATE, .mFormatID = kAudioFormatLinearPCM,
                                      .mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
-                                     .mBytesPerPacket = 2u * a->ch, .mFramesPerPacket = 1, .mBytesPerFrame = 2u * a->ch,
-                                     .mChannelsPerFrame = (UInt32)a->ch, .mBitsPerChannel = 16};
+                                     .mBytesPerPacket = 2u * output_ch, .mFramesPerPacket = 1, .mBytesPerFrame = 2u * output_ch,
+                                     .mChannelsPerFrame = (UInt32)output_ch, .mBitsPerChannel = 16};
     AURenderCallbackStruct cb = {au_render, a};
     if (AudioUnitSetProperty(a->au, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f, sizeof f) ||
         AudioUnitSetProperty(a->au, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof cb) ||
