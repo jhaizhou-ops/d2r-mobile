@@ -86,6 +86,10 @@ Result swkbd_show(void *out, const void *arg_, swkbd_input_fn input) {
     if (ilen > 0 && work) swkbd_u16_to_u8((const uint16_t *)(work + ioff), (size_t)ilen, init, sizeof init);
 
     const char *script = getenv("DM_KBD");
+#ifdef __ANDROID__
+    int32_t minlen;memcpy(&minlen,arg+ARG_MINLEN,4);
+    void dm_android_keyboard_constraints(int min);dm_android_keyboard_constraints(minlen);
+#endif
     // 键盘弹着期间冻结客体时钟（离线单机里玩家打字时怪不该照打、回来也不该补拍；这里按 iOS 原生体验，不守 Switch「小程序占前台时钟照走」的原版语义）
     // Freeze the guest clock while the keyboard is up (in offline single-player, monsters should not keep attacking while the player types, nor should ticks be caught up on return; this follows the native iOS experience, not the original game's Switch semantics of "the clock keeps running while an applet holds the foreground")
     if (!script) guest_clock_freeze_for(2, 1);

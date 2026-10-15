@@ -7,9 +7,19 @@
 #include "hle.h"
 #include <stdatomic.h>
 #include <time.h>
+#ifdef __ANDROID__
+#include <stddef.h>
+#endif
 
 typedef struct { int16_t year; int8_t month, day, hour, minute, second; int8_t pad; } CalendarTime;
 typedef struct { uint32_t wday, yday; char tzname[8]; uint32_t dst; int32_t offset; } CalendarAdditionalInfo;
+#ifdef __ANDROID__
+_Static_assert(sizeof(CalendarTime) == 8, "Horizon CalendarTime ABI");
+_Static_assert(sizeof(CalendarAdditionalInfo) == 24, "Horizon CalendarAdditionalInfo ABI");
+_Static_assert(sizeof(time_t) == 8, "64-bit SDK time_t ABI");
+_Static_assert(sizeof(struct tm) == 56 && offsetof(struct tm, tm_gmtoff) == 40 && offsetof(struct tm, tm_zone) == 48,
+               "SDK and Bionic struct tm must have compatible layout");
+#endif
 
 // DM_FIXED_TIME=秒（确定性对拍用；真值侧对应 dm/verify/ryu/drive.py --fix-time）：
 // ① 用户时钟（存档 d2s +0x20 最后游玩时间、.meta last_modified_time 的来源）恒返回该值；
@@ -28,29 +38,60 @@ static int64_t fixed_time(void) {
     return v;
 }
 HLE_FORCE("time", "按返回点认出建局种子那一处（DM_FIXED_TIME）；其余原样转调 SDK 的 time()", int64_t, h_time_time, int64_t *t) {
+#ifndef __ANDROID__
     uint64_t lr = (uint64_t)__builtin_return_address(0);
     static int64_t (*sdk_time)(int64_t *); static uint64_t seed_ret;
+#else
+    static int64_t (*sdk_time)(int64_t *);
+#endif
     if (!sdk_time) {
-        module_t *ms = NULL, *mm = NULL;
-        for (int i = 0; i < g_nmod; i++) { if (!strcmp(g_mod[i].name, "sdk")) ms = &g_mod[i]; if (!strcmp(g_mod[i].name, "main")) mm = &g_mod[i]; }
+        module_t *ms = NULL;
+        for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "sdk")) ms = &g_mod[i];
         void *f = ms ? module_sym(ms, "time") : NULL; if (!f) die("SDK 里找不到 time");
+#ifndef __ANDROID__
+        module_t *mm = NULL;
+        for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) mm = &g_mod[i];
         uint32_t w = mm ? *(uint32_t *)(mm->base + 0x3509a0) : 0;
         if ((w & 0xfc000000) == 0x94000000) seed_ret = (uint64_t)mm->base + 0x3509a4;               // bl time（构建 db0507f3…；改写器会改跳转目标，只认 bl 本身） | bl time (build db0507f3…; the rewriter changes the branch target, so only the bl itself is matched)
         else if (fixed_time() >= 0) LOG("【红】DM_FIXED_TIME：main 0x3509a0 不是预期的 bl time（%#x），建局 time() 未固定", w);
+#endif
         sdk_time = (int64_t (*)(int64_t *))f;
     }
+#ifndef __ANDROID__
     int64_t ft = fixed_time();
     if (ft >= 0 && lr == seed_ret) {
         static int once; if (!once++) LOG("DM_FIXED_TIME：建局 time() 返回 %lld", (long long)ft);
         if (t) *t = ft; return ft;
     }
+#endif
     return sdk_time(t);
 }
 
+#ifdef __ANDROID__
+static _Atomic int g_time_initialized;
+HLE_FORCE("_ZN2nn4time10InitializeEv", "验证 Android 系统墙钟及本地时区后初始化宿主时间后端", Result, h_time_Initialize, void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts)) return RES_FAIL;
+    time_t seconds = ts.tv_sec;
+    struct tm calendar;
+    if (!localtime_r(&seconds, &calendar)) return RES_FAIL;
+    atomic_store(&g_time_initialized, 1);
+    return RES_OK;
+}
+HLE_FORCE("_ZN2nn4time13IsInitializedEv", "返回 Android 时间后端的实际初始化状态", int, h_time_IsInitialized, void) { return atomic_load(&g_time_initialized); }
+#else
 HLE_FORCE("_ZN2nn4time10InitializeEv", "连 time 服务；时钟改取宿主系统时间", Result, h_time_Initialize, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn4time13IsInitializedEv", "time 服务已被接管，恒为已初始化", int, h_time_IsInitialized, void) { return 1; }
+#endif
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "用户时钟 → 宿主 time()", Result, h_time_GetCurrentTime, int64_t *out) {
+#ifdef __ANDROID__
+    if (!out || !atomic_load(&g_time_initialized)) return RES_FAIL;
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts)) return RES_FAIL;
+    int64_t ft = fixed_time(); *out = ft >= 0 ? ft : ts.tv_sec; return RES_OK;
+#else
     int64_t ft = fixed_time(); *out = ft >= 0 ? ft : time(NULL); return RES_OK;
+#endif
 }
 // 首领连战第 6–10 关的强制恐怖地带（dm_bossrush.c 设）：g_dm_tz_time 非 0 且未过期时，只有「恐怖地带」那几处取时钟拿到它，存档时间等其余调用照旧。
 // 哪几处：返回点落在地带函数 0x58f1e0 起的那一簇（0x58f1e0–0x591440），或返回后 8 条指令内调地带日程 0x58f310（服务端 0x636b38 套地带、0x694b48 等 9 处）。
@@ -60,6 +101,7 @@ HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE
 // Expiry: dm_bossrush renews it by 1 second every tick; once this run stops ticking (exit / crash) it no longer applies, and the next run gets the real clock when the game is created.
 _Atomic int64_t g_dm_tz_time;
 _Atomic uint64_t g_dm_tz_live_ns;
+#ifndef __ANDROID__
 static int tz_site(uint64_t lr) {   // 只在强制期间才判，每次读返回点后 8 条指令，不缓存（多线程都会取时钟） | Checked only while forcing is active, reading the 8 instructions after the return point each time, no caching (several threads read the clock)
     static _Atomic uint64_t base; uint64_t b = atomic_load(&base);
     if (!b) { for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) b = (uint64_t)g_mod[i].base; atomic_store(&base, b); }
@@ -69,15 +111,29 @@ static int tz_site(uint64_t lr) {   // 只在强制期间才判，每次读返�
         if ((w & 0xfc000000) == 0x94000000) { int64_t imm = w & 0x3ffffff; if (imm & 0x2000000) imm -= 1 << 26; if (off + 4 * k + imm * 4 == 0x58f310) return 1; } }
     return 0;
 }
+#endif
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock3nowEv", "用户时钟 → 宿主 time()；首领连战强制地带时恐怖地带那几处另返回", int64_t, h_time_now, void) {
+#ifdef __ANDROID__
+    // No main offsets are approved for the Android build. Time is read from the
+    // real system clock; Apple-only game modifications cannot redirect it here.
+    if (!atomic_load(&g_time_initialized)) die("Android time backend is not initialized");
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts)) die("Android CLOCK_REALTIME failed");
+    int64_t ft = fixed_time(); return ft >= 0 ? ft : ts.tv_sec;
+#else
     int64_t tz = atomic_load(&g_dm_tz_time);
     if (tz && (uint64_t)clock_gettime_nsec_np(CLOCK_MONOTONIC) < atomic_load(&g_dm_tz_live_ns) && tz_site((uint64_t)__builtin_return_address(0))) return tz;
-    int64_t ft = fixed_time(); return ft >= 0 ? ft : time(NULL); }
+    int64_t ft = fixed_time(); return ft >= 0 ? ft : time(NULL);
+#endif
+}
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock9to_time_tERKNSt3__16chrono10time_pointINS0_17SystemClockTraitsENS3_8durationIlNS2_5ratioILl1ELl1EEEEEEE",
           "SDK 实现与 now() 配套，一并接管", int64_t, h_time_to_time_t, const int64_t *tp) { return *tp; }
 HLE_FORCE("_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditionalInfoERKNS0_9PosixTimeE",
           "连 time 服务的时区规则；改用宿主 localtime_r", Result, h_time_ToCalendarTime, CalendarTime *ct, CalendarAdditionalInfo *ai, const int64_t *pt) {
-    time_t t = *pt; struct tm tm; localtime_r(&t, &tm);
+#ifdef __ANDROID__
+    if (!pt || !atomic_load(&g_time_initialized)) return RES_FAIL;
+#endif
+    time_t t = *pt; struct tm tm; if (!localtime_r(&t, &tm)) return RES_FAIL;
     static int once; if (!once++) LOG("ToCalendarTime：首次换算 %lld → %04d-%02d-%02d %02d:%02d（时区 %s，偏移 %ld 秒）", (long long)t, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_zone ? tm.tm_zone : "?", (long)tm.tm_gmtoff);
     if (ct) *ct = (CalendarTime){(int16_t)(tm.tm_year + 1900), (int8_t)(tm.tm_mon + 1), (int8_t)tm.tm_mday, (int8_t)tm.tm_hour, (int8_t)tm.tm_min, (int8_t)tm.tm_sec, 0};
     if (ai) { memset(ai, 0, sizeof *ai); ai->wday = tm.tm_wday; ai->yday = tm.tm_yday; strlcpy(ai->tzname, tm.tm_zone ? tm.tm_zone : "UTC", sizeof ai->tzname);

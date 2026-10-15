@@ -3,13 +3,17 @@
 // Multi-module loading (playing the role of Horizon's rtld): mapping, claiming thread slots, gate registration, cross-module relocation, take-over by name, segment permissions.
 // The code area (original text and patch area) is set to read-only+execute as soon as it is copied in, and from then on the loader only writes data: on iOS these two blocks must be embedded as is as signed code segments.
 #include "dm.h"
+#ifndef __ANDROID__
 #include <TargetConditionals.h>
+#endif
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef __ANDROID__
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
+#endif
 #include "hle.h"
 
 module_t g_mod[MAX_MOD];
@@ -19,6 +23,7 @@ pthread_key_t g_keyres[2], g_keyaspect, g_keyaspectui;   // g_keyaspect：宽高
 enum { KEY_K18, KEY_KTLS, KEY_KTLR, KEY_KGATE, KEY_KRES0, KEY_KRES1, KEY_KASPECT, KEY_KASPECTUI, KEY_N };
 
 uint64_t resolve_import(module_t *m, const char *name);
+uint64_t resolve_import_optional(module_t *m, const char *name);
 void gate_register(uint64_t ret_addr, const char *kind, int arg, uint64_t orig);
 
 static pthread_key_t key_value(unsigned i) {
@@ -36,18 +41,29 @@ static void create_keys(void) {
     if (pthread_key_create(&g_keyres[0], NULL) || pthread_key_create(&g_keyres[1], NULL) ||
         pthread_key_create(&g_keyaspect, NULL) || pthread_key_create(&g_keyaspectui, NULL)) die("创建参数位键失败");
     LOG("键号 K18=%lu KTLS=%lu KTLR=%lu KGATE=%lu KRES0=%lu KRES1=%lu KASPECT=%lu KASPECTUI=%lu",
-        g_key18, g_keytls, g_keytlr, g_keygate, g_keyres[0], g_keyres[1], g_keyaspect, g_keyaspectui);
+        (unsigned long)g_key18, (unsigned long)g_keytls, (unsigned long)g_keytlr, (unsigned long)g_keygate,
+        (unsigned long)g_keyres[0], (unsigned long)g_keyres[1], (unsigned long)g_keyaspect, (unsigned long)g_keyaspectui);
 }
 
 // K 槽校验：pthread TSD 布局固定，槽 = tpidrro_el0 + 8*key
 // K slot check: the pthread TSD layout is fixed, slot = tpidrro_el0 + 8*key
 static void tsd_check(void) {
+#ifdef __ANDROID__
+    dm_android_slot_set(g_key18, (void *)0x1234);
+    uint64_t off = *(uint64_t *)(g_mod[0].base + g_mod[0].key_page_off + g_mod[0].key_idx[KEY_K18] * 8);
+    if (*(uint64_t *)((uint8_t *)dm_android_slots() + off) != 0x1234) die("Android guest slots layout mismatch");
+    dm_android_slot_set(g_key18, 0);
+#else
     pthread_setspecific(g_key18, (void *)0x1234);
     uint64_t base; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(base));
     uint64_t off = *(uint64_t *)(g_mod[0].base + g_mod[0].key_page_off + g_mod[0].key_idx[KEY_K18] * 8);
     if (((uint64_t *)(base & ~7ull))[off / 8] != 0x1234) die("TSD 布局不符");
     pthread_setspecific(g_key18, 0);
+#endif
 }
+#ifdef __ANDROID__
+void dm_android_loader_keys_init(void) { create_keys(); }
+#endif
 
 static void build_symhash(module_t *m);
 static void parse_dynamic(module_t *m) {
@@ -115,17 +131,24 @@ module_t *module_of(const void *p) {
 
 // 跨模块符号解析：先在已装模块里找定义，找不到再交给 HLE / 桩
 // Cross-module symbol resolution: first look for a definition in the loaded modules, and only if not found hand over to HLE / stubs
-static uint64_t resolve_sym(module_t *m, const char *name) {
+static uint64_t resolve_sym(module_t *m, const char *name, int optional) {
     for (int i = 0; i < g_nmod; i++) { void *p = module_sym(&g_mod[i], name); if (p) return (uint64_t)p; }
-    return resolve_import(m, name);
+    return optional ? resolve_import_optional(m, name) : resolve_import(m, name);
 }
 
 // 强制接管表（hle.h HLE_FORCE，__DATA,swforce 段）：命中即覆盖模块内定义
 // Forced take-over table (hle.h HLE_FORCE, the __DATA,swforce section): a hit overrides the definition inside the module
 static const hle_force_ent *g_force; static unsigned g_nforce; static unsigned *g_force_hits;
 static void force_init(void) {
+#ifdef __ANDROID__
+    extern const hle_force_ent __start_dm_force[] __attribute__((weak));
+    extern const hle_force_ent __stop_dm_force[] __attribute__((weak));
+    g_force = __start_dm_force;
+    g_nforce = g_force ? (unsigned)(__stop_dm_force - __start_dm_force) : 0;
+#else
     unsigned long sz; g_force = (const hle_force_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swforce", &sz);
     g_nforce = g_force ? (unsigned)(sz / sizeof *g_force) : 0;
+#endif
     g_force_hits = calloc(g_nforce + 1, sizeof *g_force_hits);
     for (unsigned i = 0; i < g_nforce; i++)
         for (unsigned j = i + 1; j < g_nforce; j++)
@@ -155,8 +178,14 @@ static void read_layout(module_t *m, const char *dir) {
     if (!f) die("open %s", path);
     static const char *kn[8] = {"K18", "KTLS", "KTLR", "KGATE", "KRES0", "KRES1", "KASPECT", "KASPECTUI"};
     char line[256], key[32]; unsigned long v; unsigned seen = 0;
+#ifdef __ANDROID__
+    int android_layout = 0;
+#endif
     while (fgets(line, sizeof line, f)) {
         if (sscanf(line, "# %31s %lx", key, &v) != 2) die("%s: 产物是旧改写器出的，换成当前代号（dm/PRODUCT）的产物", path);
+#ifdef __ANDROID__
+        if (!strcmp(key, "ANDROID_APP_SLOT")) { if (v != 2) die("unsupported Android app TLS slot"); android_layout = 1; }
+#endif
         if (!strcmp(key, "PATCH_OFF")) m->patch_off = v;
         else if (!strcmp(key, "KEY_PAGE_OFF")) m->key_page_off = v;
         else if (!strcmp(key, "KEY_PAGE_SIZE")) m->key_page_size = v;
@@ -171,6 +200,9 @@ static void read_layout(module_t *m, const char *dir) {
         }
     }
     fclose(f);
+#ifdef __ANDROID__
+    if (!android_layout) die("%s: expected Android rewritten image, refused Apple TLS layout", path);
+#endif
     if (!m->patch_off || m->key_page_off % 0x4000 || m->key_page_size != 0x4000 || seen != 0xff)
         die("%s: 产物是旧改写器出的，换成当前代号（dm/PRODUCT）的产物", path);
 }
@@ -179,9 +211,13 @@ static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: 键页越界", m->name);
     uint64_t *page = (uint64_t *)(m->base + m->key_page_off);
     memset(page, 0, m->key_page_size);
+#ifdef __ANDROID__
+    for (unsigned i = 0; i < KEY_N; i++) page[m->key_idx[i]] = dm_android_slot_offset(i);
+#else
     for (unsigned i = 0; i < 4; i++) page[m->key_idx[i]] = (uint64_t)key_value(i) * 8;
     page[m->key_idx[KEY_KRES0]] = (uint64_t)g_keyres[0] * 8; page[m->key_idx[KEY_KRES1]] = (uint64_t)g_keyres[1] * 8;
     page[m->key_idx[KEY_KASPECT]] = (uint64_t)g_keyaspect * 8; page[m->key_idx[KEY_KASPECTUI]] = (uint64_t)g_keyaspectui * 8;
+#endif
     for (int k = 0; k < 8; k++) if (!page[m->key_idx[k]]) die("%s: 键页第 %d 项为 0（宿主键没建）——游戏会读到 TSD 0 号槽", m->name, k);
     if (mprotect(m->base + m->key_page_off, m->key_page_size, PROT_READ)) die("%s 键页 mprotect", m->name);
 }
@@ -218,7 +254,7 @@ static void relocate(module_t *m) {
             if (type == R_AARCH64_RELATIVE) { *where = (uint64_t)m->base + r->r_addend; cnt[0]++; continue; }
             const Elf64_Sym *s = &m->symtab[si];
             uint64_t v = (uint64_t)force_lookup(m->strtab + s->st_name);
-            if (!v) v = s->st_shndx ? (uint64_t)m->base + s->st_value : resolve_sym(m, m->strtab + s->st_name);
+            if (!v) v = s->st_shndx ? (uint64_t)m->base + s->st_value : resolve_sym(m, m->strtab + s->st_name, (s->st_info >> 4) == 2);
             if (type == R_AARCH64_JUMP_SLOT) { *where = v; cnt[2]++; }
             else { *where = v + r->r_addend; cnt[1]++; }       // ABS64 / GLOB_DAT
         }
@@ -231,6 +267,11 @@ static void relocate(module_t *m) {
 // DM_LOADHASH=1 (diagnostics): after loading, output an address-independent sha256 per module, to prove that the load results of "early start / no early start" are byte-identical.
 // Module base addresses and host ASLR differ every run, and only the values of the relocation slots change with them: copy the image and, using the same relocation table, replace every slot with an address-independent token --
 // RELATIVE → (0, addend); symbol target falls in some module → (1 + module number, offset within the module); otherwise (host forced take-over / host symbol) → (name FNV, addend); all other bytes as is.
+#ifdef __ANDROID__
+void loader_hash_log(void) {
+    if (getenv("DM_LOADHASH")) die("Android DM_LOADHASH diagnostic not ported; use host SHA256 provenance");
+}
+#else
 #include <CommonCrypto/CommonDigest.h>
 void loader_hash_log(void) {
     if (!getenv("DM_LOADHASH")) return;
@@ -272,6 +313,7 @@ void loader_hash_log(void) {
     }
 }
 
+#endif /* Apple loader hash diagnostic */
 #if TARGET_OS_IPHONE
 // iOS 不许运行时装入的代码执行，且苹果只许可执行文件有一个带执行权限的段（ITMS-90999）：映像由 dm/ios/tools/gen_embed.py 编进本可执行文件——
 // 代码两块（原 text、补丁区）是 __TEXT 里的节，W（ro 余部 + data + bss）是单独的 RW 段。三块在文件里不相邻；这里保留一块连续地址，
@@ -345,6 +387,9 @@ static void map_image(module_t *m, const char *dir) {
     m->base = mmap(NULL, m->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (m->base == MAP_FAILED) die("%s mmap", m->name);
     memcpy(m->base, raw, sz); free(raw); install_key_page(m);
+#ifdef __ANDROID__
+    __builtin___clear_cache((char *)m->base, (char *)m->base + m->size);
+#endif
     uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
     if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
     uint64_t po = m->patch_off & ~0x3FFFull;

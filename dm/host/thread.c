@@ -45,4 +45,7 @@ void guest_thread_init(void) {
     own[0] = calloc(1, TLS_SIZE); own[1] = tlr;
     *(void **)(tlr + 0x1f8) = tlr + TLR_SIZE;               // 当前线程对象 | current thread object
     pthread_once(&g_keyown_once, own_key_init); pthread_setspecific(g_keytls, own[0]); pthread_setspecific(g_keytlr, tlr); pthread_setspecific(g_keyown, own);
+#ifdef __ANDROID__
+    dm_android_slots_sync();
+#endif
 }

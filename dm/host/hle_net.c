@@ -3,18 +3,53 @@
 // Networking (out of scope: online play/friends/store/cloud saves): all hooked up as "network unavailable", the game takes the offline branch.
 // Cuts: nifm reports no network; socket only hooks up Initialize (returns success, creates no session), the rest of socket/ssl/friends are hooked up as failures when they come into use.
 #include "hle.h"
+#ifdef __ANDROID__
+#include "../android/services_platform.h"
+#endif
 
-HLE_FORCE("_ZN2nn6socket10InitializeERKNS0_6ConfigE", "连 bsd 套接字服务；离线，不建会话（剪）", Result, h_socket_Initialize, const void *cfg) { (void)cfg; return RES_OK; }
-HLE_FORCE("_ZN2nn4nifm10InitializeEv", "连 nifm 网络管理服务；离线（剪）", Result, h_nifm_Initialize, void) { return RES_OK; }
-HLE_FORCE("_ZN2nn4nifm20SubmitNetworkRequestEv", "离线：网络请求不提交", void, h_nifm_Submit, void) {}
-HLE_FORCE("_ZN2nn4nifm20CancelNetworkRequestEv", "离线：无请求可取消", void, h_nifm_Cancel, void) {}
+HLE_FORCE("_ZN2nn6socket10InitializeERKNS0_6ConfigE", "初始化宿主离线套接字策略，所有联网调用仍被拒绝", Result, h_socket_Initialize, const void *cfg) {
+#ifdef __ANDROID__
+    return !cfg || dm_android_platform_network_init(0) ? RES_FAIL : RES_OK;
+#else
+    (void)cfg; return RES_OK;
+#endif
+}
+HLE_FORCE("_ZN2nn4nifm10InitializeEv", "初始化宿主离线网络管理策略", Result, h_nifm_Initialize, void) {
+#ifdef __ANDROID__
+    return dm_android_platform_network_init(1) ? RES_FAIL : RES_OK;
+#else
+    return RES_OK;
+#endif
+}
+HLE_FORCE("_ZN2nn4nifm20SubmitNetworkRequestEv", "离线：登记被策略拒绝的请求，不接入物理网络", void, h_nifm_Submit, void) {
+#ifdef __ANDROID__
+    dm_android_platform_network_request(1);
+#endif
+}
+HLE_FORCE("_ZN2nn4nifm20CancelNetworkRequestEv", "离线：登记取消请求", void, h_nifm_Cancel, void) {
+#ifdef __ANDROID__
+    dm_android_platform_network_request(0);
+#endif
+}
 HLE_FORCE("_ZN2nn4nifm22IsNetworkRequestOnHoldEv", "离线：请求不在等待中", int, h_nifm_OnHold, void) { return 0; }
 HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "离线：网络恒不可用", int, h_nifm_Available, void) { return 0; }
 HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "离线：报失败，不弹系统联网界面", Result, h_nifm_HandleErr, void) { return RES_FAIL; }
 HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEPNS_6socket6InAddrE", "离线：无 IP", Result, h_nifm_GetIp, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
 HLE_FORCE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", "离线：无代理设置", Result, h_nifm_GetProxy, void *p) { (void)p; return RES_FAIL; }
-HLE_FORCE("nnsslInitialize", "连 ssl 服务；网络库全局初始化依赖它成功，离线不建会话（剪）", Result, h_ssl_Initialize, void) { return RES_OK; }
-HLE_FORCE("nnsslFinalize", "与 nnsslInitialize 配对（剪）", Result, h_ssl_Finalize, void) { return RES_OK; }
+HLE_FORCE("nnsslInitialize", "初始化宿主离线 SSL 策略；连接/证书/握手仍返回不可用", Result, h_ssl_Initialize, void) {
+#ifdef __ANDROID__
+    return dm_android_platform_network_init(2) ? RES_FAIL : RES_OK;
+#else
+    return RES_OK;
+#endif
+}
+HLE_FORCE("nnsslFinalize", "释放已初始化的离线 SSL 策略引用", Result, h_ssl_Finalize, void) {
+#ifdef __ANDROID__
+    return dm_android_platform_network_finalize(2) ? RES_FAIL : RES_OK;
+#else
+    return RES_OK;
+#endif
+}
 
 // ---------- socket：离线，所有连服务的调用按 BSD 习惯回 -1、错误码 ENETDOWN ----------
 // 不剪：Inet* / nnsocketInet* 字节序与地址文本转换（纯计算）。
@@ -76,8 +111,8 @@ HLE_FORCE("nnsocketSetLastErrno", "套接字错误码由宿主记录", void, h_n
 // ---------- ssl: offline, Initialize succeeds (the network library's global initialization depends on it), everything else that contacts the service fails ----------
 // Not cut: Context / Connection construction and destruction, Context::GetContextId (only read and write game objects).
 #define SSF(m, cname, ...) HLE_FORCE(m, "ssl 服务（剪）：失败", Result, cname, __VA_ARGS__)
-HLE_FORCE("_ZN2nn3ssl10InitializeEv", "与 nnsslInitialize 一致：成功、不建会话（剪）", Result, h_ssl_InitCpp, void) { return RES_OK; }
-HLE_FORCE("_ZN2nn3ssl8FinalizeEv", "与 Initialize 配对（剪）", Result, h_ssl_FinCpp, void) { return RES_OK; }
+HLE_FORCE("_ZN2nn3ssl10InitializeEv", "与 nnsslInitialize 一致：初始化离线策略", Result, h_ssl_InitCpp, void) { return h_ssl_Initialize(); }
+HLE_FORCE("_ZN2nn3ssl8FinalizeEv", "与 Initialize 配对：释放离线策略", Result, h_ssl_FinCpp, void) { return h_ssl_Finalize(); }
 SSF("_ZN2nn3ssl7Context6CreateENS1_10SslVersionE", h_ssl_CtxCreate, void *self, int v) { (void)self; (void)v; return RES_FAIL; }
 SSF("_ZN2nn3ssl7Context7DestroyEv", h_ssl_CtxDestroy, void *self) { (void)self; return RES_FAIL; }
 SSF("_ZN2nn3ssl7Context19RegisterInternalPkiEPmNS1_11InternalPkiE", h_ssl_CtxRegPki, void *self, uint64_t *id, int p) { (void)self; (void)id; (void)p; return RES_FAIL; }

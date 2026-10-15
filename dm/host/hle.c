@@ -1,8 +1,10 @@
 // 导入解析（已实现接宿主、其余接记名桩）与宿主门分派。
 // Import resolution (implemented ones go to the host, the rest go to named stubs) and host gate dispatch.
 #include "dm.h"
+#ifndef __ANDROID__
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
+#endif
 #include <dlfcn.h>
 #include <time.h>
 
@@ -13,27 +15,39 @@ typedef struct { const char *name; void *fn; } hle_ent;
 #define MAX_STUB 4096                 // 与 entry.S 的 .rept 次数一致 | Matches the .rept count in entry.S
 static unsigned g_nstub;
 static const char *g_stub_name[MAX_STUB];
+#ifndef __ANDROID__
 static uint8_t g_stub_seen[MAX_STUB];
+#endif
 extern uint64_t unimpl_stubs[MAX_STUB];   // 每桩 8 字节 | 8 bytes per stub
 
 uint64_t unimpl_c(unsigned idx, uint64_t *regs) {
+#ifdef __ANDROID__
+    die("UNIMPL %s (x0=%#llx x1=%#llx x2=%#llx)", g_stub_name[idx], regs[0], regs[1], regs[2]);
+#else
     if (!g_stub_seen[idx]++)
         LOG("UNIMPL %s (x0=%#llx x1=%#llx x2=%#llx)", g_stub_name[idx], regs[0], regs[1], regs[2]);
     return 0;
+#endif
 }
 
 // 每模块一张符号号 → 已解析地址缓存
 // Per module, one cache of symbol number → resolved address
-static uint64_t g_cache[MAX_MOD][8192];
 
-uint64_t resolve_import(module_t *m, const char *name) {
+static uint64_t resolve_import_binding(module_t *m, const char *name, int optional) {
     static const hle_ent *sec; static unsigned long secsz;
+#ifdef __ANDROID__
+    extern const hle_ent __start_dm_hle[] __attribute__((weak));
+    extern const hle_ent __stop_dm_hle[] __attribute__((weak));
+    if (!sec && __start_dm_hle) { sec = __start_dm_hle; secsz = (unsigned long)((const char *)__stop_dm_hle - (const char *)__start_dm_hle); }
+#else
     if (!sec) sec = (const hle_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swhle", &secsz);
+#endif
     for (unsigned i = 0; i < secsz / sizeof(hle_ent); i++)
         if (!strcmp(sec[i].name, name)) {
             if (g_flag.imports) { Dl_info di; dladdr(sec[i].fn, &di); LOG("import %s -> %s", name, di.dli_sname); }
             void *hlecount_wrap(const char *, const char *, void *); return (uint64_t)hlecount_wrap("HLE", name, sec[i].fn);   // DM_HLECOUNT 时为计数桩（含 libc 直通表） | With DM_HLECOUNT it is a counting stub (including the libc passthrough table)
         }
+    if (optional) { if (g_flag.imports) LOG("optional weak import %s -> NULL", name); return 0; }
     // 已为同名分过桩就复用
     // Reuse the stub if one was already allocated for the same name
     void *hlecount_wrap(const char *, const char *, void *);
@@ -45,6 +59,8 @@ uint64_t resolve_import(module_t *m, const char *name) {
     (void)m;
     return (uint64_t)hlecount_wrap("STUB", name, (void *)&unimpl_stubs[k]);
 }
+uint64_t resolve_import(module_t *m, const char *name) { return resolve_import_binding(m, name, 0); }
+uint64_t resolve_import_optional(module_t *m, const char *name) { return resolve_import_binding(m, name, 1); }
 
 void stubs_report(void) { LOG("stubs=%u", g_nstub); }
 

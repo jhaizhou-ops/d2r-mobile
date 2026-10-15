@@ -19,7 +19,17 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#ifdef __ANDROID__
+#include "../android/services_fs.h"
+#include "../android/romfs_image.h"
+#define clonefile(source, destination, flags) dm_android_fs_clone_tree(source, destination)
+#define clock_gettime_nsec_np(clock_id) now_ns()
+#ifndef ENOATTR
+#define ENOATTR ENODATA
+#endif
+#else
 #include <sys/clonefile.h>
+#endif
 #include <sys/xattr.h>
 
 #define RES_PATH_NOT_FOUND 0x202u      // fs 模块 2，描述 1 | fs module 2, description 1
@@ -40,7 +50,11 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry 布局");
 // Host: at mount, the committed directory commit (= $DM_SAVE) is clonefile'd as a whole tree into the working directory <commit>.work (APFS copy-on-write, nearly zero cost), and the mount points at the working directory,
 // all game reads and writes happen in the working directory; Commit = clonefile(work → <commit>.new), then renamex_np(RENAME_SWAP) swaps it atomically with commit, then the swapped-out old version is deleted.
 // Killed at any moment, commit is either the old version or the new version, never half-written / a mix of old and new; the next mount discards leftover .work / .new.
-typedef struct { char name[32]; char dir[1024]; char overlay[4096]; char commit[1024]; int ro; } mount_t;
+typedef struct { char name[32]; char dir[1024]; char overlay[4096]; char commit[1024]; int ro;
+#ifdef __ANDROID__
+    unsigned id, open_directories;
+#endif
+} mount_t;
 static mount_t g_mnt[MAX_MOUNT];   // commit 非空 = 事务式存档挂载 | commit non-empty = transactional save mount
 static int g_nmnt;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -49,6 +63,9 @@ static void path_unlock(pthread_mutex_t **m) { pthread_mutex_unlock(*m); }
 #define PATH_LOCK() pthread_mutex_t *path_guard __attribute__((cleanup(path_unlock))) = &g_path_lock; pthread_mutex_lock(path_guard)
 static uint8_t g_fmode[65536];              // fd → 打开方式 | fd → open mode
 static uint8_t g_fsave[65536];              // fd → 是否在事务式存档挂载上（存档写注入点只数这些） | fd → whether it is on a transactional save mount (the save write injection point only counts these)
+#ifdef __ANDROID__
+static unsigned g_file_mount[65536], g_next_mount_id = 1;
+#endif
 static _Atomic int g_save_writes;           // 存档挂载上的写次数（注入点与提交日志共用） | number of writes on the save mount (shared by the injection point and the commit log)
 static _Atomic uint64_t g_txn_first_ns;     // 本事务第一次存档写的时刻（提交日志报耗时用；提交时清 0） | time of this transaction's first save write (used by the commit log to report timing; cleared to 0 at commit)
 // 写失败按事务拒绝：真机存档空间建档时预留，覆盖写不会失败，游戏也不看 WriteFile / SetFileSize 的返回值，失败后照常 Commit
@@ -91,19 +108,38 @@ static int dm_fs_test_fail(const char *pt) {
 }
 static int in_txn_dir(const char *hp) { for (int i = 0; i < g_nmnt; i++) { size_t n = strlen(g_mnt[i].dir); if (g_mnt[i].commit[0] && !strncmp(hp, g_mnt[i].dir, n) && (hp[n] == '/' || !hp[n])) return 1; } return 0; }
 static int rm_tree(const char *p);
+static Result err_res(const char *op, const char *path);
 static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     PATH_LOCK(); pthread_mutex_lock(&g_lock);
+#ifdef __ANDROID__
+    if (!name || !*name || strlen(name) >= sizeof g_mnt[0].name || strchr(name, ':') || strchr(name, '/') ||
+        !dir || dir[0] != '/' || strlen(dir) + (txn ? 5 : 0) >= sizeof g_mnt[0].dir) {
+        pthread_mutex_unlock(&g_lock); errno = EINVAL; return RES_FAIL;
+    }
+#endif
     for (int i = 0; i < g_nmnt; i++)
         if (!strcmp(g_mnt[i].name, name)) { pthread_mutex_unlock(&g_lock); return RES_OK; }
     if (g_nmnt >= MAX_MOUNT) die("挂载表满");
     strlcpy(g_mnt[g_nmnt].name, name, sizeof g_mnt[0].name);
     g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0;
+#ifdef __ANDROID__
+    g_mnt[g_nmnt].id = g_next_mount_id++;
+    g_mnt[g_nmnt].open_directories = 0;
+    if (!g_next_mount_id) die("Android mount identity exhausted");
+#endif
     if (!strcmp(name, "rom") && getenv("DM_ROMFS_OVERLAY"))
         strlcpy(g_mnt[g_nmnt].overlay, getenv("DM_ROMFS_OVERLAY"), sizeof g_mnt[0].overlay);
     int txn_err = 0;   // 事务目录建不起来（清不掉残留 / 克隆失败，盘满时真实可能）：不退出，改成只读挂载已提交目录——角色照常读得到，写一律失败、提交为空操作，已提交版本一个字节不动 | The transaction directory cannot be set up (leftovers cannot be cleared / clone failed, which really happens on a full disk): do not exit; mount the committed directory read-only instead. Characters still load, every write fails, commits are no-ops, and not one byte of the committed version changes
     if (txn) {
         char work[1100], neu[1100]; snprintf(work, sizeof work, "%s.work", dir); snprintf(neu, sizeof neu, "%s.new", dir);
+#ifdef __ANDROID__
+        if (dm_android_fs_ensure_directory(dir)) {
+            Result result = err_res("ensure save directory", dir);
+            pthread_mutex_unlock(&g_lock); return result;
+        }
+#else
         mkdir(dir, 0755);
+#endif
         const char *why = NULL;
         if (!access(work, F_OK) && rm_tree(work)) why = "清不掉上次残留的工作目录";
         else if (!access(neu, F_OK) && rm_tree(neu)) why = "清不掉上次残留的 .new";
@@ -114,7 +150,17 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
             strlcpy(g_mnt[g_nmnt].commit, dir, sizeof g_mnt[0].commit);
             atomic_store(&g_save_poison, 0);                                // 工作目录刚从已提交版克隆，完好 | the working directory was just cloned from the committed version, intact
             strlcpy(g_mnt[g_nmnt].dir, work, sizeof g_mnt[0].dir); }
-    } else strlcpy(g_mnt[g_nmnt].dir, dir, sizeof g_mnt[0].dir);
+    } else {
+#ifdef __ANDROID__
+        struct stat st;
+        if ((!ro && dm_android_fs_ensure_directory(dir)) || lstat(dir, &st) || !S_ISDIR(st.st_mode)) {
+            if (!errno) errno = ENOTDIR;
+            Result result = err_res("mount directory", dir);
+            pthread_mutex_unlock(&g_lock); return result;
+        }
+#endif
+        strlcpy(g_mnt[g_nmnt].dir, dir, sizeof g_mnt[0].dir);
+    }
     g_nmnt++;
     pthread_mutex_unlock(&g_lock);
     if (txn_err) front_save_failed(txn_err);
@@ -130,10 +176,19 @@ static Result mount(const char *name, const char *dir, int ro) { return mount_ex
 // APFS is case-insensitive by default, Horizon paths are case-sensitive: every component is looked up exactly by guest name.
 // Ordinary host names are unchanged; only when a name collides on the host is a separate physical name chosen, with the guest name stored in an xattr.
 // clonefile preserves xattr, so save Commit/remount needs no separate mapping table; enumeration must not leak physical aliases.
+#ifdef __ANDROID__
+#define FS_GUEST_NAME DM_ANDROID_GUEST_NAME_XATTR
+#else
 #define FS_GUEST_NAME "org.d2rmobile.guest-name"
+#endif
 static int guest_name(const char *parent, const char *physical, char *out, size_t n) {
     char p[1280]; snprintf(p, sizeof p, "%s/%s", parent, physical);
+#ifdef __ANDROID__
+    ssize_t k = lgetxattr(p, FS_GUEST_NAME, out, n - 1);
+    if (k < 0 && (errno == ENOTSUP || errno == EOPNOTSUPP)) { strlcpy(out, physical, n); return 1; }
+#else
     ssize_t k = getxattr(p, FS_GUEST_NAME, out, n - 1, 0, XATTR_NOFOLLOW);
+#endif
     if (k >= 0) { out[k] = 0; return 1; }
     if (errno != ENOATTR) return 0;
     strlcpy(out, physical, n); return 1;
@@ -161,9 +216,23 @@ static int path_component(char *parent, size_t n, const char *name, int create) 
     }
     size_t len = strlen(parent), k = strlen(physical);
     if (len + k + 2 > n) { errno = ENAMETOOLONG; return 0; }
-    parent[len] = '/'; memcpy(parent + len + 1, physical, k + 1); return 1;
+    parent[len] = '/'; memcpy(parent + len + 1, physical, k + 1);
+#ifdef __ANDROID__
+    struct stat st;
+    if (!lstat(parent, &st)) { if (S_ISLNK(st.st_mode)) { errno = ELOOP; return 0; } }
+    else if (errno != ENOENT) return 0;
+#endif
+    return 1;
 }
 static int root_path(const char *root, const char *rest, char *out, size_t n) {
+#ifdef __ANDROID__
+    if (romfs_image_view_root(root)) {
+        while (*rest == '/') rest++;
+        if (snprintf(out, n, "%s%s%s", root, *rest ? "/" : "", rest) >= (int)n) { errno = ENAMETOOLONG; return 0; }
+        size_t length = strlen(out); while (length > 1 && out[length - 1] == '/') out[--length] = 0;
+        return romfs_image_lookup(out, NULL, NULL) == 1;
+    }
+#endif
     strlcpy(out, root, n);
     while (*rest) {
         while (*rest == '/') rest++;
@@ -204,7 +273,12 @@ static int rom_overlay_path(const mount_t *m, const char *rest, char *out, size_
             strlcpy(out, candidate, n); free(roots); return 1;
         }
     }
-    int found = root_path(m->dir, rest, out, n) && !access(out, F_OK);
+    int found = root_path(m->dir, rest, out, n)
+#ifdef __ANDROID__
+        && (romfs_image_view_root(m->dir) || !access(out, F_OK));
+#else
+        && !access(out, F_OK);
+#endif
     free(roots);
     if (found) return 1;
     errno = ENOENT; return 0;
@@ -220,6 +294,9 @@ static int host_path_ex(const char *p, char *out, size_t n, int *ro, int create)
         if (ro) *ro = g_mnt[i].ro;
         const char *rest = c + 1;
         if (g_mnt[i].overlay[0] && !create) return rom_overlay_path(&g_mnt[i], rest, out, n);
+#ifdef __ANDROID__
+        if (romfs_image_view_root(g_mnt[i].dir)) return root_path(g_mnt[i].dir, rest, out, n);
+#endif
         strlcpy(out, g_mnt[i].dir, n);
         while (*rest) {
             while (*rest == '/') rest++;
@@ -245,8 +322,13 @@ static int set_guest_name(const char *hp, const char *path) {
     if (k >= sizeof guest) { errno = ENAMETOOLONG; return -1; }
     memcpy(guest, start, k); guest[k] = 0;
     const char *physical = strrchr(hp, '/') + 1;
+#ifdef __ANDROID__
+    if (strcmp(physical, guest)) return lsetxattr(hp, FS_GUEST_NAME, guest, strlen(guest), 0);
+    if (!lremovexattr(hp, FS_GUEST_NAME) || errno == ENODATA || errno == ENOTSUP || errno == EOPNOTSUPP) return 0;
+#else
     if (strcmp(physical, guest)) return setxattr(hp, FS_GUEST_NAME, guest, strlen(guest), 0, XATTR_NOFOLLOW);
     if (!removexattr(hp, FS_GUEST_NAME, XATTR_NOFOLLOW) || errno == ENOATTR) return 0;
+#endif
     return -1;
 }
 static Result err_res(const char *op, const char *path) {
@@ -257,7 +339,7 @@ static Result err_res(const char *op, const char *path) {
 // 名字解析与创建/改名/列举同锁，别名与 xattr 对客体一起发布。
 // Name resolution shares one lock with create/rename/enumerate, aliases and xattr are published to the guest together.
 #define HP_EX(path, create) PATH_LOCK(); char hp[1024]; int ro = 0; if (!host_path_ex(path, hp, sizeof hp, &ro, create)) return err_res("path", path)
-#define HP(path) HP_EX(path, 0)
+#define HP(path) PATH_LOCK(); char hp[1024]; int ro = 0; if (!host_path(path, hp, sizeof hp, &ro)) return err_res("path", path)
 #define RW() if (ro) { LOG("fs 写只读挂载：%s", hp); return RES_FAIL; }
 // 建目录 / 建文件：目标已存在就照可写挂载的语义回「已存在」——游戏只认得这一种失败（原版存档盘不会写失败），回通用失败它会拿空句柄继续走（iOS 只读回退局在 CloseDirectory 崩）
 // Create directory / create file: if the target exists, answer "already exists" as a writable mount would. That is the only failure the game understands (the original save storage never fails to write); with a generic failure it carries on with a null handle (the iOS read-only fallback crashed in CloseDirectory)
@@ -280,7 +362,16 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv；rom → 宿主 RomFS 目录", 
 HLE_FORCE("_ZN2nn2fs21MountTemporaryStorageEPKc", "fsp-srv；临时区 → 宿主目录", Result, h_fs_MountTemp, const char *name) {
     char b[1024]; return mount(name, envdir("DM_TEMP", "run/platform/temp", b, sizeof b), 0);
 }
-HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv；存档目录在挂载时建", Result, h_fs_EnsureSave, const void *uid) { (void)uid; return RES_OK; }
+HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv；确保存档目录已可用", Result, h_fs_EnsureSave, const void *uid) {
+    (void)uid;
+#ifdef __ANDROID__
+    const char *save = getenv("DM_SAVE");
+    if (!save) { errno = EINVAL; return err_res("ensure save configuration", "DM_SAVE"); }
+    return dm_android_fs_ensure_directory(save) ? err_res("ensure save directory", save) : RES_OK;
+#else
+    return RES_OK;
+#endif
+}
 // 触摸产品的设置缺省（掉落物名字默认常显、设置里可关）：存档里的 Settings/Settings.json 只记玩家改过的键，没记的走游戏缺省。
 // 挂存档前给「玩家还没碰过」的两个键补上触摸产品的缺省；已有的键一律不动（玩家在选项页改过就以玩家为准）：
 //   "Item Name Display": 1 —— 选项页「显示物品」= 开关式（游戏缺省 0 = 长按；触摸没有可按住的键）。配套：前端在本进程首次进到局内常态时替玩家点一次「显示物品」键（front_ios.m），
@@ -307,6 +398,7 @@ HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv；存档目�
 // Done before mounting the save and cloning the working directory, so it is what the game reads the first time. On by default on iOS, DM_STASH_SEED=0 turns it off; off by default on the Mac host, DM_STASH_SEED=1 turns it on.
 // Only covers the DLC type (standard + hardcore): SharedStash{Soft,Hard}CoreV2.d2i used by the Lord of Destruction type is not seeded -- the touch character creation page cannot create that kind of character
 // The seed file stash_seed.h holds the bytes of a save the game itself generated, and the public repository does not ship it: without the header nothing is seeded (the game then creates an empty shared stash of its own the first time one is needed, as the original does)
+#ifndef __ANDROID__
 #if __has_include("stash_seed.h")
 #include "stash_seed.h"
 static void stash_seed_one(const char *save_dir, const char *name) {
@@ -390,6 +482,7 @@ static void settings_lang_apply(const char *save_dir) {
     fclose(f); if (rename(tmp, path)) { LOG("【红】语言开关：改名到 %s 失败", path); return; }
     LOG("语言开关：设置文件的 Language / VoiceLanguage 改成 %d（%s；原文字语言 %d）", want, en ? "英文" : "简中", cur);
 }
+#endif // Apple-only save seed/settings modifications
 // 事务式存档当前的工作目录（游戏读写的那份；宿主自己的旁路文件写在这里才会随 Commit 进已提交版）。没挂载存档时返回 NULL
 // The current working directory of the transactional save (the copy the game reads and writes; the host's own side files must be written here to enter the committed version with Commit). Returns NULL when no save is mounted
 const char *dm_save_workdir(void) { for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].commit[0]) return g_mnt[i].dir; return NULL; }
@@ -404,6 +497,7 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv；存档 �
     const char *d = getenv("DM_SAVE");
     if (!d) die("未设 DM_SAVE：请指向一份存档目录的可写副本");
     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;   // 去掉结尾斜杠（.work / .new 拼在同级） | strip trailing slashes (.work / .new are appended at the same level)
+#ifndef __ANDROID__
     stash_seed(dd);
     low_vision_off(dd);
     settings_seed(dd); settings_lang_apply(dd);
@@ -412,6 +506,7 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv；存档 �
     // Rule files for the loot filter (the game loads them at startup; dm_lootfilter.c registers this hook from a constructor; it is null in unit tests that link only hle_fs.c). Same switch as settings_seed:
     // written by default on iOS; not written under the Mac host's parity gate (saves must match the device ground truth file by file)
     { const char *e = getenv("DM_TOUCH_DEFAULTS"); if (g_dm_mount_seed_hook && (e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE)) g_dm_mount_seed_hook(dd); }
+#endif
     return mount_ex(name, dd, 0, 1);
 }
 void (*g_dm_pre_commit_hook[5])(const char *workdir);   // 提交前调（工作目录）：宿主旁路文件按工作目录里的存档内容核对后再写（[0] 个人仓库多页 dm_pages.c、[2] 百宝囊 dm_pouch.c、[1] 编年史仓库 dm_vault.c、[3] 秘境进度 dm_rift.c、[4] iCloud 收件箱并回 dm_cloudmerge.c） | Called before commit (working directory): host side files are checked against the save content in the working directory before being written ([0] personal stash multi-page dm_pages.c, [2] pouch dm_pouch.c, [1] Chronicle stash dm_vault.c, [3] Rift progress dm_rift.c, [4] iCloud inbox merge dm_cloudmerge.c)
@@ -421,9 +516,23 @@ uint64_t dm_fs_commit_count(void) { return atomic_load(&g_save_commits); }
 HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整树 clone 后与已提交目录原子互换（renamex_np RENAME_SWAP）", Result, h_fs_Commit, const char *name) {
     PATH_LOCK(); pthread_mutex_lock(&g_lock);
     int i = 0; while (i < g_nmnt && strcmp(g_mnt[i].name, name)) i++;
+#ifdef __ANDROID__
+    if (i == g_nmnt) { pthread_mutex_unlock(&g_lock); return RES_PATH_NOT_FOUND; }
+    if (g_mnt[i].ro) { pthread_mutex_unlock(&g_lock); return RES_FAIL; }
+    for (int fd = 0; fd < 65536; fd++) if (g_file_mount[fd] == g_mnt[i].id && (g_fmode[fd] & (MODE_WRITE | MODE_APPEND))) {
+        pthread_mutex_unlock(&g_lock); return 0x327202u; // Target locked: original SDK rejects Commit while a writable file is open.
+    }
+    if (!g_mnt[i].commit[0]) {
+        Result result = dm_android_fs_sync_tree(g_mnt[i].dir) ? err_res("commit sync", g_mnt[i].dir) : RES_OK;
+        pthread_mutex_unlock(&g_lock); return result;
+    }
+#else
     if (i == g_nmnt || !g_mnt[i].commit[0]) { pthread_mutex_unlock(&g_lock); return RES_OK; }   // 非事务挂载：无可提交 | non-transactional mount: nothing to commit
+#endif
     uint64_t tc0 = clock_gettime_nsec_np(CLOCK_MONOTONIC), tw0 = atomic_exchange(&g_txn_first_ns, 0);
+#ifndef __ANDROID__
     for (int k = 0; k < 5; k++) if (g_dm_pre_commit_hook[k]) g_dm_pre_commit_hook[k](g_mnt[i].dir);
+#endif
     uint64_t tc1 = clock_gettime_nsec_np(CLOCK_MONOTONIC);   // 写进工作目录的旁路文件随这次提交一起原子换入 | side files written into the working directory are swapped in atomically together with this commit
     int perr = atomic_exchange(&g_save_poison, 0);
     if (perr) {                                                         // 本事务有写失败：拒绝提交、丢弃工作目录 | a write failed in this transaction: refuse the commit, discard the working directory
@@ -453,12 +562,21 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整�
         front_save_failed(perr);
         return RES_FAIL;
     }
-    char neu[1100]; snprintf(neu, sizeof neu, "%s.new", g_mnt[i].commit);
     Result r = RES_OK;
+#ifdef __ANDROID__
+    if (dm_android_fs_commit_snapshot(g_mnt[i].dir, g_mnt[i].commit)) {
+        int error = errno;
+        LOG("Android save commit failed errno=%d; previous committed generation preserved", error);
+        front_save_failed(error);
+        r = RES_FAIL;
+    }
+#else
+    char neu[1100]; snprintf(neu, sizeof neu, "%s.new", g_mnt[i].commit);
     if (!access(neu, F_OK)) rm_tree(neu);
     if (clonefile(g_mnt[i].dir, neu, 0)) { LOG("【红】存档提交：clonefile %s 失败 errno=%d（已提交版本不变）", neu, errno); r = RES_FAIL; }
     else if (renamex_np(neu, g_mnt[i].commit, RENAME_SWAP)) { LOG("【红】存档提交：原子互换失败 errno=%d（已提交版本不变）", errno); rm_tree(neu); r = RES_FAIL; }
     else rm_tree(neu);                                                  // 换下来的旧版 | the old version that was swapped out
+#endif
     // 耗时读数（整数微秒，不带浮点）：提交前钩子、克隆 + 原子互换各多久；从本事务第一次存档写到提交完一共多久（游戏写文件 + 提交，0 = 本事务没有存档写）
     // Timing readouts (integer microseconds, no floating point): how long the pre-commit hook and the clone + atomic swap each took; how long in total from this transaction's first save write to the end of the commit (the game writing files + the commit; 0 = no save write in this transaction)
     static int n; if (r == RES_OK) { uint64_t tc2 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
@@ -468,7 +586,22 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整�
     pthread_mutex_unlock(&g_lock);
     return r;
 }
-HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv；挂载表常驻，卸载为空操作", void, h_fs_Unmount, const char *name) { (void)name; }
+HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv；释放 Android 挂载并丢弃未提交工作目录", void, h_fs_Unmount, const char *name) {
+#ifdef __ANDROID__
+    PATH_LOCK(); pthread_mutex_lock(&g_lock);
+    int i = 0; while (i < g_nmnt && strcmp(g_mnt[i].name, name)) i++;
+    if (i == g_nmnt) die("Android Unmount: unknown mount %s", name);
+    if (g_mnt[i].open_directories) die("Android Unmount: open directories on %s", name);
+    for (int fd = 0; fd < 65536; fd++) if (g_file_mount[fd] == g_mnt[i].id)
+        die("Android Unmount: file %d still open on %s", fd, name);
+    if (g_mnt[i].commit[0] && rm_tree(g_mnt[i].dir)) die("Android Unmount work cleanup failed: %s", g_mnt[i].dir);
+    memmove(&g_mnt[i], &g_mnt[i + 1], (size_t)(g_nmnt - i - 1) * sizeof g_mnt[0]);
+    memset(&g_mnt[--g_nmnt], 0, sizeof g_mnt[0]);
+    pthread_mutex_unlock(&g_lock);
+#else
+    (void)name;
+#endif
+}
 
 // ---------- 文件 ----------
 // 剔零档案：资源包里被填零的大段（过场视频、旧版音乐）不随包分发——档案文件里把这些零段剔掉，旁边放一张区段表
@@ -505,14 +638,29 @@ static holemap *hm_load(const char *hostpath) {
     return m;
 }
 void dm_data_note_fd(int fd, const char *hostpath) {   // 打开资源档案后调：有区段表就登记 | Called after opening a resource archive: register it if there is an extent table
+#ifdef __ANDROID__
+    int image_result = romfs_image_note_fd(fd, hostpath);
+    if (image_result < 0) die("RomFS view opened outside its range-descriptor API: %s", hostpath);
+    if (image_result) return;
+#endif
     if (fd < 0 || fd >= 4096) return;
     g_hm[fd] = hm_load(hostpath);
 }
 int64_t dm_data_logical_size(const char *hostpath, int64_t phys_size) {   // 列目录 / 取大小用：有区段表报原始大小 | For directory listing / size queries: report the original size when there is an extent table
+#ifdef __ANDROID__
+    int64_t image_size; int image_result = romfs_image_lookup(hostpath, NULL, &image_size);
+    if (image_result < 0) return -1;
+    if (image_result) return image_size;
+#endif
     char hp2[1100]; if (snprintf(hp2, sizeof hp2, "%s.holes", hostpath) >= (int)sizeof hp2) return phys_size;
     FILE *f = fopen(hp2, "r"); if (!f) return phys_size; long long size = -1; int ok = fscanf(f, "size %lld", &size) == 1; fclose(f); return ok && size >= 0 ? size : phys_size;
 }
 ssize_t dm_data_pread(int fd, void *buf, size_t n, off_t off) {   // 语义同 pread（可能短读）；剔零档案按区段表换算 | Same semantics as pread (may short-read); zero-stripped archives are translated through the extent table
+#ifdef __ANDROID__
+    ssize_t image_received; int image_result = romfs_image_pread(fd, buf, n, off, &image_received);
+    if (image_result < 0) return -1;
+    if (image_result) return image_received;
+#endif
     holemap *m = fd >= 0 && fd < 4096 ? g_hm[fd] : NULL;
     if (!m) return pread(fd, buf, n, off);
     if (off >= m->size) return 0;
@@ -542,16 +690,36 @@ ssize_t dm_data_pread(int fd, void *buf, size_t n, off_t off) {   // 语义同 p
 }
 HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Result, h_fs_OpenFile, uint64_t *out, const char *path, int mode) {
     HP(path);
+#ifdef __ANDROID__
+    if (!out || !(mode & (MODE_READ | MODE_WRITE)) || (mode & ~(MODE_READ | MODE_WRITE | MODE_APPEND))) return RES_FAIL;
+#endif
     if (mode & (MODE_WRITE | MODE_APPEND)) RW();
-    int fd = open(hp, (mode & (MODE_WRITE | MODE_APPEND)) ? ((mode & MODE_READ) ? O_RDWR : O_WRONLY) : O_RDONLY);
+    int flags = (mode & (MODE_WRITE | MODE_APPEND)) ? ((mode & MODE_READ) ? O_RDWR : O_WRONLY) : O_RDONLY;
+#ifdef __ANDROID__
+    flags |= O_CLOEXEC | O_NOFOLLOW;
+#endif
+    int fd;
+#ifdef __ANDROID__
+    int image_result = romfs_image_open(hp, mode, &fd);
+    if (image_result < 0) return err_res("romfs range open", hp);
+    if (!image_result) fd = open(hp, flags);
+#else
+    fd = open(hp, flags);
+#endif
     if (fd < 0) return err_res("open", hp);
     struct stat st; fstat(fd, &st);
     if (S_ISDIR(st.st_mode)) { close(fd); return RES_PATH_NOT_FOUND; }
     if (fd >= (int)sizeof g_fmode) die("fd 超出表");
     g_fmode[fd] = (uint8_t)mode; *out = (uint64_t)fd;
-    g_hm[fd] = NULL; if (!(mode & (MODE_WRITE | MODE_APPEND))) dm_data_note_fd(fd, hp);
+    if (fd < 4096) g_hm[fd] = NULL;
+    if (!(mode & (MODE_WRITE | MODE_APPEND))) dm_data_note_fd(fd, hp);
     { const char *c = strchr(path, ':'); size_t ln = c ? (size_t)(c - path) : 0; g_fsave[fd] = 0;
-      for (int i = 0; c && i < g_nmnt; i++) if (strlen(g_mnt[i].name) == ln && !strncmp(g_mnt[i].name, path, ln)) g_fsave[fd] = g_mnt[i].commit[0] != 0; }
+      for (int i = 0; c && i < g_nmnt; i++) if (strlen(g_mnt[i].name) == ln && !strncmp(g_mnt[i].name, path, ln)) {
+          g_fsave[fd] = g_mnt[i].commit[0] != 0;
+#ifdef __ANDROID__
+          g_file_mount[fd] = g_mnt[i].id;
+#endif
+      } }
     fslog_init();
     if (g_fslog && fd < 4096) { pthread_mutex_lock(&g_fslog_lock); free(g_fdpath[fd]); g_fdpath[fd] = strdup(path); pthread_mutex_unlock(&g_fslog_lock); }
     if (g_flag.fs) LOG("fs open [%.2fs] %s mode=%d → fd %d", (now_ns() - g_t0_ns) / 1e9, path, mode, fd);
@@ -578,7 +746,7 @@ HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", 
     if (g_flag.fs) {   // 读取计量：每累计 64 MiB 或每 1000 次打一行 | Read metering: print a line every 64 MiB accumulated or every 1000 reads
         static uint64_t n, bytes, next_b = 64 << 20; static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
         pthread_mutex_lock(&m); n++; bytes += got;
-        if (bytes >= next_b || n % 1000 == 0) { LOG("fs 读 累计 %llu 次 %.1f MiB（本次 fd %d 偏移 %#llx 长 %#zx）", n, bytes / 1048576.0, (int)h, off, got); if (bytes >= next_b) next_b += 64 << 20; }
+        if (bytes >= next_b || n % 1000 == 0) { LOG("fs 读 累计 %llu 次 %.1f MiB（本次 fd %d 偏移 %#llx 长 %#zx）", (unsigned long long)n, bytes / 1048576.0, (int)h, (unsigned long long)off, got); if (bytes >= next_b) next_b += 64 << 20; }
         pthread_mutex_unlock(&m);
     }
     return RES_OK;
@@ -603,10 +771,21 @@ HLE_FORCE("_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE", "fsp
         if (r == 0) { errno = ENOSPC; if (g_fsave[(int)h & 0xffff]) save_poison(ENOSPC); return err_res("pwrite（写入 0 字节）", "fd"); }   // 原先在此死循环 | This used to loop forever here
         put += r;
     }
+#ifdef __ANDROID__
+    if (opt && (*(const uint32_t *)opt & 1u) && fsync((int)h)) {
+        if (g_fsave[(int)h & 0xffff]) save_poison(errno);
+        return err_res("write fsync", "fd");
+    }
+#endif
     return RES_OK;
 }
 HLE_FORCE("_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE", "fsp-srv → fstat(2)", Result, h_fs_GetFileSize, int64_t *out, uint64_t h) {
     if (!h) return RES_FAIL;
+#ifdef __ANDROID__
+    int image_result = romfs_image_fd_size((int)h, out);
+    if (image_result < 0) return err_res("romfs range size", "fd");
+    if (image_result) return RES_OK;
+#endif
     struct stat st; if (fstat((int)h, &st)) return err_res("fstat", "fd");
     *out = (int)h < 4096 && g_hm[(int)h] ? g_hm[(int)h]->size : st.st_size; return RES_OK;
 }
@@ -616,11 +795,36 @@ HLE_FORCE("_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl", "fsp-srv → ftruncate(2)
     if (g_fsave[(int)h & 0xffff]) save_poison(errno);
     return err_res("ftruncate", "fd");
 }
-HLE_FORCE("_ZN2nn2fs9FlushFileENS0_10FileHandleE", "fsp-srv；宿主 write 已进页缓存，刷新为空操作", Result, h_fs_FlushFile, uint64_t h) { (void)h; return RES_OK; }
+HLE_FORCE("_ZN2nn2fs9FlushFileENS0_10FileHandleE", "fsp-srv；Android 文件刷新实际调用 fsync", Result, h_fs_FlushFile, uint64_t h) {
+#ifdef __ANDROID__
+    int64_t image_size;
+    int image_result = romfs_image_fd_size((int)h, &image_size);
+    if (image_result < 0) return err_res("romfs readonly flush", "fd");
+    // A registered range has passed the live descriptor identity and immutable
+    // image checks. romfs_image_open admits MODE_READ only and its image fd is
+    // O_RDONLY: there are no writes to submit. The socket token is not storage
+    // and must not be passed to fsync. Ordinary files still use actual fsync.
+    if (image_result) return RES_OK;
+    if (!fsync((int)h)) return RES_OK;
+    if (g_fsave[(int)h & 0xffff]) save_poison(errno);
+    return err_res("fsync", "fd");
+#else
+    (void)h; return RES_OK;
+#endif
+}
 HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void, h_fs_CloseFile, uint64_t h) {
-    if (!h) return;  g_fmode[(int)h & 0xffff] = 0; g_fsave[(int)h & 0xffff] = 0;
+    if (!h) return;   // 游戏在打开失败后也会关（句柄是 0）：原版无事可做 | The game also closes after a failed open (handle 0): nothing to do in the original either
+    g_fmode[(int)h & 0xffff] = 0; g_fsave[(int)h & 0xffff] = 0;
+#ifdef __ANDROID__
+    g_file_mount[(int)h & 0xffff] = 0;
+#endif
     if ((int)h >= 0 && (int)h < 4096 && g_hm[(int)h]) { holemap *m = g_hm[(int)h]; g_hm[(int)h] = NULL; free(m->log); free(m->len); free(m->phys); free(m); }
-    close((int)h); }
+#ifdef __ANDROID__
+    if (!romfs_image_close_fd((int)h)) close((int)h);
+#else
+    close((int)h);
+#endif
+}
 HLE_FORCE("_ZN2nn2fs15GetFileOpenModeENS0_10FileHandleE", "fsp-srv；打开方式由宿主记录", int, h_fs_GetFileOpenMode, uint64_t h) { return g_fmode[(int)h & 0xffff]; }
 
 // ---------- 路径操作 ----------
@@ -640,6 +844,9 @@ HLE_FORCE("_ZN2nn2fs15CreateDirectoryEPKc", "fsp-srv → mkdir(2)", Result, h_fs
     if (set_guest_name(hp, path)) { int e = errno; rmdir(hp); errno = e; return err_res("mkdir name", hp); }
     return RES_OK; }
 static int rm_tree(const char *p) {
+#ifdef __ANDROID__
+    return dm_android_fs_remove_tree(p);
+#else
     DIR *d = opendir(p); if (!d) return -1;
     struct dirent *e; char c[1024]; int rc = 0;
     while ((e = readdir(d))) {
@@ -649,6 +856,7 @@ static int rm_tree(const char *p) {
     }
     closedir(d);
     return rc | rmdir(p);
+#endif
 }
 HLE_FORCE("_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", "fsp-srv → 递归删除（只在可写挂载内）", Result, h_fs_DeleteDirRec, const char *path) {
     HP(path); RW(); return rm_tree(hp) ? err_res("rmtree", hp) : RES_OK;
@@ -666,13 +874,23 @@ HLE_FORCE("_ZN2nn2fs10RenameFileEPKcS2_", "fsp-srv → rename(2)", Result, h_fs_
 }
 HLE_FORCE("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", "fsp-srv → stat(2)", Result, h_fs_GetEntryType, int32_t *out, const char *path) {
     HP(path); struct stat st;
+#ifdef __ANDROID__
+    int image_type, image_result = romfs_image_lookup(hp, &image_type, NULL);
+    if (image_result < 0) return err_res("romfs entry", hp);
+    if (image_result) { *out = image_type; return RES_OK; }
+#endif
     if (stat(hp, &st)) return err_res("stat", hp);
     *out = S_ISDIR(st.st_mode) ? ENT_DIR : ENT_FILE; return RES_OK;
 }
 
 // ---------- 目录 ----------
 // ---------- Directories ----------
-typedef struct { DIR *d; char path[1024]; DIR *od; char opath[1024]; DirectoryEntry *snap; int64_t nsnap, psnap; int mode; } dirh_t;
+typedef struct { DIR *d; char path[1024]; DIR *od; char opath[1024]; DirectoryEntry *snap; int64_t nsnap, psnap; int mode;
+#ifdef __ANDROID__
+    unsigned mount_id;
+    char image_root[1024];
+#endif
+} dirh_t;
 static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
     char *roots = strdup(m->overlay);
     char (*names)[0x301] = calloc(2048, sizeof *names);
@@ -685,6 +903,18 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
     for (char *root = strtok_r(roots, ":", &save); root && nr < 65; root = strtok_r(NULL, ":", &save)) all[nr++] = root;
     for (int ri = nr - 1; ri >= 0; ri--) {
         if (!root_path(all[ri], rest, parent, 1024)) continue;
+#ifdef __ANDROID__
+        romfs_image_entry *image_entries = NULL; size_t image_count = 0;
+        int image_result = romfs_image_list(parent, &image_entries, &image_count);
+        if (image_result < 0) die("RomFS directory snapshot invalidated: %s", parent);
+        if (image_result) {
+            for (size_t k = 0; k < image_count; k++) {
+                int duplicate = 0; for (int j = 0; j < nn; j++) if (!strcmp(names[j], image_entries[k].name)) { duplicate = 1; break; }
+                if (!duplicate) { if (nn == 2048) die("RomFS directory snapshot exceeds supported capacity"); strlcpy(names[nn++], image_entries[k].name, sizeof names[0]); }
+            }
+            free(image_entries); continue;
+        }
+#endif
         DIR *x = opendir(parent); if (!x) continue;
         struct dirent *e;
         while ((e = readdir(x))) {
@@ -702,6 +932,12 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
         strlcpy(h->snap[j].name, names[j], sizeof h->snap[j].name);
         snprintf(rel, 2048, "%s/%s", rest, names[j]);
         if (!rom_overlay_path(m, rel, resolved, 1024)) continue;
+#ifdef __ANDROID__
+        int type; int64_t size;
+        int image_result = romfs_image_lookup(resolved, &type, &size);
+        if (image_result < 0) die("RomFS directory entry invalidated: %s", resolved);
+        if (image_result) { h->snap[j].type = (int8_t)type; h->snap[j].size = size; continue; }
+#endif
         struct stat st;
         if (!stat(resolved, &st)) { h->snap[j].type = S_ISDIR(st.st_mode) ? ENT_DIR : ENT_FILE; h->snap[j].size = S_ISDIR(st.st_mode) ? 0 : dm_data_logical_size(resolved, st.st_size); }
     }
@@ -712,6 +948,23 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
     if (!d) return err_res("opendir", hp);
     dirh_t *h = calloc(1, sizeof *h); h->d = d; strlcpy(h->path, hp, sizeof h->path); h->mode = mode;
     const char *c = strchr(path, ':');
+#ifdef __ANDROID__
+    if (c) for (int i = 0; i < g_nmnt; i++) if (strlen(g_mnt[i].name) == (size_t)(c - path) && !strncmp(g_mnt[i].name, path, (size_t)(c - path))) {
+        h->mount_id = g_mnt[i].id; g_mnt[i].open_directories++; break;
+    }
+    if (c) for (int i = 0; i < g_nmnt; i++) if (strlen(g_mnt[i].name) == (size_t)(c - path) && !strncmp(g_mnt[i].name, path, (size_t)(c - path))) {
+        if (romfs_image_view_root(g_mnt[i].dir)) {
+            strlcpy(h->image_root, g_mnt[i].dir, sizeof h->image_root);
+            if (!g_mnt[i].overlay[0]) {
+                romfs_image_entry *image_entries = NULL; size_t image_count = 0;
+                int image_result = romfs_image_list(hp, &image_entries, &image_count);
+                if (image_result < 0) die("RomFS directory open invalidated: %s", hp);
+                if (image_result) { h->snap = (DirectoryEntry *)image_entries; h->nsnap = (int64_t)image_count; }
+            }
+        }
+        break;
+    }
+#endif
     if (c) for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].overlay[0] && strlen(g_mnt[i].name) == (size_t)(c - path) && !strncmp(g_mnt[i].name, path, (size_t)(c - path))) {
         dir_snapshot(h, &g_mnt[i], c + 1); break;
     }
@@ -720,6 +973,9 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
 HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", "fsp-srv → readdir(3)", Result, h_fs_ReadDirectory, int64_t *count, DirectoryEntry *ents, uint64_t hh, int64_t max) {
     if (!hh) { *count = 0; return RES_FAIL; }
     PATH_LOCK(); dirh_t *h = (dirh_t *)hh; int64_t n = 0; struct dirent *e;
+#ifdef __ANDROID__
+    if (h->image_root[0] && romfs_image_lookup(h->image_root, NULL, NULL) < 0) return err_res("romfs directory", h->image_root);
+#endif
     if (h->snap) { while (n < max && h->psnap < h->nsnap) { DirectoryEntry *src = &h->snap[h->psnap++]; if (!(h->mode & (src->type == ENT_DIR ? DIRMODE_DIR : DIRMODE_FILE))) continue; ents[n++] = *src; } *count = n; return RES_OK; }
     while (n < max && (e = readdir(h->d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
@@ -736,5 +992,13 @@ HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandl
 }
 HLE_FORCE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", "fsp-srv → closedir(3)", void, h_fs_CloseDirectory, uint64_t hh) {
     if (!hh) return;   // 游戏在打开失败后也会关（句柄是 0）：原版无事可做 | The game also closes after a failed open (handle 0): nothing to do in the original either
+#ifdef __ANDROID__
+    PATH_LOCK();
+    dirh_t *handle = (dirh_t *)hh;
+    for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].id == handle->mount_id) {
+        if (!g_mnt[i].open_directories) die("Android directory ownership underflow");
+        g_mnt[i].open_directories--; break;
+    }
+#endif
     dirh_t *h = (dirh_t *)hh; closedir(h->d); if (h->od) closedir(h->od); free(h->snap); free(h);
 }

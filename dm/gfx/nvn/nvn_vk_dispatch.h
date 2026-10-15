@@ -1,0 +1,306 @@
+/* Vulkan dispatch belongs to the explicitly selected loader instance. */
+static PFN_vkGetInstanceProcAddr dm_vk_get;
+static PFN_vkAcquireNextImageKHR dm_vkAcquireNextImageKHR;
+#define vkAcquireNextImageKHR dm_vkAcquireNextImageKHR
+static PFN_vkAllocateCommandBuffers dm_vkAllocateCommandBuffers;
+#define vkAllocateCommandBuffers dm_vkAllocateCommandBuffers
+static PFN_vkAllocateDescriptorSets dm_vkAllocateDescriptorSets;
+#define vkAllocateDescriptorSets dm_vkAllocateDescriptorSets
+static PFN_vkAllocateMemory dm_vkAllocateMemory;
+#define vkAllocateMemory dm_vkAllocateMemory
+static PFN_vkBeginCommandBuffer dm_vkBeginCommandBuffer;
+#define vkBeginCommandBuffer dm_vkBeginCommandBuffer
+static PFN_vkBindBufferMemory dm_vkBindBufferMemory;
+#define vkBindBufferMemory dm_vkBindBufferMemory
+static PFN_vkBindImageMemory dm_vkBindImageMemory;
+#define vkBindImageMemory dm_vkBindImageMemory
+static PFN_vkCmdBeginQuery dm_vkCmdBeginQuery;
+#define vkCmdBeginQuery dm_vkCmdBeginQuery
+static PFN_vkCmdBeginRenderPass dm_vkCmdBeginRenderPass;
+#define vkCmdBeginRenderPass dm_vkCmdBeginRenderPass
+static PFN_vkCmdBindDescriptorSets dm_vkCmdBindDescriptorSets;
+#define vkCmdBindDescriptorSets dm_vkCmdBindDescriptorSets
+static PFN_vkCmdBindIndexBuffer dm_vkCmdBindIndexBuffer;
+#define vkCmdBindIndexBuffer dm_vkCmdBindIndexBuffer
+static PFN_vkCmdBindPipeline dm_vkCmdBindPipeline;
+#define vkCmdBindPipeline dm_vkCmdBindPipeline
+static PFN_vkCmdBindVertexBuffers dm_vkCmdBindVertexBuffers;
+#define vkCmdBindVertexBuffers dm_vkCmdBindVertexBuffers
+static PFN_vkCmdBlitImage dm_vkCmdBlitImage;
+#define vkCmdBlitImage dm_vkCmdBlitImage
+static PFN_vkCmdClearAttachments dm_vkCmdClearAttachments;
+#define vkCmdClearAttachments dm_vkCmdClearAttachments
+static PFN_vkCmdClearColorImage dm_vkCmdClearColorImage;
+#define vkCmdClearColorImage dm_vkCmdClearColorImage
+static PFN_vkCmdClearDepthStencilImage dm_vkCmdClearDepthStencilImage;
+#define vkCmdClearDepthStencilImage dm_vkCmdClearDepthStencilImage
+static PFN_vkCmdCopyBuffer dm_vkCmdCopyBuffer;
+#define vkCmdCopyBuffer dm_vkCmdCopyBuffer
+static PFN_vkCmdCopyBufferToImage dm_vkCmdCopyBufferToImage;
+#define vkCmdCopyBufferToImage dm_vkCmdCopyBufferToImage
+static PFN_vkCmdCopyImageToBuffer dm_vkCmdCopyImageToBuffer;
+#define vkCmdCopyImageToBuffer dm_vkCmdCopyImageToBuffer
+static PFN_vkCmdCopyImage dm_vkCmdCopyImage;
+#define vkCmdCopyImage dm_vkCmdCopyImage
+static PFN_vkCmdDispatch dm_vkCmdDispatch;
+#define vkCmdDispatch dm_vkCmdDispatch
+static PFN_vkCmdDraw dm_vkCmdDraw;
+#define vkCmdDraw dm_vkCmdDraw
+static PFN_vkCmdDrawIndexed dm_vkCmdDrawIndexed;
+#define vkCmdDrawIndexed dm_vkCmdDrawIndexed
+static PFN_vkCmdEndQuery dm_vkCmdEndQuery;
+#define vkCmdEndQuery dm_vkCmdEndQuery
+static PFN_vkCmdEndRenderPass dm_vkCmdEndRenderPass;
+#define vkCmdEndRenderPass dm_vkCmdEndRenderPass
+static PFN_vkCmdPipelineBarrier dm_vkCmdPipelineBarrier;
+#define vkCmdPipelineBarrier dm_vkCmdPipelineBarrier
+static PFN_vkCmdResetQueryPool dm_vkCmdResetQueryPool;
+#define vkCmdResetQueryPool dm_vkCmdResetQueryPool
+static PFN_vkCmdSetBlendConstants dm_vkCmdSetBlendConstants;
+#define vkCmdSetBlendConstants dm_vkCmdSetBlendConstants
+static PFN_vkCmdSetScissor dm_vkCmdSetScissor;
+#define vkCmdSetScissor dm_vkCmdSetScissor
+static PFN_vkCmdSetViewport dm_vkCmdSetViewport;
+#define vkCmdSetViewport dm_vkCmdSetViewport
+static PFN_vkCmdUpdateBuffer dm_vkCmdUpdateBuffer;
+#define vkCmdUpdateBuffer dm_vkCmdUpdateBuffer
+static PFN_vkCmdWriteTimestamp dm_vkCmdWriteTimestamp;
+#define vkCmdWriteTimestamp dm_vkCmdWriteTimestamp
+static PFN_vkCreateAndroidSurfaceKHR dm_vkCreateAndroidSurfaceKHR;
+#define vkCreateAndroidSurfaceKHR dm_vkCreateAndroidSurfaceKHR
+static PFN_vkCreateBuffer dm_vkCreateBuffer;
+#define vkCreateBuffer dm_vkCreateBuffer
+static PFN_vkCreateCommandPool dm_vkCreateCommandPool;
+#define vkCreateCommandPool dm_vkCreateCommandPool
+static PFN_vkCreateComputePipelines dm_vkCreateComputePipelines;
+#define vkCreateComputePipelines dm_vkCreateComputePipelines
+static PFN_vkCreateDescriptorPool dm_vkCreateDescriptorPool;
+#define vkCreateDescriptorPool dm_vkCreateDescriptorPool
+static PFN_vkCreateDescriptorSetLayout dm_vkCreateDescriptorSetLayout;
+#define vkCreateDescriptorSetLayout dm_vkCreateDescriptorSetLayout
+static PFN_vkCreateDevice dm_vkCreateDevice;
+#define vkCreateDevice dm_vkCreateDevice
+static PFN_vkCreateFence dm_vkCreateFence;
+#define vkCreateFence dm_vkCreateFence
+static PFN_vkCreateFramebuffer dm_vkCreateFramebuffer;
+#define vkCreateFramebuffer dm_vkCreateFramebuffer
+static PFN_vkCreateGraphicsPipelines dm_vkCreateGraphicsPipelines;
+#define vkCreateGraphicsPipelines dm_vkCreateGraphicsPipelines
+static PFN_vkCreateImage dm_vkCreateImage;
+#define vkCreateImage dm_vkCreateImage
+static PFN_vkCreateImageView dm_vkCreateImageView;
+#define vkCreateImageView dm_vkCreateImageView
+static PFN_vkCreateInstance dm_vkCreateInstance;
+#define vkCreateInstance dm_vkCreateInstance
+static PFN_vkCreatePipelineCache dm_vkCreatePipelineCache;
+#define vkCreatePipelineCache dm_vkCreatePipelineCache
+static PFN_vkCreatePipelineLayout dm_vkCreatePipelineLayout;
+#define vkCreatePipelineLayout dm_vkCreatePipelineLayout
+static PFN_vkCreateQueryPool dm_vkCreateQueryPool;
+#define vkCreateQueryPool dm_vkCreateQueryPool
+static PFN_vkCreateRenderPass dm_vkCreateRenderPass;
+#define vkCreateRenderPass dm_vkCreateRenderPass
+static PFN_vkCreateSampler dm_vkCreateSampler;
+#define vkCreateSampler dm_vkCreateSampler
+static PFN_vkCreateSemaphore dm_vkCreateSemaphore;
+#define vkCreateSemaphore dm_vkCreateSemaphore
+static PFN_vkCreateShaderModule dm_vkCreateShaderModule;
+#define vkCreateShaderModule dm_vkCreateShaderModule
+static PFN_vkCreateSwapchainKHR dm_vkCreateSwapchainKHR;
+#define vkCreateSwapchainKHR dm_vkCreateSwapchainKHR
+static PFN_vkDestroyBuffer dm_vkDestroyBuffer;
+#define vkDestroyBuffer dm_vkDestroyBuffer
+static PFN_vkDestroyDescriptorPool dm_vkDestroyDescriptorPool;
+#define vkDestroyDescriptorPool dm_vkDestroyDescriptorPool
+static PFN_vkDestroyFence dm_vkDestroyFence;
+#define vkDestroyFence dm_vkDestroyFence
+static PFN_vkDestroyFramebuffer dm_vkDestroyFramebuffer;
+#define vkDestroyFramebuffer dm_vkDestroyFramebuffer
+static PFN_vkDestroyImage dm_vkDestroyImage;
+#define vkDestroyImage dm_vkDestroyImage
+static PFN_vkDestroyImageView dm_vkDestroyImageView;
+#define vkDestroyImageView dm_vkDestroyImageView
+static PFN_vkDestroyPipeline dm_vkDestroyPipeline;
+#define vkDestroyPipeline dm_vkDestroyPipeline
+static PFN_vkDestroyPipelineLayout dm_vkDestroyPipelineLayout;
+#define vkDestroyPipelineLayout dm_vkDestroyPipelineLayout
+static PFN_vkDestroyQueryPool dm_vkDestroyQueryPool;
+#define vkDestroyQueryPool dm_vkDestroyQueryPool
+static PFN_vkDestroyRenderPass dm_vkDestroyRenderPass;
+#define vkDestroyRenderPass dm_vkDestroyRenderPass
+static PFN_vkDestroySampler dm_vkDestroySampler;
+#define vkDestroySampler dm_vkDestroySampler
+static PFN_vkDestroySemaphore dm_vkDestroySemaphore;
+#define vkDestroySemaphore dm_vkDestroySemaphore
+static PFN_vkDestroySurfaceKHR dm_vkDestroySurfaceKHR;
+#define vkDestroySurfaceKHR dm_vkDestroySurfaceKHR
+static PFN_vkDestroySwapchainKHR dm_vkDestroySwapchainKHR;
+#define vkDestroySwapchainKHR dm_vkDestroySwapchainKHR
+static PFN_vkDeviceWaitIdle dm_vkDeviceWaitIdle;
+#define vkDeviceWaitIdle dm_vkDeviceWaitIdle
+static PFN_vkEndCommandBuffer dm_vkEndCommandBuffer;
+#define vkEndCommandBuffer dm_vkEndCommandBuffer
+static PFN_vkEnumeratePhysicalDevices dm_vkEnumeratePhysicalDevices;
+#define vkEnumeratePhysicalDevices dm_vkEnumeratePhysicalDevices
+static PFN_vkFreeCommandBuffers dm_vkFreeCommandBuffers;
+#define vkFreeCommandBuffers dm_vkFreeCommandBuffers
+static PFN_vkFreeMemory dm_vkFreeMemory;
+#define vkFreeMemory dm_vkFreeMemory
+static PFN_vkGetBufferMemoryRequirements dm_vkGetBufferMemoryRequirements;
+#define vkGetBufferMemoryRequirements dm_vkGetBufferMemoryRequirements
+static PFN_vkGetDeviceQueue dm_vkGetDeviceQueue;
+#define vkGetDeviceQueue dm_vkGetDeviceQueue
+static PFN_vkGetImageMemoryRequirements dm_vkGetImageMemoryRequirements;
+#define vkGetImageMemoryRequirements dm_vkGetImageMemoryRequirements
+static PFN_vkGetPhysicalDeviceFeatures dm_vkGetPhysicalDeviceFeatures;
+#define vkGetPhysicalDeviceFeatures dm_vkGetPhysicalDeviceFeatures
+static PFN_vkGetPhysicalDeviceFormatProperties dm_vkGetPhysicalDeviceFormatProperties;
+#define vkGetPhysicalDeviceFormatProperties dm_vkGetPhysicalDeviceFormatProperties
+static PFN_vkGetPhysicalDeviceMemoryProperties dm_vkGetPhysicalDeviceMemoryProperties;
+#define vkGetPhysicalDeviceMemoryProperties dm_vkGetPhysicalDeviceMemoryProperties
+static PFN_vkGetPhysicalDeviceProperties dm_vkGetPhysicalDeviceProperties;
+#define vkGetPhysicalDeviceProperties dm_vkGetPhysicalDeviceProperties
+static PFN_vkGetPhysicalDeviceProperties2 dm_vkGetPhysicalDeviceProperties2;
+#define vkGetPhysicalDeviceProperties2 dm_vkGetPhysicalDeviceProperties2
+static PFN_vkGetPhysicalDeviceQueueFamilyProperties dm_vkGetPhysicalDeviceQueueFamilyProperties;
+#define vkGetPhysicalDeviceQueueFamilyProperties dm_vkGetPhysicalDeviceQueueFamilyProperties
+static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR dm_vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
+#define vkGetPhysicalDeviceSurfaceCapabilitiesKHR dm_vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+static PFN_vkGetPhysicalDeviceSurfaceFormatsKHR dm_vkGetPhysicalDeviceSurfaceFormatsKHR;
+#define vkGetPhysicalDeviceSurfaceFormatsKHR dm_vkGetPhysicalDeviceSurfaceFormatsKHR
+static PFN_vkGetPhysicalDeviceSurfaceSupportKHR dm_vkGetPhysicalDeviceSurfaceSupportKHR;
+#define vkGetPhysicalDeviceSurfaceSupportKHR dm_vkGetPhysicalDeviceSurfaceSupportKHR
+static PFN_vkGetQueryPoolResults dm_vkGetQueryPoolResults;
+#define vkGetQueryPoolResults dm_vkGetQueryPoolResults
+static PFN_vkGetSwapchainImagesKHR dm_vkGetSwapchainImagesKHR;
+#define vkGetSwapchainImagesKHR dm_vkGetSwapchainImagesKHR
+static PFN_vkMapMemory dm_vkMapMemory;
+#define vkMapMemory dm_vkMapMemory
+static PFN_vkQueuePresentKHR dm_vkQueuePresentKHR;
+#define vkQueuePresentKHR dm_vkQueuePresentKHR
+static PFN_vkQueueSubmit dm_vkQueueSubmit;
+#define vkQueueSubmit dm_vkQueueSubmit
+static PFN_vkQueueWaitIdle dm_vkQueueWaitIdle;
+#define vkQueueWaitIdle dm_vkQueueWaitIdle
+static PFN_vkUnmapMemory dm_vkUnmapMemory;
+#define vkUnmapMemory dm_vkUnmapMemory
+static PFN_vkUpdateDescriptorSets dm_vkUpdateDescriptorSets;
+#define vkUpdateDescriptorSets dm_vkUpdateDescriptorSets
+static PFN_vkWaitForFences dm_vkWaitForFences;
+#define vkWaitForFences dm_vkWaitForFences
+static PFN_vkResetCommandPool dm_vkResetCommandPool;
+#define vkResetCommandPool dm_vkResetCommandPool
+static PFN_vkResetDescriptorPool dm_vkResetDescriptorPool;
+#define vkResetDescriptorPool dm_vkResetDescriptorPool
+static PFN_vkResetFences dm_vkResetFences;
+#define vkResetFences dm_vkResetFences
+static PFN_vkGetFenceStatus dm_vkGetFenceStatus;
+#define vkGetFenceStatus dm_vkGetFenceStatus
+static PFN_vkCreateBufferView dm_vkCreateBufferView;
+#define vkCreateBufferView dm_vkCreateBufferView
+static PFN_vkDestroyBufferView dm_vkDestroyBufferView;
+#define vkDestroyBufferView dm_vkDestroyBufferView
+static PFN_vkCmdCopyImage dm_vkCmdCopyImage;
+#define vkCmdCopyImage dm_vkCmdCopyImage
+static void dm_vk_resolve(VkInstance instance) {
+    dm_vkResetCommandPool=(PFN_vkResetCommandPool)dm_vk_get(instance,"vkResetCommandPool");if(!dm_vkResetCommandPool)die("Vulkan dispatch vkResetCommandPool",0);
+    dm_vkResetDescriptorPool=(PFN_vkResetDescriptorPool)dm_vk_get(instance,"vkResetDescriptorPool");if(!dm_vkResetDescriptorPool)die("Vulkan dispatch vkResetDescriptorPool",0);
+    dm_vkResetFences=(PFN_vkResetFences)dm_vk_get(instance,"vkResetFences");if(!dm_vkResetFences)die("Vulkan dispatch vkResetFences",0);
+    dm_vkGetFenceStatus=(PFN_vkGetFenceStatus)dm_vk_get(instance,"vkGetFenceStatus");if(!dm_vkGetFenceStatus)die("Vulkan dispatch vkGetFenceStatus",0);
+    dm_vkCmdCopyImage=(PFN_vkCmdCopyImage)dm_vk_get(instance,"vkCmdCopyImage");if(!dm_vkCmdCopyImage)die("Vulkan dispatch vkCmdCopyImage",0);
+    dm_vkDestroyBufferView=(PFN_vkDestroyBufferView)dm_vk_get(instance,"vkDestroyBufferView");if(!dm_vkDestroyBufferView)die("Vulkan dispatch vkDestroyBufferView",0);
+    dm_vkCreateBufferView=(PFN_vkCreateBufferView)dm_vk_get(instance,"vkCreateBufferView");if(!dm_vkCreateBufferView)die("Vulkan dispatch vkCreateBufferView",0);
+    dm_vkAcquireNextImageKHR=(PFN_vkAcquireNextImageKHR)dm_vk_get(instance,"vkAcquireNextImageKHR");if(!dm_vkAcquireNextImageKHR)die("Vulkan dispatch vkAcquireNextImageKHR",0);
+    dm_vkAllocateCommandBuffers=(PFN_vkAllocateCommandBuffers)dm_vk_get(instance,"vkAllocateCommandBuffers");if(!dm_vkAllocateCommandBuffers)die("Vulkan dispatch vkAllocateCommandBuffers",0);
+    dm_vkAllocateDescriptorSets=(PFN_vkAllocateDescriptorSets)dm_vk_get(instance,"vkAllocateDescriptorSets");if(!dm_vkAllocateDescriptorSets)die("Vulkan dispatch vkAllocateDescriptorSets",0);
+    dm_vkAllocateMemory=(PFN_vkAllocateMemory)dm_vk_get(instance,"vkAllocateMemory");if(!dm_vkAllocateMemory)die("Vulkan dispatch vkAllocateMemory",0);
+    dm_vkBeginCommandBuffer=(PFN_vkBeginCommandBuffer)dm_vk_get(instance,"vkBeginCommandBuffer");if(!dm_vkBeginCommandBuffer)die("Vulkan dispatch vkBeginCommandBuffer",0);
+    dm_vkBindBufferMemory=(PFN_vkBindBufferMemory)dm_vk_get(instance,"vkBindBufferMemory");if(!dm_vkBindBufferMemory)die("Vulkan dispatch vkBindBufferMemory",0);
+    dm_vkBindImageMemory=(PFN_vkBindImageMemory)dm_vk_get(instance,"vkBindImageMemory");if(!dm_vkBindImageMemory)die("Vulkan dispatch vkBindImageMemory",0);
+    dm_vkCmdBeginQuery=(PFN_vkCmdBeginQuery)dm_vk_get(instance,"vkCmdBeginQuery");if(!dm_vkCmdBeginQuery)die("Vulkan dispatch vkCmdBeginQuery",0);
+    dm_vkCmdBeginRenderPass=(PFN_vkCmdBeginRenderPass)dm_vk_get(instance,"vkCmdBeginRenderPass");if(!dm_vkCmdBeginRenderPass)die("Vulkan dispatch vkCmdBeginRenderPass",0);
+    dm_vkCmdBindDescriptorSets=(PFN_vkCmdBindDescriptorSets)dm_vk_get(instance,"vkCmdBindDescriptorSets");if(!dm_vkCmdBindDescriptorSets)die("Vulkan dispatch vkCmdBindDescriptorSets",0);
+    dm_vkCmdBindIndexBuffer=(PFN_vkCmdBindIndexBuffer)dm_vk_get(instance,"vkCmdBindIndexBuffer");if(!dm_vkCmdBindIndexBuffer)die("Vulkan dispatch vkCmdBindIndexBuffer",0);
+    dm_vkCmdBindPipeline=(PFN_vkCmdBindPipeline)dm_vk_get(instance,"vkCmdBindPipeline");if(!dm_vkCmdBindPipeline)die("Vulkan dispatch vkCmdBindPipeline",0);
+    dm_vkCmdBindVertexBuffers=(PFN_vkCmdBindVertexBuffers)dm_vk_get(instance,"vkCmdBindVertexBuffers");if(!dm_vkCmdBindVertexBuffers)die("Vulkan dispatch vkCmdBindVertexBuffers",0);
+    dm_vkCmdBlitImage=(PFN_vkCmdBlitImage)dm_vk_get(instance,"vkCmdBlitImage");if(!dm_vkCmdBlitImage)die("Vulkan dispatch vkCmdBlitImage",0);
+    dm_vkCmdClearAttachments=(PFN_vkCmdClearAttachments)dm_vk_get(instance,"vkCmdClearAttachments");if(!dm_vkCmdClearAttachments)die("Vulkan dispatch vkCmdClearAttachments",0);
+    dm_vkCmdClearColorImage=(PFN_vkCmdClearColorImage)dm_vk_get(instance,"vkCmdClearColorImage");if(!dm_vkCmdClearColorImage)die("Vulkan dispatch vkCmdClearColorImage",0);
+    dm_vkCmdClearDepthStencilImage=(PFN_vkCmdClearDepthStencilImage)dm_vk_get(instance,"vkCmdClearDepthStencilImage");if(!dm_vkCmdClearDepthStencilImage)die("Vulkan dispatch vkCmdClearDepthStencilImage",0);
+    dm_vkCmdCopyBuffer=(PFN_vkCmdCopyBuffer)dm_vk_get(instance,"vkCmdCopyBuffer");if(!dm_vkCmdCopyBuffer)die("Vulkan dispatch vkCmdCopyBuffer",0);
+    dm_vkCmdCopyBufferToImage=(PFN_vkCmdCopyBufferToImage)dm_vk_get(instance,"vkCmdCopyBufferToImage");if(!dm_vkCmdCopyBufferToImage)die("Vulkan dispatch vkCmdCopyBufferToImage",0);
+    dm_vkCmdCopyImageToBuffer=(PFN_vkCmdCopyImageToBuffer)dm_vk_get(instance,"vkCmdCopyImageToBuffer");if(!dm_vkCmdCopyImageToBuffer)die("Vulkan dispatch vkCmdCopyImageToBuffer",0);
+    dm_vkCmdCopyImage=(PFN_vkCmdCopyImage)dm_vk_get(instance,"vkCmdCopyImage");if(!dm_vkCmdCopyImage)die("Vulkan dispatch vkCmdCopyImage",0);
+    dm_vkCmdDispatch=(PFN_vkCmdDispatch)dm_vk_get(instance,"vkCmdDispatch");if(!dm_vkCmdDispatch)die("Vulkan dispatch vkCmdDispatch",0);
+    dm_vkCmdDraw=(PFN_vkCmdDraw)dm_vk_get(instance,"vkCmdDraw");if(!dm_vkCmdDraw)die("Vulkan dispatch vkCmdDraw",0);
+    dm_vkCmdDrawIndexed=(PFN_vkCmdDrawIndexed)dm_vk_get(instance,"vkCmdDrawIndexed");if(!dm_vkCmdDrawIndexed)die("Vulkan dispatch vkCmdDrawIndexed",0);
+    dm_vkCmdEndQuery=(PFN_vkCmdEndQuery)dm_vk_get(instance,"vkCmdEndQuery");if(!dm_vkCmdEndQuery)die("Vulkan dispatch vkCmdEndQuery",0);
+    dm_vkCmdEndRenderPass=(PFN_vkCmdEndRenderPass)dm_vk_get(instance,"vkCmdEndRenderPass");if(!dm_vkCmdEndRenderPass)die("Vulkan dispatch vkCmdEndRenderPass",0);
+    dm_vkCmdPipelineBarrier=(PFN_vkCmdPipelineBarrier)dm_vk_get(instance,"vkCmdPipelineBarrier");if(!dm_vkCmdPipelineBarrier)die("Vulkan dispatch vkCmdPipelineBarrier",0);
+    dm_vkCmdResetQueryPool=(PFN_vkCmdResetQueryPool)dm_vk_get(instance,"vkCmdResetQueryPool");if(!dm_vkCmdResetQueryPool)die("Vulkan dispatch vkCmdResetQueryPool",0);
+    dm_vkCmdSetBlendConstants=(PFN_vkCmdSetBlendConstants)dm_vk_get(instance,"vkCmdSetBlendConstants");if(!dm_vkCmdSetBlendConstants)die("Vulkan dispatch vkCmdSetBlendConstants",0);
+    dm_vkCmdSetScissor=(PFN_vkCmdSetScissor)dm_vk_get(instance,"vkCmdSetScissor");if(!dm_vkCmdSetScissor)die("Vulkan dispatch vkCmdSetScissor",0);
+    dm_vkCmdSetViewport=(PFN_vkCmdSetViewport)dm_vk_get(instance,"vkCmdSetViewport");if(!dm_vkCmdSetViewport)die("Vulkan dispatch vkCmdSetViewport",0);
+    dm_vkCmdUpdateBuffer=(PFN_vkCmdUpdateBuffer)dm_vk_get(instance,"vkCmdUpdateBuffer");if(!dm_vkCmdUpdateBuffer)die("Vulkan dispatch vkCmdUpdateBuffer",0);
+    dm_vkCmdWriteTimestamp=(PFN_vkCmdWriteTimestamp)dm_vk_get(instance,"vkCmdWriteTimestamp");if(!dm_vkCmdWriteTimestamp)die("Vulkan dispatch vkCmdWriteTimestamp",0);
+    dm_vkCreateAndroidSurfaceKHR=(PFN_vkCreateAndroidSurfaceKHR)dm_vk_get(instance,"vkCreateAndroidSurfaceKHR");if(!dm_vkCreateAndroidSurfaceKHR)die("Vulkan dispatch vkCreateAndroidSurfaceKHR",0);
+    dm_vkCreateBuffer=(PFN_vkCreateBuffer)dm_vk_get(instance,"vkCreateBuffer");if(!dm_vkCreateBuffer)die("Vulkan dispatch vkCreateBuffer",0);
+    dm_vkCreateCommandPool=(PFN_vkCreateCommandPool)dm_vk_get(instance,"vkCreateCommandPool");if(!dm_vkCreateCommandPool)die("Vulkan dispatch vkCreateCommandPool",0);
+    dm_vkCreateComputePipelines=(PFN_vkCreateComputePipelines)dm_vk_get(instance,"vkCreateComputePipelines");if(!dm_vkCreateComputePipelines)die("Vulkan dispatch vkCreateComputePipelines",0);
+    dm_vkCreateDescriptorPool=(PFN_vkCreateDescriptorPool)dm_vk_get(instance,"vkCreateDescriptorPool");if(!dm_vkCreateDescriptorPool)die("Vulkan dispatch vkCreateDescriptorPool",0);
+    dm_vkCreateDescriptorSetLayout=(PFN_vkCreateDescriptorSetLayout)dm_vk_get(instance,"vkCreateDescriptorSetLayout");if(!dm_vkCreateDescriptorSetLayout)die("Vulkan dispatch vkCreateDescriptorSetLayout",0);
+    dm_vkCreateDevice=(PFN_vkCreateDevice)dm_vk_get(instance,"vkCreateDevice");if(!dm_vkCreateDevice)die("Vulkan dispatch vkCreateDevice",0);
+    dm_vkCreateFence=(PFN_vkCreateFence)dm_vk_get(instance,"vkCreateFence");if(!dm_vkCreateFence)die("Vulkan dispatch vkCreateFence",0);
+    dm_vkCreateFramebuffer=(PFN_vkCreateFramebuffer)dm_vk_get(instance,"vkCreateFramebuffer");if(!dm_vkCreateFramebuffer)die("Vulkan dispatch vkCreateFramebuffer",0);
+    dm_vkCreateGraphicsPipelines=(PFN_vkCreateGraphicsPipelines)dm_vk_get(instance,"vkCreateGraphicsPipelines");if(!dm_vkCreateGraphicsPipelines)die("Vulkan dispatch vkCreateGraphicsPipelines",0);
+    dm_vkCreateImage=(PFN_vkCreateImage)dm_vk_get(instance,"vkCreateImage");if(!dm_vkCreateImage)die("Vulkan dispatch vkCreateImage",0);
+    dm_vkCreateImageView=(PFN_vkCreateImageView)dm_vk_get(instance,"vkCreateImageView");if(!dm_vkCreateImageView)die("Vulkan dispatch vkCreateImageView",0);
+    dm_vkCreatePipelineCache=(PFN_vkCreatePipelineCache)dm_vk_get(instance,"vkCreatePipelineCache");if(!dm_vkCreatePipelineCache)die("Vulkan dispatch vkCreatePipelineCache",0);
+    dm_vkCreatePipelineLayout=(PFN_vkCreatePipelineLayout)dm_vk_get(instance,"vkCreatePipelineLayout");if(!dm_vkCreatePipelineLayout)die("Vulkan dispatch vkCreatePipelineLayout",0);
+    dm_vkCreateQueryPool=(PFN_vkCreateQueryPool)dm_vk_get(instance,"vkCreateQueryPool");if(!dm_vkCreateQueryPool)die("Vulkan dispatch vkCreateQueryPool",0);
+    dm_vkCreateRenderPass=(PFN_vkCreateRenderPass)dm_vk_get(instance,"vkCreateRenderPass");if(!dm_vkCreateRenderPass)die("Vulkan dispatch vkCreateRenderPass",0);
+    dm_vkCreateSampler=(PFN_vkCreateSampler)dm_vk_get(instance,"vkCreateSampler");if(!dm_vkCreateSampler)die("Vulkan dispatch vkCreateSampler",0);
+    dm_vkCreateSemaphore=(PFN_vkCreateSemaphore)dm_vk_get(instance,"vkCreateSemaphore");if(!dm_vkCreateSemaphore)die("Vulkan dispatch vkCreateSemaphore",0);
+    dm_vkCreateShaderModule=(PFN_vkCreateShaderModule)dm_vk_get(instance,"vkCreateShaderModule");if(!dm_vkCreateShaderModule)die("Vulkan dispatch vkCreateShaderModule",0);
+    dm_vkCreateSwapchainKHR=(PFN_vkCreateSwapchainKHR)dm_vk_get(instance,"vkCreateSwapchainKHR");if(!dm_vkCreateSwapchainKHR)die("Vulkan dispatch vkCreateSwapchainKHR",0);
+    dm_vkDestroyBuffer=(PFN_vkDestroyBuffer)dm_vk_get(instance,"vkDestroyBuffer");if(!dm_vkDestroyBuffer)die("Vulkan dispatch vkDestroyBuffer",0);
+    dm_vkDestroyDescriptorPool=(PFN_vkDestroyDescriptorPool)dm_vk_get(instance,"vkDestroyDescriptorPool");if(!dm_vkDestroyDescriptorPool)die("Vulkan dispatch vkDestroyDescriptorPool",0);
+    dm_vkDestroyFence=(PFN_vkDestroyFence)dm_vk_get(instance,"vkDestroyFence");if(!dm_vkDestroyFence)die("Vulkan dispatch vkDestroyFence",0);
+    dm_vkDestroyFramebuffer=(PFN_vkDestroyFramebuffer)dm_vk_get(instance,"vkDestroyFramebuffer");if(!dm_vkDestroyFramebuffer)die("Vulkan dispatch vkDestroyFramebuffer",0);
+    dm_vkDestroyImage=(PFN_vkDestroyImage)dm_vk_get(instance,"vkDestroyImage");if(!dm_vkDestroyImage)die("Vulkan dispatch vkDestroyImage",0);
+    dm_vkDestroyImageView=(PFN_vkDestroyImageView)dm_vk_get(instance,"vkDestroyImageView");if(!dm_vkDestroyImageView)die("Vulkan dispatch vkDestroyImageView",0);
+    dm_vkDestroyPipeline=(PFN_vkDestroyPipeline)dm_vk_get(instance,"vkDestroyPipeline");if(!dm_vkDestroyPipeline)die("Vulkan dispatch vkDestroyPipeline",0);
+    dm_vkDestroyPipelineLayout=(PFN_vkDestroyPipelineLayout)dm_vk_get(instance,"vkDestroyPipelineLayout");if(!dm_vkDestroyPipelineLayout)die("Vulkan dispatch vkDestroyPipelineLayout",0);
+    dm_vkDestroyQueryPool=(PFN_vkDestroyQueryPool)dm_vk_get(instance,"vkDestroyQueryPool");if(!dm_vkDestroyQueryPool)die("Vulkan dispatch vkDestroyQueryPool",0);
+    dm_vkDestroyRenderPass=(PFN_vkDestroyRenderPass)dm_vk_get(instance,"vkDestroyRenderPass");if(!dm_vkDestroyRenderPass)die("Vulkan dispatch vkDestroyRenderPass",0);
+    dm_vkDestroySampler=(PFN_vkDestroySampler)dm_vk_get(instance,"vkDestroySampler");if(!dm_vkDestroySampler)die("Vulkan dispatch vkDestroySampler",0);
+    dm_vkDestroySemaphore=(PFN_vkDestroySemaphore)dm_vk_get(instance,"vkDestroySemaphore");if(!dm_vkDestroySemaphore)die("Vulkan dispatch vkDestroySemaphore",0);
+    dm_vkDestroySurfaceKHR=(PFN_vkDestroySurfaceKHR)dm_vk_get(instance,"vkDestroySurfaceKHR");if(!dm_vkDestroySurfaceKHR)die("Vulkan dispatch vkDestroySurfaceKHR",0);
+    dm_vkDestroySwapchainKHR=(PFN_vkDestroySwapchainKHR)dm_vk_get(instance,"vkDestroySwapchainKHR");if(!dm_vkDestroySwapchainKHR)die("Vulkan dispatch vkDestroySwapchainKHR",0);
+    dm_vkDeviceWaitIdle=(PFN_vkDeviceWaitIdle)dm_vk_get(instance,"vkDeviceWaitIdle");if(!dm_vkDeviceWaitIdle)die("Vulkan dispatch vkDeviceWaitIdle",0);
+    dm_vkEndCommandBuffer=(PFN_vkEndCommandBuffer)dm_vk_get(instance,"vkEndCommandBuffer");if(!dm_vkEndCommandBuffer)die("Vulkan dispatch vkEndCommandBuffer",0);
+    dm_vkEnumeratePhysicalDevices=(PFN_vkEnumeratePhysicalDevices)dm_vk_get(instance,"vkEnumeratePhysicalDevices");if(!dm_vkEnumeratePhysicalDevices)die("Vulkan dispatch vkEnumeratePhysicalDevices",0);
+    dm_vkFreeCommandBuffers=(PFN_vkFreeCommandBuffers)dm_vk_get(instance,"vkFreeCommandBuffers");if(!dm_vkFreeCommandBuffers)die("Vulkan dispatch vkFreeCommandBuffers",0);
+    dm_vkFreeMemory=(PFN_vkFreeMemory)dm_vk_get(instance,"vkFreeMemory");if(!dm_vkFreeMemory)die("Vulkan dispatch vkFreeMemory",0);
+    dm_vkGetBufferMemoryRequirements=(PFN_vkGetBufferMemoryRequirements)dm_vk_get(instance,"vkGetBufferMemoryRequirements");if(!dm_vkGetBufferMemoryRequirements)die("Vulkan dispatch vkGetBufferMemoryRequirements",0);
+    dm_vkGetDeviceQueue=(PFN_vkGetDeviceQueue)dm_vk_get(instance,"vkGetDeviceQueue");if(!dm_vkGetDeviceQueue)die("Vulkan dispatch vkGetDeviceQueue",0);
+    dm_vkGetImageMemoryRequirements=(PFN_vkGetImageMemoryRequirements)dm_vk_get(instance,"vkGetImageMemoryRequirements");if(!dm_vkGetImageMemoryRequirements)die("Vulkan dispatch vkGetImageMemoryRequirements",0);
+    dm_vkGetPhysicalDeviceFeatures=(PFN_vkGetPhysicalDeviceFeatures)dm_vk_get(instance,"vkGetPhysicalDeviceFeatures");if(!dm_vkGetPhysicalDeviceFeatures)die("Vulkan dispatch vkGetPhysicalDeviceFeatures",0);
+    dm_vkGetPhysicalDeviceFormatProperties=(PFN_vkGetPhysicalDeviceFormatProperties)dm_vk_get(instance,"vkGetPhysicalDeviceFormatProperties");if(!dm_vkGetPhysicalDeviceFormatProperties)die("Vulkan dispatch vkGetPhysicalDeviceFormatProperties",0);
+    dm_vkGetPhysicalDeviceMemoryProperties=(PFN_vkGetPhysicalDeviceMemoryProperties)dm_vk_get(instance,"vkGetPhysicalDeviceMemoryProperties");if(!dm_vkGetPhysicalDeviceMemoryProperties)die("Vulkan dispatch vkGetPhysicalDeviceMemoryProperties",0);
+    dm_vkGetPhysicalDeviceProperties=(PFN_vkGetPhysicalDeviceProperties)dm_vk_get(instance,"vkGetPhysicalDeviceProperties");if(!dm_vkGetPhysicalDeviceProperties)die("Vulkan dispatch vkGetPhysicalDeviceProperties",0);
+    dm_vkGetPhysicalDeviceProperties2=(PFN_vkGetPhysicalDeviceProperties2)dm_vk_get(instance,"vkGetPhysicalDeviceProperties2");if(!dm_vkGetPhysicalDeviceProperties2)die("Vulkan dispatch vkGetPhysicalDeviceProperties2",0);
+    dm_vkGetPhysicalDeviceQueueFamilyProperties=(PFN_vkGetPhysicalDeviceQueueFamilyProperties)dm_vk_get(instance,"vkGetPhysicalDeviceQueueFamilyProperties");if(!dm_vkGetPhysicalDeviceQueueFamilyProperties)die("Vulkan dispatch vkGetPhysicalDeviceQueueFamilyProperties",0);
+    dm_vkGetPhysicalDeviceSurfaceCapabilitiesKHR=(PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)dm_vk_get(instance,"vkGetPhysicalDeviceSurfaceCapabilitiesKHR");if(!dm_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)die("Vulkan dispatch vkGetPhysicalDeviceSurfaceCapabilitiesKHR",0);
+    dm_vkGetPhysicalDeviceSurfaceFormatsKHR=(PFN_vkGetPhysicalDeviceSurfaceFormatsKHR)dm_vk_get(instance,"vkGetPhysicalDeviceSurfaceFormatsKHR");if(!dm_vkGetPhysicalDeviceSurfaceFormatsKHR)die("Vulkan dispatch vkGetPhysicalDeviceSurfaceFormatsKHR",0);
+    dm_vkGetPhysicalDeviceSurfaceSupportKHR=(PFN_vkGetPhysicalDeviceSurfaceSupportKHR)dm_vk_get(instance,"vkGetPhysicalDeviceSurfaceSupportKHR");if(!dm_vkGetPhysicalDeviceSurfaceSupportKHR)die("Vulkan dispatch vkGetPhysicalDeviceSurfaceSupportKHR",0);
+    dm_vkGetQueryPoolResults=(PFN_vkGetQueryPoolResults)dm_vk_get(instance,"vkGetQueryPoolResults");if(!dm_vkGetQueryPoolResults)die("Vulkan dispatch vkGetQueryPoolResults",0);
+    dm_vkGetSwapchainImagesKHR=(PFN_vkGetSwapchainImagesKHR)dm_vk_get(instance,"vkGetSwapchainImagesKHR");if(!dm_vkGetSwapchainImagesKHR)die("Vulkan dispatch vkGetSwapchainImagesKHR",0);
+    dm_vkMapMemory=(PFN_vkMapMemory)dm_vk_get(instance,"vkMapMemory");if(!dm_vkMapMemory)die("Vulkan dispatch vkMapMemory",0);
+    dm_vkQueuePresentKHR=(PFN_vkQueuePresentKHR)dm_vk_get(instance,"vkQueuePresentKHR");if(!dm_vkQueuePresentKHR)die("Vulkan dispatch vkQueuePresentKHR",0);
+    dm_vkQueueSubmit=(PFN_vkQueueSubmit)dm_vk_get(instance,"vkQueueSubmit");if(!dm_vkQueueSubmit)die("Vulkan dispatch vkQueueSubmit",0);
+    dm_vkQueueWaitIdle=(PFN_vkQueueWaitIdle)dm_vk_get(instance,"vkQueueWaitIdle");if(!dm_vkQueueWaitIdle)die("Vulkan dispatch vkQueueWaitIdle",0);
+    dm_vkUnmapMemory=(PFN_vkUnmapMemory)dm_vk_get(instance,"vkUnmapMemory");if(!dm_vkUnmapMemory)die("Vulkan dispatch vkUnmapMemory",0);
+    dm_vkUpdateDescriptorSets=(PFN_vkUpdateDescriptorSets)dm_vk_get(instance,"vkUpdateDescriptorSets");if(!dm_vkUpdateDescriptorSets)die("Vulkan dispatch vkUpdateDescriptorSets",0);
+    dm_vkWaitForFences=(PFN_vkWaitForFences)dm_vk_get(instance,"vkWaitForFences");if(!dm_vkWaitForFences)die("Vulkan dispatch vkWaitForFences",0);
+}

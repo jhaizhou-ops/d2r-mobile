@@ -8,6 +8,15 @@
 // 1) unimpl_entry: stub entry for unimplemented imports, x9 = stub number; save x0-x8+lr and call unimpl_c(idx, regs).
 // 2) dm_gate: the rewriter replaces svc / cntpct reads with "bl to this entry". On entry lr = the gate block return point (gate_dispatch uses it to look up which gate this is),
 //    save x0-x30 to a contiguous area on the stack, call gate_dispatch(ret, regs), write back x0 (gate return value), return.
+#ifdef __ANDROID__
+#define _unimpl_stubs unimpl_stubs
+#define _unimpl_entry unimpl_entry
+#define _unimpl_c unimpl_c
+#define _dm_gate dm_gate
+#define _gate_dispatch gate_dispatch
+#define _dm_thread_enter dm_thread_enter
+#define _dm_thread_returned dm_thread_returned
+#endif
     .text
     .globl _unimpl_stubs
     .p2align 3
@@ -134,6 +143,15 @@ _dm_gate:
     .globl _dm_thread_enter
     .p2align 2
 _dm_thread_enter:
+#ifdef __ANDROID__
+    // Slot zero is reserved for the host stack used by pthread teardown.
+    // Guest stacks can be just 4 KiB; Bionic TLS destructors need the host stack.
+    stp x29, x30, [sp, #-16]!
+    mrs x9, tpidr_el0
+    ldr x9, [x9, #16]
+    mov x10, sp
+    str x10, [x9]
+#endif
     mov sp, x2
     mov x29, #0
     mov x16, x0
@@ -142,3 +160,19 @@ _dm_thread_enter:
     br x16
 1:  bl _dm_thread_returned
     brk #0
+#ifdef __ANDROID__
+    .globl dm_thread_exit_host
+    .p2align 2
+dm_thread_exit_host:
+    mrs x9, tpidr_el0
+    ldr x9, [x9, #16]
+    ldr x9, [x9]
+    cbz x9, 2f
+    mov sp, x9
+    ldp x29, x30, [sp], #16
+    mov x0, #0
+    b pthread_exit
+2:  mov x0, #0
+    b pthread_exit             // Abandoned before dm_thread_enter: already on host stack.
+    .section .note.GNU-stack,"",%progbits
+#endif

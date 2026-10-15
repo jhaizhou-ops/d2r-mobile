@@ -26,6 +26,7 @@ import lz4.block
 from capstone import *
 
 src, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]
+ANDROID = os.environ.get('DM_TARGET') == 'android'
 d = open(src, 'rb').read()
 assert d[:4] == b'NSO0'
 flags = struct.unpack_from('<I', d, 0xc)[0]
@@ -257,6 +258,10 @@ def emit_key_addr(reg, kind):
     fix.append((len(patch), kind)); emit(ADRP(reg, here(), KEY_PAGE_OFF)); emit(LDRX(reg, reg, KEY_INDEX[kind]))
 
 def emit_slot_addr(base, key_reg, kind):
+    if ANDROID:
+        # Android Q+: TLS_SLOT_APP contains this thread's host-owned guest slots.
+        # TPIDR_EL0 remains the Bionic thread pointer; no private pthread layout.
+        emit(LDRX(base, base, 2))
     emit_key_addr(key_reg, kind); emit(ADDR(base, base, key_reg))
 
 # ---- 编码器 ----
@@ -272,7 +277,7 @@ def STUR(t, n, off): return 0xF8000000 | ((off & 0x1FF) << 12) | (n << 5) | t   
 def LDUR(t, n, off): return 0xF8400000 | ((off & 0x1FF) << 12) | (n << 5) | t   # ldur xt,[xn,#off]
 def LDRX(t, n, imm12=0): return 0xF9400000 | (imm12 << 10) | (n << 5) | t
 def STRX(t, n, imm12=0): return 0xF9000000 | (imm12 << 10) | (n << 5) | t
-def MRS_TPIDRRO(t): return 0xD53BD060 | t
+def MRS_TPIDRRO(t): return (0xD53BD040 if ANDROID else 0xD53BD060) | t
 def ADRP(dd, pc, target):
     imm = ((target & ~0xFFF) - (pc & ~0xFFF)) >> 12; assert -(1 << 20) <= imm < (1 << 20)
     return 0x90000000 | ((imm & 3) << 29) | (((imm >> 2) & 0x7FFFF) << 5) | dd
@@ -326,9 +331,73 @@ def sp_delta(ins):
     assert not re.match(r'(sp|wsp),', ins.op_str), f'writes sp: {ins.address:x} {ins.op_str}'
     return 0
 
+def subst_sp(ins, word, reg):
+    """Retarget original SP operands to a saved original-SP register.
+
+    Register 31 also encodes ZR. Exhaustively verify the disassembly so that
+    a ZR operand is never rewritten merely because it shares that encoding.
+    """
+    original = dis(word, ins.address)
+    # MOV Xd,SP is ADD Xd,SP,#0. Retargeting the base yields ADD Xd,Xn,#0
+    # (Capstone stops spelling that MOV); use the true register MOV alias.
+    if original.mnemonic == 'mov' and original.op_str.endswith(', sp'):
+        assert word & 0xffc003e0 == 0x910003e0 and (word >> 10 & 0xfff) == 0
+        return 0xaa0003e0 | (reg << 16) | (word & 31)
+    want = re.sub(r'\b(w?sp)\b', lambda m: ('w' if m.group(1) == 'wsp' else 'x') + str(reg), original.op_str)
+    pos = [p for p in (0, 5, 10, 16) if (word >> p) & 31 == 31]
+    for k in range(1, len(pos) + 1):
+        for fields in combinations(pos, k):
+            value = word
+            for p in fields: value = (value & ~(31 << p)) | (reg << p)
+            try: out = dis(value, ins.address)
+            except AssertionError: continue
+            if out.mnemonic == original.mnemonic and out.op_str == want: return value
+    raise RuntimeError(f'Android SP substitution unsupported: {ins.address:x} {original.mnemonic} {original.op_str}')
+
+def android_frame(ins, scratch_bytes=32):
+    """Keep saved registers below every statically known original SP access."""
+    floor = min(0, sp_delta(ins))
+    from capstone.arm64 import ARM64_OP_MEM, ARM64_REG_SP, ARM64_REG_INVALID
+    for operand in ins.operands:
+        if operand.type == ARM64_OP_MEM and operand.mem.base == ARM64_REG_SP:
+            assert operand.mem.index == ARM64_REG_INVALID, f'Android dynamic SP-indexed access unsupported: {ins.address:x} {ins.op_str}'
+            floor = min(floor, operand.mem.disp)
+    frame = (scratch_bytes - floor + 15) & ~15
+    assert frame <= 4095, f'Android scratch frame too large: {ins.address:x} {frame}'
+    return frame
+
+def save_pair(s, t):
+    emit(STP_PRE(s, t, 31, -16) if ANDROID else STP(s, t, 31, -16))
+
+def restore_pair(s, t):
+    emit(LDP_POST(s, t, 31, 16) if ANDROID else LDP(s, t, 31, -16))
+
 def site_plain(ins):
     S, T = pick(regs_in(ins))
     dlt = sp_delta(ins)
+    if ANDROID:
+        assert dlt % 16 == 0, f'Android SP writeback loses 16-byte alignment: {ins.address:x} {dlt}'
+        start = here()
+        sp_used = re.search(r'\bw?sp\b', ins.op_str) is not None
+        if sp_used:
+            (U,) = pick(regs_in(ins) | {S, T}, 1)
+            frame = android_frame(ins)
+            emit(SUBI(31, 31, frame))
+            emit(STP(S, T, 31, 0)); emit(STRX(U, 31, 2))
+            emit(ADDI(U, 31, frame))
+        else:
+            frame, U = 16, None
+            save_pair(S, T)
+        emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+        word = subst(ins, S)
+        if U is not None: word = subst_sp(ins, word, U)
+        emit(word); emit(STRX(S, T))
+        if U is not None: emit(LDRX(U, 31, 2))
+        emit(LDP(S, T, 31, 0))
+        assert 0 <= frame + dlt <= 4095, f'Android final SP adjustment unsupported: {ins.address:x} {frame + dlt}'
+        if frame + dlt: emit(ADDI(31, 31, frame + dlt))
+        emit(B(here(), ins.address + 4))
+        return start
     save = -16 if dlt == 0 else -112          # 改 sp 的指令会写到 sp 下方，暂存放到保留区深处 | Instructions that modify sp write below sp, so the scratch save is placed deep in the reserved area
     assert dlt == 0 or dlt >= -96, f'sp delta {dlt} at {ins.address:x}'
     start = here()
@@ -343,34 +412,36 @@ def site_cond(ins):
     S, T = pick(regs_in(ins))
     tgt = ins.operands[-1].imm
     start = here()
-    emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+    save_pair(S, T); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
     m = ins.mnemonic
     taken = here() + 4 * 3
     off = (taken - here()) >> 2
     nw = ((w & 0xFF000000) | ((off & 0x7FFFF) << 5) | S) if m in ('cbz', 'cbnz') else ((w & 0xFFF80000) | ((off & 0x3FFF) << 5) | S)
     pc = here(); emit(nw)
     dd = dis(nw, pc); assert dd.mnemonic == m and dd.operands[-1].imm == taken
-    emit(LDP(S, T, 31, -16)); emit(B(here(), ins.address + 4))
+    restore_pair(S, T); emit(B(here(), ins.address + 4))
     assert here() == taken
-    emit(LDP(S, T, 31, -16)); emit(B(here(), tgt))
+    restore_pair(S, T); emit(B(here(), tgt))
     return start
 
 def site_pcrel(ins):
     tgt = ins.operands[1].imm
     S, T = pick(set())
     start = here()
-    emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18')   # S 先作键页偏移暂存，下一条再装目标值 | S first serves as a temporary for the key page offset; the next instruction then loads the target value
+    save_pair(S, T); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18')   # S first holds the key-page offset.
     pc = here(); emit(ADRP(S, pc, tgt))
     if ins.mnemonic == 'adr': emit(ADDI(S, S, tgt & 0xFFF))
     emit(STRX(S, T))
-    emit(LDP(S, T, 31, -16)); emit(B(here(), ins.address + 4))
+    restore_pair(S, T); emit(B(here(), ins.address + 4))
     return start
 
 def site_br(ins, base, count):
     """跳转表 br x18：目标 = base + 4i。x16 暂存红区 → 等距落地垫 → 恢复 x16 → 原目标。 | Jump table br x18: target = base + 4i. Stash x16 in the red zone → equally spaced landing pads → restore x16 → original target."""
     start = here()
-    emit(STUR(16, 31, -16)); emit(STUR(17, 31, -24))   # x16 / x17 是函数内可存活的临时寄存器，借用前存红区 | x16 / x17 are temporary registers that can stay live within a function; save them to the red zone before borrowing
-    emit(MRS_TPIDRRO(16)); emit_slot_addr(16, 17, 'K18'); emit(LDRX(16, 16)); emit(LDUR(17, 31, -24))
+    if ANDROID: emit(STP_PRE(16, 17, 31, -16))
+    else: emit(STUR(16, 31, -16)); emit(STUR(17, 31, -24))
+    emit(MRS_TPIDRRO(16)); emit_slot_addr(16, 17, 'K18'); emit(LDRX(16, 16))
+    emit(LDRX(17, 31, 1) if ANDROID else LDUR(17, 31, -24))
     padbase = start + 4 * 24
     delta = padbase - base
     op = ADDI if delta >= 0 else SUBI; dl = abs(delta)
@@ -384,27 +455,48 @@ def site_br(ins, base, count):
     tails = padbase + 4 * count
     for i in range(count): emit(B(here(), tails + 8 * i))
     for i in range(count):
-        emit(0xF85F0000 | (31 << 5) | 16)      # ldur x16,[sp,#-16]
+        emit(LDP_POST(16, 17, 31, 16) if ANDROID else LDUR(16, 31, -16))
         emit(B(here(), base + 4 * i))
     return start
 
 def site_sysreg_read(ins, kind):
     """mrs xN, tpidr_el0 / tpidrro_el0 → xN = 线程槽值。 | mrs xN, tpidr_el0 / tpidrro_el0 → xN = thread slot value."""
     N = ins.bytes[0] & 31
+    if ANDROID and N == 18:
+        return site_virtual_tp(ins, kind, 'K18')
+    if ANDROID and N == 31:
+        start = here(); emit(B(here(), ins.address + 4)); return start
     tmp = 16 if N != 16 else 17
     start = here()
-    emit(STUR(tmp, 31, -16)); emit(MRS_TPIDRRO(N)); emit_slot_addr(N, tmp, kind); emit(LDRX(N, N)); emit(LDUR(tmp, 31, -16))   # tmp 存红区借用 | tmp is saved by borrowing the red zone
+    emit(STP_PRE(tmp, 31, 31, -16) if ANDROID else STUR(tmp, 31, -16))
+    emit(MRS_TPIDRRO(N)); emit_slot_addr(N, tmp, kind); emit(LDRX(N, N))
+    emit(LDP_POST(tmp, 31, 31, 16) if ANDROID else LDUR(tmp, 31, -16))
     emit(B(here(), ins.address + 4))
     return start
 
 def site_tpidr_write(ins):
     N = struct.unpack('<I', ins.bytes)[0] & 31
+    if ANDROID and N == 18:
+        return site_virtual_tp(ins, 'K18', 'KTLS')
     (T,) = pick({N}, 1)
     start = here()
-    emit(0xF81F0000 | (31 << 5) | T)           # stur xT,[sp,#-16]
     tmp = next(x for x in (16, 17) if x not in (N, T))
-    emit(STUR(tmp, 31, -24)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, tmp, 'KTLS'); emit(STRX(N, T)); emit(LDUR(tmp, 31, -24))
-    emit(0xF85F0000 | (31 << 5) | T)           # ldur xT,[sp,#-16]
+    if ANDROID: emit(STP_PRE(T, tmp, 31, -16))
+    else: emit(STUR(T, 31, -16)); emit(STUR(tmp, 31, -24))
+    emit(MRS_TPIDRRO(T)); emit_slot_addr(T, tmp, 'KTLS'); emit(STRX(N, T))
+    if ANDROID: emit(LDP_POST(T, tmp, 31, 16))
+    else: emit(LDUR(tmp, 31, -24)); emit(LDUR(T, 31, -16))
+    emit(B(here(), ins.address + 4))
+    return start
+
+def site_virtual_tp(ins, source_kind, destination_kind):
+    """TP reads/writes involving guest x18 must never touch hardware x18."""
+    S, T, U = pick({18}, 3)
+    start = here()
+    emit(STP_PRE(S, T, 31, -32)); emit(STRX(U, 31, 2))
+    emit(MRS_TPIDRRO(T)); emit_slot_addr(T, U, source_kind); emit(LDRX(S, T))
+    emit(MRS_TPIDRRO(T)); emit_slot_addr(T, U, destination_kind); emit(STRX(S, T))
+    emit(LDRX(U, 31, 2)); emit(LDP_POST(S, T, 31, 32))
     emit(B(here(), ins.address + 4))
     return start
 
@@ -472,13 +564,22 @@ def site_window(seg):
     S, T = pick(used)
     lo, hi = seg[0].address, seg[-1].address + 4
     start = here()
-    emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+    U = None
+    if ANDROID and any(re.search(r'\bw?sp\b', x.op_str) for x in seg):
+        for x in seg:
+            assert sp_delta(x) == 0, f'Android exclusive window writes SP: {x.address:x} {x.op_str}'
+            assert android_frame(x) == 32, f'Android exclusive window negative SP access: {x.address:x} {x.op_str}'
+        (U,) = pick(used | {S, T}, 1)
+        emit(STP_PRE(S, T, 31, -32)); emit(STRX(U, 31, 2)); emit(ADDI(U, 31, 32))
+    else: save_pair(S, T)
+    emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
     copy0 = here(); n = len(seg)
     exits = copy0 + 4 * n
     ex_targets = []; words = []
     for k, x in enumerate(seg):
         w = struct.unpack('<I', x.bytes)[0]
         if has18(x): w = subst(x, S)
+        if U is not None and re.search(r'\bw?sp\b', x.op_str): w = subst_sp(x, w, U)
         m = x.mnemonic
         if m in ('cbz', 'cbnz', 'tbz', 'tbnz') or m.startswith('b.'):
             tgt = x.operands[-1].imm
@@ -501,7 +602,11 @@ def site_window(seg):
     # (one operation done twice / a lock-free list popped more than once). The game has 6 such windows (main 0x1848eb8 / 0x1848f28 / 0x1848f84, sdk 0x2ea0fc / 0x2ea4cc / 0x2ea644);
     # windows whose only branch is a cbnz back into the window are not affected. The equivalence check used to never draw the "compare equal" direction at random, so it stayed green (equiv.py now forces both directions of window branches).
     for t in [hi] + ex_targets:
-        emit(STRX(S, T)); emit(LDP(S, T, 31, -16)); emit(B(here(), t)); emit(NOP)
+        emit(STRX(S, T))
+        if U is not None:
+            emit(LDRX(U, 31, 2)); emit(LDP_POST(S, T, 31, 32)); emit(B(here(), t))
+        else:
+            restore_pair(S, T); emit(B(here(), t)); emit(NOP)
     return start, lo, hi
 
 # ---- 函数边界（eh_frame_hdr）----
@@ -789,9 +894,9 @@ for oa, wa, ob_, wb, r, key, why in params:
     for o in range(oa + 4, ob_, 4):
         ins = dis(struct.unpack_from('<I', IMG, o)[0], o)
         assert r not in regs_in(ins), f'参数位中间用到 x{r}：{o:#x} {ins.mnemonic} {ins.op_str}'
-    start = here()
-    tmp = 16 if r != 16 else 17
-    emit(STUR(tmp, 31, -16)); emit(MRS_TPIDRRO(r)); emit_slot_addr(r, tmp, key); emit(LDRX(r, r)); emit(LDUR(tmp, 31, -16)); emit(B(here(), oa + 4))
+    # Parameter values use the same allocated-frame slot-read block as TP
+    # reads, including logical x18 handling on Android.
+    start = site_sysreg_read(dis(0xd53bd040 | r, oa), key)
     struct.pack_into('<I', IMG, oa, B(oa, start)); struct.pack_into('<I', IMG, ob_, NOP); stat('param')
 
 # 既有三块原生规则跳板均只使用后继覆盖的死临时w8，不改w0/stat返回、sp或NZCV。
@@ -852,6 +957,7 @@ if RULE_RUN:
 elif os.path.exists(P('rules.tsv')):
     os.unlink(P('rules.tsv'))  # 重出native时清本模块旧规则登记，不让旧manifest混入原资源域 | When rebuilding native, clear this module's old rule registration so the old manifest does not leak into the original-resource domain
 with open(P('fixups.tsv'), 'w') as f:
+    if ANDROID: f.write('# ANDROID_APP_SLOT\t0x2\n')
     f.write(f'# PATCH_OFF\t{PATCH_OFF:#x}\n# KEY_PAGE_OFF\t{KEY_PAGE_OFF:#x}\n# KEY_PAGE_SIZE\t0x4000\n# TEXT_END\t{TEXT_END:#x}\n# RO_OFF\t{RO_OFF:#x}\n# DATA_OFF\t{DATA_OFF:#x}\n')
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
 with open(P('gates.tsv'), 'w') as f:

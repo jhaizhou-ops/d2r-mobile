@@ -26,6 +26,7 @@
 #include "nvn_pace.h"
 #include "../../host/front.h"
 #include "nvn_dirty.h"
+#ifndef __ANDROID__
 #include <mach/mach_time.h>
 #include <mach/mach.h>
 #include <TargetConditionals.h>
@@ -42,6 +43,12 @@
 #include <stdatomic.h>
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
+#else
+#include <unistd.h>
+#include <assert.h>
+#include <stdatomic.h>
+#include <time.h>
+#endif
 
 // ---------- 槽表、跳板、未实现桩 ----------
 // ---------- Slot table, thunks, unimplemented stubs ----------
@@ -54,25 +61,37 @@ extern void nvn_unimpl_entry(void);
 extern void nvn_prof_entry(void);
 void *nvn_real[NVN_NFUNC];               // DM_NVN_PROF：计时包装调用的真实现 | DM_NVN_PROF: the real implementation called by the timing wrapper
 _Atomic uint64_t nvn_prof_ticks[NVN_NFUNC]; // DM_NVN_PROF：各函数累计耗时（cntvct 计数） | DM_NVN_PROF: cumulative time of each function (cntvct counts)
+#ifndef __ANDROID__
 static uint8_t g_unimpl_seen[NVN_NFUNC];
+#endif
 
 uint64_t nvn_unimpl_c(nvn_slot_t *slot, uint64_t x0, uint64_t x1, uint64_t x2) {
     unsigned i = (unsigned)(slot - nvn_slot);
+#ifdef __ANDROID__
+    if(i>=NVN_NFUNC)die("Android invalid NVN stub slot %u",i);
+    die("Android NVN unsupported function %s (x0=%#llx x1=%#llx x2=%#llx)",nvn_names[i],(unsigned long long)x0,(unsigned long long)x1,(unsigned long long)x2);
+#else
     if (!g_unimpl_seen[i]++) LOG("【红】NVN 未实现被调用：%s (x0=%#llx x1=%#llx x2=%#llx)", nvn_names[i], x0, x1, x2);
     return 0;
+#endif
 }
 
 typedef struct { const char *name; void *fn; } nvn_impl;
+#ifdef __ANDROID__
+#define NVN_SECTION "swnvn"
+#else
+#define NVN_SECTION "__DATA,swnvn"
+#endif
 #define NVN(name, ret, ...)                                                                       \
     static ret h_##name(__VA_ARGS__);                                                             \
     static const NVNT_##name chk_##name __attribute__((unused)) = h_##name;                       \
-    __attribute__((used, section("__DATA,swnvn"))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
+    __attribute__((used, aligned(8), section(NVN_SECTION))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
     static ret h_##name(__VA_ARGS__)
 // 无原型的新版接口：不做签名检查
 // Newer interfaces without prototypes: no signature check
 #define NVN_NOPROTO(name, ret, ...)                                                               \
     static ret h_##name(__VA_ARGS__);                                                             \
-    __attribute__((used, section("__DATA,swnvn"))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
+    __attribute__((used, aligned(8), section(NVN_SECTION))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
     static ret h_##name(__VA_ARGS__)
 
 static int g_log;
@@ -80,12 +99,17 @@ uint64_t nvn_new_serial(void) { static _Atomic uint64_t n; return ++n; }
 static unsigned g_nsem;                          // 语义实现个数（nvn_init_slots 填） | Number of semantic implementations (filled by nvn_init_slots)
 #define OLOG(...) do { if (g_log) LOG("[nvn] " __VA_ARGS__); } while (0)
 
-static void nvn_init_slots(void) {
-    static int done; if (done) return; done = 1;
+static void nvn_slots_initialize_once(void) {
     g_log = getenv("DM_NVN_LOG") != NULL;
+#ifdef __ANDROID__
+    extern const nvn_impl __start_swnvn[],__stop_swnvn[];
+    const nvn_impl *im=__start_swnvn;
+    unsigned nim=(unsigned)(__stop_swnvn-__start_swnvn),hit=0;
+#else
     unsigned long sz;
     const nvn_impl *im = (const nvn_impl *)getsectiondata(&_mh_execute_header, "__DATA", "swnvn", &sz);
     unsigned nim = im ? (unsigned)(sz / sizeof *im) : 0, hit = 0;
+#endif
     for (unsigned i = 0; i < NVN_NFUNC; i++) nvn_slot[i].fn = (void *)nvn_unimpl_entry;
     for (unsigned k = 0; k < nim; k++) {
         unsigned i = 0;
@@ -95,12 +119,19 @@ static void nvn_init_slots(void) {
     }
     g_nsem = hit;
 }
+static void nvn_init_slots(void) {static pthread_once_t once=PTHREAD_ONCE_INIT;if(pthread_once(&once,nvn_slots_initialize_once))die("NVN slot initialization failed");}
 
 static void *nvn_lookup(const char *name) {
     nvn_init_slots();
+#ifdef __ANDROID__
+    if(!name)die("Android NVN null function lookup");
+#endif
     for (unsigned i = 0; i < NVN_NFUNC; i++)
         if (!strcmp(nvn_names[i], name)) return nvn_thunk[i];
     LOG("【红】NVN 取址未知名字：%s", name ? name : "(null)");
+#ifdef __ANDROID__
+    die("Android unknown NVN function lookup %s",name);
+#endif
     return NULL;
 }
 
@@ -152,7 +183,13 @@ NVN(nvnDeviceGetInteger, void, const NVNdevice *d, NVNdeviceInfo what, int *out)
     unsigned w = (unsigned)what;
     // 0x5F 分离采样器绑定数、0x60/0x61 在 SMO 实测表里没有：0x5F 按采样器池上限给 4096 未核，0x60/0x61 报红给 0
     // 0x5F separate sampler binding count and 0x60/0x61 are not in the table measured on SMO: 0x5F is given 4096 per the sampler pool limit, unverified; 0x60/0x61 report a failure and return 0
-    if (w >= sizeof g_devinfo / sizeof *g_devinfo) { LOG("【红】nvnDeviceGetInteger 未知项 %#x，给 0", w); *out = 0; return; }
+    if (w >= sizeof g_devinfo / sizeof *g_devinfo) {
+#ifdef __ANDROID__
+        die("Android NVN unsupported device property %#x",w);
+#else
+        LOG("【红】nvnDeviceGetInteger 未知项 %#x，给 0", w); *out = 0; return;
+#endif
+    }
     *out = g_devinfo[w];
     OLOG("DeviceGetInteger %#x -> %d", w, *out);
 }
@@ -164,7 +201,13 @@ NVN(nvnDeviceGetSeparateSamplerHandle, NVNseparateSamplerHandle, const NVNdevice
 NVN(nvnDeviceInstallDebugCallback, void, NVNdevice *d, const PFNNVNDEBUGCALLBACKPROC cb, void *data, uint32_t enable) {
     dev_t_ *o = (dev_t_ *)d; o->dbg_cb = B(enable) ? (void *)cb : NULL; o->dbg_data = data;
 }
-NVN(nvnDeviceSetWindowOriginMode, void, NVNdevice *d, NVNwindowOriginMode m) { ((dev_t_ *)d)->origin = m; LOG("[nvn] 窗口原点 %s", m ? "左上（同 D3D / Metal）" : "左下（GL）"); }
+NVN(nvnDeviceSetWindowOriginMode, void, NVNdevice *d, NVNwindowOriginMode m) {
+    ((dev_t_ *)d)->origin = m;
+#ifdef __ANDROID__
+    mtl_set_window_origin_mode(m);
+#endif
+    LOG("[nvn] 窗口原点 %s", m ? "左上（同 D3D / Metal）" : "左下（GL）");
+}
 NVN(nvnDeviceSetDepthMode, void, NVNdevice *d, NVNdepthMode m) { ((dev_t_ *)d)->depth_mode = m; LOG("[nvn] 深度模式 %s", m ? "近=0（同 D3D / Metal）" : "近=-w（GL）"); }
 NVN(nvnDeviceFinalizeCommandHandle, void, NVNdevice *d, NVNcommandHandle h) { (void)d; (void)h; }
 
@@ -438,9 +481,10 @@ NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) {
     *(ev_t *)e = (ev_t){MAGIC('E', 'V', 'N', 'T'), (volatile uint32_t *)(s->pool->mem + s->off)}; return 1;
 }
 NVN(nvnEventFinalize, void, NVNevent *e) { ((ev_t *)e)->magic = 0; }
-NVN(nvnEventGetValue, uint32_t, const NVNevent *e) { return *((const ev_t *)e)->val; }
+static volatile unsigned g_cpu_event_gets,g_cpu_event_signals;
+NVN(nvnEventGetValue, uint32_t, const NVNevent *e) { unsigned n=__sync_add_and_fetch(&g_cpu_event_gets,1);if(n<=20||n%2000==0)fprintf(stderr,"[nvn-event] CPU_GET addr=%p count=%u\n",(const void *)((const ev_t *)e)->val,n);return *((const ev_t *)e)->val; }
 static void ev_signal(const ev_t *e, int mode, uint32_t v) { if (mode == NVN_EVENT_SIGNAL_MODE_ADD) *e->val += v; else *e->val = v; }
-NVN(nvnEventSignal, void, NVNevent *e, NVNeventSignalMode m, uint32_t v) { ev_signal((const ev_t *)e, m, v); }
+NVN(nvnEventSignal, void, NVNevent *e, NVNeventSignalMode m, uint32_t v) { unsigned n=__sync_add_and_fetch(&g_cpu_event_signals,1);if(n<=20||n%2000==0)fprintf(stderr,"[nvn-event] CPU_SIGNAL addr=%p mode=%d value=%u count=%u\n",(const void *)((const ev_t *)e)->val,(int)m,v,n);ev_signal((const ev_t *)e, m, v); }
 
 // ---------- 队列 ----------
 // ---------- Queue ----------
@@ -571,11 +615,12 @@ NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return
 NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
     for (int i = 0; i < n; i++) { uint8_t *p = cmd_alloc(CB(c), 16); put_hdr(p, OP_CALL, 16); memcpy(p + 8, &h[i], 8); }
 }
+static int nvn_event_trace_enabled(void) { return getenv("DM_EVENT_TRACE") != NULL; }
 NVN(nvnCommandBufferSignalEvent, void, NVNcommandBuffer *c, const NVNevent *e, NVNeventSignalMode m, NVNeventSignalLocation loc, int flags, uint32_t v) {
-    (void)loc; (void)flags;
     uint8_t *p = cmd_alloc(CB(c), 24); put_hdr(p, OP_SIGNAL_EVENT, 24);
     const ev_t *ev = (const ev_t *)e; volatile uint32_t *val = ev->val; uint32_t mm = m;
     memcpy(p + 8, &val, 8); memcpy(p + 16, &mm, 4); memcpy(p + 20, &v, 4);
+    if (nvn_event_trace_enabled()) fprintf(stderr, "[nvn-event] SIGNAL_RECORD record=%p address=%p mode=%u location=%u flags=%#x value=%u\n", (void *)p, (void *)val, (unsigned)mm, (unsigned)loc, (unsigned)flags, v);
 }
 NVN(nvnCommandBufferResetCounter, void, NVNcommandBuffer *c, NVNcounterType t) {
     uint8_t *p = cmd_alloc(CB(c), 16); put_hdr(p, OP_RESET_COUNTER, 16); uint64_t tt = t; memcpy(p + 8, &tt, 8);
@@ -703,6 +748,16 @@ NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, in
 NVN(nvnCommandBufferBarrier, void, NVNcommandBuffer *c, int bits) { *(int32_t *)rec(c, OP_BARRIER, 8) = bits; }
 NVN(nvnCommandBufferSetTexturePool, void, NVNcommandBuffer *c, const NVNtexturePool *p) { REC(c, OP_SET_TEX_POOL, p_set_pool)->pool = (const dpool_t *)p; }
 NVN(nvnCommandBufferSetSamplerPool, void, NVNcommandBuffer *c, const NVNsamplerPool *p) { REC(c, OP_SET_SAMP_POOL, p_set_pool)->pool = (const dpool_t *)p; }
+#ifdef __ANDROID__
+NVN(nvnCommandBufferSetShaderScratchMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t offset, size_t size) {
+    const pool_t *pool=(const pool_t *)p;
+    if(!pool || pool->magic!=MAGIC('P','O','O','L') || !pool->mem || offset<0 ||
+       (uint64_t)offset>pool->size || size>pool->size-(uint64_t)offset)
+        die("Android NVN invalid shader scratch range offset=%lld size=%llu",(long long)offset,(unsigned long long)size);
+    *REC(c,OP_SHADER_SCRATCH,p_bind_buf)=(p_bind_buf){.addr=(uint64_t)(uintptr_t)(pool->mem+offset),.size=size};
+    LOG("ANDROID_NVN_SHADER_SCRATCH offset=%lld bytes=%llu SPIRV_private_memory=true",(long long)offset,(unsigned long long)size);
+}
+#endif
 
 NVN(nvnCommandBufferCopyBufferToTexture, void, NVNcommandBuffer *c, NVNbufferAddress src, const NVNtexture *t, const NVNtextureView *v,
     const NVNcopyRegion *r, int flags) {
@@ -726,6 +781,24 @@ NVN(nvnCommandBufferCopyTextureToTexture, void, NVNcommandBuffer *c, const NVNte
     copy_view(&o->sv, &o->has_sv, sv); copy_view(&o->dv, &o->has_dv, dv); o->sr = *sr; o->dr = *dr; o->flags = flags;
 }
 NVN(nvnCommandBufferSetCopyRowStride, void, NVNcommandBuffer *c, ptrdiff_t st) { REC(c, OP_COPY_STRIDE, p_copy_stride)->stride = st; }
+#ifdef __ANDROID__
+NVN(nvnCommandBufferWaitSync, void, NVNcommandBuffer *c, const NVNsync *s) {
+    if(!s || ((const sync_t *)s)->magic!=MAGIC('S','Y','N','C'))die("CommandBufferWaitSync invalid sync");
+    *REC(c,OP_WAIT_SYNC,p_sync)=(p_sync){(sync_t *)s,0,0};
+}
+NVN(nvnCommandBufferFenceSync, void, NVNcommandBuffer *c, NVNsync *s, NVNsyncCondition condition, int flags) {
+    if(!s || ((sync_t *)s)->magic!=MAGIC('S','Y','N','C') || condition<0 || condition>1 || flags&~1)
+        die("CommandBufferFenceSync invalid sync/condition/flags");
+    *REC(c,OP_FENCE_SYNC,p_sync)=(p_sync){(sync_t *)s,condition,flags};
+}
+NVN(nvnCommandBufferWaitEvent, void, NVNcommandBuffer *c, const NVNevent *e, NVNeventWaitMode mode, uint32_t value) {
+    const ev_t *v=(const ev_t *)e;
+    if(!v || v->magic!=MAGIC('E','V','N','T') || !v->val || mode<0 || mode>1)die("CommandBufferWaitEvent invalid event/mode");
+    uint64_t *r=rec(c,OP_WAIT_EVENT,16);r[0]=(uint64_t)(uintptr_t)v->val;
+    ((uint32_t *)(r+1))[0]=mode;((uint32_t *)(r+1))[1]=value;
+    if(nvn_event_trace_enabled())fprintf(stderr,"[nvn-event] WAIT_RECORD record=%p address=%p mode=%u value=%u\n",(void *)((uint8_t *)r-sizeof(op_hdr)),(void *)v->val,(unsigned)mode,value);
+}
+#endif
 NVN(nvnCommandBufferSetBlendColor, void, NVNcommandBuffer *c, const float *v) { memcpy(REC(c, OP_BLEND_COLOR, p_blend_color)->rgba, v, 16); }
 
 // ---------- 状态对象：就地打包（nvn_obj.h） ----------
@@ -785,6 +858,9 @@ NVN(nvnVertexStreamStateSetDefaults, void, NVNvertexStreamState *s) { *ST(vs_st,
 NVN(nvnVertexStreamStateSetStride, void, NVNvertexStreamState *s, ptrdiff_t st) { ST(vs_st, s)->stride = (uint32_t)st; }
 NVN(nvnVertexStreamStateSetDivisor, void, NVNvertexStreamState *s, int d) { ST(vs_st, s)->divisor = d; }
 
+#ifdef __ANDROID__
+#include "../../android/nvn_platform_present.inc"
+#else
 static _Atomic uint64_t g_sub_wall_ns, g_sub_cpu_ns, g_sub_instr;   // 提交（不含出图）的墙钟 / 本线程 CPU 时间 / 本线程退休指令数（逐帧取走） | Wall clock / this thread's CPU time / this thread's retired instruction count for submit (excluding present) (taken away per frame)
 static _Atomic uint64_t g_cum_sub_instr, g_cum_sub_cpu_ns;   // 同上累计（每 300 帧汇总「翻译」行取差，真机经日志口读：每次绘制指令数 / 每帧提交 CPU） | Cumulative versions of the above (the 「翻译」(translation) summary row every 300 frames takes the difference; on a real device read through the log port: instructions per draw / submit CPU per frame)
 extern int thread_selfcounts(int type, void *buf, size_t nbytes);   // 本线程累计 {指令, 周期}（libSystem 私有接口，Mac / iOS 都有） | This thread's cumulative {instructions, cycles} (libSystem private interface, present on both Mac and iOS)
@@ -934,6 +1010,8 @@ static void nvn_nop(void) {}
 static const char *const g_nops[] = {
     "nvnCommandBufferDispatchComputeIndirect",
     "nvnCommandBufferSetDepthBounds",
+    "nvnCommandBufferDownsampleTextureView",
+#ifndef __ANDROID__
     "nvnCommandBufferWaitSync",    // 每帧 1 次。GPU 侧等一个同步对象，不是 CPU 读回（CPU 等 GPU 走 nvnSyncWait，已按栅栏真等）。同步对象只有两种来源： | 1 time per frame. A GPU-side wait on a sync object, not a CPU readback (CPU waits on the GPU via nvnSyncWait, which already truly waits on the fence). Sync objects have only two sources:
                                    // QueueFenceSync 与 WindowAcquireTexture，栅栏值都取「记录时已提交的最大值」，含 WaitSync 的命令缓冲必在其后提交到同一条队列。
                                    // 翻译层只有一条 Metal 队列（游戏各帧与出图都提交到它）：Metal 4 每个编码器开头都设「等队列上此前全部阶段」的屏障，
@@ -943,13 +1021,16 @@ static const char *const g_nops[] = {
                                    // The translation layer has only one Metal queue (all game frames and presents are submitted to it): Metal 4 sets a barrier at the start of each encoder that "waits for all previous stages on the queue",
                                    // and on the legacy API (iOS 18) resources are all tracked and argument block references are useResource one by one, so Metal guarantees read/write order. Both paths are already ordered, so a no-op is correct.
                                    // This assumes a single queue: if a second one is ever added (e.g. async compute), this must become a real wait
+#endif
     "nvnCommandBufferSetShaderScratchMemory",
     "nvnCommandBufferPushDebugGroupDynamic",
     "nvnCommandBufferPopDebugGroup",
     "nvnCommandBufferInsertDebugMarkerDynamic",
+#ifndef __ANDROID__
     "nvnCommandBufferWaitEvent",   // 每帧 2 次。等的是同一命令流里更早的 SignalEvent（每帧 4 次）或 CPU 的 EventSignal（只在初始化时 6 次，早已到位）； | 2 times per frame. Waits on an earlier SignalEvent in the same command stream (4 times per frame) or a CPU EventSignal (only 6 times at init, long since reached);
                                    // 单队列按序执行，GPU 不会越过前面的命令，空跑即正确（若等的是其后才发的信号，Switch 真机单队列会卡死，不可能）
                                    // A single queue executes in order and the GPU never passes earlier commands, so a no-op is correct (if it waited on a signal issued later, a single queue on real Switch hardware would deadlock, which cannot happen)
+#endif
     "nvnWindowFinalize",
 };
 __attribute__((constructor)) static void nvn_nops_register(void) {
@@ -1382,3 +1463,4 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (f >= 8 && slow_on()) slow_emit(f - 8);
     prev_out = now_ns();
 }
+#endif /* Apple submit/window diagnostics retained; Android uses native platform implementation. */

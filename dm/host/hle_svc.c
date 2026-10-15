@@ -102,7 +102,9 @@ enum { I_CoreMask=0, I_PriorityMask=1, I_AliasAddr=2, I_AliasSize=3, I_HeapAddr=
        I_AslrAddr=12, I_AslrSize=13, I_StackAddr=14, I_StackSize=15, I_SysResTotal=16, I_SysResUsed=17,
        I_ProgramId=18, I_InitProcIdRange=19, I_UserExcAddr=20, I_TotalNonSys=21, I_UsedNonSys=22, I_IsApplication=23 };
 
+#ifndef __ANDROID__
 static uint8_t g_seen[256];
+#endif
 
 // 已映射区间登记（MapMemory 栈、MapPhysicalMemory alias 页），QueryMemory 据此回报；SDK 靠它找空位
 // Registry of mapped ranges (MapMemory stacks, MapPhysicalMemory alias pages), QueryMemory reports from it; the SDK relies on it to find free space
@@ -142,8 +144,12 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         g_heap_cur = size;
         regs[0] = 0; regs[1] = (uint64_t)g_heap; return 0;
     }
+#ifdef __ANDROID__
+    case 0x02: case 0x03: die("Android memory permission/attribute service %#x not yet implemented", num);
+#else
     case 0x02: regs[0] = 0; return 0;   // SetMemoryPermission
     case 0x03: regs[0] = 0; return 0;   // SetMemoryAttribute
+#endif
     case 0x04: {  // MapMemory(dst, src, size)：SDK 建线程时把堆上的栈搬进栈区 | MapMemory(dst, src, size): when creating a thread the SDK moves the stack on the heap into the stack region
         uint64_t dst = regs[0], src = regs[1], size = regs[2];
         if ((uint8_t *)dst < g_stack || (uint8_t *)dst + size > g_stack + g_stack_cap || map_find(dst, size)) {
@@ -193,7 +199,14 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
             // later nn::os::GetCurrentStackInfo asserts that sp is still inside that range and aborts if not. Previously every address outside the guest address space was reported as "the 4 KiB page containing it",
             // so the main thread stack was recorded as one page. Whether the sp at init and a later sp share a page depends on the absolute position of the host stack top, which moves with the total length of environment variables / launch arguments (a different environment occasionally aborts at startup).
             // This Diablo build does not call GetCurrentStackInfo (main / subsdk0 do not import it and the SDK has no internal call site; the host reaches the main menu with 12 different environment padding lengths), so it was never hit; reporting "one page" is wrong in itself, so fix it anyway.
+#ifdef __ANDROID__
+            pthread_attr_t attr; void *stack_base; size_t stack_size;
+            if (pthread_getattr_np(pthread_self(), &attr) || pthread_attr_getstack(&attr, &stack_base, &stack_size)) die("Android host stack attributes");
+            pthread_attr_destroy(&attr);
+            uint64_t top = (uint64_t)stack_base + stack_size, ssz = stack_size;
+#else
             uint64_t top = (uint64_t)pthread_get_stackaddr_np(pthread_self()), ssz = pthread_get_stacksize_np(pthread_self());
+#endif
             if (addr < top && addr >= top - ssz) { base = top - ssz; size = ssz; state = 0xB/*Stack*/; perm = 3; }
             else { base=addr & ~0xFFFull; size=0x1000; state=3/*Code*/; perm=5; } }
         if (mi) { uint64_t *m=(uint64_t*)mi; m[0]=base; m[1]=size; ((uint32_t*)mi)[4]=state; ((uint32_t*)mi)[5]=0; ((uint32_t*)mi)[6]=perm; ((uint32_t*)mi)[7]=0; ((uint32_t*)mi)[8]=0; }
@@ -241,12 +254,27 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         case I_ProgramId: v = 0x0100726014352000ull; break;
         case I_IsApplication: v = 1; break;
         case I_UserExcAddr: v = 0; break;
+#ifdef __ANDROID__
+        default: die("Android unsupported GetInfo id=%llu handle=%#llx subid=%#llx", id, regs[2], regs[3]);
+#else
         default: v = 0; break;
+#endif
         }
         regs[0] = 0; regs[1] = v; return 0;
     }
     default:
+#ifdef __ANDROID__
+        LOG("ANDROID_UNHANDLED_SVC original_pc=%#llx lr=%#llx fp=%#llx", orig_addr, regs[30], regs[29]);
+        if (num==0x1f) {
+            module_t *m=module_of((void *)(uintptr_t)regs[1]);
+            if (m && regs[1]-(uint64_t)(uintptr_t)m->base<=m->size-16)
+                LOG("ANDROID_CONNECT_PORT name=%.15s",(const char *)(uintptr_t)regs[1]);
+        }
+        dm_backtrace(regs[29]);
+        die("Android unsupported SVC %#x x0=%#llx x1=%#llx x2=%#llx", num, regs[0], regs[1], regs[2]);
+#else
         if (!g_seen[num & 0xff]) { g_seen[num & 0xff] = 1; LOG("SVC %#x x0=%#llx x1=%#llx x2=%#llx (占位返回成功)", num, regs[0], regs[1], regs[2]); }
         regs[0] = 0; return 0;
+#endif
     }
 }
