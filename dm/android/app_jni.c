@@ -185,6 +185,14 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     setenv("DM_WRITEBACK_PREPARE","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-writeback-prepare");
     if(access(driver_option,F_OK)==0)setenv("DM_WRITEBACK_PREPARE","0",1);
+    /* Android 实测：遮挡查询的批量重置路径在 Adreno 上每帧多烧 ~11ms（营地 +32% fps），
+       默认关批量；文件 enable-query-batch 可恢复他原版行为做 A/B。
+       Measured on Adreno: the batched occlusion-query reset path burns ~11ms/frame
+       (camp scene +32% fps). Batching is off by default; enable-query-batch restores
+       the original behaviour for A/B. */
+    setenv("DM_DISABLE_QUERY_BATCH","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-query-batch");
+    if(access(driver_option,F_OK)==0)unsetenv("DM_DISABLE_QUERY_BATCH");
     unsetenv("DM_WRITEBACK_COALESCE");
     path(driver_option,sizeof driver_option,port_root,"diagnostics/writeback-coalesce");
     if(access(driver_option,F_OK)==0)setenv("DM_WRITEBACK_COALESCE","1",1);
@@ -332,6 +340,11 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
         {"flag-chunk-192",         "DM_CHUNK_DRAWS",                   "192"},
         {"flag-chunk-384",         "DM_CHUNK_DRAWS",                   "384"},
         {"flag-pass-timing",       "DM_PASS_TIMING",                   "1"},
+        {"flag-loadstore-1",       "DM_DIAG_LOADSTORE",                 "1"},
+        {"flag-loadstore-2",       "DM_DIAG_LOADSTORE",                 "2"},
+        {"flag-loadstore-3",       "DM_DIAG_LOADSTORE",                 "3"},
+        {"flag-gameres-1080",      "DM_GAME_RES",                       "1920x1080"},
+        {"flag-gameres-native",    "DM_GAME_RES",                       "2168x1220"},
       };
       for (unsigned i = 0; i < sizeof env_flags / sizeof *env_flags; i++) {
         char f[PATH_MAX]; path(f, sizeof f, logs, env_flags[i].file);
