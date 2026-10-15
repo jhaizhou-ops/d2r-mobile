@@ -9,10 +9,14 @@
 extern void dm_gate(void);            // entry.S：门公共入口 | entry.S: common gate entry
 #include "front.h"
 #include "dm_uiscreen.h"
+#ifndef __ANDROID__
 static pthread_key_t g_keyown;   // 本线程申请到的 TLS 块 / 线程本地区的原始指针（见函数末尾） | raw pointers of the TLS block / thread-local region allocated by this thread (see the end of the function)
 static pthread_once_t g_keyown_once = PTHREAD_ONCE_INIT;
 static void own_free(void *p) { void **own = p; free(own[0]); free(own[1]); free(own); }
 static void own_key_init(void) { if (pthread_key_create(&g_keyown, own_free)) die("创建线程本地块的释放键失败"); }
+#else
+// Android: thread_slots.c's guest-slot context owns and frees the TLS / TLR / thread-object blocks.
+#endif
 void guest_thread_init(void) {
     pthread_setspecific(g_keygate, (void *)dm_gate);
     for (int i = 0; i < 2; i++) if (g_keyres[i]) pthread_setspecific(g_keyres[i], (void *)dm_game_res(i));   // 分辨率参数位：{u32 宽, u32 高} 打包 | resolution parameter slot: {u32 width, u32 height} packed
@@ -33,6 +37,20 @@ void guest_thread_init(void) {
         if (g_keyaspectui) { memcpy(&bits, &ui, 4); pthread_setspecific(g_keyaspectui, (void *)(uintptr_t)bits); }
     }
     pthread_setspecific(g_key18, 0);
+#ifdef __ANDROID__
+    // Android: guest TLS / thread-local region / thread object are three separate allocations.
+    // thread_slots.c records them when the signal-safe guest-slot context attaches and its key
+    // destructor frees them at thread exit -- so they must NOT also be routed through g_keyown
+    // (the merged mainline scheme bundles them into one block and frees interior pointers, which
+    // free() aborts on).
+    {
+        uint8_t *tlr = calloc(1, TLR_SIZE);
+        *(void **)(tlr + 0x1f8) = calloc(1, THREAD_OBJ_SIZE);   // 当前线程对象 | current thread object
+        pthread_setspecific(g_keytls, calloc(1, TLS_SIZE));
+        pthread_setspecific(g_keytlr, tlr);
+        dm_android_slots_sync();
+    }
+#else
     // 这两块随线程退出释放。客体会改写 TLS / 线程本地区这两把键的槽（它自己设线程指针），所以不能按键里的当前值去 free：
     // 申请到的原始指针另记在本文件自己的键 g_keyown 上，由它的析构放（键析构在 pthread_exit 时调用，同信号备用栈 crash.c altstack_free；
     // 析构里只有 free，客体线程的小栈上也安全）。原先不放：游戏频繁起短命线程，每条漏 8192 + 0x200 + 0x400 = 9728 字节。
@@ -45,7 +63,5 @@ void guest_thread_init(void) {
     own[0] = calloc(1, TLS_SIZE); own[1] = tlr;
     *(void **)(tlr + 0x1f8) = tlr + TLR_SIZE;               // 当前线程对象 | current thread object
     pthread_once(&g_keyown_once, own_key_init); pthread_setspecific(g_keytls, own[0]); pthread_setspecific(g_keytlr, tlr); pthread_setspecific(g_keyown, own);
-#ifdef __ANDROID__
-    dm_android_slots_sync();
 #endif
 }

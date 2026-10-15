@@ -7,6 +7,8 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <sys/uio.h>
+#include <dlfcn.h>
+void dm_backtrace(uint64_t fp);   /* defined below; used by the non-guest diagnostic */
 
 static pthread_once_t signals_once = PTHREAD_ONCE_INIT;
 static pthread_once_t alt_key_once = PTHREAD_ONCE_INIT;
@@ -114,7 +116,15 @@ static void fatal_signal(int sig, siginfo_t *info, void *opaque) {
     }
     /* ART uses SIGSEGV for managed implicit checks. Claim only threads that
      * actually own a registered guest context; preserve the previous handler. */
-    if (!dm_android_thread_has_guest_context()) { chain_signal(sig, info, opaque); return; }
+    if (!dm_android_thread_has_guest_context()) {
+        /* MERGE DIAG (test): also dump a raw frame-pointer chain for non-guest threads
+         * (e.g. the JNI surface thread) before chaining to the previous handler. */
+        { Dl_info di; if (dladdr((const void *)&dm_backtrace, &di) && di.dli_fbase)
+              fprintf(stderr, "[dm] HOST_BASE %p %s\n", di.dli_fbase, di.dli_fname ? di.dli_fname : "?"); }
+        fprintf(stderr, "[dm] NON_GUEST_ABORT sig=%d tid=%ld fp=%#llx\n", sig, syscall(SYS_gettid),
+                (unsigned long long)u->uc_mcontext.regs[29]);
+        dm_backtrace(u->uc_mcontext.regs[29]);
+        chain_signal(sig, info, opaque); return; }
     char line[256];
     int n = snprintf(line, sizeof line,
         "ANDROID_FATAL signal=%d tid=%ld address=%p pc=%#llx lr=%#llx sp=%#llx\n",
