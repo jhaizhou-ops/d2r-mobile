@@ -343,8 +343,10 @@ static const prog_t *snap_prog(const NVNprogram *p) {
     pthread_mutex_unlock(&g_snap_mu);
     return s;
 }
+#ifndef __ANDROID__
 static void x_drain(void);
 static uint64_t x_fence(void);
+#endif
 // 对象 Finalize / 换序号前调：本序号的副本退役（按值拷来的同序号对象之后再录会重新取副本）
 // Called before an object is Finalized / changes serial: retire this serial's snapshot (an object with the same serial copied by value takes a new snapshot when recorded later)
 static void snap_drop(const void **pp, uint64_t ser, uint64_t snap_ser_off) {
@@ -403,7 +405,9 @@ static void read_texels(const tex_t *o, const view_t *v, const NVNcopyRegion *r,
     if (!row) row = wb;
     if (!img) img = row * hb;
     unsigned level = v && v->set_levels ? (unsigned)v->base_level : 0, layer0 = v && v->set_layers ? (unsigned)v->min_layer : 0;
+#ifndef __ANDROID__
     x_drain();   // CPU 读贴图：已入队的提交先翻译完 | CPU texture read: submits already enqueued are translated first
+#endif
     mtl_read_texels(o, level, layer0, r, dst, (size_t)row, (size_t)img);
 }
 NVN(nvnTextureReadTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, void *dst) {
@@ -464,7 +468,13 @@ NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t
 NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 // 围栏 = 「此前提交到队列的命令全部完成」：记下最近一次提交的栅栏值
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
-NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = x_fence(); }
+NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; ((sync_t *)s)->fenced = 1;
+#ifdef __ANDROID__
+    ((sync_t *)s)->fence = mtl_last_fence();
+#else
+    ((sync_t *)s)->fence = x_fence();
+#endif
+}
 // 没围栏过的同步对象按真机行为等到超时；已围栏的只在 GPU 真正完成到该栅栏值后放行
 // A sync object that was never fenced waits until timeout, as on a real device; a fenced one is released only after the GPU has actually completed up to that fence value
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
@@ -515,7 +525,11 @@ NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *in
     (void)q; if (info) memset(info, 0, sizeof *info); return NVN_QUEUE_GET_ERROR_RESULT_GPU_NO_ERROR;
 }
 NVN(nvnQueueFlush, void, NVNqueue *q) { (void)q; }
-NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; x_drain(); mtl_finish(); }
+NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q;
+#ifndef __ANDROID__
+    x_drain();
+#endif
+    mtl_finish(); }
 
 // ---------- 命令缓冲：录进游戏的命令内存，提交时执行 CPU 可见副作用 ----------
 // ---------- Command buffer: record into the game's command memory, perform CPU-visible side effects at submit ----------

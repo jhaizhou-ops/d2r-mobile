@@ -22,8 +22,16 @@
 #ifdef __ANDROID__
 #include "../android/services_fs.h"
 #include "../android/romfs_image.h"
+#include <sys/syscall.h>
 #define clonefile(source, destination, flags) dm_android_fs_clone_tree(source, destination)
 #define clock_gettime_nsec_np(clock_id) now_ns()
+#ifndef RENAME_EXCHANGE
+#define RENAME_EXCHANGE (1u << 1)   // Linux renameat2 flag (same one services_fs.c uses)
+#endif
+// Apple's atomic directory swap, expressed with renameat2 on Android.
+static int renamex_np(const char *from, const char *to, unsigned flags) { (void)flags;
+    return syscall(__NR_renameat2, AT_FDCWD, from, AT_FDCWD, to, RENAME_EXCHANGE); }
+#define RENAME_SWAP 0
 #ifndef ENOATTR
 #define ENOATTR ENODATA
 #endif

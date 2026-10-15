@@ -418,7 +418,9 @@ HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "系统通知队列；前�
     if (ok && *msg == MSG_PERFMODE) dm_uiscreen_res_reread();
 #endif
     if (ok) LOG("oe 通知被游戏取走：%u", *msg);   // 状态变化很少，逐条打不刷屏 | state changes are rare, printing each one does not flood the log
+#ifndef __ANDROID__
     if (ok && (*msg == MSG_OPMODE || *msg == MSG_PERFMODE)) dm_ui_gen_bump(*msg == MSG_OPMODE ? DM_UIGEN_OPMODE : DM_UIGEN_PERFMODE);   // 界面代号（dm_cursor.h） | UI generation (dm_cursor.h)
+#endif
     return ok;
 }
 // bool 参数：Switch 调用方不扩展，声明成 unsigned 只看低 8 位
