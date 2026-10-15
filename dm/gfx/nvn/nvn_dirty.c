@@ -131,10 +131,29 @@ static void prep_write(void *addr, size_t len) {
         range_t *r = find(a);
         if (!r) { a = (a + g_pg) & ~(g_pg - 1); continue; }
         uintptr_t stop = e < r->end ? e : r->end;
-        for (uintptr_t p = (a - r->base) >> g_shift, q = (stop - 1 - r->base) >> g_shift; p <= q; p++) {
-            for (;;) { uint8_t st = PG_PROT;   // 见 BUSY 等完要重看：对方可能是在设只读，等完这页是 PROT，照样得解 | After waiting out BUSY, look again: the other side may have been setting read-only, in which case the page is PROT after the wait and still has to be unprotected
-                if (atomic_compare_exchange_strong(&r->state[p], &st, PG_BUSY)) { unprotect_page(r, p); atomic_fetch_add(&g_preps, 1); break; }
-                if (st != PG_BUSY || !busy_wait(r, p)) break; }
+        uintptr_t p = (a - r->base) >> g_shift, q = (stop - 1 - r->base) >> g_shift;
+        while (p <= q) {
+            uint8_t st = PG_PROT;
+            if (atomic_compare_exchange_strong(&r->state[p], &st, PG_BUSY)) {
+                // 批量快路径（dodola 版思路）：写回常覆盖一整段受保护的连续页，把相邻页一起认领，
+                // 用一次 mprotect 覆盖整段；页序与逐页记账不变，只有保护系统调用被合并。
+                // Batched fast path (dodola's idea): a GPU writeback often covers a long protected
+                // run. Claim adjacent pages together so one mprotect replaces one per page. Per-page
+                // ordering is kept; only the protection syscall is batched.
+                uintptr_t after = p + 1;
+                while (after <= q) { st = PG_PROT;
+                    if (!atomic_compare_exchange_strong(&r->state[after], &st, PG_BUSY)) break;
+                    after++; }
+                size_t count = after - p;
+                mp(r->base + (p << g_shift), count << g_shift, PROT_READ | PROT_WRITE);
+                for (uintptr_t page = p; page < after; page++) { store_generation(r, page); atomic_store(&r->state[page], PG_NONE); }
+                atomic_fetch_add(&g_preps, count);
+                p = after;
+            } else {
+                // 竞争页保留主线的语义：BUSY 等完要重看：对方可能是在设只读，等完这页是 PROT，照样得解 | Contested page keeps the mainline semantics: after waiting out BUSY, look again; the other side may have been setting read-only, in which case the page is PROT after the wait and still has to be unprotected
+                if (st == PG_BUSY && busy_wait(r, p)) continue;
+                p++;
+            }
         }
         a = stop;
     }
