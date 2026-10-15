@@ -308,6 +308,36 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     path(logs,sizeof logs,port_root,"diagnostics");
     setenv("DM_FRAME_DIR",logs,1);
     if (dm_android_fs_ensure_directory(logs)) return errno?errno:EIO;
+    /* TEST PATCH (not in dodola's tree): switch files -> setenv, using the same access()
+       channel as dodola's own flag files (the app-side sandbox allows stat on shell-created
+       files but not always read of their contents, so one file per switch/value). */
+    { static const struct { const char *file, *name, *value; } env_flags[] = {
+        {"flag-precise-sync-off",  "DM_DISABLE_PRECISE_SYNC",          "1"},
+        {"flag-binding-plans-off", "DM_DISABLE_BINDING_PLANS",         "1"},
+        {"flag-snapshot-off",      "DM_DISABLE_CPU_UNIFORM_SNAPSHOT",  "1"},
+        {"flag-storage-bias-off",  "DM_DISABLE_STORAGE_BIAS",          "1"},
+        {"flag-occlusion-off",     "DM_DIAG_NO_OCCLUSION",             "1"},
+        {"flag-temp-pool-off",     "DM_DISABLE_TEMP_POOL",             "1"},
+        {"flag-res-cache-off",     "DM_DISABLE_RESOURCE_CACHE",        "1"},
+        {"flag-pso-reuse-off",     "DM_DISABLE_PSO_REUSE",             "1"},
+        {"flag-wb-stage-off",      "DM_DISABLE_WB_STAGE",              "1"},
+        {"flag-async-drain",       "DM_ASYNC_DRAIN",                   "1"},
+        {"flag-scale-70",          "DM_3D_SCALE",                      "0.70"},
+        {"flag-scale-75",          "DM_3D_SCALE",                      "0.75"},
+        {"flag-scale-80",          "DM_3D_SCALE",                      "0.80"},
+        {"flag-scale-85",          "DM_3D_SCALE",                      "0.85"},
+        {"flag-chunk-12",          "DM_CHUNK_DRAWS",                   "12"},
+        {"flag-chunk-24",          "DM_CHUNK_DRAWS",                   "24"},
+        {"flag-chunk-96",          "DM_CHUNK_DRAWS",                   "96"},
+        {"flag-chunk-192",         "DM_CHUNK_DRAWS",                   "192"},
+        {"flag-chunk-384",         "DM_CHUNK_DRAWS",                   "384"},
+        {"flag-pass-timing",       "DM_PASS_TIMING",                   "1"},
+      };
+      for (unsigned i = 0; i < sizeof env_flags / sizeof *env_flags; i++) {
+        char f[PATH_MAX]; path(f, sizeof f, logs, env_flags[i].file);
+        if (access(f, F_OK) == 0) setenv(env_flags[i].name, env_flags[i].value, 1);
+      }
+    }
     /* TEST PATCH (not in dodola's tree): K=V lines in diagnostics/env.txt are imported into the
        environment, so performance bisecting can flip their DM_* switches without rebuilding. */
     { char envf[PATH_MAX]; path(envf,sizeof envf,logs,"env.txt");

@@ -317,31 +317,56 @@ static float g_android_scale_want=1.0f;
 static _Atomic float g_android_scale_cur=1.0f;
 static _Atomic int g_android_scale_applied;
 static pthread_once_t g_android_scale_once=PTHREAD_ONCE_INIT;
+static int g_android_scale_94012;   // 1 = 用 Apple 侧 build94012 地址映射（已对本镜像做锚点校验） | 1 = Apple-side build94012 address map (anchor-verified against this image)
 
 static void android_scale_build_guard(module_t *main) {
-    if (!main || main->text_end!=0x1b4f5d0 || main->ro_off!=0x1b50000 || main->data_off!=0x2028000 || main->size<0x31b2538)
-        die("ANDROID_3D_SCALE unsupported main layout; requires verified build91738");
-    /* Anchor the notification caller, wrapper/global, scale arithmetic, and
-     * target dimension sources. None of these bytes contain relocations or
-     * overlap the Android instruction rewrite sites. */
-    static const struct { size_t address; unsigned count; uint32_t words[30]; } anchors[]={
-        {0xdf7b90,10,{0xd10283ff,0xa9046ffc,0xa90567fa,0xa9065ff8,0xa90757f6,0xa9084ff4,0xa9097bfd,0x910243fd,0x910033e0,0x94355aff}},
-        {0x841540,10,{0xd10343ff,0xa9095ff8,0xa90a57f6,0xa90b4ff4,0xa90c7bfd,0x910303fd,0x90014b88,0xf9403d08,0xb4000d28,0x90014b98}},
-        {0x160d210,24,{0x1e230021,0x528cd488,0xbc686800,0x1e210801,0x529dcf0a,0x1e250028,0x8b0a0017,0x1e230041,0x1e210800,0x1e250009,0xb94002ea,0xaa0003f3,0x6b08015f,0x54000081,0xb94006ea,0x6b09015f,0x540000e0,0x7100011f,0x7a401924,0x29020ae1,0x290026e8,0x290126e8,0x540000e1,0xa9447bfd}},
-        {0x84168c,30,{0xb0014b97,0xf94296e9,0x528cbfaa,0x382a6928,0x90014b88,0x91020108,0xa9402500,0xf802e3ff,0xa9027fe9,0xf94252a9,0xa9017fe9,0x2947a909,0x290727ea,0x79407109,0x5280038a,0x390113ff,0x79006be9,0xb90043ea,0x29054ff4,0xf9400901,0xf9400008,0xf9419508,0x910043e2,0xd63f0100,0x08dffec8,0x36000a68,0xf94296e0,0x2a1403e1,0x2a1303e2,0x94372ebe}},
-        {0x15d93dc,7,{0xd2a7f00a,0xf80342ac,0xb20007ec,0xf2c0006a,0xf803c2ac,0xd28000ac,0xf80b42aa}},
-        {0x160e694,11,{0x529dcf08,0xaa0003f3,0xf0005739,0x8b08001a,0x529e6408,0x8b080000,0xf9569268,0xf9400901,0xf000573b,0xf944ab39,0xf9400342}},
-        {0x160f188,6,{0x529f9808,0x8b080260,0xf9569268,0xf9400901,0xf9400b42,0x90000018}},
-        {0x160f250,5,{0x529fae08,0x8b080260,0xf9569268,0xf9400901,0xf9400b42}},
-        /* Reject the old whole-output resolution experiment as well. */
-        {0xdf7bbc,2,{0xd280a016,0xd280c818}},
-        {0xdf7bd4,1,{0xf2c05a16}},
-        {0xdf7be0,1,{0xf2c07098}},
-        {0xdf9c7c,2,{0xd280a008,0xf2c05a08}},
-    };
-    for (size_t i=0;i<sizeof anchors/sizeof *anchors;i++)
-        if (memcmp(main->base+anchors[i].address,anchors[i].words,anchors[i].count*4))
-            die("ANDROID_3D_SCALE build91738 anchor mismatch at %#zx",anchors[i].address);
+    if (main && main->text_end==0x1b4f5d0 && main->ro_off==0x1b50000 && main->data_off==0x2028000 && main->size>=0x31b2538) {
+        /* Anchor the notification caller, wrapper/global, scale arithmetic, and
+         * target dimension sources. None of these bytes contain relocations or
+         * overlap the Android instruction rewrite sites. */
+        static const struct { size_t address; unsigned count; uint32_t words[30]; } anchors[]={
+            {0xdf7b90,10,{0xd10283ff,0xa9046ffc,0xa90567fa,0xa9065ff8,0xa90757f6,0xa9084ff4,0xa9097bfd,0x910243fd,0x910033e0,0x94355aff}},
+            {0x841540,10,{0xd10343ff,0xa9095ff8,0xa90a57f6,0xa90b4ff4,0xa90c7bfd,0x910303fd,0x90014b88,0xf9403d08,0xb4000d28,0x90014b98}},
+            {0x160d210,24,{0x1e230021,0x528cd488,0xbc686800,0x1e210801,0x529dcf0a,0x1e250028,0x8b0a0017,0x1e230041,0x1e210800,0x1e250009,0xb94002ea,0xaa0003f3,0x6b08015f,0x54000081,0xb94006ea,0x6b09015f,0x540000e0,0x7100011f,0x7a401924,0x29020ae1,0x290026e8,0x290126e8,0x540000e1,0xa9447bfd}},
+            {0x84168c,30,{0xb0014b97,0xf94296e9,0x528cbfaa,0x382a6928,0x90014b88,0x91020108,0xa9402500,0xf802e3ff,0xa9027fe9,0xf94252a9,0xa9017fe9,0x2947a909,0x290727ea,0x79407109,0x5280038a,0x390113ff,0x79006be9,0xb90043ea,0x29054ff4,0xf9400901,0xf9400008,0xf9419508,0x910043e2,0xd63f0100,0x08dffec8,0x36000a68,0xf94296e0,0x2a1403e1,0x2a1303e2,0x94372ebe}},
+            {0x15d93dc,7,{0xd2a7f00a,0xf80342ac,0xb20007ec,0xf2c0006a,0xf803c2ac,0xd28000ac,0xf80b42aa}},
+            {0x160e694,11,{0x529dcf08,0xaa0003f3,0xf0005739,0x8b08001a,0x529e6408,0x8b080000,0xf9569268,0xf9400901,0xf000573b,0xf944ab39,0xf9400342}},
+            {0x160f188,6,{0x529f9808,0x8b080260,0xf9569268,0xf9400901,0xf9400b42,0x90000018}},
+            {0x160f250,5,{0x529fae08,0x8b080260,0xf9569268,0xf9400901,0xf9400b42}},
+            /* Reject the old whole-output resolution experiment as well. */
+            {0xdf7bbc,2,{0xd280a016,0xd280c818}},
+            {0xdf7bd4,1,{0xf2c05a16}},
+            {0xdf7be0,1,{0xf2c07098}},
+            {0xdf9c7c,2,{0xd280a008,0xf2c05a08}},
+        };
+        for (size_t i=0;i<sizeof anchors/sizeof *anchors;i++)
+            if (memcmp(main->base+anchors[i].address,anchors[i].words,anchors[i].count*4))
+                die("ANDROID_3D_SCALE build91738 anchor mismatch at %#zx",anchors[i].address);
+        g_android_scale_94012=0;
+        return;
+    }
+    /* 第二套映射：Apple 侧 build94012 地址（本树 iOS 分支用的那套）。离线已对本镜像
+     * （设备实际加载的 main.patched.bin）核对：改分辨率函数序言与 24 词比例算术块逐字吻合。
+     * 渲染器全局量无法离线锚定（BSS，运行时写入），故 tick 里另加：指针对齐/可读、输出必须
+     * 恰好 1280x720、当前比例必须是 0.70..1.0 的有限值，且改完后逐项校验尺寸。
+     * Second map: the Apple-side build94012 addresses (the ones the iOS branch in this tree
+     * uses). Verified offline against this very image: the resize-function prologue and the
+     * 24-word scale-arithmetic block match exactly. The renderer global cannot be anchored
+     * offline (BSS, runtime-filled), so the tick additionally requires an aligned readable
+     * pointer, the exact 1280x720 output size, a finite in-range current scale, and it
+     * verifies every size after the rebuild. */
+    if (main && main->size>=0x31e0860) {
+        static const struct { size_t address; unsigned count; uint32_t words[24]; } anchors[]={
+            {0x8582f0,12,{0xd10343ff,0xa9095ff8,0xa90a57f6,0xa90b4ff4,0xa90c7bfd,0x910303fd,0xf0014c28,0xf941cd08,0xb4000d28,0xf0014c38,0x910ea318,0x2a0003f4}},
+            {0x1627f08,24,{0x1e230021,0x528cd488,0xbc686800,0x1e210801,0x529dcf0a,0x1e250028,0x8b0a0017,0x1e230041,0x1e210800,0x1e250009,0xb94002ea,0xaa0003f3,0x6b08015f,0x54000081,0xb94006ea,0x6b09015f,0x540000e0,0x7100011f,0x7a401924,0x29020ae1,0x290026e8,0x290126e8,0x540000e1,0xa9447bfd}},
+        };
+        for (size_t i=0;i<sizeof anchors/sizeof *anchors;i++)
+            if (memcmp(main->base+anchors[i].address,anchors[i].words,anchors[i].count*4))
+                die("ANDROID_3D_SCALE build94012 anchor mismatch at %#zx",anchors[i].address);
+        g_android_scale_94012=1;
+        return;
+    }
+    die("ANDROID_3D_SCALE unsupported main layout (neither verified 91738 nor 94012)");
 }
 static void android_scale_configure(void) {
     const char *e=getenv("DM_3D_SCALE");
@@ -354,7 +379,7 @@ static void android_scale_configure(void) {
     for (int i=0;i<g_nmod;i++) if (!strcmp(g_mod[i].name,"main")) g_android_scale_main=&g_mod[i];
     android_scale_build_guard(g_android_scale_main);
     g_android_scale_want=want;
-    LOG("ANDROID_3D_SCALE_CONFIG build=91738 fixed_scale=%.3f output=1280x720",(double)want);
+    LOG("ANDROID_3D_SCALE_CONFIG build=%s fixed_scale=%.3f output=1280x720",g_android_scale_94012?"94012":"91738",(double)want);
 }
 static int android_scale_readable(uintptr_t address,size_t length) {
     if (address>UINTPTR_MAX-length) return 0;
@@ -369,9 +394,13 @@ static void android_scale3d_tick(void *return_address) {
     pthread_once(&g_android_scale_once,android_scale_configure);
     if (g_android_scale_want==1.0f || atomic_load(&g_android_scale_applied) || rebuilding || dm_nvn_frame_count()<30) return;
     module_t *main=g_android_scale_main;
-    if (return_address!=main->base+0xdf7bb8 && return_address!=main->base+0xdf7c10)
+    uintptr_t obj_off=g_android_scale_94012?0x31e0848:0x31b2528, fn_off=g_android_scale_94012?0x8582f0:0x841540;
+    if (!g_android_scale_94012 && return_address!=main->base+0xdf7bb8 && return_address!=main->base+0xdf7c10)
         die("ANDROID_3D_SCALE unexpected notification caller %p",return_address);
-    uintptr_t renderer=*(uintptr_t *)(main->base+0x31b2528); if (!renderer) return;
+    if (g_android_scale_94012 &&
+        ((const uint8_t *)return_address<(const uint8_t *)main->base || (const uint8_t *)return_address>=(const uint8_t *)main->base+main->size))
+        die("ANDROID_3D_SCALE unexpected caller %p outside main (94012 map)",return_address);
+    uintptr_t renderer=*(uintptr_t *)(main->base+obj_off); if (!renderer) return;
     if ((renderer&15) || renderer>UINTPTR_MAX-0xee90 || !android_scale_readable(renderer+0x66a4,4) || !android_scale_readable(renderer+0xee78,24))
         die("ANDROID_3D_SCALE invalid renderer pointer %p",(void *)renderer);
     uint32_t *sizes=(uint32_t *)(renderer+0xee78);
@@ -384,11 +413,24 @@ static void android_scale3d_tick(void *return_address) {
     rebuilding=1;
     uint64_t start=now_ns();
     dm_guest_write_prepare(scale,sizeof *scale); *scale=want;
-    ((void (*)(uint32_t,uint32_t))(main->base+0x841540))(ow,oh);
+    ((void (*)(uint32_t,uint32_t))(main->base+fn_off))(ow,oh);
     uint64_t elapsed=now_ns()-start;
     LOG("ANDROID_3D_SCALE_END before=%.3f after=%.3f internal=%ux%u duplicate=%ux%u output=%ux%u rebuild_ms=%.3f frame=%llu",(double)before,(double)*scale,sizes[0],sizes[1],sizes[2],sizes[3],sizes[4],sizes[5],(double)elapsed/1e6,(unsigned long long)dm_nvn_frame_count());
-    if (*(uintptr_t *)(main->base+0x31b2528)!=renderer || *scale!=want || sizes[0]!=expected_w || sizes[1]!=expected_h || sizes[2]!=expected_w || sizes[3]!=expected_h || sizes[4]!=ow || sizes[5]!=oh)
-        die("ANDROID_3D_SCALE resize verification failed: expected internal=%ux%u output=%ux%u",expected_w,expected_h,ow,oh);
+    if (*(uintptr_t *)(main->base+obj_off)!=renderer || *scale!=want || sizes[0]!=expected_w || sizes[1]!=expected_h || sizes[2]!=expected_w || sizes[3]!=expected_h || sizes[4]!=ow || sizes[5]!=oh) {
+        if (!g_android_scale_94012)
+            die("ANDROID_3D_SCALE resize verification failed: expected internal=%ux%u output=%ux%u",expected_w,expected_h,ow,oh);
+        /* 94012 映射：校验失败必须能回退到原状——比例写回原值并重跑一次改分辨率函数，恢复了才继续；
+           恢复不了（尺寸仍不对）才 die。 | 94012 map: a verification failure must revert: write the old
+           scale back and run the resize function again; only die if the revert itself fails. */
+        LOG("【红】ANDROID_3D_SCALE (94012) resize verification failed; reverting to %.3f (got internal=%ux%u duplicate=%ux%u output=%ux%u)",(double)before,sizes[0],sizes[1],sizes[2],sizes[3],sizes[4],sizes[5]);
+        dm_guest_write_prepare(scale,sizeof *scale); *scale=before;
+        ((void (*)(uint32_t,uint32_t))(main->base+fn_off))(ow,oh);
+        uint32_t revert_w=(uint32_t)lroundf((float)ow*before),revert_h=(uint32_t)lroundf((float)oh*before);
+        if (sizes[0]!=revert_w || sizes[1]!=revert_h || sizes[4]!=ow || sizes[5]!=oh)
+            die("ANDROID_3D_SCALE (94012) revert failed: internal=%ux%u expected=%ux%u",sizes[0],sizes[1],revert_w,revert_h);
+        atomic_store(&g_android_scale_applied,1);   // 放弃这次实验，不再重试 | give the experiment up, do not retry
+        rebuilding=0; return;
+    }
     atomic_store(&g_android_scale_cur,want); atomic_store(&g_android_scale_applied,1); rebuilding=0;
 }
 float dm_3d_scale_cur(void) { return atomic_load(&g_android_scale_cur); }
