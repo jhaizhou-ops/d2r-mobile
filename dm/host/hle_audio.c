@@ -54,6 +54,11 @@ static void notify_release(aout *a) {
 
 static void *event_notify(void *p) {
     aout *a = p;
+    // 缓冲释放通知负责唤醒客体混音线程；与其使用相同的交互级 QoS，避免这一环节在界面负载下以较低优先级运行。
+    // Release notifications wake the guest mixer; match its interactive QoS so
+    // this handoff does not run at a lower priority under UI load.
+    int qos_error = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    if (qos_error) LOG("audio: notifier QoS failed (%d)", qos_error);
     for (;;) {
         dispatch_semaphore_wait(a->notify_sem, DISPATCH_TIME_FOREVER);
         if (atomic_exchange_explicit(&a->notify_pending, 0, memory_order_acq_rel) && a->event)
