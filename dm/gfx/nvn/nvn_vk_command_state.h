@@ -23,6 +23,8 @@ typedef struct {
         VkPipelineLayout layout;
         VkDescriptorSet sets[2];
         uint32_t count;
+        uint32_t ndyn;
+        uint32_t dyn[2*64];   // 动态偏移参与记忆化：同一个 set 换了偏移必须重绑 | Dynamic offsets take part in the memo: the same set with other offsets must rebind
         int valid;
     } descriptors[2];
     VkViewport viewport;
@@ -53,18 +55,24 @@ static inline int nvn_vk_cmd_pipeline(NvnVkCommandState *state,int elide,
 
 static inline int nvn_vk_cmd_descriptors(NvnVkCommandState *state,int elide,
         VkCommandBuffer command,VkPipelineBindPoint point,VkPipelineLayout layout,
-        uint32_t count,const VkDescriptorSet *sets) {
+        uint32_t count,const VkDescriptorSet *sets,uint32_t ndyn,const uint32_t *dyn) {
     unsigned slot=point==VK_PIPELINE_BIND_POINT_COMPUTE;
     /* Use exact layout identity, rather than guessing compatibility. Binding
-     * fewer sets conservatively replaces the whole remembered set list. */
+     * fewer sets conservatively replaces the whole remembered set list.
+     * Dynamic offsets are part of the comparison: the same sets with other
+     * offsets bind different data. */
     if(elide&&count>=1&&count<=2&&state->descriptors[slot].valid&&
        state->descriptors[slot].layout==layout&&state->descriptors[slot].count==count&&
-       !memcmp(state->descriptors[slot].sets,sets,count*sizeof(*sets)))return 0;
-    vkCmdBindDescriptorSets(command,point,layout,0,count,sets,0,NULL);
+       state->descriptors[slot].ndyn==ndyn&&
+       !memcmp(state->descriptors[slot].sets,sets,count*sizeof(*sets))&&
+       !memcmp(state->descriptors[slot].dyn,dyn,ndyn*sizeof(*dyn)))return 0;
+    vkCmdBindDescriptorSets(command,point,layout,0,count,sets,ndyn,dyn);
     state->descriptors[slot].valid=0;
     if(elide&&count>=1&&count<=2){
         state->descriptors[slot].layout=layout;state->descriptors[slot].count=count;
         memcpy(state->descriptors[slot].sets,sets,count*sizeof(*sets));
+        state->descriptors[slot].ndyn=ndyn;
+        memcpy(state->descriptors[slot].dyn,dyn,ndyn*sizeof(*dyn));
         state->descriptors[slot].valid=1;
     }
     return 1;

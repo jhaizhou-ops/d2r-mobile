@@ -103,6 +103,7 @@ typedef struct { uint32_t magic,version,stage,nb,na,c1n,ncap,local[3],fout,reser
 typedef struct {
     char key[17]; RHeader h; RBinding b[LIMIT_BINDINGS]; uint32_t attr[32][2],caps[32];
     VBuffer c1; VkShaderModule module; VkDescriptorSetLayout layout; uint64_t fetch_bindings,dref_bindings,large_bindings_seen;
+    uint64_t dyn_bindings; uint32_t dyn_count;   // kind-2 uniform bindings switched to DYNAMIC descriptors | 改成动态描述符的 kind2 统一缓冲绑定
     SBInfo storage_bias;
     BindingPlan *plan;
 } VShader;
@@ -793,7 +794,7 @@ static void submission_pools_create(VkSubmission *sub) {
     CHECK(vkCreateQueryPool(G.device,&q,NULL,&sub->timestamps));
     if(G.pass_timing){q.queryCount=1024;CHECK(vkCreateQueryPool(G.device,&q,NULL,&sub->pass_ts));}
     if(G.profile_detail){q.queryCount=128;CHECK(vkCreateQueryPool(G.device,&q,NULL,&sub->chunk_ts));}
-    VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,16384},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,8192},
+    VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,16384},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,16384},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,8192},
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,16384},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,4096},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,16384},
       {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,4096},{VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,4096}};
     VkDescriptorPoolCreateInfo d={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=8192,
@@ -1584,9 +1585,24 @@ static VShader *shader_get(const void *control,uint32_t stage) {
     VkShaderModuleCreateInfo mi={.sType=VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,.codeSize=size,.pCode=(uint32_t *)bytes};
     CHECK(vkCreateShaderModule(G.device,&mi,NULL,&s->module));free(bytes);
     fprintf(stderr,"[nvn-vulkan] original shader key=%s stage=%u loaded\n",s->key,stage);
+    /* kind2 统一缓冲的偏移逐 draw 变化：改成 DYNAMIC 描述符，让描述符内容（池缓冲 + 整段）
+     * 跨 draw 保持不变，偏移走绑定调用。动态偏移按 set 布局的绑定顺序消费，因此只在绑定号
+     * 升序时启用。 | kind-2 uniform offsets change per draw: switch them to DYNAMIC descriptors so
+     * the descriptor content (pool buffer + whole range) stays put across draws and the offset
+     * travels in the bind call. Dynamic offsets are consumed in the set layout's binding order, so
+     * only enable when the binding numbers are ascending. */
+    s->dyn_bindings=0;s->dyn_count=0;{
+        int ordered=1;uint32_t prev=0;
+        for(uint32_t i=0;i<s->h.nb;i++){if(i&&s->b[i].binding<prev)ordered=0;prev=s->b[i].binding;}
+        for(uint32_t i=0;ordered&&i<s->h.nb;i++)
+            if(s->b[i].kind==2&&s->b[i].type==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER&&s->b[i].slot>=0&&s->b[i].slot<16){
+                s->dyn_bindings|=1ull<<i;s->dyn_count++; }
+    }
     VkDescriptorSetLayoutBinding bindings[LIMIT_BINDINGS];for(uint32_t i=0;i<s->h.nb;i++){
        if(s->b[i].count!=1 || s->b[i].set!=(stage==1?1u:0u))die("shader descriptor set/count",s->b[i].set);
-       bindings[i]=(VkDescriptorSetLayoutBinding){s->b[i].binding,(VkDescriptorType)s->b[i].type,1,stage==0?VK_SHADER_STAGE_VERTEX_BIT:stage==1?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_COMPUTE_BIT,NULL}; }
+       VkDescriptorType type=(VkDescriptorType)s->b[i].type;
+       if((s->dyn_bindings>>i)&1)type=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+       bindings[i]=(VkDescriptorSetLayoutBinding){s->b[i].binding,type,1,stage==0?VK_SHADER_STAGE_VERTEX_BIT:stage==1?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_COMPUTE_BIT,NULL}; }
     VkDescriptorSetLayoutCreateInfo li={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,.bindingCount=s->h.nb,.pBindings=bindings};
     CHECK(vkCreateDescriptorSetLayout(G.device,&li,NULL,&s->layout));s->plan=binding_plan_compile(s);return s;
 }
@@ -1885,13 +1901,16 @@ static VkDescriptorSet binding_plan_try(VShader *s) {
     if(!plan||G.disable_binding_plans||G.disable_desc_cache||G.trace_frame||!plan->eligible){G.profile_plan_fallbacks++;return VK_NULL_HANDLE;}
     if(!plan->resolved||plan->epoch!=S.epoch||plan->state_revision!=G.binding_revision[s->h.stage]||
        plan->registry_revision!=G.registry_revision||plan->pool_revision!=G.pool_revision||!plan->set){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+    uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,sizeof(live_dyn));
     for(uint32_t n=0;n<plan->nbuffer;n++){
         unsigned i=plan->buffers[n];const RBinding *b=&s->b[i];
         Range r=G.state.uniform[s->h.stage][b->slot];uint64_t offset=0;
         if(!r.addr||!r.size){G.profile_plan_misses++;return VK_NULL_HANDLE;}
         VPool *pool=pool_read(r.addr,r.size,&offset);const BindingBuffer *cached=&plan->resources[i].buffer;
+        int dynamic=(s->dyn_bindings>>i)&1;   // 动态绑定的偏移不算计划失效条件：它随绑定调用走 | A dynamic binding's offset is not a plan-invalidating condition: it rides the bind call
         if(offset%G.properties.limits.minUniformBufferOffsetAlignment||r.addr!=cached->range.addr||r.size!=cached->range.size||
-           pool->serial!=cached->pool_serial||offset!=cached->offset){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+           pool->serial!=cached->pool_serial||(!dynamic&&offset!=cached->offset)||(dynamic&&offset>0xffffffffu)){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(dynamic)live_dyn[i]=(uint32_t)offset;
         G.profile_plan_buffers++;
     }
     for(uint32_t n=0;n<plan->nimage;n++){
@@ -1911,12 +1930,15 @@ static VkDescriptorSet binding_plan_try(VShader *s) {
         }
         G.profile_plan_images++;
     }
+    if(s->dyn_count){uint32_t k=0;for(uint32_t i=0;i<s->h.nb;i++)if((s->dyn_bindings>>i)&1)S.dyn_offset[s->h.stage][k++]=live_dyn[i];S.dyn_count[s->h.stage]=k;}
     G.profile_plan_hits++;return plan->set;
 }
 static VkDescriptorSet bind_shader(VShader *s) {
     memset(S.storage_bias[s->h.stage],0,sizeof S.storage_bias[s->h.stage]);
+    S.dyn_count[s->h.stage]=0;
     VkDescriptorSet planned=binding_plan_try(s);if(planned)return planned;
     VkWriteDescriptorSet w[LIMIT_BINDINGS];VkDescriptorBufferInfo bi[LIMIT_BINDINGS];VkDescriptorImageInfo ii[LIMIT_BINDINGS];
+    uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,sizeof(live_dyn));
     BindingResource plan_resources[LIMIT_BINDINGS];memset(plan_resources,0,sizeof(plan_resources));
     int plan_safe=s->plan&&s->plan->eligible&&!G.disable_binding_plans&&!G.disable_desc_cache&&!G.trace_frame;
     memset(w,0,s->h.nb*sizeof(*w));memset(bi,0,s->h.nb*sizeof(*bi));memset(ii,0,s->h.nb*sizeof(*ii));
@@ -1964,7 +1986,7 @@ static VkDescriptorSet bind_shader(VShader *s) {
                 * after it; later readonly draws need no additional copy. */
                direct_storage_read(r);S.storage_bias[s->h.stage][i]=(uint32_t)(prefix/4);
                bi[i]=(VkDescriptorBufferInfo){p->v.b,offset-prefix,r.size+prefix};G.profile_storage_bias_bindings++;G.profile_storage_bias_bytes+=r.size;
-           }else if(prefix){
+           }else if(prefix||(((s->dyn_bindings>>i)&1)&&offset>0xffffffffu)){
                if(r.size>=1024*1024&&!(s->large_bindings_seen&(1ull<<i))){
                    s->large_bindings_seen|=1ull<<i;
                    fprintf(stderr,"[nvn-vulkan] UNALIGNED_LARGE_BIND shader=%s stage=%u binding=%u kind=%u slot=%d bytes=%llu prefix=%llu alignment=%llu writable=%u\n",s->key,s->h.stage,b->binding,b->kind,b->slot,(unsigned long long)r.size,(unsigned long long)(offset%alignment),(unsigned long long)alignment,b->flags);
@@ -2004,6 +2026,13 @@ static VkDescriptorSet bind_shader(VShader *s) {
                bi[i]=(VkDescriptorBufferInfo){aligned->buffer->b,0,r.size};
            }else bi[i]=(VkDescriptorBufferInfo){p->v.b,offset,r.size};
            if(b->kind==3 && b->flags)mark_write(r.addr,r.size);
+           if((s->dyn_bindings>>i)&1){
+               /* 动态描述符：内容固定为（缓冲, 0, 整段），逐 draw 偏移走绑定调用；
+                  快照/临时路径的偏移本来就是 0，保持其范围。 | Dynamic descriptor: fix the content to
+                  (buffer, 0, whole range); the per-draw offset travels in the bind call. Temp snapshot
+                  paths already carry offset zero, keep their range. */
+               live_dyn[i]=(uint32_t)bi[i].offset;bi[i].offset=0;bi[i].range=VK_WHOLE_SIZE;
+           }
        } else if(b->kind==4 || b->kind==6) {
            if(b->slot<0 || b->slot>=(b->kind==6?32:128))die("texture shader slot",b->slot);
            uint64_t handle=b->kind==6?G.state.img[s->h.stage][b->slot]:G.state.tex[s->h.stage][b->slot];
@@ -2076,6 +2105,7 @@ static VkDescriptorSet bind_shader(VShader *s) {
        } else die("Vulkan shader resource kind",b->kind);
        w[i].pBufferInfo=&bi[i];
     }
+    if(s->dyn_count){uint32_t k=0;for(uint32_t i=0;i<s->h.nb;i++)if((s->dyn_bindings>>i)&1)S.dyn_offset[s->h.stage][k++]=live_dyn[i];S.dyn_count[s->h.stage]=k;}
     uint32_t nb=s->h.nb;size_t half=(size_t)nb*sizeof(VkDescriptorBufferInfo);uint32_t slot=0;uint64_t hash=0;
     if(cacheable){
         hash=14695981039346656037ULL^(uint64_t)(uintptr_t)s;const uint8_t *k0=(const uint8_t *)bi,*k1=(const uint8_t *)ii;
@@ -2419,7 +2449,10 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     }
     int cache_commands=G.enable_command_cache&&!G.trace_frame;
     command_bind_profile(NVN_VK_CMD_PIPELINE,nvn_vk_cmd_pipeline(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pso.pipeline));
-    command_bind_profile(NVN_VK_CMD_DESCRIPTORS,nvn_vk_cmd_descriptors(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pso.layout,ps?2:1,descriptor_sets));
+    {uint32_t draw_dyn[2*LIMIT_BINDINGS];uint32_t ndyn=S.dyn_count[vs->h.stage];
+     memcpy(draw_dyn,S.dyn_offset[vs->h.stage],ndyn*sizeof(*draw_dyn));
+     if(ps){memcpy(draw_dyn+ndyn,S.dyn_offset[ps->h.stage],S.dyn_count[ps->h.stage]*sizeof(*draw_dyn));ndyn+=S.dyn_count[ps->h.stage];}
+     command_bind_profile(NVN_VK_CMD_DESCRIPTORS,nvn_vk_cmd_descriptors(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pso.layout,ps?2:1,descriptor_sets,ndyn,draw_dyn));}
     if(G.state.viewport.width<=0 || G.state.viewport.height<=0)die("viewport bounds",0);
     VkViewport viewport=G.state.viewport;if(upper_left){viewport.y+=viewport.height;viewport.height=-viewport.height;}
     command_bind_profile(NVN_VK_CMD_VIEWPORT,nvn_vk_cmd_viewport(&S.command_state,cache_commands,S.command,&viewport));
@@ -2474,7 +2507,7 @@ static void dispatch(const p_dispatch *p) {
     }
     int cache_commands=G.enable_command_cache&&!G.trace_frame;
     command_bind_profile(NVN_VK_CMD_PIPELINE,nvn_vk_cmd_pipeline(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_COMPUTE,pso.pipeline));
-    command_bind_profile(NVN_VK_CMD_DESCRIPTORS,nvn_vk_cmd_descriptors(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_COMPUTE,pso.layout,1,&set));
+    command_bind_profile(NVN_VK_CMD_DESCRIPTORS,nvn_vk_cmd_descriptors(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_COMPUTE,pso.layout,1,&set,S.dyn_count[s->h.stage],S.dyn_offset[s->h.stage]));
     if(G.precise_sync)hz_sync(HZ_CS,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_UNIFORM_READ_BIT);
     vkCmdDispatch(S.command,p->x,p->y,p->z);
     aligned_writeback();
