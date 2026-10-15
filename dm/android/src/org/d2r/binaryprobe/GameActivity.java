@@ -115,13 +115,20 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         try(InputStream in=new FileInputStream(file)){int n;while((n=in.read(bytes))!=-1)md.update(bytes,0,n);}
         StringBuilder text=new StringBuilder();for(byte b:md.digest())text.append(String.format("%02x",b&255));return text.toString();
     }
+    /* TEST PATCH (not in dodola's tree): read from the app's EXTERNAL files dir, because this
+       device's SELinux policy blocks run-as, so game data cannot be placed into internal storage.
+       Renderer/host code paths are untouched; only the storage location changes. */
+    private java.io.File filesBase(){
+        java.io.File external=getExternalFilesDir(null);
+        return external!=null?external:getFilesDir();
+    }
     private void prepareModules()throws Exception {
         String json;
         try(InputStream in=getAssets().open("module-manifest.json")){
             java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] b=new byte[4096];int n;
             while((n=in.read(b))!=-1)out.write(b,0,n);json=new String(out.toByteArray(),StandardCharsets.UTF_8);
         }
-        JSONArray list=new JSONObject(json).getJSONArray("files");File directory=new File(getFilesDir(),"d2r-mobile/modules");
+        JSONArray list=new JSONObject(json).getJSONArray("files");File directory=new File(filesBase(),"d2r-mobile/modules");
         if(!directory.isDirectory()&&!directory.mkdirs())throw new java.io.IOException("不能创建游戏目录");
         for(int i=0;i<list.length();i++){
             JSONObject entry=list.getJSONObject(i);String name=entry.getString("name"),hash=entry.getString("sha256");
@@ -135,12 +142,12 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             if(temporary.length()!=entry.getLong("bytes")||!digest(temporary).equals(hash))throw new java.io.IOException("游戏模块校验失败");
             if(!temporary.renameTo(target))throw new java.io.IOException("不能保存游戏模块");
         }
-        if(!new File(getFilesDir(),"game.romfs").isFile())throw new java.io.IOException("缺少原游戏资源");
-        if(!new File(getFilesDir(),"d2r-mobile/shaders/shader_index.bin").isFile())throw new java.io.IOException("缺少游戏图形缓存");
+        if(!new File(filesBase(),"game.romfs").isFile())throw new java.io.IOException("缺少原游戏资源");
+        if(!new File(filesBase(),"d2r-mobile/shaders/shader_index.bin").isFile())throw new java.io.IOException("缺少游戏图形缓存");
     }
     private void configureAndStart(){
         if(!prepared||failed||destroyed)return;
-        if(!configured){int rc=nativeConfigure(getFilesDir().getAbsolutePath(),getResources().getConfiguration().getLocales().get(0).toLanguageTag(),
+        if(!configured){int rc=nativeConfigure(filesBase().getAbsolutePath(),getResources().getConfiguration().getLocales().get(0).toLanguageTag(),
             getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN));
             if(rc!=0){fail("游戏初始化失败",new Exception("错误 "+rc));return;}configured=true;}
         if(surfaceReady)publishSurface();

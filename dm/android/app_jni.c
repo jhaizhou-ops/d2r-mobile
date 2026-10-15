@@ -76,7 +76,7 @@ static void persist_status(void) {
     if (!report_file[0]) return;
     pthread_mutex_lock(&report_lock);
     char text[384];pthread_mutex_lock(&state_lock);status_text(text,sizeof text);pthread_mutex_unlock(&state_lock);
-    int fd=open(report_temp,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600),error=0;
+    int fd=open(report_temp,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0660),error=0;
     if(fd<0)error=errno;
     else {size_t n=strlen(text),sent=0;while(sent<n){ssize_t k=write(fd,text+sent,n-sent);if(k<0&&errno==EINTR)continue;if(k<=0){error=errno?errno:EIO;break;}sent+=(size_t)k;}
         if(!error&&fsync(fd))error=errno;if(close(fd)&&!error)error=errno;
@@ -308,11 +308,18 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     path(logs,sizeof logs,port_root,"diagnostics");
     setenv("DM_FRAME_DIR",logs,1);
     if (dm_android_fs_ensure_directory(logs)) return errno?errno:EIO;
+    /* TEST PATCH (not in dodola's tree): K=V lines in diagnostics/env.txt are imported into the
+       environment, so performance bisecting can flip their DM_* switches without rebuilding. */
+    { char envf[PATH_MAX]; path(envf,sizeof envf,logs,"env.txt");
+      FILE *ef=fopen(envf,"r");
+      if(ef){ char line[512]; while(fgets(line,sizeof line,ef)){ char *eq=strchr(line,'='); if(!eq)continue; *eq=0;
+        char *k=line; char *v=eq+1; size_t n=strlen(v); while(n&&(v[n-1]=='\n'||v[n-1]=='\r'))v[--n]=0;
+        if(*k)setenv(k,v,1); } fclose(ef); LOG("ANDROID_ENV_FILE imported %s",envf); } }
     path(log,sizeof log,logs,"game-startup.log");
     char status_path[PATH_MAX]; path(status_path,sizeof status_path,logs,"status.json");
     if (unlink(status_path) && errno!=ENOENT) return errno;
     strcpy(report_file,status_path);path(report_temp,sizeof report_temp,logs,"status.native.new");
-    int fd=open(log,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600); if (fd<0) return errno;
+    int fd=open(log,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0660); if (fd<0) return errno;
     if (dup2(fd,STDERR_FILENO)<0) {rc=errno;close(fd);return rc;} close(fd); setvbuf(stderr,NULL,_IONBF,0);
     g_t0_ns=now_ns(); g_flag.fs=1; g_flag.svc=1; g_flag.dbg=1;
     path(shaders,sizeof shaders,port_root,"shaders"); dm_vk_set_shader_root(shaders);

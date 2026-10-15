@@ -226,7 +226,9 @@ done: {
 
 int dm_android_fs_ensure_directory(const char *path) {
     if (!path || path[0] != '/') { errno = EINVAL; return -1; }
-    if (mkdir(path, 0700) && errno != EEXIST) return -1;
+    /* TEST PATCH (not in dodola's tree): 0775 instead of 0700 so the diagnostics stay readable
+       from adb shell; storage permissions only, no behavioural change. */
+    if (mkdir(path, 0775) && errno != EEXIST) return -1;
     int fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) return -1;
     int rc = fsync(fd), error = errno;
