@@ -476,11 +476,6 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整�
     pthread_mutex_unlock(&g_lock);
     return r;
 }
-// 旧版 SDK 使用另一个符号；复用事务提交、失败恢复和同步钩子。
-// Older SDKs use a different symbol; reuse transaction commit, recovery and sync hooks.
-HLE_FORCE("_ZN2nn2fs14CommitSaveDataEPKc", "fsp-srv；旧版 SDK 的事务式存档提交", Result, h_fs_CommitSaveData, const char *name) {
-    return h_fs_Commit(name);
-}
 HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv；挂载表常驻，卸载为空操作", void, h_fs_Unmount, const char *name) { (void)name; }
 
 // ---------- 文件 ----------
