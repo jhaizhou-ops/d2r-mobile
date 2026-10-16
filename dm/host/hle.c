@@ -26,7 +26,7 @@ uint64_t unimpl_c(unsigned idx, uint64_t *regs) {
 // Per module, one cache of symbol number → resolved address
 static uint64_t g_cache[MAX_MOD][8192];
 
-uint64_t resolve_import(module_t *m, const char *name) {
+uint64_t resolve_import(module_t *m, const char *name, int weak) {
     static const hle_ent *sec; static unsigned long secsz;
     if (!sec) sec = (const hle_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swhle", &secsz);
     for (unsigned i = 0; i < secsz / sizeof(hle_ent); i++)
@@ -34,6 +34,9 @@ uint64_t resolve_import(module_t *m, const char *name) {
             if (g_flag.imports) { Dl_info di; dladdr(sec[i].fn, &di); LOG("import %s -> %s", name, di.dli_sname); }
             void *hlecount_wrap(const char *, const char *, void *); return (uint64_t)hlecount_wrap("HLE", name, sec[i].fn);   // DM_HLECOUNT 时为计数桩（含 libc 直通表） | With DM_HLECOUNT it is a counting stub (including the libc passthrough table)
         }
+    // 未解析的弱导入保持零，让客体能检测可选函数缺失。
+    // Leave unresolved weak imports null so the guest can detect absent optional functions.
+    if (weak) return 0;
     // 已为同名分过桩就复用
     // Reuse the stub if one was already allocated for the same name
     void *hlecount_wrap(const char *, const char *, void *);

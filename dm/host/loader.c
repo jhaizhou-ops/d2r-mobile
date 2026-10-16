@@ -18,7 +18,7 @@ pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 pthread_key_t g_keyres[2], g_keyaspect, g_keyaspectui;   // g_keyaspect：宽高比上限参数位（KASPECT）          // 分辨率参数位（改写器 PARAMS，KRES0 掌机 / KRES1 主机）；产物没有即 0、不占 | g_keyaspect: aspect ratio upper-limit parameter slot (KASPECT)          // resolution parameter slots (rewriter PARAMS, KRES0 handheld / KRES1 docked); 0 and not allocated if the build output lacks them
 enum { KEY_K18, KEY_KTLS, KEY_KTLR, KEY_KGATE, KEY_KRES0, KEY_KRES1, KEY_KASPECT, KEY_KASPECTUI, KEY_N };
 
-uint64_t resolve_import(module_t *m, const char *name);
+uint64_t resolve_import(module_t *m, const char *name, int weak);
 void gate_register(uint64_t ret_addr, const char *kind, int arg, uint64_t orig);
 
 static pthread_key_t key_value(unsigned i) {
@@ -115,9 +115,9 @@ module_t *module_of(const void *p) {
 
 // 跨模块符号解析：先在已装模块里找定义，找不到再交给 HLE / 桩
 // Cross-module symbol resolution: first look for a definition in the loaded modules, and only if not found hand over to HLE / stubs
-static uint64_t resolve_sym(module_t *m, const char *name) {
+static uint64_t resolve_sym(module_t *m, const char *name, int weak) {
     for (int i = 0; i < g_nmod; i++) { void *p = module_sym(&g_mod[i], name); if (p) return (uint64_t)p; }
-    return resolve_import(m, name);
+    return resolve_import(m, name, weak);
 }
 
 // 强制接管表（hle.h HLE_FORCE，__DATA,swforce 段）：命中即覆盖模块内定义
@@ -218,7 +218,7 @@ static void relocate(module_t *m) {
             if (type == R_AARCH64_RELATIVE) { *where = (uint64_t)m->base + r->r_addend; cnt[0]++; continue; }
             const Elf64_Sym *s = &m->symtab[si];
             uint64_t v = (uint64_t)force_lookup(m->strtab + s->st_name);
-            if (!v) v = s->st_shndx ? (uint64_t)m->base + s->st_value : resolve_sym(m, m->strtab + s->st_name);
+            if (!v) v = s->st_shndx ? (uint64_t)m->base + s->st_value : resolve_sym(m, m->strtab + s->st_name, (s->st_info >> 4) == 2);
             if (type == R_AARCH64_JUMP_SLOT) { *where = v; cnt[2]++; }
             else { *where = v + r->r_addend; cnt[1]++; }       // ABS64 / GLOB_DAT
         }

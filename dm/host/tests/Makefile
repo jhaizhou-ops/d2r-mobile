@@ -22,6 +22,7 @@ run: \
 	$(B)/t_hid_script \
 	$(B)/t_hud_dead \
 	$(B)/t_i18n \
+	$(B)/t_loader_weak \
 	$(B)/t_modetx \
 	$(B)/t_movie \
 	$(B)/t_namegen \
@@ -50,6 +51,7 @@ run: \
 	python3 ../../ios/tools/dm_i18n.py --check
 	python3 ../../i18n/scan_literals.py
 	$(B)/t_thread_leak
+	$(B)/t_loader_weak
 	$(B)/t_rift_clock
 	$(B)/t_rift_next
 	$(B)/t_rift_oldrun
@@ -172,3 +174,6 @@ $(B)/t_map_diag: t_map_diag.c ../dm_cursor.c ../dm_unit.h | $(B)
 
 $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 	clang -O1 -Wno-unused-function -Wl,-dead_strip -I.. -o $@ t_warp_diag.c
+
+$(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
