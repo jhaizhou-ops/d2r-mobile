@@ -1,4 +1,45 @@
-# Android 性能工程笔记（骁龙 8 Gen 1 / Adreno 730）
+# Android 性能工程笔记（骁龙 8+ Gen 1 / Adreno 730）
+
+## 0. 会话交接（压缩现状，2026-10-16）
+
+**代码位置**：本仓库（vickwv/d2r-mobile fork）分支 `android-integration`；dodola 的 Android 层已并入。
+**设备**：小米 22081212C（骁龙 8+ Gen 1 / Adreno 730，serial 4c6229ab）。当前开关：
+`diagnostics/` 下 `flag-gameres-native`、`flag-present-hz-120`；`pso-cache.bin` 跨会话持久；
+跑测前：`input keyevent KEYCODE_WAKEUP; svc power stayon true`，必须解锁+前台。
+
+**真实性能现状**（热稳态，原生 2168×1220 出图）：轻中场景 31–44fps、重营地 24–28、
+用户 14 分钟真实游玩均 36.2fps；菜单 60（120Hz 节拍解锁后）。GPU 等待通常只剩 3–10ms/帧
+——**瓶颈是 CPU 翻译流水**（replay ~15–22ms，其中描述符绑定 ~6.6ms、renderpass ~3.5ms）。
+
+**本轮（会话末尾）结论——翻译线程移植**：
+Apple v1.0.15 的翻译队列（游戏线程只入队、nvn-translate 线程翻译/出图）已移植进
+`dm/android/nvn_platform_present.inc`（+ 同步等待接队列、释放/改注册等待发布）。三轮回归稳定，
+但本 SoC **重场景零增益**（大核已饱和：游戏逻辑+翻译+驱动），菜单 60 同步模式本来就有。
+→ 默认同步（`DM_NVN_SYNC=1` 由 app_jni 设），`diagnostics/flag-nvn-queue` 可实验开启。
+三处真 bug 修复保留（对同步模式亦更稳健）。
+
+**上游同步**：只落后 2 个提交，已合（v1.0.17 存档数据损失修复 `9de307e` + Mac 修复）。
+owner（上游作者）给 dodola 的建议六条：①同步上游 ✅ ②翻译线程 ✅（已移植，本机无增益）
+③load/store 带宽——本机实测**无 fps 增益**（非带宽瓶颈），含哨兵核查法留作省电实验
+④管线缓存 ✅（落盘持久化；预热/后台编译未做）⑤测量方法论——采纳中（见 §7）
+⑥D2R 逻辑固定 25 拍、出图节拍独立 → 我们的 120Hz 节拍解锁**速度安全**（owner 证实）。
+
+**下一步队列**（优先级序）：
+1. 测量基建：上屏时刻（`mtl_presented_time` 空桩）接线 + 热机尾 30s 口径 + 良品/弃品判定
+   （游戏内存场景检测优于截图）；Apple 侧已有 `DM_NVN_UB` 交替测量可参照移植。
+2. 管线预热：启动期按常用清单预建（iOS 清单 397 行实证）+ 后台线程编译。
+3. CPU 深水：描述符 bind 路径 6.6ms（计划校验/缓存查找）、renderpass 3.5ms（每帧 70 次
+   真创建 × ~50µs，缓存生命周期跨块持久化试过但崩溃已回退，需带复现调试）、tail 4.3ms。
+4. load/store 哨兵协议实测化（省瓦数，热机频率受益）。
+
+**已验证的测量陷阱**：冷却频率加成（FUSE 间歇只读、首轮可能虚高 30-50%）；营地粒子方差 ±20%；
+toybox grep 不支持 `\|`；`PRESENT_PARTS acquire_ms` 是每 60 帧累计；验证层开关文件必须清。
+
+**文档审计**（给另一份 `ANDROID_PERF_NOTES.zh-CN.md` 的结论）：约 85% 属实；必修 6 点
+（交换链 DONT_CARE 机会无效、带宽线降级、管线缓存已做、翻译队体现状、测量基建已有部分、
+数字口径/归属更正）。该文档在 `d2r-mobile` 树未跟踪。
+
+---
 
 本文件汇总合并版 Android 端（1280×720 ~ 2168×1220 输出、1121 draws/帧营地区）逐轮实测的
 性能结论。所有数字来自设备 60 帧窗口（`RENDER_PROFILE` / `RENDER_PHASE_CPU_PROFILE`）。
