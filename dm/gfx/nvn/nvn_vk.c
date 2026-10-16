@@ -238,11 +238,12 @@ static struct {
     uint64_t profile_query_breaks,profile_query_preresets,profile_pass_splits;
     uint64_t profile_counter_resets,profile_counter_reports,profile_counter_ops;
     uint64_t profile_full_clears,profile_scissor_clears;
+    uint64_t profile_read_memo_hits,profile_read_memo_misses;
     uint64_t pass_end_draws[8192];
     int diag_barrier,diag_loadstore,disable_barrier_elision,disable_sample_copy_cache,barrier_stats,pass_timing;
     uint32_t npacc;
 
-    PassAcc pacc[128];char skip_ps[17];struct{char key[17];uint32_t draws;}hot[64];uint32_t nhot;int disable_desc_cache,disable_control_cache,diag_no_occlusion,diag_img_usage,barrier_pass_elide,pass_side_effects,diag_no_pass_deps,precise_sync,draw_store,xition_vertex;uint64_t profile_wait_elided,profile_hz_barriers,hz_count[8];int hz_diag,chunk_draws,chunk_log,profile_detail,seg_index,diag_skip_draws,diag_skip_xfer,diag_skip_class,diag_shape,enable_narrow_access,diag_fixed_desc,disable_wait_elision,want_cached,wb_stage_enabled,wb_stage_type,disable_setrt_skip,disable_subres,disable_pass_reuse,disable_cpu_uniform_snapshot,query_pre_reset,pass_split_draws,diag_imprecise_occlusion;uint64_t setrt_total,setrt_same;char pass_desc[96],last_ps[20],last_uses[100];int last_count,last_barrier_bits;uint64_t pass_draws0;uint64_t gts_busy[4],gts_span[4],gts_gap[4],gts_chunks[4],pres_acq_ns,pres_fence_ns,pres_idle_ns,pres_submit_ns,seg_begin_ns,seg_record_ns[4],seg_wait_ns[4],seg_tail_ns[4],seg_draws[4],seg_chunks[4];uint64_t profile_chunks;uint32_t barrier_bits[256],barrier_kept[256],barrier_nopass,barrier_sidefx;uint32_t barrier_sites[4096],pass_end_sites[8192];
+    PassAcc pacc[128];char skip_ps[17];struct{char key[17];uint32_t draws;}hot[64];uint32_t nhot;int disable_desc_cache,disable_control_cache,diag_no_occlusion,diag_img_usage,barrier_pass_elide,pass_side_effects,diag_no_pass_deps,precise_sync,draw_store,xition_vertex;uint64_t profile_wait_elided,profile_hz_barriers,hz_count[8];int hz_diag,chunk_draws,chunk_log,profile_detail,seg_index,diag_skip_draws,diag_skip_xfer,diag_skip_class,diag_shape,enable_narrow_access,diag_fixed_desc,disable_wait_elision,want_cached,wb_stage_enabled,wb_stage_type,disable_setrt_skip,disable_subres,disable_pass_reuse,disable_cpu_uniform_snapshot,query_pre_reset,pass_split_draws,diag_imprecise_occlusion,read_memo_enabled;uint64_t setrt_total,setrt_same;char pass_desc[96],last_ps[20],last_uses[100];int last_count,last_barrier_bits;uint64_t pass_draws0;uint64_t gts_busy[4],gts_span[4],gts_gap[4],gts_chunks[4],pres_acq_ns,pres_fence_ns,pres_idle_ns,pres_submit_ns,seg_begin_ns,seg_record_ns[4],seg_wait_ns[4],seg_tail_ns[4],seg_draws[4],seg_chunks[4];uint64_t profile_chunks;uint32_t barrier_bits[256],barrier_kept[256],barrier_nopass,barrier_sidefx;uint32_t barrier_sites[4096],pass_end_sites[8192];
     ControlCache *control_cache;
     uint64_t profile_desc_hits,profile_desc_misses,profile_control_hits,profile_control_misses,profile_control_evict,profile_control_changed,profile_barriers_skipped,profile_sample_copy_hits,profile_sample_copy_misses;
     uint64_t profile_passes,profile_barriers,profile_uniform_updates,profile_cpu_snapshots,profile_gpu_copies,profile_snapshot_reuses;char trace_shader[17];
@@ -534,6 +535,7 @@ static void backend_init(void) {
     G.query_pre_reset=getenv("DM_QUERY_PRERESET")!=NULL;   /* 默认关：实测 CPU 省 2.2ms 但 GPU 亏 2-4ms（更少更长的通道对 GPU 不利）| default off: measured CPU win but larger GPU loss (fewer/longer passes hurt this GPU) */
     {const char *ps=getenv("DM_PASS_SPLIT");G.pass_split_draws=ps?atoi(ps):0;}
     G.fb_cache_enabled=getenv("DM_DISABLE_FB_CACHE")==NULL;
+    G.read_memo_enabled=getenv("DM_DISABLE_READ_MEMO")==NULL;
     G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
     G.disable_resource_cache=getenv("DM_DISABLE_RESOURCE_CACHE")!=NULL;
     G.disable_binding_plans=getenv("DM_DISABLE_BINDING_PLANS")!=NULL;G.plan_precise_state=getenv("DM_PLAN_PRECISE_STATE")!=NULL;
@@ -600,9 +602,18 @@ static void pool_materialize(VPool *pool) {
 }
 static VPool *pool_find(uint64_t addr,uint64_t size,uint64_t *offset) {
     if(size>UINT64_MAX-addr) return NULL;
+    /* 最近命中池优先：热路径上同一批小池（流式/常量池）被反复查找，先试上次命中的索引。
+     * 池数组会被删除操作压实 → 索引可能指向别的池，但范围检查保证返回的仍是"包含该地址的池"
+     * （池区间互不重叠），找不到再走全表扫描。 | Last-hit pool first: the hot path hammers a few
+     * streaming/constant pools; the cached index may be stale after compaction, but the range check
+     * still guarantees the returned pool contains the address (pool ranges never overlap). */
+    static _Thread_local int last=-1;
+    if(last>=0&&last<G.npool){VPool *p=&G.pools[last];uint64_t base=(uint64_t)(uintptr_t)p->guest;
+        if(addr>=base && addr-base<=p->size && size<=p->size-(addr-base)) {
+            if(offset) *offset=addr-base; return p; } }
     for(int i=0;i<G.npool;i++) { uint64_t base=(uint64_t)(uintptr_t)G.pools[i].guest;
         if(addr>=base && addr-base<=G.pools[i].size && size<=G.pools[i].size-(addr-base)) {
-            if(offset) *offset=addr-base; return &G.pools[i]; } }
+            if(offset) *offset=addr-base; last=i; return &G.pools[i]; } }
     return NULL;
 }
 int mtl_addr(uint64_t addr,uint64_t len,void **buf,uint64_t *off) {
@@ -711,6 +722,22 @@ static VPool *pool_read_resolved(VPool *p,uint64_t addr,uint64_t len,uint64_t *o
 static VPool *pool_read(uint64_t addr,uint64_t len,uint64_t *off) {
     VPool *p=pool_find(addr,len,off);if(!p)die("unmapped NVN buffer range",addr);
     return pool_read_resolved(p,addr,len,off);
+}
+/* draw 热路径专用读出备忘（索引/顶点流）：pool_read 的内置备忘是单条且被缓冲绑定穿插冲刷，
+ * 这里开一层 8 槽直接映射表，跳过 pool_find 扫描与上传桶查找；**保留脏检查**（内容新鲜语义不变：
+ * 命中条件含 dirty_since，任何 CPU 写入都会落回 pool_read 走上传）。 */
+typedef struct { uint64_t addr,size,serial,stamp; VPool *p; uint64_t off; } ReadMemo;
+static _Thread_local ReadMemo g_read_memo[8];
+static VPool *pool_read_memo(uint64_t addr,uint64_t size,uint64_t *offset) {
+    if(!G.read_memo_enabled)return pool_read(addr,size,offset);
+    ReadMemo *m=&g_read_memo[(addr>>6)&7];
+    uint64_t stamp=nvn_dirty_now();
+    if(m->addr==addr&&m->size==size&&m->p&&m->p->serial==m->serial&&
+       !nvn_dirty_since((const void *)(uintptr_t)addr,size,m->stamp)){
+        *offset=m->off;G.profile_read_memo_hits++;return m->p; }
+    uint64_t off=0;VPool *p=pool_read(addr,size,&off);
+    m->addr=addr;m->size=size;m->serial=p->serial;m->stamp=stamp;m->p=p;m->off=off;
+    G.profile_read_memo_misses++;*offset=off;return p;
 }
 static void mark_write(uint64_t addr,uint64_t len) {
     if(!pool_find(addr,len,NULL)) die("unmapped write range",addr);
@@ -2744,7 +2771,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
         attributes[i]=(VkVertexInputAttributeDescription){location,v.stream,format(v.fmt),v.offset};used[v.stream]=1; }
     for(unsigned i=0;i<16;i++)if(used[i]) { vs_st v=G.state.streams[i];if(v.divisor>1)die("vertex divisor",v.divisor);
         bindings[nbindings++]=(VkVertexInputBindingDescription){i,v.stride,v.divisor?VK_VERTEX_INPUT_RATE_INSTANCE:VK_VERTEX_INPUT_RATE_VERTEX};
-        NVNbufferRange r=G.state.vbuf[i];if(!r.address || !r.size)die("unbound vertex stream",i);uint64_t offset=0;VPool *p=pool_read(r.address,r.size,&offset);
+        NVNbufferRange r=G.state.vbuf[i];if(!r.address || !r.size)die("unbound vertex stream",i);uint64_t offset=0;VPool *p=pool_read_memo(r.address,r.size,&offset);
         command_bind_profile(NVN_VK_CMD_VERTEX,nvn_vk_cmd_vertex(&S.command_state,G.enable_command_cache&&!G.trace_frame,S.command,i,p->v.b,offset)); }
     G.profile_vertex_ns+=prof_now()-vertex_started;
     VkPipelineVertexInputStateCreateInfo vi={.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,.vertexBindingDescriptionCount=nbindings,
@@ -2835,7 +2862,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     else if(a) {if(a->count<0 || a->first<0)die("draw arrays bounds",a->count);vkCmdDraw(S.command,(G.diag_shape&2)&&a->count>3?3:a->count,1,a->first,0);}
     else { if(idx->count<0 || idx->instances<0 || (idx->itype!=NVN_INDEX_TYPE_UNSIGNED_SHORT && idx->itype!=NVN_INDEX_TYPE_UNSIGNED_INT))die("index type/bounds",idx->itype);
         uint64_t idx_t0=prof_now();
-        uint64_t offset=0,size=(uint64_t)idx->count*(idx->itype==NVN_INDEX_TYPE_UNSIGNED_SHORT?2:4);VPool *p=pool_read(idx->ibuf,size,&offset);
+        uint64_t offset=0,size=(uint64_t)idx->count*(idx->itype==NVN_INDEX_TYPE_UNSIGNED_SHORT?2:4);VPool *p=pool_read_memo(idx->ibuf,size,&offset);
         command_bind_profile(NVN_VK_CMD_INDEX,nvn_vk_cmd_index(&S.command_state,cache_commands,S.command,p->v.b,offset,idx->itype==NVN_INDEX_TYPE_UNSIGNED_SHORT?VK_INDEX_TYPE_UINT16:VK_INDEX_TYPE_UINT32));
         G.profile_tail_idx_ns+=prof_now()-idx_t0;
         vkCmdDrawIndexed(S.command,(G.diag_shape&2)&&idx->count>3?3:idx->count,idx->instances,0,idx->base_vertex,idx->base_instance); }
@@ -3501,8 +3528,8 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_plan_hits=G.profile_plan_misses=G.profile_plan_fallbacks=G.profile_plan_buffers=G.profile_plan_images=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_VIEW_CACHE_PROFILE frame=%llu view_hits=%llu view_misses=%llu framebuffer_hits=%llu framebuffer_misses=%llu rp_hits=%llu rp_creates=%llu rp_overflow=%llu rtv_hits=%llu rtv_creates=%llu rtv_stale=%llu rtf_hits=%llu rtf_creates=%llu rtf_stale=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_view_hits,(unsigned long long)G.profile_view_misses,(unsigned long long)G.profile_framebuffer_hits,(unsigned long long)G.profile_framebuffer_misses,(unsigned long long)G.profile_rpc_hits,(unsigned long long)G.profile_rpc_creates,(unsigned long long)G.profile_rpc_overflow,(unsigned long long)G.profile_rtv_hits,(unsigned long long)G.profile_rtv_creates,(unsigned long long)G.profile_rtv_stale,(unsigned long long)G.profile_rtf_hits,(unsigned long long)G.profile_rtf_creates,(unsigned long long)G.profile_rtf_stale);
         G.profile_view_hits=G.profile_view_misses=G.profile_framebuffer_hits=G.profile_framebuffer_misses=G.profile_rpc_hits=G.profile_rpc_creates=G.profile_rpc_overflow=G.profile_rtv_hits=G.profile_rtv_creates=G.profile_rtv_stale=G.profile_rtf_hits=G.profile_rtf_creates=G.profile_rtf_stale=0;
-        fprintf(stderr,"[nvn-vulkan] RENDER_POOL_UPLOAD_PROFILE frame=%llu pools=%d uploaded_bytes=%llu reused_ranges=%llu reused_bytes=%llu\n",(unsigned long long)G.present_count+1,G.npool,(unsigned long long)G.profile_pool_uploaded_bytes,(unsigned long long)G.profile_pool_reused_ranges,(unsigned long long)G.profile_pool_reused_bytes);
-        G.profile_pool_uploaded_bytes=G.profile_pool_reused_ranges=G.profile_pool_reused_bytes=0;
+        fprintf(stderr,"[nvn-vulkan] RENDER_POOL_UPLOAD_PROFILE frame=%llu pools=%d uploaded_bytes=%llu reused_ranges=%llu reused_bytes=%llu read_memo_hits=%llu read_memo_misses=%llu\n",(unsigned long long)G.present_count+1,G.npool,(unsigned long long)G.profile_pool_uploaded_bytes,(unsigned long long)G.profile_pool_reused_ranges,(unsigned long long)G.profile_pool_reused_bytes,(unsigned long long)G.profile_read_memo_hits,(unsigned long long)G.profile_read_memo_misses);
+        G.profile_pool_uploaded_bytes=G.profile_pool_reused_ranges=G.profile_pool_reused_bytes=0;G.profile_read_memo_hits=G.profile_read_memo_misses=0;
         if(G.pass_timing){for(uint32_t a=0;a<G.npacc;a++)for(uint32_t b=a+1;b<G.npacc;b++)if(G.pacc[b].ms>G.pacc[a].ms){PassAcc tmp=G.pacc[a];G.pacc[a]=G.pacc[b];G.pacc[b]=tmp;}
             double total=0;for(uint32_t a=0;a<G.npacc;a++)total+=G.pacc[a].ms;fprintf(stderr,"[nvn-vulkan] PASS_TIME_TOTAL frame=%llu groups=%u gpu_ms=%.3f\n",(unsigned long long)G.present_count+1,G.npacc,total);
             for(uint32_t a=0;a<G.npacc&&a<12;a++)fprintf(stderr,"[nvn-vulkan] PASS_TIME rank=%u rt_key=%llx size=%ux%u colors=%u passes=%u draws=%llu ms=%.3f\n",a,(unsigned long long)G.pacc[a].key,G.pacc[a].w,G.pacc[a].h,G.pacc[a].n,G.pacc[a].passes,(unsigned long long)G.pacc[a].draws,G.pacc[a].ms);
@@ -3592,6 +3619,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(imdir&&*imdir&&snprintf(imf,sizeof imf,"%s/imprecise.txt",imdir)<(int)sizeof imf){FILE *fp=fopen(imf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.diag_imprecise_occlusion){G.diag_imprecise_occlusion=m;
                 fprintf(stderr,"[nvn-vulkan] DIAG_IMPRECISE_OCCLUSION 运行中切换 → %d\n",m);}fclose(fp);}}}
+        /* 读出备忘运行时 A/B：readmemo.txt = 1 开（默认）/ 0 关。 | Read-memo runtime A/B:
+         * readmemo.txt = 1 on (default) / 0 off. */
+        { static const char *rmdir; if(!rmdir)rmdir=getenv("DM_FRAME_DIR"); char rmf[1300];
+          if(rmdir&&*rmdir&&snprintf(rmf,sizeof rmf,"%s/readmemo.txt",rmdir)<(int)sizeof rmf){FILE *fp=fopen(rmf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.read_memo_enabled){G.read_memo_enabled=m;
+                fprintf(stderr,"[nvn-vulkan] READ_MEMO 运行中切换 → %d\n",m);}fclose(fp);}}}
         /* 有意通道分割器运行时切换：passsplit.txt = 单通道 draw 上限（0=关）。 | Intentional
          * pass splitter: passsplit.txt = draws per pass cap (0 = off). */
         { static const char *psdir; if(!psdir)psdir=getenv("DM_FRAME_DIR"); char psf[1300];
