@@ -234,12 +234,13 @@ static struct {
     uint64_t profile_tail_bind_ns,profile_tail_state_ns,profile_tail_draw_ns;   // tail 子桶：管线+描述符 / 状态+查询 / 绘制调用 | tail sub-buckets
     uint64_t profile_rp_flush_ns,profile_rp_attach_ns,profile_rp_key_ns,profile_rp_begin_ns;   // render_begin 子桶：冲刷 / 附件 / 键+创建 / 编码 | render_begin sub-buckets
     uint64_t profile_rp_chunk_ns,profile_rp_scan_ns,profile_rp_create_ns,profile_tail_idx_ns;   // 细分：分块提交 / 键构建+扫描 / 创建对象 / 索引读
-    uint64_t profile_query_breaks,profile_query_preresets;
+    uint64_t profile_chunk_end_ns,profile_chunk_submit_ns,profile_chunk_begin_ns;   // 分块提交三分：vkEndCommandBuffer / vkQueueSubmit / 新缓冲开始+状态重置
+    uint64_t profile_query_breaks,profile_query_preresets,profile_pass_splits;
     uint64_t pass_end_draws[8192];
     int diag_barrier,diag_loadstore,disable_barrier_elision,disable_sample_copy_cache,barrier_stats,pass_timing;
     uint32_t npacc;
 
-    PassAcc pacc[128];char skip_ps[17];struct{char key[17];uint32_t draws;}hot[64];uint32_t nhot;int disable_desc_cache,disable_control_cache,diag_no_occlusion,diag_img_usage,barrier_pass_elide,pass_side_effects,diag_no_pass_deps,precise_sync,draw_store,xition_vertex;uint64_t profile_wait_elided,profile_hz_barriers,hz_count[8];int hz_diag,chunk_draws,chunk_log,profile_detail,seg_index,diag_skip_draws,diag_skip_xfer,diag_skip_class,diag_shape,enable_narrow_access,diag_fixed_desc,disable_wait_elision,want_cached,wb_stage_enabled,wb_stage_type,disable_setrt_skip,disable_subres,disable_pass_reuse,disable_cpu_uniform_snapshot,query_pre_reset;uint64_t setrt_total,setrt_same;char pass_desc[96],last_ps[20],last_uses[100];int last_count,last_barrier_bits;uint64_t pass_draws0;uint64_t gts_busy[4],gts_span[4],gts_gap[4],gts_chunks[4],pres_acq_ns,pres_fence_ns,pres_idle_ns,pres_submit_ns,seg_begin_ns,seg_record_ns[4],seg_wait_ns[4],seg_tail_ns[4],seg_draws[4],seg_chunks[4];uint64_t profile_chunks;uint32_t barrier_bits[256],barrier_kept[256],barrier_nopass,barrier_sidefx;uint32_t barrier_sites[4096],pass_end_sites[8192];
+    PassAcc pacc[128];char skip_ps[17];struct{char key[17];uint32_t draws;}hot[64];uint32_t nhot;int disable_desc_cache,disable_control_cache,diag_no_occlusion,diag_img_usage,barrier_pass_elide,pass_side_effects,diag_no_pass_deps,precise_sync,draw_store,xition_vertex;uint64_t profile_wait_elided,profile_hz_barriers,hz_count[8];int hz_diag,chunk_draws,chunk_log,profile_detail,seg_index,diag_skip_draws,diag_skip_xfer,diag_skip_class,diag_shape,enable_narrow_access,diag_fixed_desc,disable_wait_elision,want_cached,wb_stage_enabled,wb_stage_type,disable_setrt_skip,disable_subres,disable_pass_reuse,disable_cpu_uniform_snapshot,query_pre_reset,pass_split_draws;uint64_t setrt_total,setrt_same;char pass_desc[96],last_ps[20],last_uses[100];int last_count,last_barrier_bits;uint64_t pass_draws0;uint64_t gts_busy[4],gts_span[4],gts_gap[4],gts_chunks[4],pres_acq_ns,pres_fence_ns,pres_idle_ns,pres_submit_ns,seg_begin_ns,seg_record_ns[4],seg_wait_ns[4],seg_tail_ns[4],seg_draws[4],seg_chunks[4];uint64_t profile_chunks;uint32_t barrier_bits[256],barrier_kept[256],barrier_nopass,barrier_sidefx;uint32_t barrier_sites[4096],pass_end_sites[8192];
     ControlCache *control_cache;
     uint64_t profile_desc_hits,profile_desc_misses,profile_control_hits,profile_control_misses,profile_control_evict,profile_control_changed,profile_barriers_skipped,profile_sample_copy_hits,profile_sample_copy_misses;
     uint64_t profile_passes,profile_barriers,profile_uniform_updates,profile_cpu_snapshots,profile_gpu_copies,profile_snapshot_reuses;char trace_shader[17];
@@ -529,6 +530,7 @@ static void backend_init(void) {
     G.disable_query_batch=getenv("DM_DISABLE_QUERY_BATCH")!=NULL;G.diag_no_occlusion=getenv("DM_DIAG_NO_OCCLUSION")!=NULL;G.barrier_pass_elide=getenv("DM_BARRIER_PASS_ELIDE")!=NULL;G.diag_no_pass_deps=getenv("DM_DIAG_NO_PASS_DEPS")!=NULL;G.precise_sync=getenv("DM_DISABLE_PRECISE_SYNC")==NULL;{const char *hd=getenv("DM_HZ_DIAG");G.hz_diag=hd?atoi(hd):0;}{const char *cd=getenv("DM_CHUNK_DRAWS");G.chunk_draws=cd?atoi(cd):48;G.chunk_log=getenv("DM_RESOURCE_STATS")!=NULL;G.profile_detail=getenv("DM_PROFILE_DETAIL")!=NULL;G.diag_skip_draws=getenv("DM_DIAG_SKIP_DRAWS")!=NULL;{const char *sh=getenv("DM_DIAG_SHAPE");G.diag_shape=sh?atoi(sh):0;}G.disable_setrt_skip=getenv("DM_DISABLE_SETRT_SKIP")!=NULL;G.disable_subres=getenv("DM_DISABLE_SUBRES")!=NULL;G.enable_narrow_access=getenv("DM_NARROW_ACCESS")!=NULL;G.diag_fixed_desc=getenv("DM_DIAG_FIXED_DESC")!=NULL;G.disable_wait_elision=getenv("DM_DISABLE_WAIT_ELISION")!=NULL;G.async_enabled=getenv("DM_DISABLE_ASYNC_COMMIT")==NULL;G.async_drain_after_submit=getenv("DM_ASYNC_DRAIN")!=NULL;{const char *sc=getenv("DM_DIAG_SKIP_CLASS");G.diag_skip_class=sc?atoi(sc):0;}G.wb_stage_enabled=getenv("DM_DISABLE_WB_STAGE")==NULL;G.disable_pass_reuse=getenv("DM_DISABLE_PASS_REUSE")!=NULL;G.disable_cpu_uniform_snapshot=getenv("DM_DISABLE_CPU_UNIFORM_SNAPSHOT")!=NULL;{const char *sx=getenv("DM_DIAG_SKIP_XFER");G.diag_skip_xfer=sx?atoi(sx):0;}}fprintf(stderr,"[nvn-vulkan] PRECISE_SYNC=%d hz_diag=%d\n",G.precise_sync,G.hz_diag);{const char *iu=getenv("DM_DIAG_IMG_USAGE");G.diag_img_usage=iu?atoi(iu):0;}
     {const char *range=getenv("DM_QUERY_RESET_RANGE");G.enable_query_reset_range=range&&atoi(range)!=0;}
     G.query_pre_reset=getenv("DM_QUERY_PRERESET")!=NULL;   /* 默认关：实测 CPU 省 2.2ms 但 GPU 亏 2-4ms（更少更长的通道对 GPU 不利）| default off: measured CPU win but larger GPU loss (fewer/longer passes hurt this GPU) */
+    {const char *ps=getenv("DM_PASS_SPLIT");G.pass_split_draws=ps?atoi(ps):0;}
     G.fb_cache_enabled=getenv("DM_DISABLE_FB_CACHE")==NULL;
     G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
     G.disable_resource_cache=getenv("DM_DISABLE_RESOURCE_CACHE")!=NULL;
@@ -2440,18 +2442,21 @@ static void sub_chunk_flush(void) {
      * prefixes are reset before first use and all chunks retire at the final
      * fence; profiling therefore need not disable normal early submission. */
     if(S.in_pass||S.active_occlusion!=UINT32_MAX||G.draws-S.chunk_mark<(uint64_t)G.chunk_draws||S.chunk_index+1>=48)return;
-    chunk_ts_write(1);CHECK(vkEndCommandBuffer(S.command));
+    chunk_ts_write(1);
+    uint64_t c_t0=prof_now();CHECK(vkEndCommandBuffer(S.command));G.profile_chunk_end_ns+=prof_now()-c_t0;
     VkSubmitInfo si={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&S.command};
-    CHECK(vkQueueSubmit(G.queue,1,&si,VK_NULL_HANDLE));
+    uint64_t c_t1=prof_now();CHECK(vkQueueSubmit(G.queue,1,&si,VK_NULL_HANDLE));G.profile_chunk_submit_ns+=prof_now()-c_t1;
     S.chunk_index++;
     if(S.chunk_index>=S.chunk_alloc){
         VkCommandBufferAllocateInfo a={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.commandPool=S.command_pool,.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};
         CHECK(vkAllocateCommandBuffers(G.device,&a,&S.chunk_cb[S.chunk_alloc]));S.chunk_alloc++;
     }
+    uint64_t c_t2=prof_now();
     S.command=S.chunk_cb[S.chunk_index];
     VkCommandBufferBeginInfo b={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     CHECK(vkBeginCommandBuffer(S.command,&b));chunk_ts_write(0);
     nvn_vk_command_state_reset(&S.command_state);S.command_dirty=1;S.chunk_mark=G.draws;G.profile_chunks++;
+    G.profile_chunk_begin_ns+=prof_now()-c_t2;
 }
 /* 持久渲染通道缓存：PassKey 是纯值数据（附件/子通道/依赖描述，无句柄），且 VkRenderPass 描述后不可变，
  * 因此对象可与设备同寿命。省去每 epoch 重建通道对象的成本；表满/探测链过长时退化为"创建不缓存"（对象
@@ -2663,6 +2668,12 @@ static void command_bind_profile(unsigned kind,int issued) {
 }
 static void draw(const p_draw *a,const p_draw_idx *idx) {
     if(!a&&!idx)die("draw parameters",0);
+    /* 有意通道分割器（A/B 实验，passsplit.txt）：限制单通道 draw 数。预重置实验证明通道长度
+     * 对这块 GPU 影响巨大（~100 draw 长通道 15.8fps vs ~32 draw 25fps），本档把"查询打断"
+     * 的副产品分割变成可调参数。 | Intentional pass splitter (A/B, passsplit.txt): cap the draws
+     * per pass. The pre-reset experiment showed pass length matters a lot on this GPU (~100-draw
+     * passes 15.8fps vs ~32-draw 25fps); this turns the accidental query-break splitter into a knob. */
+    if(G.pass_split_draws && S.in_pass && G.draws-G.pass_draws0>=(uint64_t)G.pass_split_draws){G.profile_pass_splits++;pass_end();}
     uint64_t dr_state=prof_now();
     int upper_left=atomic_load(&G.window_origin)==NVN_WINDOW_ORIGIN_MODE_UPPER_LEFT;
     if(G.state.ms.samples>1 || G.state.ms.a2c || G.state.ms.cov_mod || G.state.ms.sl_en)die("multisample semantics",G.state.ms.samples);
@@ -3457,7 +3468,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         fprintf(stderr,"[nvn-vulkan] RENDER_BIND_SPLIT frame=%llu plan_hits=%llu plan_ms=%.3f full_calls=%llu full_ms=%.3f\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_bind_hits,G.profile_bind_plan_ns/1e6,(unsigned long long)G.profile_bind_full_calls,G.profile_bind_full_ns/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_PLAN_REASON frame=%llu rev=%llu epoch=%llu state=%llu registry=%llu pool=%llu buf_none=%llu buf_align=%llu buf_addr=%llu buf_pool=%llu buf_off=%llu buf_dynbig=%llu img_check=%llu img_layout=%llu img_samp=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_plan_rev,(unsigned long long)G.profile_plan_epoch,(unsigned long long)G.profile_plan_state,(unsigned long long)G.profile_plan_reg,(unsigned long long)G.profile_plan_pool,(unsigned long long)G.profile_plan_buf_none,(unsigned long long)G.profile_plan_buf_align,(unsigned long long)G.profile_plan_buf_addr,(unsigned long long)G.profile_plan_buf_pool,(unsigned long long)G.profile_plan_buf_off,(unsigned long long)G.profile_plan_buf_dynbig,(unsigned long long)G.profile_plan_img_check,(unsigned long long)G.profile_plan_img_layout,(unsigned long long)G.profile_plan_img_samp);
         fprintf(stderr,"[nvn-vulkan] RENDER_TAIL_SPLIT frame=%llu bind_ms=%.3f state_ms=%.3f draw_ms=%.3f idx_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_tail_bind_ns/1e6,G.profile_tail_state_ns/1e6,G.profile_tail_draw_ns/1e6,G.profile_tail_idx_ns/1e6);
-        fprintf(stderr,"[nvn-vulkan] RENDER_RP_SPLIT frame=%llu flush_ms=%.3f chunk_ms=%.3f attach_ms=%.3f key_ms=%.3f scan_ms=%.3f create_ms=%.3f begin_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_rp_flush_ns/1e6,G.profile_rp_chunk_ns/1e6,G.profile_rp_attach_ns/1e6,G.profile_rp_key_ns/1e6,G.profile_rp_scan_ns/1e6,G.profile_rp_create_ns/1e6,G.profile_rp_begin_ns/1e6);
+        fprintf(stderr,"[nvn-vulkan] RENDER_RP_SPLIT frame=%llu flush_ms=%.3f chunk_ms=%.3f cend_ms=%.3f csub_ms=%.3f cbeg_ms=%.3f attach_ms=%.3f key_ms=%.3f scan_ms=%.3f create_ms=%.3f begin_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_rp_flush_ns/1e6,G.profile_rp_chunk_ns/1e6,G.profile_chunk_end_ns/1e6,G.profile_chunk_submit_ns/1e6,G.profile_chunk_begin_ns/1e6,G.profile_rp_attach_ns/1e6,G.profile_rp_key_ns/1e6,G.profile_rp_scan_ns/1e6,G.profile_rp_create_ns/1e6,G.profile_rp_begin_ns/1e6);
         if(G.profile_detail){for(int rank=0;rank<8;rank++){int best=-1;uint64_t bestc=0;
             for(int i=0;i<8192;i++)if(G.pass_end_sites[i]>bestc){bestc=G.pass_end_sites[i];best=i;}
             if(best<0||!bestc)break;
@@ -3504,8 +3515,8 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_storage_bias_bindings=G.profile_storage_bias_bytes=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_QUERY_PROFILE frame=%llu queries=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_occlusion_queries);
         G.profile_occlusion_queries=0;
-        fprintf(stderr,"[nvn-vulkan] RENDER_QUERY_RESET_PROFILE frame=%llu frames=%llu enabled=%d calls=%llu slots=%llu pre_resets=%llu reserve_breaks=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,G.enable_query_reset_range,(unsigned long long)G.profile_query_reset_calls,(unsigned long long)G.profile_query_reset_slots,(unsigned long long)G.profile_query_preresets,(unsigned long long)G.profile_query_breaks);
-        G.profile_query_reset_calls=G.profile_query_reset_slots=G.profile_query_preresets=G.profile_query_breaks=0;
+        fprintf(stderr,"[nvn-vulkan] RENDER_QUERY_RESET_PROFILE frame=%llu frames=%llu enabled=%d calls=%llu slots=%llu pre_resets=%llu reserve_breaks=%llu pass_splits=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,G.enable_query_reset_range,(unsigned long long)G.profile_query_reset_calls,(unsigned long long)G.profile_query_reset_slots,(unsigned long long)G.profile_query_preresets,(unsigned long long)G.profile_query_breaks,(unsigned long long)G.profile_pass_splits);
+        G.profile_query_reset_calls=G.profile_query_reset_slots=G.profile_query_preresets=G.profile_query_breaks=G.profile_pass_splits=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_SYNC_PROFILE frame=%llu passes=%llu all_barriers=%llu uniform_updates=%llu aligned_cpu_snapshots=%llu aligned_gpu_copies=%llu aligned_snapshot_reuses=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)(G.pass_count-G.profile_passes),(unsigned long long)G.profile_barriers,(unsigned long long)G.profile_uniform_updates,(unsigned long long)G.profile_cpu_snapshots,(unsigned long long)G.profile_gpu_copies,(unsigned long long)G.profile_snapshot_reuses);
         fprintf(stderr,"[nvn-vulkan] PRESENT_PARTS acquire_ms=%.1f fence_ms=%.1f idle_ms=%.1f\n",G.pres_acq_ns/1e6,G.pres_fence_ns/1e6,G.pres_idle_ns/1e6);G.pres_acq_ns=G.pres_fence_ns=G.pres_idle_ns=0;
         for(int q=0;q<4;q++){fprintf(stderr,"[nvn-vulkan] SEG%d record_ms=%.1f wait_ms=%.1f last_chunk_draws=%llu chunks=%llu gpu_busy_ms=%.1f gpu_gap_ms=%.1f gpu_span_ms=%.1f\n",q,G.seg_record_ns[q]/1e6,G.seg_wait_ns[q]/1e6,(unsigned long long)G.seg_draws[q],(unsigned long long)G.seg_chunks[q],G.gts_busy[q]/1e6,G.gts_gap[q]/1e6,G.gts_span[q]/1e6);G.gts_busy[q]=G.gts_gap[q]=G.gts_span[q]=G.gts_chunks[q]=0;G.seg_record_ns[q]=G.seg_wait_ns[q]=G.seg_draws[q]=G.seg_chunks[q]=0;}
@@ -3522,6 +3533,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_plan_buf_none=G.profile_plan_buf_align=G.profile_plan_buf_addr=G.profile_plan_buf_pool=G.profile_plan_buf_off=G.profile_plan_buf_dynbig=0;
         G.profile_plan_img_check=G.profile_plan_img_layout=G.profile_plan_img_samp=0;
         G.profile_tail_bind_ns=G.profile_tail_state_ns=G.profile_tail_draw_ns=G.profile_tail_idx_ns=0;
+        G.profile_chunk_end_ns=G.profile_chunk_submit_ns=G.profile_chunk_begin_ns=0;
         G.profile_rp_flush_ns=G.profile_rp_chunk_ns=G.profile_rp_attach_ns=G.profile_rp_key_ns=G.profile_rp_scan_ns=G.profile_rp_create_ns=G.profile_rp_begin_ns=0;
         /* §1 带宽 A/B：运行时可翻转的 load/store（文件内容 = 0/1/2/3，语义同 DM_DIAG_LOADSTORE）。
          * 每个 profile 窗口（~1 秒）读一次；切换会改变后续渲染通道的键（新通道对象，旧的留在
@@ -3554,6 +3566,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(qrdir&&*qrdir&&snprintf(qrf,sizeof qrf,"%s/prereset.txt",qrdir)<(int)sizeof qrf){FILE *fp=fopen(qrf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.query_pre_reset){G.query_pre_reset=m;
                 fprintf(stderr,"[nvn-vulkan] QUERY_PRERESET 运行中切换 → %d\n",m);}fclose(fp);}}}
+        /* 有意通道分割器运行时切换：passsplit.txt = 单通道 draw 上限（0=关）。 | Intentional
+         * pass splitter: passsplit.txt = draws per pass cap (0 = off). */
+        { static const char *psdir; if(!psdir)psdir=getenv("DM_FRAME_DIR"); char psf[1300];
+          if(psdir&&*psdir&&snprintf(psf,sizeof psf,"%s/passsplit.txt",psdir)<(int)sizeof psf){FILE *fp=fopen(psf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=4096&&m!=G.pass_split_draws){G.pass_split_draws=m;
+                fprintf(stderr,"[nvn-vulkan] PASS_SPLIT 运行中切换 → %d\n",m);}fclose(fp);}}}
         /* 持久帧缓冲缓存运行时 A/B：fbcache.txt = 1 开（默认）/ 0 关。 | Persistent framebuffer
          * cache runtime A/B: fbcache.txt = 1 on (default) / 0 off. */
         { static const char *fcdir; if(!fcdir)fcdir=getenv("DM_FRAME_DIR"); char fcf[1300];
