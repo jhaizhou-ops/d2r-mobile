@@ -3,6 +3,7 @@
 // Fixed command chain experiment: production mtl_exec, hand-written constant shaders and closed-form expectations; does not include the production reorderer.
 // G full stencil block, M small view + copy, U blend, R stencil resolve; only G/M are swapped.
 #include "../nvn/nvn_mtl.m"
+#include "t_descriptor_fixture.h"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;
@@ -65,12 +66,12 @@ static void draw_prog(chain *c, int p, int tid) {
 static int bind_view_range(const tex_t *t, int lv, int levels, int sl, int slices) {
     static int tid=1000; view_t v={.set_levels=1,.base_level=lv,.nlevels=levels,
         .set_layers=slices>0,.min_layer=sl,.nlayers=slices};
-    mtl_reg_tex(tid,t,&v); return tid++;
+    fixture_reg_tex(tid,t,&v); return tid++;
 }
 static int bind_view(const tex_t *t, int lv) { return bind_view_range(t,lv,1,0,0); }
 typedef struct { uint8_t a[256],b[256],c[256],e[256]; uint64_t query; } result;
 static result execute(chain *c, const tex_t *a, const tex_t *b, const tex_t *out, const tex_t *e, uint64_t *q) {
-    emit(c,OP_END,NULL,0); state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0;
+    emit(c,OP_END,NULL,0); state_reset(); S.texture_pool = fixture_pool.host; memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0;
     mtl_sub_begin(); mtl_exec(c->p);
     const tex_t *t[4]={a,b,out,e}; id<MTLBuffer> buf[4];
     for(int k=0;k<4;k++) { buf[k]=[g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
@@ -126,7 +127,7 @@ static uint64_t query_case(int reordered, int mode) {
     if(mode==2) {   // 两块计数都在任何report之前被后继reset抹去；只报告新的4x4绘制。 | both blocks' counts are wiped by the subsequent reset before any report; only the new 4x4 draw is reported.
         emit(&c,OP_RESET_COUNTER,&type,8); clear(&c,&b,0,NULL,0,0,0); draw_prog(&c,1,0); }
     uint64_t report[2]={type,(uint64_t)q}; emit(&c,OP_REPORT_COUNTER,report,sizeof report); emit(&c,OP_END,NULL,0);
-    state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); mtl_exec(c.p);
+    state_reset(); S.texture_pool = fixture_pool.host; memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); mtl_exec(c.p);
     EXPECT("查询完成",1,mtl_wait(mtl_sub_commit(),5000000000ull)); EXPECT("查询提交反馈无错误",0,mtl_last_commit_error());
     const char *names[]={"查询","同区间查询","后继reset覆盖查询"};
     save_raw(names[mode],reordered,q,sizeof q); mtl_pool_del(c.p); free(c.p); return q[0];

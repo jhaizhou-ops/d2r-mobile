@@ -1820,7 +1820,10 @@ static int udc_on(void) {
 // Latched only at the start of each submission (g_tbdr_eff) and constant within a submission; when the latched value changes, the cross-submission lookahead state (writeback check ledger) is cleared; the all-zero set is already cleared at the start of each submission
 int g_tbdr_rt = 1; static int g_tbdr_eff = 1;
 static int tbdr_env(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_TBDR"), *r = getenv("DM_NVN_RULER"); v = !(e && !strcmp(e, "0")); g_ruler_truth = r && !strcmp(r, "1"); if (!v) MLOG("DM_NVN_TBDR=0：TBDR 优化全关（等价对照用）"); } return v; }
-static int tbdr_on(void) { return tbdr_env() && g_tbdr_eff && !g_ruler_truth; }
+// 多池模式先用保守回放；跨池的特定游戏优化仍需逐项对拍后再开放。
+// Use conservative replay with multiple pools until title-specific cross-pool optimizations are validated.
+static _Atomic unsigned g_texture_pools_created;
+static int tbdr_on(void) { return atomic_load(&g_texture_pools_created) <= 1 && tbdr_env() && g_tbdr_eff && !g_ruler_truth; }
 static int tb_sub(int bit) { return tbdr_on() && (g_tbdr_sub_eff & bit); }
 int dm_nvn_ruler_truth(void) { tbdr_on(); return g_ruler_truth; }   // 视觉尺子真值阶段（宿主侧的被测设置据此让开，如 3D 渲染比例） | Visual ruler ground-truth phase (host-side settings under test yield accordingly, e.g. the 3D render scale)
 static int rt_range_on(void) { static int v = -1; if (v < 0) { const char *e=getenv("DM_NVN_RT_RANGE"); v=e && !strcmp(e,"1"); } return v; }   // 窄候选，缺省关 | Narrow candidate, off by default
@@ -2451,32 +2454,73 @@ void mtl_prog_release(prog_t *p) { if (p->serial) serial_del(p->serial); }
 // 登记时快照整个贴图对象（NVN 语义：描述符已写进池）；view：该号对应的 MTLTexture（视图或基贴图，CFBridgingRetain 持有）及取得时的序号表 / 客体写代号
 // ---------- Descriptor pool: texture ID / sampler ID → object ----------
 // At registration the whole texture object is snapshotted (NVN semantics: the descriptor has been written into the pool); view: the MTLTexture for that ID (a view or the base texture, held via CFBridgingRetain) and the serial-table / guest-write generations at the time it was obtained
-typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty; } treg_t;
-static treg_t *g_treg; static int g_ntreg;
-// 贴图号 → 序号的无锁副本（回放热路径只要序号：写回前瞻索引、纯清除前提的绑定集合）：贴图号 20 位，固定 1M 项（BSS，只占碰过的页），
-// 登记时 release 写、读端 relaxed 原子读，不进 g_rmu（原 h_ser 每次查表加解锁，营地每帧数千次）
-// Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
-// release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
-static _Atomic uint64_t g_tser[1 << 20];
-static samp_par *g_sreg; static uint8_t *g_sreg_ok; static void **g_sview; static uint64_t *g_srid; static int g_nsreg;   // g_sview：采样器号 → MTLSamplerState（持有） | g_sview: sampler ID → MTLSamplerState (retained)
-void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
-    int id_ = tid; if (id_ < 0) return;
+#include "nvn_descriptors.h"
+static struct {
+    const prog_t *prog;
+    nvn_descriptor_pool *texture_pool, *sampler_pool;
+    blend_st blend[8]; color_st color; chmask_st chmask; ms_st ms; poly_st poly; ds_st ds;
+    va_st attr[16]; int nattr; vs_st stream[16]; int nstream;
+    NVNbufferRange vbuf[16];
+    p_bind_buf ubo[6][16], ssbo[6][16];
+    uint64_t tex[6][128], samp[6][128], img[6][32];
+    uint32_t st_vmask[2], st_wmask[2], st_ref[2];
+    p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp;
+    float blend_color[4]; int64_t copy_stride;
+} S;
+static nvn_descriptor_pool *g_descriptor_pools;
+static nvn_descriptor_pool g_empty_descriptors;
+static nvn_descriptor_pool *texture_pool(void) { return S.texture_pool ? S.texture_pool : &g_empty_descriptors; }
+static nvn_descriptor_pool *sampler_pool(void) { return S.sampler_pool ? S.sampler_pool : &g_empty_descriptors; }
+#define g_treg (texture_pool()->textures)
+#define g_ntreg (texture_pool()->capacity)
+#define g_tpool_n (texture_pool()->capacity)
+#define g_sreg (sampler_pool()->samplers)
+#define g_sreg_ok (sampler_pool()->sampler_ok)
+#define g_sview (sampler_pool()->sampler_views)
+#define g_srid (sampler_pool()->sampler_rids)
+#define g_nsreg (sampler_pool()->capacity)
+
+int mtl_dpool_init(dpool_t *p, int sampler) {
+    nvn_descriptor_pool *host = nvn_descriptors_create(p->n, sampler);
+    if (!host) return 0;
+    if (!sampler) atomic_fetch_add(&g_texture_pools_created, 1);
     pthread_mutex_lock(&g_rmu);
-    if (id_ >= g_ntreg) { int n = id_ + 1024; g_treg = realloc(g_treg, n * sizeof *g_treg); memset(g_treg + g_ntreg, 0, (n - g_ntreg) * sizeof *g_treg); g_ntreg = n; }
-    g_reg_gen++;
-    if (g_treg[id_].view) { defer_obj_unref((__bridge id)g_treg[id_].view); CFRelease(g_treg[id_].view); g_treg[id_].view = NULL; g_treg[id_].view_id = g_treg[id_].view_rid = 0; }
-    g_treg[id_].ok = t != NULL; if (t) g_treg[id_].t = *t; g_treg[id_].has_v = v != NULL; if (v) g_treg[id_].v = *v;
-    if (id_ < (1 << 20)) atomic_store_explicit(&g_tser[id_], t ? t->serial : 0, memory_order_release);
+    host->next = g_descriptor_pools; g_descriptor_pools = host; p->host = host;
+    pthread_mutex_unlock(&g_rmu);
+    return 1;
+}
+void mtl_dpool_fini(dpool_t *p) {
+    pthread_mutex_lock(&g_rmu);
+    nvn_descriptor_pool *host = p->host;
+    if (host) {
+        for (int i = 0; i < host->capacity; i++) {
+            void *view = host->sampler ? host->sampler_views[i] : host->textures[i].view;
+            if (view) { defer_obj_unref((__bridge id)view); CFRelease(view); }
+        }
+        // 录制命令和保存状态可能持有该标识；释放数组和 Metal 对象，但保留小标识对象。
+        // Keep the small token stable for recorded commands and saved replay state.
+        // Its backing arrays and Metal objects are released at Finalize.
+        nvn_descriptors_clear(host); p->host = NULL; g_reg_gen++;
+    }
     pthread_mutex_unlock(&g_rmu);
 }
-void mtl_reg_samp(int sid, const samp_par *sp) {
-    int id_ = sid; if (id_ < 0) return;
+void mtl_reg_tex(const dpool_t *pool, int tid, const tex_t *t, const view_t *v) {
     pthread_mutex_lock(&g_rmu);
-    if (id_ >= g_nsreg) { int n = id_ + 256; g_sreg = realloc(g_sreg, n * sizeof *g_sreg); g_sreg_ok = realloc(g_sreg_ok, n); g_sview = realloc(g_sview, n * sizeof *g_sview); g_srid = realloc(g_srid, n * sizeof *g_srid);
-        memset(g_sreg_ok + g_nsreg, 0, n - g_nsreg); memset(g_sview + g_nsreg, 0, (n - g_nsreg) * sizeof *g_sview); memset(g_srid + g_nsreg, 0, (n - g_nsreg) * sizeof *g_srid); g_nsreg = n; }
-    if (g_sview[id_]) { CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0; }
-    g_reg_gen++;
-    g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
+    nvn_descriptor_pool *p = pool ? pool->host : NULL;
+    treg_t *r = nvn_descriptor_texture(p, tid);
+    if (r) {
+        if (r->view) { defer_obj_unref((__bridge id)r->view); CFRelease(r->view); r->view = NULL; r->view_id = r->view_rid = 0; }
+        nvn_descriptor_write_texture(p, tid, t, v); g_reg_gen++;
+    } else MLOG("【红】texture descriptor registration outside pool: id=%d capacity=%d", tid, p ? p->capacity : 0);
+    pthread_mutex_unlock(&g_rmu);
+}
+void mtl_reg_samp(const dpool_t *pool, int sid, const samp_par *sp) {
+    pthread_mutex_lock(&g_rmu);
+    nvn_descriptor_pool *p = pool ? pool->host : NULL;
+    if (nvn_descriptor_write_sampler(p, sid, sp)) {
+        if (p->sampler_views[sid]) { defer_obj_unref((__bridge id)p->sampler_views[sid]); CFRelease(p->sampler_views[sid]); p->sampler_views[sid] = NULL; p->sampler_rids[sid] = 0; }
+        g_reg_gen++;
+    } else MLOG("【红】sampler descriptor registration outside pool: id=%d capacity=%d", sid, p ? p->capacity : 0);
     pthread_mutex_unlock(&g_rmu);
 }
 static MTLTextureType ttype(int target, int fallback) {
@@ -2489,8 +2533,7 @@ static MTLTextureType ttype(int target, int fallback) {
 // 贴图池容量 15256），从不登记该号。按 D3D / 空槽语义读出 0（与未绑同一套全零哑贴图），不报红；池内未登记的号仍报红
 // Out-of-pool texture ID = empty slot: the game itself uses GetSeparateTextureHandle(0xFFFFF) to get a handle and bind it to unused slots (measured call site main+0x1746820,
 // texture pool capacity 15256) and never registers that ID. Read 0 per D3D / empty-slot semantics (the same all-zero dummy textures as unbound), no failure; unregistered IDs inside the pool are still reported a failure
-static int g_tpool_n; static uint64_t g_stat_tex_oob;
-void mtl_set_tex_pool_n(int n) { g_tpool_n = n; }
+static uint64_t g_stat_tex_oob;
 static id<MTLTexture> tex_by_id(int tid) {   // 调用方持 g_rmu | Caller holds g_rmu
     if (g_tpool_n && tid >= g_tpool_n) { if (!g_stat_tex_oob++) MLOG("池外贴图号 %d（池容量 %d）按空槽处理：读出 0", tid, g_tpool_n); return nil; }
     if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) { RED_ONCE(10, "贴图号 %d 未登记", tid); return nil; }
@@ -2589,17 +2632,7 @@ static size_t arena_alloc(size_t n, id<MTLBuffer> *buf) {
 
 // ---------- 绘制状态 ----------
 // ---------- Draw state ----------
-static struct {
-    const prog_t *prog;
-    blend_st blend[8]; color_st color; chmask_st chmask; ms_st ms; poly_st poly; ds_st ds;
-    va_st attr[16]; int nattr; vs_st stream[16]; int nstream;
-    NVNbufferRange vbuf[16];
-    p_bind_buf ubo[6][16], ssbo[6][16];
-    uint64_t tex[6][128], samp[6][128], img[6][32];
-    uint32_t st_vmask[2], st_wmask[2], st_ref[2];
-    p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp;
-    float blend_color[4]; int64_t copy_stride;
-} S;
+
 static void udc_note_draw(NvProg *pr) {
     // 同一目标、全零集合代号没变：上次已把它删掉，不必再扫一遍集合（集合最长 4096 项，每次绘制每个颜色附件扫一次）
     // Same target, all-zero set generation unchanged: it was already removed last time, so no need to scan the set again (the set has up to 4096 entries, scanned once per color attachment per draw)
@@ -3206,6 +3239,7 @@ static int fz_next(fz_cursor *c, const uint8_t **out, op_hdr *oh, const void **o
         if (!c->p) return 0;
         op_hdr h; memcpy(&h, c->p, sizeof h); const void *a = c->p + 8;
         switch (h.op) {
+            case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: c->bad = 1; return 0;
             case OP_END:
                 if (c->ret_n) c->p = c->ret[--c->ret_n];
                 else if (c->rest_i < g_nrest) c->p = (const uint8_t *)g_rest[c->rest_i++];
@@ -3394,6 +3428,12 @@ static int first_draw_covers(int i, id<MTLTexture> t, NSUInteger level) {
 
 static int state_op(uint32_t op, const void *a) {
     switch (op) {
+        case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: {
+            nvn_descriptor_pool **bound = op == OP_SET_TEX_POOL ? &S.texture_pool : &S.sampler_pool;
+            nvn_descriptor_pool *next = ((const p_set_pool *)a)->pool;
+            if (*bound != next) { *bound = next; args_dirty_all(); zskip_clear(); }
+            break;
+        }
         case OP_SCISSOR: R.sc = *(const p_scissor *)a; R.has_sc = 1; break;
         case OP_BIND_PROGRAM: { const prog_t *np = ((const p_bind_program *)a)->prog; if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); } break; }
         case OP_BIND_STATE: {
@@ -3642,7 +3682,7 @@ static int pass_ds_need(void) {
 // (character select page: grunge and particles both draw 28 / 27 level 0 + depth, with only levels 1 and 2 cleared in between).
 // Equivalence conditions (hoist only if all hold, otherwise leave as-is): the scan range has only draws, state and these clears, no copies / dispatches / texture clears / sub-lists; the cleared subresources (texture + level + layer)
 // are disjoint from this render pass's attachments; the cleared textures are neither on any current texture / image slot nor bound within the scan range (conservative: regardless of whether the program samples them); the scissor at the time of the clear covers the whole block (same requirement as executing at the original position)
-static uint64_t h_ser(uint64_t h) { int tid = (int)(h & 0xfffff); return tid ? atomic_load_explicit(&g_tser[tid], memory_order_relaxed) : 0; }
+static uint64_t h_ser(uint64_t h) { return nvn_descriptor_serial(S.texture_pool, h); }
 // ---------- 写回前瞻索引：提交开始按回放顺序线性扫一遍，按贴图记事件；通道结束时每个附件二分找「之后第一个有效事件」定论 ----------
 // 取代原「每个通道结束向后整段扫」（通道数 × 命令数，营地每帧 49 通道）。与原扫描逐附件对拍：画面闸门 17 页 + 营地局约 34 万次附件判定（多余约 4.6 万）0 不一致后删去原扫描。
 // 事件（seq = 回放序号）：READ 绘制 / 派发按程序反射读到该贴图；ATT 绘制时它是当前附件；CLEAR 作附件被整块清除；COPY / CLRTEX 作拷贝两端 / 被清贴图。
@@ -3671,6 +3711,7 @@ static int sdx_bucket(uint64_t ser, int add) {   // 返回桶号；不在集合�
 }
 static const uint8_t **g_sdx_op; static uint32_t g_sdx_nop, g_sdx_opcap;
 static uint32_t g_exec_seq;   // 回放中当前操作的序号 | Sequence number of the current operation during replay
+static nvn_descriptor_pool *g_pp_pool;
 static uint64_t g_pp_slot[6][160]; static const prog_t *g_pp_prog; static const p_set_rt *g_pp_rt; static uint32_t g_pp_rtseq;
 static uint32_t *g_rtx_seq, *g_drx_seq; static uint32_t g_rtx_n, g_rtx_cap, g_drx_n, g_drx_cap;
 // 同一通道（同一个 SetRenderTargets 序号）里每次绘制的「作附件」事件内容相同（同贴图、同平面、同级别层），判定都只认第一条：
@@ -3707,16 +3748,17 @@ static void sdx_walk(const uint8_t *p, int depth) {
                 if ((c->stencil_mask & 0xff) == 0xff) sdx_ev_add((sdx_ev){seq, g_pp_rtseq, r->depth->serial, p, lv, sl, SDX_CLEAR, 2, !r->has_dview, 0});
                 break; }
             case OP_BIND_TEX: case OP_BIND_IMG: { const p_bind_handles *b = a; int base = h.op == OP_BIND_IMG ? 128 : 0, lim = h.op == OP_BIND_IMG ? 32 : 128;
-                if (b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) g_pp_slot[b->stage][base + b->first + k] = h_ser(b->h[k]);
+                if (b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) g_pp_slot[b->stage][base + b->first + k] = b->h[k];
                 break; }
+            case OP_SET_TEX_POOL: g_pp_pool = ((const p_set_pool *)a)->pool; break;
             case OP_BIND_PROGRAM: g_pp_prog = ((const p_bind_program *)a)->prog; break;
             case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: {
                 if (h.op != OP_DISPATCH) seq_push(&g_drx_seq, &g_drx_n, &g_drx_cap, seq);
                 __unsafe_unretained NvProg *pr = g_pp_prog ? prog_get(g_pp_prog) : nil;
-                if (!pr) { for (int st = 0; st < 6; st++) for (int k = 0; k < 160; k++) if (g_pp_slot[st][k]) sdx_ev_add((sdx_ev){seq, 0, g_pp_slot[st][k], p, 0, 0, SDX_READ, 0, 0, 1}); }
+                if (!pr) { for (int st = 0; st < 6; st++) for (int k = 0; k < 160; k++) if (g_pp_slot[st][k]) sdx_ev_add((sdx_ev){seq, 0, nvn_descriptor_serial(g_pp_pool, g_pp_slot[st][k]), p, 0, 0, SDX_READ, 0, 0, 1}); }
                 else for (int st = 0; st < 6; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh || (h.op == OP_DISPATCH) != (st == 5)) continue;
                     for (int i = 0; i < sh->rf.nb; i++) { const nvn_rbind *b = &sh->rf.b[i]; int k = b->kind == NVN_RB_IMG ? 128 + b->reg : (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TBUF) ? b->reg : -1;
-                        if (k < 0 || k >= 160 || sh->stage < 0 || sh->stage >= 6) continue; uint64_t ser = g_pp_slot[sh->stage][k];
+                        if (k < 0 || k >= 160 || sh->stage < 0 || sh->stage >= 6) continue; uint64_t ser = nvn_descriptor_serial(g_pp_pool, g_pp_slot[sh->stage][k]);
                         if (ser) sdx_ev_add((sdx_ev){seq, 0, ser, p, 0, 0, SDX_READ, 0, 0, 1}); } }
                 const p_set_rt *r = g_pp_rt;
                 if (h.op != OP_DISPATCH && r && g_sdx_attdedup && g_att_rtseq == g_pp_rtseq) {
@@ -3743,9 +3785,9 @@ void mtl_sub_index(const uint64_t *h, int n) {   // 提交开始（hle_nvn.c Que
     memset(g_sdx_hk, 0, sizeof g_sdx_hk); g_sdx_nb = 0;
     for (int i = 0; i < g_xv_n; i++) sdx_bucket(g_xv[i].ser, 1);   // 账本里的贴图进候选集：否则它在本次提交里只被采样、不作附件时读事件不入索引，兜底看不见 | Textures in the ledger enter the candidate set: otherwise, when one is only sampled and not used as an attachment in this submit, its read events are not indexed and the fallback cannot see them
     if (R.has_rt) { for (int k = 0; k < R.rt.n && k < 8; k++) if (R.rt.color[k]) sdx_bucket(R.rt.color[k]->serial, 1); if (R.rt.depth) sdx_bucket(R.rt.depth->serial, 1); }   // 提交开始时的目标（首个绘制可能不经 SetRenderTargets 重开通道） | The targets at the start of the submit (the first draw may reopen the render pass without going through SetRenderTargets)
-    g_pp_prog = S.prog; g_pp_rt = NULL; g_pp_rtseq = SDX_NONE;
-    for (int st = 0; st < 6; st++) { for (int k = 0; k < 128; k++) g_pp_slot[st][k] = S.tex[st][k] ? h_ser(S.tex[st][k]) : 0;
-                                     for (int k = 0; k < 32; k++) g_pp_slot[st][128 + k] = S.img[st][k] ? h_ser(S.img[st][k]) : 0; }
+    g_pp_pool = S.texture_pool; g_pp_prog = S.prog; g_pp_rt = NULL; g_pp_rtseq = SDX_NONE;
+    for (int st = 0; st < 6; st++) { for (int k = 0; k < 128; k++) g_pp_slot[st][k] = S.tex[st][k];
+                                     for (int k = 0; k < 32; k++) g_pp_slot[st][128 + k] = S.img[st][k]; }
     for (int i = 0; i < n && g_sdx_ok; i++) sdx_walk((const uint8_t *)h[i], 0);
     if (!g_sdx_ok) return;
     // 计数排序到桶：事件本按序号追加，同一序号内 READ 先于 ATT（同一绘制先判读后判附件），稳定散列后桶内有序
@@ -3813,6 +3855,7 @@ static void hoist_try(void) {
     for (int guard = 0; guard < 200000; guard++) {
         op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
         switch (h.op) {
+            case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: return;
             case OP_END: case OP_CALL: case OP_COPY_T2T: case OP_COPY_B2T: case OP_COPY_T2B: case OP_CLEAR_TEX: case OP_DISPATCH: return;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
             case OP_DRAW: case OP_DRAW_IDX: if (in_grp) return; break;
@@ -4116,6 +4159,7 @@ static void defer_try(const p_draw *dw, const p_draw_idx *di) {
         op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
         if (g_hoist_n && hoist_skipped(p)) { p += h.size; continue; }
         switch (h.op) {
+            case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: g_defer.reason = 9; goto fail;
             case OP_END: { const uint8_t *nx = defer_cont(&ci); if (!nx) { g_defer.reason = 1; goto fail; } p = nx; continue; }
             case OP_CALL: g_defer.reason = 2; goto fail;
             case OP_JUMP: memcpy(&p, a, 8); continue;
@@ -4171,7 +4215,7 @@ q_found:
         if (h.op == OP_DRAW || h.op == OP_DRAW_IDX) { if (defer_prog_hits(pg, tex, img, &g_defer.p_rt, 1, 1)) { g_defer.reason = 14; goto fail; } q_body = 1; p += h.size; continue; }
         if (q_body && (h.op == OP_SET_RT || h.op == OP_END)) break;
         if (!q_body && h.op == OP_END) { const uint8_t *nx = defer_cont(&ci); if (!nx) { g_defer.reason = 9; goto fail; } p = nx; continue; }
-        if (h.op == OP_CALL) { g_defer.reason = 9; g_defer.reason_op = h.op; goto fail; }
+        if (h.op == OP_CALL || h.op == OP_SET_TEX_POOL || h.op == OP_SET_SAMP_POOL) { g_defer.reason = 9; g_defer.reason_op = h.op; goto fail; }
         // Q 的 SetRenderTargets 之后、首次绘制与任何清除之前又来一次 SetRenderTargets（游戏重复设目标，前一次是空通道）：新目标仍覆盖 P 就以它为 Q，否则不推迟
         // After Q's SetRenderTargets and before its first draw and any clear, another SetRenderTargets arrives (the game sets targets repeatedly, the previous one being an empty render pass): if the new targets still cover P take it as Q, otherwise do not defer
         if (!q_body && h.op == OP_SET_RT && !q_clears) { const p_set_rt *r2 = a; if (!defer_q_superset(r2)) { g_defer.reason = 15; goto fail; } q = r2; qop = p; p += h.size; continue; }
@@ -5538,7 +5582,8 @@ void mtl_exec(const uint8_t *p) {
             case OP_COPY_T2T: copy_t2t(a); break;
             case OP_CLEAR_TEX: clear_tex(a); break;
             case OP_DISPATCH: dispatch(a); break;
-            case OP_BARRIER: case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: break;
+            case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: state_op(h.op, a); break;
+            case OP_BARRIER: break;
             default: break;
         }
         p += h.size;
@@ -5568,9 +5613,11 @@ void mtl_res_snapshot(mtl_res_count *out) {
     out->pool_adds = g_pool_adds;
     pthread_mutex_unlock(&g_mu);
     pthread_mutex_lock(&g_rmu);
-    out->view_slots = (uint32_t)g_ntreg;
-    for (int i = 0; i < g_ntreg; i++) if (g_treg[i].view) out->view_nonnull++;
-    for (int i = 0; i < g_nsreg; i++) if (g_sview[i]) out->sview_nonnull++;
+    for (nvn_descriptor_pool *p = g_descriptor_pools; p; p = p->next) {
+        if (p->sampler) { for (int i = 0; i < p->capacity; i++) if (p->sampler_views[i]) out->sview_nonnull++; }
+        else { out->view_slots += (uint32_t)p->capacity;
+            for (int i = 0; i < p->capacity; i++) if (p->textures[i].view) out->view_nonnull++; }
+    }
     pthread_mutex_unlock(&g_rmu);
 }
 // 资源计数（长时间稳定性 L3 读）：宿主按游戏拍 / 事件调用（每 250 拍、读取画面已撤、退出），不按墙钟 / 出图数取样。

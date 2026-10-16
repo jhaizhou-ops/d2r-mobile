@@ -23,7 +23,8 @@ typedef struct { uint32_t magic; NVNdevice *dev; uint64_t submits; } queue_t;   
 typedef struct { NVNdevice *dev; void *mem; uint64_t size; uint32_t flags; } pool_builder_t;  FITS(pool_builder_t, NVNmemoryPoolBuilder);
 typedef struct { uint32_t magic, flags; uint8_t *mem; uint64_t size; } pool_t;                FITS(pool_t, NVNmemoryPool);
 
-typedef struct { const pool_t *pool; int64_t off; int32_t n; } dpool_t;                       // 贴图 / 采样器描述符池 | Texture / sampler descriptor pool
+typedef struct nvn_descriptor_pool nvn_descriptor_pool;
+typedef struct { const pool_t *pool; int64_t off; int32_t n; nvn_descriptor_pool *host; } dpool_t;                       // 贴图 / 采样器描述符池 | Texture / sampler descriptor pool
 FITS(dpool_t, NVNtexturePool); FITS(dpool_t, NVNsamplerPool);
 
 typedef struct {
@@ -115,7 +116,7 @@ typedef struct { float factor, units, clamp; } p_poly_offset;
 typedef struct { int32_t prim, first, count; } p_draw;
 typedef struct { int32_t prim, itype, count, base_vertex, base_instance, instances; uint64_t ibuf; } p_draw_idx;
 typedef struct { int32_t x, y, z; uint64_t caller; } p_dispatch;   // caller：游戏调用点返回地址（定位派发者） | caller: return address of the game call site (to locate the dispatcher)
-typedef struct { const dpool_t *pool; } p_set_pool;
+typedef struct { nvn_descriptor_pool *pool; } p_set_pool;
 typedef struct { uint64_t src; const tex_t *tex; view_t view; uint8_t has_view; NVNcopyRegion r; int32_t flags; } p_copy_b2t;
 typedef struct { const tex_t *src, *dst; view_t sv, dv; uint8_t has_sv, has_dv; NVNcopyRegion sr, dr; int32_t flags; } p_copy_t2t;   // T2B 复用：src 存目标缓冲地址 | Reused for T2B: src stores the destination buffer address
 typedef struct { const tex_t *tex; view_t view; uint8_t has_view, is_uint; NVNcopyRegion r; int32_t mask; union { float f[4]; uint32_t u[4]; } c; } p_clear_tex;
@@ -136,7 +137,6 @@ int mtl_display_hz(void);                                   // 有窗口时屏�
 double mtl_display_refresh(void);                           // 同上，不取整（窗口所在屏） | Same as above, not rounded (screen the window is on)
 double mtl_pace_hz(void);                                   // 出图帧率：刷新率的整数分之一里不低于目标（60 / 省电 30）的最小一档 | Present frame rate: the smallest tier among integer fractions of the refresh rate that is not below the target (60 / power saving 30)
 double dm_pace_hz(double screen_hz, double floor_hz);       // 上面的纯算式（单测用） | Pure formula of the above (for unit tests)
-void mtl_set_tex_pool_n(int n);                            // 贴图描述符池容量：池外的贴图号按「空槽」处理（读出 0） | Texture descriptor pool capacity: texture IDs outside the pool are treated as 'empty slots' (read 0)
 // 计时埋点（Mac / iOS 共用）：提交按帧号打标；GPU 时间 = 该帧全部命令缓冲 GPUEnd−GPUStart 之和，全部完成后才可读（否则 −1）
 // Timing instrumentation (shared by Mac / iOS): submissions are tagged with the frame number; GPU time = sum of GPUEnd−GPUStart over all of that frame's command buffers, readable only after all complete (otherwise −1)
 void mtl_set_frame(uint64_t f);
@@ -174,8 +174,10 @@ void mtl_create_stats(uint64_t *lib, uint64_t *pso);   // 累计：提交线程�
 void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img);
 // 描述符池登记（贴图号 / 采样器号 → 对象快照）、程序释放
 // Descriptor pool registration (texture ID / sampler ID → object snapshot), program release
-void mtl_reg_tex(int id, const tex_t *t, const view_t *v);
-void mtl_reg_samp(int id, const samp_par *p);
+int mtl_dpool_init(dpool_t *pool, int sampler);
+void mtl_dpool_fini(dpool_t *pool);
+void mtl_reg_tex(const dpool_t *pool, int id, const tex_t *t, const view_t *v);
+void mtl_reg_samp(const dpool_t *pool, int id, const samp_par *p);
 void mtl_prog_release(prog_t *p);
 // 新序号（> 0，全局递增）
 // New serial (> 0, globally increasing)

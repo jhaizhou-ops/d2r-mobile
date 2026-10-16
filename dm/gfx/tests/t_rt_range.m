@@ -1,6 +1,7 @@
 // 实际RT单级选择不变，仅view范围4→1；同纹理同CB原guard参考与候选，手写常量shader不冒游戏shader。
 // The actual RT single-level selection is unchanged, only the view range goes 4→1; same texture and same CB for the original-guard reference and the candidate; hand-written constant shaders do not pass themselves off as game shaders.
 #include "../nvn/nvn_mtl.m"
+#include "t_descriptor_fixture.h"
 void *front_metal_layer(void){return NULL;}
 module_t *module_of(const void *p){(void)p;return NULL;}
 module_t g_mod[MAX_MOD];int g_nmod;
@@ -30,14 +31,14 @@ int main(int argc,char **argv){@autoreleasepool{enabled=1;for(int i=1;i<argc;i++
 #endif
  serial_put(pg[i].serial,p);}
  color.d.width=color.d.height=depth.d.width=depth.d.height=8;color.d.depth=color.d.samples=depth.d.depth=depth.d.samples=1;color.d.levels=4;depth.d.levels=small_depth?2:1;color.d.target=depth.d.target=NVN_TEXTURE_TARGET_2D;color.d.format=NVN_FORMAT_RGBA8;depth.d.format=NVN_FORMAT_DEPTH32F_STENCIL8;
- (void)tex_mtl(&color);(void)tex_mtl(&depth);if(sample_attachment){view_t v={.set_levels=1,.base_level=1,.nlevels=1};mtl_reg_tex(1000,&color,&v);}
+ (void)tex_mtl(&color);(void)tex_mtl(&depth);if(sample_attachment){view_t v={.set_levels=1,.base_level=1,.nlevels=1};fixture_reg_tex(1000,&color,&v);}
  uint16_t *ix;posix_memalign((void **)&ix,getpagesize(),getpagesize());for(int i=0;i<120;i++)ix[i]=i%3;mtl_pool_add(ix,getpagesize());
  code first={0},second={0};p_set_rt a=rt(4),b=rt(1);emit(&first,OP_SET_RT,&a,sizeof a);ds_st ds={.dt=1,.df=NVN_DEPTH_FUNC_LESS};st(&first,5,&ds,sizeof ds);
  color_st col={0,NVN_LOGIC_OP_COPY,NVN_ALPHA_FUNC_ALWAYS};st(&first,1,&col,sizeof col);p_bind_program pr={&pg[0],3};emit(&first,OP_BIND_PROGRAM,&pr,sizeof pr);uint64_t reset=NVN_COUNTER_TYPE_SAMPLES_PASSED;emit(&first,OP_RESET_COUNTER,&reset,8);p_draw dw={NVN_DRAW_PRIMITIVE_TRIANGLES,0,3};emit(&first,OP_DRAW,&dw,sizeof dw);emit(&first,OP_END,NULL,0);
  emit(&second,OP_RESET_COUNTER,&reset,8);emit(&second,OP_SET_RT,&b,sizeof b);if(small_depth){ds_st off={.df=NVN_DEPTH_FUNC_ALWAYS};st(&second,5,&off,sizeof off);}pr.prog=&pg[1];emit(&second,OP_BIND_PROGRAM,&pr,sizeof pr);if(sample_attachment){p_bind_handles h={.stage=1,.first=0,.n=1};h.h[0]=1000;emit(&second,OP_BIND_TEX,&h,sizeof h);}col.blend_en=1;st(&second,1,&col,sizeof col);blend_st blend={0,NVN_BLEND_FUNC_ONE,NVN_BLEND_FUNC_ONE,NVN_BLEND_FUNC_ONE,NVN_BLEND_FUNC_ZERO,NVN_BLEND_EQUATION_ADD,NVN_BLEND_EQUATION_ADD};st(&second,0,&blend,sizeof blend);p_draw_idx di={.prim=NVN_DRAW_PRIMITIVE_TRIANGLES,.count=120,.itype=1,.ibuf=(uint64_t)ix,.instances=1};emit(&second,OP_DRAW_IDX,&di,sizeof di);emit(&second,OP_END,NULL,0);
  id<MTLBuffer> buffers[2][3];for(int m=0;m<2;m++)for(int j=0;j<3;j++)buffers[m][j]=[g_dev newBufferWithLength:j==2?64:256 options:MTLResourceStorageModeShared];uint64_t passes[2],bytes[2],q[2][2]={{0}};
  mtl_sub_begin();
- for(int m=0;m<2;m++){state_reset();memset(&R,0,sizeof R);vis_clear();g_vis_on=g_vis_counting=0;seed();uint64_t p=g_stat_pass,l=g_bw_load,s=g_bw_store,draws=g_stat_draw;mtl_exec(first.b);E("首绘按深度只读模式",4,g_enc_mode);if(!m)rp_end();else if(force_invalid)R.rt.cview[0].nlevels=1; // 负控：错误地假设附件范围/目标始终等价 | negative control: wrongly assume the attachment range/target is always equivalent
+ for(int m=0;m<2;m++){state_reset(); S.texture_pool = fixture_pool.host;memset(&R,0,sizeof R);vis_clear();g_vis_on=g_vis_counting=0;seed();uint64_t p=g_stat_pass,l=g_bw_load,s=g_bw_store,draws=g_stat_draw;mtl_exec(first.b);E("首绘按深度只读模式",4,g_enc_mode);if(!m)rp_end();else if(force_invalid)R.rt.cview[0].nlevels=1; // 负控：错误地假设附件范围/目标始终等价 | negative control: wrongly assume the attachment range/target is always equivalent
  mtl_exec(second.b);rp_end();passes[m]=g_stat_pass-p;bytes[m]=g_bw_load-l+g_bw_store-s;E("真实draw次数不变",2,g_stat_draw-draws);post((post_op){3,NULL,0,0,(uint64_t)q[m],(uint32_t)reset,vis_snapshot()});rr_read_planes(buffers[m]);if(g_blit){[g_blit endEncoding];g_blit=nil;}}
  int done=mtl_wait(mtl_sub_commit(),5000000000ull);E("同纹理同CB完成",1,done);if(!done)abort();E("提交反馈无错误",0,mtl_last_commit_error());
  uint8_t yellow[4]={255,255,0,0},green[4]={0,255,0,0}; // alpha由第二draw ONE/ ZERO给0；整数闭式RGB黄色。 | alpha is given 0 by the second draw's ONE/ ZERO; integer closed-form RGB yellow.

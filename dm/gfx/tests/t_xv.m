@@ -1,4 +1,5 @@
 #include "../nvn/nvn_mtl.m"
+#include "t_descriptor_fixture.h"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;
@@ -10,7 +11,7 @@ typedef struct { uint8_t *p; size_t n; } chain;
 static chain chain_new(void) { chain c={0}; if (posix_memalign((void **)&c.p,getpagesize(),65536)) abort(); memset(c.p,0,65536); mtl_pool_add(c.p,65536); return c; }
 static void emit(chain *c, unsigned op, const void *a, size_t n) { size_t z=(8+n+7)&~7ull; op_hdr h={op,(uint32_t)z}; memcpy(c->p+c->n,&h,8); if(n) memcpy(c->p+c->n+8,a,n); c->n+=z; }
 static tex_t tex(unsigned w) { static uint64_t s=9000; tex_t t={.serial=s++}; t.d.width=t.d.height=w; t.d.depth=t.d.samples=1; t.d.levels=2; t.d.target=NVN_TEXTURE_TARGET_2D; t.d.format=NVN_FORMAT_RGBA8; return t; }
-static int view(const tex_t *t, int lv) { static int id=1200; view_t v={.set_levels=1,.base_level=lv,.nlevels=1}; mtl_reg_tex(id,t,&v); return id++; }
+static int view(const tex_t *t, int lv) { static int id=1200; view_t v={.set_levels=1,.base_level=lv,.nlevels=1}; fixture_reg_tex(id,t,&v); return id++; }
 static void set_rt(chain *c, const tex_t *a, const tex_t *b, int alv) { p_set_rt r={.n=b?2:1}; r.color[0]=a; r.color[1]=b; for(int i=0;i<r.n;i++){r.has_cview[i]=1;r.cview[i].set_levels=1;r.cview[i].base_level=i?0:alv;r.cview[i].nlevels=1;} emit(c,OP_SET_RT,&r,sizeof r); p_viewports v={.n=1};v.v[0][2]=v.v[0][3]=8;emit(c,OP_VIEWPORTS,&v,sizeof v);p_scissor sc={0,0,8,8};emit(c,OP_SCISSOR,&sc,sizeof sc); }
 static void clear_color(chain *c, int i, float r, float g, float b) { p_clear_color x={.index=i,.mask=15,.rgba={r,g,b,1}}; emit(c,OP_CLEAR_COLOR,&x,sizeof x); }
 static void bind_prog(chain *c, prog_t *p) { p_bind_program b={p,3}; emit(c,OP_BIND_PROGRAM,&b,sizeof b); }
@@ -33,7 +34,7 @@ static void cycle(const tex_t *a, const tex_t *b, int aid, int kind, uint8_t px[
     if (kind!=2) { set_rt(&c,a,t_two?&t_x:NULL,0); clear_color(&c,0,0,0,0); if (t_two) clear_color(&c,1,0,0,0); ds_off(&c); bind_prog(&c,&t_pg[0]); blend(&c); draw_cmd(&c);
                    set_rt(&c,&t_mid,NULL,0); clear_color(&c,0,0,0,0); draw_cmd(&c); }   /* A 的通道在命令流里结束（下一个 SetRenderTargets），和游戏里一样；最后这个通道在提交结束时才结束（一律写回） | A's pass ends in the command stream (at the next SetRenderTargets), as in the game; this last pass only ends when the submit ends (always stored) */
     if (kind) { set_rt(&c,b,NULL,0); clear_color(&c,0,0,0,0); ds_off(&c); bind_prog(&c,&t_pg[1]); bind_tex(&c,aid); draw_cmd(&c); }
-    emit(&c,OP_END,NULL,0); state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0;
+    emit(&c,OP_END,NULL,0); state_reset(); S.texture_pool = fixture_pool.host; memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0;
     mtl_sub_begin(); uint64_t hh=(uint64_t)c.p; mtl_sub_index(&hh,1); mtl_exec(c.p);
     if (kind) readback(b,px); else commit();
 }
