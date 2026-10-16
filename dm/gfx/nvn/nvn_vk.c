@@ -609,6 +609,15 @@ static void pool_upload_guest_span(VPool *p,uint64_t base,uint64_t base_off,uint
     G.profile_pool_uploaded_bytes+=nvn_vk_pool_copy_guest_span(p->v.map,base,base_off,addr,len,S.writes,S.nwrites);
 }
 static VPool *pool_read_resolved(VPool *p,uint64_t addr,uint64_t len,uint64_t *off) {
+    /* 热路径备忘录：同一 draw 内（乃至相邻 draw）反复读同一区间——统一缓冲/顶点/索引。
+     * 命中且此后无新写入（脏检查仍是权威）时直接复用，省掉哈希桶查找。
+     * 池序号参与匹配：池被释放后地址复用不会误命中。 */
+    static _Thread_local struct { VPool *p; uint64_t serial,addr,len,off,stamp; } memo;
+    if(memo.p==p && memo.serial==p->serial && memo.addr==addr && memo.len==len &&
+       (!len || !nvn_dirty_since((const void *)(uintptr_t)addr,len,memo.stamp))){
+        *off=memo.off;G.profile_pool_reused_ranges++;G.profile_pool_reused_bytes+=len;
+        return p;
+    }
     uint64_t started=prof_now();
     pool_materialize(p);
     /* Cache exact read ranges. On a dirty cache hit, copy only changed page
@@ -626,6 +635,7 @@ static VPool *pool_read_resolved(VPool *p,uint64_t addr,uint64_t len,uint64_t *o
                 upload=entry;upload_stamp=entry->stamp;
                 if(!nvn_dirty_since((const void *)(uintptr_t)addr,len,entry->stamp)){
                     entry->age=++G.upload_age;G.profile_pool_reused_ranges++;G.profile_pool_reused_bytes+=len;
+                    memo.p=p;memo.serial=p->serial;memo.addr=addr;memo.len=len;memo.off=*off;memo.stamp=entry->stamp;
                     G.profile_pool_ns+=prof_now()-started;return p;
                 }
                 partial_upload=1;
@@ -646,6 +656,7 @@ static VPool *pool_read_resolved(VPool *p,uint64_t addr,uint64_t len,uint64_t *o
         pool_upload_guest_span(p,addr,*off,addr,len);
     }
     if(upload)*upload=(PoolUpload){addr,len,p->serial,stamp,++G.upload_age};
+    memo.p=p;memo.serial=p->serial;memo.addr=addr;memo.len=len;memo.off=*off;memo.stamp=stamp;
     G.profile_pool_ns+=prof_now()-started;return p;
 }
 static VPool *pool_read(uint64_t addr,uint64_t len,uint64_t *off) {
