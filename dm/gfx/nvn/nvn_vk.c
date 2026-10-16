@@ -112,6 +112,7 @@ typedef struct { uint64_t serial,incarnation; tex_t source; VkImage image; VkDev
     uint8_t *cpu_snapshot;
     VkImage sample_copy;VkDeviceMemory sample_memory;VkImageView sample_view;VkImageLayout sample_layout;
     VkImage shadow;VkDeviceMemory shadow_memory;VkImageView shadow_view;VkFormat shadow_format;VkImageLayout shadow_layout;uint64_t shadow_version;uint64_t other_version,sample_other;uint32_t dirty_levels,sc_valid,sc_level,sc_levels,sc_layer,sc_layers;
+    uint8_t bc_block;   // 压缩直传时 = BC 块字节数（8/16）；0 = 非压缩 | compressed passthrough: BC block bytes (8/16); 0 = not compressed
     VkImageLayout lvl[16];int mixed; /* per-mip layouts, valid only while mixed (then layout is stale) */ } VTexture;
 static void tex_dirty(VTexture *t){t->version++;t->other_version++;}
 static void tex_attach_dirty(VTexture *t,unsigned level){t->version++;t->dirty_levels|=1u<<(level&31);}
@@ -281,6 +282,7 @@ static _Thread_local unsigned replay_cpu_depth,present_cpu_depth;
 static _Thread_local uint64_t replay_cpu_started,present_cpu_started;
 static char g_pso_cache_path[1024];   // PSO 缓存落盘路径（DM_FRAME_DIR/pso-cache.bin） | pipeline-cache blob path (DM_FRAME_DIR/pso-cache.bin)
 static int g_pso_cache_dirty,g_pso_cache_presents;
+static int g_bc_passthrough;          // 设备支持 textureCompressionBC：压缩纹理直传 GPU | device supports textureCompressionBC: upload compressed textures as-is
 static VkDebugUtilsMessengerEXT validation_messenger;
 static VKAPI_ATTR VkBool32 VKAPI_CALL validation_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity,VkDebugUtilsMessageTypeFlagsEXT type,const VkDebugUtilsMessengerCallbackDataEXT *data,void *user) {
     (void)type;(void)user;
@@ -448,7 +450,10 @@ static void backend_init(void) {
     enabled.independentBlend=VK_TRUE;
     enabled.fragmentStoresAndAtomics=available.fragmentStoresAndAtomics;
     enabled.vertexPipelineStoresAndAtomics=available.vertexPipelineStoresAndAtomics;
+    enabled.textureCompressionBC=available.textureCompressionBC;   // Adreno 原生支持 BC：开启后纹理压缩直传，免 CPU 解码（"初次遇到怪卡一下"的根源）
+    g_bc_passthrough=enabled.textureCompressionBC;
     G.precise_occlusion=enabled.occlusionQueryPrecise;
+    fprintf(stderr,"[nvn-vulkan] textureCompressionBC=%d (BC 直传=%s)\n",available.textureCompressionBC,g_bc_passthrough?"开":"关");
     vkGetPhysicalDeviceQueueFamilyProperties(G.physical,&n,NULL);
     families=calloc(n,sizeof(*families));if(!families)die("timestamp queue properties",n);
     vkGetPhysicalDeviceQueueFamilyProperties(G.physical,&n,families);G.timestamp_bits=families[G.family].timestampValidBits;free(families);
@@ -1243,6 +1248,26 @@ static void refresh_compressed_cpu(VTexture *t,const tex_t *source) {
         uint8_t *old=malloc(linear_bytes),*next=malloc(linear_bytes);if(!old||!next)die("streamed BC block comparison allocation",linear_bytes);
         if(nvn_deswizzle(&source->d,level,layer,t->cpu_snapshot,old,row)||nvn_deswizzle(&source->d,level,layer,snapshot,next,row))die("streamed BC block layout",source->serial);
         if(!memcmp(old,next,linear_bytes)){free(old);free(next);continue;}
+        VkBufferImageCopy *regions=NULL;unsigned count=0,capacity=0;
+        if(t->bc_block){
+            /* 压缩直传：staging = 整层压缩块流；区域按“块”表述缓冲区坐标
+             * （压缩格式的 bufferRowLength/bufferImageHeight 以块计）。 */
+            uint64_t compressed=(uint64_t)row*rows*depth;
+            VBuffer *staging=temporary(compressed,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+            memcpy(staging->map,next,compressed);
+            for(unsigned z=0;z<depth;z++)for(unsigned y=0;y<rows;y++){
+                unsigned x=0;while(x<columns){uint64_t offset=((uint64_t)z*rows+y)*row+(uint64_t)x*block;
+                    if(!memcmp(old+offset,next+offset,block)){x++;continue;}
+                    unsigned first=x++;while(x<columns&&memcmp(old+((uint64_t)z*rows+y)*row+(uint64_t)x*block,next+((uint64_t)z*rows+y)*row+(uint64_t)x*block,block))x++;
+                    if(count==capacity){capacity=capacity?capacity*2:64;VkBufferImageCopy *larger=realloc(regions,(size_t)capacity*sizeof(*regions));if(!larger)die("streamed BC copy regions",capacity);regions=larger;}
+                    unsigned px=first*bw,py=y*bh,w=(x-first)*bw,h=bh;if(w>width-px)w=width-px;if(h>height-py)h=height-py;
+                    regions[count++]=(VkBufferImageCopy){.bufferOffset=offset,.bufferRowLength=columns,.bufferImageHeight=rows,
+                        .imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,level,layer,1},.imageOffset={px,py,z},.imageExtent={w,h,1}};
+                }
+            }
+            all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);vkCmdCopyBufferToImage(S.command,staging->b,t->image,t->layout,count,regions);changed_regions+=count;
+            free(regions);free(old);free(next);
+        } else {
         uint64_t plane=((uint64_t)width*height*t->bpp+3)&~3ULL;
         VBuffer *staging=temporary(plane*depth,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         for(unsigned z=0;z<depth;z++)if(nvn_bc_decode(source->d.format,next+z*row*rows,row,width,height,staging->map+z*plane,(size_t)width*t->bpp))die("streamed BC block decode",source->d.format);
@@ -1259,6 +1284,7 @@ static void refresh_compressed_cpu(VTexture *t,const tex_t *source) {
         }
         all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);vkCmdCopyBufferToImage(S.command,staging->b,t->image,t->layout,count,regions);changed_regions+=count;
         free(regions);free(old);free(next);
+        }
     }
     free(t->cpu_snapshot);t->cpu_snapshot=snapshot;t->upload_stamp=stamp;
     if(changed_regions){tex_dirty(t);G.uploads++;fprintf(stderr,"[nvn-vulkan] BC_STREAM_REFRESH serial=%llu changed_regions=%u gpu_blocks_preserved=1\n",(unsigned long long)t->serial,changed_regions);}
@@ -1285,6 +1311,29 @@ static TextureRef texture_reference(VTexture *t) {
 static VTexture *texture_reference_get(TextureRef ref) {
     if(!ref.incarnation||ref.slot>=G.texture_used)return NULL;
     VTexture *t=&G.textures[ref.slot];return t->serial&&t->incarnation==ref.incarnation?t:NULL;
+}
+/* NVN 压缩格式 → Vulkan BC 格式（Adreno 原生支持）。与 nvn_bc_unpacked 的解码语义
+ * 保持一致：0x41/0x42（含 sRGB 变体）都按带 1-bit alpha 的 BC1 处理。
+ * NVN compressed formats -> Vulkan BC formats (Adreno supports natively). Semantics match
+ * nvn_bc_unpacked's decode: 0x41/0x42 (and sRGB variants) both behave as BC1 with 1-bit alpha. */
+static int nvn_bc_vk_format(uint32_t f,VkFormat *out,uint8_t *block) {
+    switch(f) {
+    case 0x41: case 0x42: *out=VK_FORMAT_BC1_RGBA_UNORM_BLOCK;*block=8;return 1;
+    case 0x45: case 0x46: *out=VK_FORMAT_BC1_RGBA_SRGB_BLOCK;*block=8;return 1;
+    case 0x43: *out=VK_FORMAT_BC2_UNORM_BLOCK;*block=16;return 1;
+    case 0x47: *out=VK_FORMAT_BC2_SRGB_BLOCK;*block=16;return 1;
+    case 0x44: *out=VK_FORMAT_BC3_UNORM_BLOCK;*block=16;return 1;
+    case 0x48: *out=VK_FORMAT_BC3_SRGB_BLOCK;*block=16;return 1;
+    case 0x49: *out=VK_FORMAT_BC4_UNORM_BLOCK;*block=8;return 1;
+    case 0x4a: *out=VK_FORMAT_BC4_SNORM_BLOCK;*block=8;return 1;
+    case 0x4b: *out=VK_FORMAT_BC5_UNORM_BLOCK;*block=16;return 1;
+    case 0x4c: *out=VK_FORMAT_BC5_SNORM_BLOCK;*block=16;return 1;
+    case 0x4d: *out=VK_FORMAT_BC7_UNORM_BLOCK;*block=16;return 1;
+    case 0x4e: *out=VK_FORMAT_BC7_SRGB_BLOCK;*block=16;return 1;
+    case 0x4f: *out=VK_FORMAT_BC6H_SFLOAT_BLOCK;*block=16;return 1;
+    case 0x50: *out=VK_FORMAT_BC6H_UFLOAT_BLOCK;*block=16;return 1;
+    default: return 0;
+    }
 }
 static VTexture *texture_acquire(const tex_t *source,int upload,TextureRef ref) {
     if(!source || !source->serial) die("texture serial",0);
@@ -1314,7 +1363,10 @@ static VTexture *texture_acquire(const tex_t *source,int upload,TextureRef ref) 
     t->width=source->d.width; t->height=one?1:source->d.height;t->depth=volume?source->d.depth:1;t->layout=VK_IMAGE_LAYOUT_UNDEFINED;
     uint32_t metal_format=0; int decompressed_bpp=0;
     int bc=nvn_bc_unpacked(source->d.format,&metal_format,&decompressed_bpp);
-    if(bc) {
+    t->bc_block=0;
+    if(bc&&g_bc_passthrough&&nvn_bc_vk_format(source->d.format,&t->format,&t->bc_block)) {
+        t->bpp=decompressed_bpp;   // 仅历史兼容：非 BC 路径才会用 bpp 定尺寸 | compat only: non-BC paths size by bpp
+    } else if(bc) {
         switch(metal_format) { case 10:t->format=VK_FORMAT_R8_UNORM;break;case 12:t->format=VK_FORMAT_R8_SNORM;break;
           case 30:t->format=VK_FORMAT_R8G8_UNORM;break;case 32:t->format=VK_FORMAT_R8G8_SNORM;break;
           case 70:t->format=VK_FORMAT_R8G8B8A8_UNORM;break;case 71:t->format=VK_FORMAT_R8G8B8A8_SRGB;break;
@@ -1359,9 +1411,17 @@ upload_existing:
             uint8_t *linear=malloc(row*rows*z); if(!linear)die("texture decode allocation",row*rows*z);
             if(source->d.flags&NVN_TEXTURE_FLAGS_LINEAR) { free(linear); die("linear texture upload layout",source->d.flags); }
             if(nvn_deswizzle(&source->d,level,layer,upload_memory,linear,row))die("Tegra texture deswizzle",level);
-            VBuffer *staging=temporary((uint64_t)w*h*z*t->bpp,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-            if(upload_bc) {for(unsigned slice=0;slice<z;++slice)if(nvn_bc_decode(source->d.format,linear+slice*row*rows,row,w,h,staging->map+(size_t)slice*w*h*t->bpp,(size_t)w*t->bpp))die("BC decode",source->d.format); }
-            else memcpy(staging->map,linear,(size_t)w*h*z*t->bpp); free(linear);
+            VBuffer *staging;
+            if(t->bc_block) {   // 压缩直传：swizzle 已按块解开，整段搬入暂存，零解码 | compressed passthrough: blocks already unswizzled, copy as-is, no decode
+                uint64_t compressed=(uint64_t)row*rows*z;
+                staging=temporary(compressed,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+                memcpy(staging->map,linear,compressed);
+            } else {
+                staging=temporary((uint64_t)w*h*z*t->bpp,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+                if(upload_bc) {for(unsigned slice=0;slice<z;++slice)if(nvn_bc_decode(source->d.format,linear+slice*row*rows,row,w,h,staging->map+(size_t)slice*w*h*t->bpp,(size_t)w*t->bpp))die("BC decode",source->d.format); }
+                else memcpy(staging->map,linear,(size_t)w*h*z*t->bpp);
+            }
+            free(linear);
             VkImageAspectFlags upload_aspect=aspect(t->format);
             if(upload_aspect&VK_IMAGE_ASPECT_STENCIL_BIT)die("packaged depth/stencil upload requires separate aspect conversion",source->d.format);
             VkBufferImageCopy copy={.imageSubresource={upload_aspect,level,layer,1},.imageExtent={w,h,z}};
@@ -1819,6 +1879,7 @@ static void prepare_comparison_images(VShader *s) {
     }
 }
 static void trace_texture(VTexture *t,const VShader *s,const RBinding *binding) {
+    if(t->bc_block)return;   // 压缩纹理诊断捕获按线性尺寸读取，直接跳过 | compressed textures: skip the linear-sized diagnostic capture
     const char *trace_shader=G.trace_ui?"9a650561e5c40791":G.trace_shader[0]?G.trace_shader:"5c1ca4e7c3e4657c";
     if(!G.trace_frame||s->h.stage!=1||strcmp(s->key,trace_shader)||G.ntrace_textures==24||t->depth!=1)return;
     for(unsigned i=0;i<G.ntrace_textures;i++)if(G.trace_texture_serials[i]==t->serial)return;
