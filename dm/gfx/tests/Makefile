@@ -73,6 +73,8 @@ run: \
 	t_pfv \
 	t_present_crop \
 	t_pso_skey \
+	t_program_binding \
+	t_program_snapshot \
 	t_refl \
 	t_reorder_chain \
 	t_rt_depth_ro \
@@ -110,6 +112,8 @@ run: \
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --small-depth
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --sample-attachment --both-flags
 	./t_pso_skey
+	./t_program_binding
+	./t_program_snapshot
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_rt_srgb_view
 	python3 test_tbdr_budget.py
@@ -121,3 +125,9 @@ run: \
 run-m3:
 	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m *.py ../tests_m3/
 	$(MAKE) -C ../tests_m3 run CFLAGS="$(CFLAGS) -DDM_NVN_M3=1 -mmacosx-version-min=15.0"
+
+t_program_binding: t_program_binding.c ../nvn/nvn_program_binding.c ../nvn/nvn_program_binding.h ../nvn/nvn_obj.h
+	clang $(CFLAGS) -Werror -o $@ t_program_binding.c ../nvn/nvn_program_binding.c
+
+t_program_snapshot: t_program_snapshot.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_program_snapshot.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
