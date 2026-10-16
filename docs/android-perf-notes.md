@@ -1,5 +1,8 @@
 # Android 性能工程笔记（骁龙 8+ Gen 1 / Adreno 730）
 
+> **写作约定：文档一律用大白话写；中文不好说的词直接用英文（git conflict、merge、DONT_CARE…）。**
+> 不写"密码本"式缩写，不堆抽象表格；一句话说不清的事，就多写几句把它说清。
+
 ## 0. 会话交接（压缩现状，2026-10-16）
 
 **代码位置**：本仓库（vickwv/d2r-mobile fork）分支 `android-integration`；dodola 的 Android 层已并入。
