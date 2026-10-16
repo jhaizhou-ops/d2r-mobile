@@ -64,13 +64,13 @@ NVN(nvnWindowInitialize,NVNboolean,NVNwindow *window,const NVNwindowBuilder *b) 
     w->ntex=s->ntex;w->interval=s->interval;memcpy(w->tex,s->tex,sizeof(w->tex));return 1;
 }
 NVN(nvnWindowFinalize,void,NVNwindow *window) {mtl_finish();memset(window,0,sizeof(win_t));}
-NVN(nvnWindowSetPresentInterval,void,NVNwindow *window,int interval) {if(interval<0)die("negative present interval %d",interval);((win_t *)window)->interval=interval;}
+NVN(nvnWindowSetPresentInterval,void,NVNwindow *window,int interval) {if(interval<0)die("negative present interval %d",interval);((win_t *)window)->interval=interval;LOG("NVN present interval 设为 %d（节拍周期 = 1e9/present_hz × interval）",interval);}
 NVN(nvnWindowSetCrop,void,NVNwindow *window,int x,int y,int width,int height) {
     if(x<0 || y<0 || width<0 || height<0)die("NVN crop bounds %d %d %d %d",x,y,width,height);
     int crop[4]={x,y,width,height};memcpy(((win_t *)window)->crop,crop,sizeof(crop));
 }
 static int android_present_hz=-1,android_display_intervals;
-void nvn_present_config(int hz,int display_intervals) {if(hz<0 || hz>1000)die("NVN pacing hz=%d",hz);android_present_hz=hz;android_display_intervals=display_intervals;}
+void nvn_present_config(int hz,int display_intervals) {if(hz<0 || hz>1000)die("NVN pacing hz=%d",hz);android_present_hz=hz;android_display_intervals=display_intervals;LOG("NVN 节拍配置 hz=%d display_intervals=%d",hz,display_intervals);}
 static uint64_t android_present_period(const win_t *w) {
     if(android_present_hz<0) {const char *e=getenv("DM_PRESENT_HZ");android_present_hz=e?atoi(e):60;
         android_display_intervals=mtl_has_window();}

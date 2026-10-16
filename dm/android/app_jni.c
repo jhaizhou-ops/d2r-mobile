@@ -345,6 +345,8 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
         {"flag-loadstore-3",       "DM_DIAG_LOADSTORE",                 "3"},
         {"flag-gameres-1080",      "DM_GAME_RES",                       "1920x1080"},
         {"flag-gameres-native",    "DM_GAME_RES",                       "2168x1220"},
+        {"flag-present-hz-120",    "DM_PRESENT_HZ",                     "120"},
+        {"flag-present-hz-30",     "DM_PRESENT_HZ",                     "30"},
       };
       for (unsigned i = 0; i < sizeof env_flags / sizeof *env_flags; i++) {
         char f[PATH_MAX]; path(f, sizeof f, logs, env_flags[i].file);
