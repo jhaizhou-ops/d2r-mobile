@@ -1407,28 +1407,48 @@ upload_existing:
             memcpy(snapshot,source->mem,source->L.size);free(t->cpu_snapshot);t->cpu_snapshot=snapshot;upload_memory=snapshot;}
         all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         uint64_t decode_start=dm_android_nvn_clock_ns();
+        /* 先把所有（层，级）的字节尺寸算好，合成一个暂存缓冲与一次拷贝命令批次：
+           多层图集（例如 252 层 × 7 级）因此从上千次暂存分配+拷贝命令降到个位数。
+           | Size every (layer, level) upload first, stage them into one buffer and issue
+           a single copy-command batch: multi-layer atlases (e.g. 252 layers x 7 levels)
+           drop from ~1e3 staging allocations and copy calls to a handful. */
+        {
+        VkImageAspectFlags upload_aspect=aspect(t->format);
+        if(upload_aspect&VK_IMAGE_ASPECT_STENCIL_BIT)die("packaged depth/stencil upload requires separate aspect conversion",source->d.format);
+        size_t total=0,scratch_max=0;unsigned nregions=0;
         for(unsigned layer=0;layer<source->L.layers;layer++)for(unsigned level=0;level<source->d.levels;level++) {
             uint32_t w=t->width>>level,h=t->height>>level,z=t->depth>>level;if(!w)w=1;if(!h)h=1;if(!z)z=1;
-            int bw=1,bh=1; int bb=nvn_fmt_bpb(source->d.format,&bw,&bh); if(!bb)die("texture block size",source->d.format);
+            int bw=1,bh=1;int bb=nvn_fmt_bpb(source->d.format,&bw,&bh);if(!bb)die("texture block size",source->d.format);
             uint64_t row=(uint64_t)((w+bw-1)/bw)*bb,rows=(h+bh-1)/bh;
-            uint8_t *linear=malloc(row*rows*z); if(!linear)die("texture decode allocation",row*rows*z);
-            if(source->d.flags&NVN_TEXTURE_FLAGS_LINEAR) { free(linear); die("linear texture upload layout",source->d.flags); }
-            if(nvn_deswizzle(&source->d,level,layer,upload_memory,linear,row))die("Tegra texture deswizzle",level);
-            VBuffer *staging;
-            if(t->bc_block) {   // 压缩直传：swizzle 已按块解开，整段搬入暂存，零解码 | compressed passthrough: blocks already unswizzled, copy as-is, no decode
-                uint64_t compressed=(uint64_t)row*rows*z;
-                staging=temporary(compressed,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-                memcpy(staging->map,linear,compressed);
+            total+=t->bc_block?(size_t)(row*rows*z):(size_t)w*h*z*t->bpp;
+            if(row*rows*z>scratch_max)scratch_max=(size_t)(row*rows*z);
+            nregions++;
+        }
+        VBuffer *staging=temporary((uint64_t)total,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        uint8_t *scratch=malloc(scratch_max?scratch_max:1);if(!scratch)die("texture upload scratch allocation",scratch_max);
+        VkBufferImageCopy *regions=calloc(nregions,sizeof(*regions));if(!regions)die("texture upload copy regions",nregions);
+        size_t staged=0;unsigned r=0;
+        for(unsigned layer=0;layer<source->L.layers;layer++)for(unsigned level=0;level<source->d.levels;level++) {
+            uint32_t w=t->width>>level,h=t->height>>level,z=t->depth>>level;if(!w)w=1;if(!h)h=1;if(!z)z=1;
+            int bw=1,bh=1;int bb=nvn_fmt_bpb(source->d.format,&bw,&bh);if(!bb)die("texture block size",source->d.format);
+            uint64_t row=(uint64_t)((w+bw-1)/bw)*bb,rows=(h+bh-1)/bh;
+            if(source->d.flags&NVN_TEXTURE_FLAGS_LINEAR) { free(scratch);free(regions); die("linear texture upload layout",source->d.flags); }
+            if(nvn_deswizzle(&source->d,level,layer,upload_memory,scratch,row)){free(scratch);free(regions);die("Tegra texture deswizzle",level);}
+            if(t->bc_block) {
+                size_t compressed=(size_t)row*rows*z;
+                memcpy(staging->map+staged,scratch,compressed);
+                regions[r++]=(VkBufferImageCopy){.bufferOffset=staged,.imageSubresource={upload_aspect,level,layer,1},.imageExtent={w,h,z}};
+                staged+=compressed;
             } else {
-                staging=temporary((uint64_t)w*h*z*t->bpp,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-                if(upload_bc) {for(unsigned slice=0;slice<z;++slice)if(nvn_bc_decode(source->d.format,linear+slice*row*rows,row,w,h,staging->map+(size_t)slice*w*h*t->bpp,(size_t)w*t->bpp))die("BC decode",source->d.format); }
-                else memcpy(staging->map,linear,(size_t)w*h*z*t->bpp);
+                if(upload_bc) {for(unsigned slice=0;slice<z;++slice)if(nvn_bc_decode(source->d.format,scratch+slice*row*rows,row,w,h,staging->map+staged+(size_t)slice*w*h*t->bpp,(size_t)w*t->bpp)){free(scratch);free(regions);die("BC decode",source->d.format);} }
+                else memcpy(staging->map+staged,scratch,(size_t)w*h*z*t->bpp);
+                regions[r++]=(VkBufferImageCopy){.bufferOffset=staged,.imageSubresource={upload_aspect,level,layer,1},.imageExtent={w,h,z}};
+                staged+=(size_t)w*h*z*t->bpp;
             }
-            free(linear);
-            VkImageAspectFlags upload_aspect=aspect(t->format);
-            if(upload_aspect&VK_IMAGE_ASPECT_STENCIL_BIT)die("packaged depth/stencil upload requires separate aspect conversion",source->d.format);
-            VkBufferImageCopy copy={.imageSubresource={upload_aspect,level,layer,1},.imageExtent={w,h,z}};
-            vkCmdCopyBufferToImage(S.command,staging->b,t->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+        }
+        free(scratch);
+        vkCmdCopyBufferToImage(S.command,staging->b,t->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,r,regions);
+        free(regions);
         }
         G.profile_decode_ns+=dm_android_nvn_clock_ns()-decode_start;
         {uint64_t decode_ms=(dm_android_nvn_clock_ns()-decode_start)/1000000ull;
