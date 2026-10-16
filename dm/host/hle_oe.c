@@ -385,8 +385,9 @@ static _Atomic int g_3d_quality_mode;          // 0 = 流畅优先（缺省）�
 static void android_scale_configure(void) {
     const char *e=getenv("DM_3D_SCALE"),*d=getenv("DM_3D_SCALE_DYN");
     int dyn=d && strcmp(d,"0") && !getenv("DM_THERMAL_NOFALLBACK");
-    if (!e && !dyn) return;   // 没要求比例实验 → 不武装（缺省行为不变） | nothing requested: stay unarmed (default behaviour unchanged)
-    float base=1.0f;
+    /* 2026-10-16 起 Android 默认开世界档：3D 比例 0.75（= iOS 档）；DM_3D_SCALE=1.0 可关（纯原生）。
+       档位可在 diagnostics/quality.txt 或 flag/env 里改（app_jni.c）。 */
+    float base=0.75f;
     if (e) { char *end; errno=0; float want=strtof(e,&end);
         if (end==e || *end || errno==ERANGE || !isfinite(want) || want<0.70f || want>1.0f)
             die("ANDROID_3D_SCALE invalid value %s; expected finite 0.70..1.0",e);

@@ -46,16 +46,19 @@ run_cfg base2168  flag-gameres-native
 run_cfg base2624  flag-gameres-2624
 run_cfg w2168_75  flag-gameres-native flag-scale-75
 run_cfg w2624_75  flag-gameres-2624 flag-scale-75
+run_cfg base1080  flag-gameres-1080
+run_cfg w1080_80  flag-gameres-1080 flag-scale-80
 
 echo "================ 几何判定（同出图档，开比例前后应 scale≈1.000）================"
 PY=${DM_PY:-/home/vick/dm-work/build/cache/dm/venv/bin/python3}; [ -x "$PY" ] || PY=python3
-for pair in "base2168 w2168_75" "base2624 w2624_75"; do
+for pair in "base2168 w2168_75" "base2624 w2624_75" "base1080 w1080_80"; do
   set -- $pair
   echo "--- $1 vs $2 ---"
   $PY "$HERE/ui_geom.py" "$OUT/$2.png" "$OUT/$1.png" || true
 done
-echo "--- 跨出图档参考（2624 相对 2168 应≈2624/2168=1.210 且无偏移异常）---"
+echo "--- 跨出图档参考（屏上段宽比≈出图宽之反比：2624 档 vs 2168 档 ≈ 2168/2624 = 0.826；
+     两档画布像素一致、2168 档屏上被出图→交换链横向拉伸 ×1.21——见 perf-notes §7.4）---"
 $PY "$HERE/ui_geom.py" "$OUT/base2624.png" "$OUT/base2168.png" || true
 echo
-echo "游戏停在最后一档（w2624_75）上，可肉眼复核；截图在 $OUT/"
+echo "游戏停在最后一档（w1080_80）上，可肉眼复核；截图在 $OUT/"
 echo "MATRIX-DONE"

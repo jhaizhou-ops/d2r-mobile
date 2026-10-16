@@ -364,10 +364,41 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
         {"flag-gameres-1080",      "DM_GAME_RES",                       "1920x1080"},
         {"flag-gameres-native",    "DM_GAME_RES",                       "2168x1220"},
         {"flag-gameres-2624",      "DM_GAME_RES",                       "2624x1220"},
+        {"flag-gameres-switch",    "DM_GAME_RES",                       "1600x900"},
+        {"flag-scale-100",         "DM_3D_SCALE",                       "1.0"},
         {"flag-present-hz-120",    "DM_PRESENT_HZ",                     "120"},
         {"flag-present-hz-30",     "DM_PRESENT_HZ",                     "30"},
         {"flag-resource-stats",    "DM_RESOURCE_STATS",                 "1"},
       };
+      /* 画质档（diagnostics/quality.txt，一行档名）：一次写好出图分辨率 + 3D 比例两个值。
+         优先级：quality.txt < flag-* < env.txt（后两者都能覆盖单值）。2026-10-16 固化缺省档
+         = 2624-075（真窗口出图 1:1 + 世界 0.75 = 1968×915，docs/android-perf-notes.md §7）。
+         Quality tiers (diagnostics/quality.txt, one tier name per line): sets both the output
+         resolution and the 3D scale at once. Precedence: quality.txt < flag-* < env.txt.
+         Default since 2026-10-16 = 2624-075 (true-window 1:1 output + 0.75 world = 1968x915). */
+      { char qf[PATH_MAX]; path(qf, sizeof qf, logs, "quality.txt");
+        FILE *q = fopen(qf, "r");
+        if (q) {
+          char line[64] = "", tok[32] = "";
+          if (fgets(line, sizeof line, q)) sscanf(line, "%31s", tok);
+          fclose(q);
+          struct { const char *name, *gamres, *scale; } tiers[] = {
+            {"2624-075", "2624x1220", "0.75"},
+            {"2168-075", "2168x1220", "0.75"},
+            {"1080-080", "1920x1080", "0.80"},
+            {"2624-085", "2624x1220", "0.85"},
+            {"2624-100", "2624x1220", "1.0"},
+            {"1600-100", "1600x900",  "1.0"},
+          };
+          int hit = 0;
+          for (unsigned i = 0; i < sizeof tiers / sizeof *tiers; i++)
+            if (!strcmp(tok, tiers[i].name)) {
+              setenv("DM_GAME_RES", tiers[i].gamres, 0); setenv("DM_3D_SCALE", tiers[i].scale, 0);
+              LOG("ANDROID_QUALITY tier=%s → DM_GAME_RES=%s DM_3D_SCALE=%s", tok, tiers[i].gamres, tiers[i].scale);
+              hit = 1; break;
+            }
+          if (!hit && tok[0]) LOG("【红】ANDROID_QUALITY 未知档名「%s」（用 2624-075 / 2168-075 / 1080-080 / 2624-085 / 2624-100 / 1600-100；缺省 2624-075）", tok);
+        } }
       for (unsigned i = 0; i < sizeof env_flags / sizeof *env_flags; i++) {
         char f[PATH_MAX]; path(f, sizeof f, logs, env_flags[i].file);
         if (access(f, F_OK) == 0) { setenv(env_flags[i].name, env_flags[i].value, 1); LOG("ANDROID_FLAG %s → %s=%s", env_flags[i].file, env_flags[i].name, env_flags[i].value); }
