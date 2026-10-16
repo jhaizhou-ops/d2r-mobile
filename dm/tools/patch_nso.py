@@ -79,20 +79,23 @@ CUTS = {'db0507f36b84200ac05f75d76ed5026f': [
      'DM_C2S_REPLAY 时丢弃客户端自发命令、改由拍入口按文件注入（diag.c，调用号登记在 hle.h SVC_HOST_C2S_DELIVER）', '仅宿主'),
     (0x5d39c8, 'ba750194', '411000d4', '收包泵 0x5d3960 投递系统类消息的调用点 bl 0x6310b0 → svc #0x82：宿主缺省以原参数原样调用 0x6310b0（返回值调用方不用）；'
      'DM_C2S_REPLAY 时，回放文件首拍起丢弃宿主客户端自发的系统类消息（之前的加入消息放行），改由拍入口按文件注入（diag.c，调用号登记在 hle.h SVC_HOST_C2S_SYS）', '仅宿主'),
-    # 屏幕比例（仅宿主，配合下方 PARAMS 分辨率参数位）：输出分辨率上限 {u32 宽, u32 高}，只被分辨率选择的三处读写
-    # （0xe12e28 / 0xe10d70 读：选中值的宽或高超上限即不换；0xe12f54 初始化选完后写成选中值）；初值 1920x1080 → 4096x2160，让按屏幕比例放宽的宽度能通过
-    # Screen aspect (host only, together with the resolution parameter slots in PARAMS below): output resolution cap {u32 width, u32 height}, read or written at only three places in resolution selection
-    # (0xe12e28 / 0xe10d70 read: if the selected value's width or height exceeds the cap, no switch is made; 0xe12f54 writes it to the selected value after initialization finishes selecting); initial value 1920x1080 → 4096x2160, so that a width widened to the screen aspect can pass
+    # 屏幕比例（配合下方 PARAMS 分辨率参数位；主机 / Android 都要）：输出分辨率上限 {u32 宽, u32 高}，只被分辨率选择的三处读写
+    # （0xe12e28 / 0xe10d70 读：选中值的宽或高超上限即不换；0xe12f54 初始化选完后写成选中值）；初值 1920x1080 → 4096x2160，让
+    # 按屏幕比例放宽的宽度能通过。Android 若保留 1920x1080 初值，输出 2168 / 2624 宽时启动选分辨率那一步的超限分支会跳过
+    # 「窗口尺寸变化」事件（iOS 上这一步会送达）——两边行为不一致，UI 状态有缺口，故一并放开。
+    # Screen aspect (with the resolution parameter slots in PARAMS below; needed on the host and on Android): output resolution cap {u32 width, u32 height}, read or written at only three places in resolution selection
+    # (0xe12e28 / 0xe10d70 read: if the selected value's width or height exceeds the cap, no switch is made; 0xe12f54 writes it to the selected value after initialization finishes selecting); initial value 1920x1080 → 4096x2160, so that a width widened to the screen aspect can pass.
+    # On Android, keeping the 1920x1080 initial value makes the resolution-selection over-limit branch skip the "window size changed" event for outputs 2168 / 2624 wide (that step is delivered on iOS) - the two sides differ and the UI state has a gap, so it is opened up as well.
     (0x211da30, '8007000038040000', '0010000070080000', '输出分辨率上限初值 1920x1080 → 4096x2160（数据段）：宿主按屏幕比例给的宽度（如 iPhone 19.5:9 的 1956x900）'
-     '须不超上限才会被选中；Mac 前端仍给原值 1600x900 / 1280x720，行为不变', '仅宿主'),
+     '须不超上限才会被选中；Mac 前端仍给原值 1600x900 / 1280x720，行为不变；Android 输出 2168 / 2624 同样要过这一关'),
     # 运行模式通知处理（0xe10d30）给「窗口尺寸变化」事件的宽度：原码 mov w9,#0x740; and x9,x25,x9——编译器知道宽只可能是 1280（0x500）/ 1600（0x640），
     # 把「取低 32 位」优化成了 & (0x500|0x640)。KRES0 / KRES1 参数位换掉了那两个常数，这个推导出来的掩码没跟着改：2868 & 0x740 = 768、2296 & 0x740 = 64
     # （运行中切主机 / 掌机后输出宽 64 / 768，iOS 过热降级走的就是这条）。改成直接取低 32 位：对原版两个宽度结果相同，对任意宽度正确
     # The width that the operation-mode notification handler (0xe10d30) gives to the "window size changed" event: original code mov w9,#0x740; and x9,x25,x9 -- the compiler knew the width could only be 1280 (0x500) / 1600 (0x640),
     # and optimized "take the low 32 bits" into & (0x500|0x640). The KRES0 / KRES1 parameter slots replaced those two constants, but this derived mask was not changed along with them: 2868 & 0x740 = 768, 2296 & 0x740 = 64
     # (after switching docked / handheld while running, the output width was 64 / 768; the iOS overheating downgrade takes exactly this path). Changed to take the low 32 bits directly: same result for the original game's two widths, correct for any width
-    (0xe10e48, '09e880522903098a', 'e903192a1f2003d5', '运行模式通知发窗口尺寸事件的宽度：mov w9,#0x740; and x9,x25,x9 → mov w9,w25; nop（取低 32 位，不再用原版两档宽度推出的常数掩码）', '仅宿主'),
-    (0xe12e88, '09e880528902098a', 'e903142a1f2003d5', '启动初始化选分辨率（0xe12d70）同一处掩码：mov w9,#0x740; and x9,x20,x9 → mov w9,w20; nop（structck 参数门下游掩码检查查出；启动时事件接收对象通常未建，平时不显形）', '仅宿主'),
+    (0xe10e48, '09e880522903098a', 'e903192a1f2003d5', '运行模式通知发窗口尺寸事件的宽度：mov w9,#0x740; and x9,x25,x9 → mov w9,w25; nop（取低 32 位，不再用原版两档宽度推出的常数掩码；主机与 Android 都要）'),
+    (0xe12e88, '09e880528902098a', 'e903142a1f2003d5', '启动初始化选分辨率（0xe12d70）同一处掩码：mov w9,#0x740; and x9,x20,x9 → mov w9,w20; nop（structck 参数门下游掩码检查查出；启动时事件接收对象通常未建，平时不显形；主机与 Android 都要）'),
     # 产品剪口（复刻排除清单「经典画面切换」）：经典画面切换 0xb15d60 的两条状态写入 → nop。
     # 画面过渡状态在 0x2dc0758 起（+4 起点、+8 目标、+0xc 进度；1.0 = 新画面）；全程序写它的只有 0x852280（启动初始化写 1）、0x85cb20（强制回新画面写 1）、
     # 0x856be0（只写 +0xc）与 0xb15d60（不在局内或局版本 1 / 2 时按当前系数在 0 / 1 间翻转目标）——后者是唯一能把目标推向 0 的地方；
@@ -105,11 +108,13 @@ CUTS = {'db0507f36b84200ac05f75d76ed5026f': [
     # What is cut is two plain stores, containing no calls: the list of synchronization primitives and external side effects of the cut part is empty (the cut rule). The hint branch for run version 3 in a run (from 0xb15e2c) is untouched
     (0xb15e20, '0281002d', '1f2003d5', '经典画面切换写起点 / 目标（stp s2, s0, [x8, #4]）→ nop：目标恒为 1.0（新画面）'),
     (0xb15e24, '1f0d00b9', '1f2003d5', '经典画面切换清进度（str wzr, [x8, #0xc]）→ nop'),
-    # 宽屏（仅宿主，配合 PARAMS 的 KASPECT 宽高比上限）：界面画布宽 = min(屏宽, 4560 = 2160 × 19/9) 的上限放开到 0xffff。
-    # 原版 16:9 下屏宽 3840 单位 < 4560，结果不变；iPhone 1952x900 下屏宽约 4685 单位，原先被夹到 4560、两侧各留约 26 像素
-    # Widescreen (host only, together with the KASPECT aspect ratio cap in PARAMS): the cap in UI canvas width = min(screen width, 4560 = 2160 × 19/9) is opened up to 0xffff.
-    # In the original game at 16:9 the screen width of 3840 units < 4560, so the result is unchanged; on iPhone 1952x900 the screen width is about 4685 units, which used to be clamped to 4560, leaving about 26 pixels on each side
-    (0xb1a660, '083a8252', 'e8ff9f52', '界面画布宽上限 mov w8, #4560 → mov w8, #0xffff（画布宽 = 屏宽）', '仅宿主'),
+    # 宽屏（配合 PARAMS 的 KASPECT 宽高比上限；主机与 Android 都要）：界面画布宽 = min(屏宽, 4560 = 2160 × 19/9) 的上限放开到 0xffff。
+    # 原版 16:9 下屏宽 3840 单位 < 4560，结果不变；iPhone 1952x900 下屏宽约 4685 单位，原先被夹到 4560、两侧各留约 26 像素。
+    # Android 输出 2624x1220（2.15:1）屏宽 4645 单位同样会被夹，故主机与 Android 一致放开。
+    # Widescreen (with the KASPECT aspect ratio cap in PARAMS; needed on the host and on Android): the cap in UI canvas width = min(screen width, 4560 = 2160 × 19/9) is opened up to 0xffff.
+    # In the original game at 16:9 the screen width of 3840 units < 4560, so the result is unchanged; on iPhone 1952x900 the screen width is about 4685 units, which used to be clamped to 4560, leaving about 26 pixels on each side.
+    # Android output 2624x1220 (2.15:1) has a screen width of 4645 units, which would also be clamped, so host and Android open it up consistently.
+    (0xb1a660, '083a8252', 'e8ff9f52', '界面画布宽上限 mov w8, #4560 → mov w8, #0xffff（画布宽 = 屏宽；主机与 Android 都要）'),
     # （撤销：原 r13 / r15 起的「SetLanguage 0x317298 清空 + 重装字符串表」剪口 0x3172f8 / 0x3173e4（原为排除简中以外的语言而设），
     # 因英文版撤销——原版切语言要靠这次重装。）
     # 产品剪口：字符串表 A（legacy，0x2d70ff0 / 0x2d71010）的装载整段跳过。装载函数 0x7f64f0(w0 = 是否装 legacy)
