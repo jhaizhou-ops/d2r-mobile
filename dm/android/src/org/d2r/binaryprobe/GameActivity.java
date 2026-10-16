@@ -80,8 +80,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         addAction(root,"→",1L<<14,Gravity.LEFT|Gravity.BOTTOM,166,55);
         touchControls=new TouchControlsView(this,() -> inputReady&&resumed&&!failed);
         root.addView(touchControls,new FrameLayout.LayoutParams(-1,-1));
-        TextView mode=new TextView(this);mode.setText("战斗操控");mode.setTextColor(0xffe9d9ba);mode.setTextSize(16);
-        mode.setGravity(Gravity.CENTER);mode.setBackgroundColor(0x8030241b);mode.setContentDescription("切换到战斗触摸操控");mode.setClickable(true);mode.setFocusable(true);
+        TextView mode=new TextView(this);mode.setText("战斗操控");mode.setTextColor(TouchControlsView.TEXT);mode.setTextSize(16);
+        mode.setGravity(Gravity.CENTER);mode.setBackground(buttonBackground());mode.setContentDescription("切换到战斗触摸操控");mode.setClickable(true);mode.setFocusable(true);
         FrameLayout.LayoutParams modeParams=new FrameLayout.LayoutParams(dp(100),dp(48),Gravity.LEFT|Gravity.TOP);modeParams.leftMargin=dp(18);modeParams.topMargin=dp(18);
         mode.setOnClickListener(v -> {boolean combat=touchControls.getVisibility()!=View.VISIBLE;actionButtons=0;if(inputReady)nativeActions(0,0,0,0,0);
             touchControls.setActive(combat);for(View control:menuControls)control.setVisibility(combat?View.GONE:View.VISIBLE);
@@ -97,9 +97,15 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         },"game-files").start();
     }
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
+    private android.graphics.drawable.Drawable buttonBackground(){
+        android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();
+        shape.setColor(0xb316100c);shape.setCornerRadius(dp(14));
+        shape.setStroke(Math.max(1,(int)getResources().getDisplayMetrics().density),0x80997845);
+        return shape;
+    }
     private void addAction(FrameLayout root,String label,long mask,int gravity,int horizontal,int vertical){
-        TextView button=new TextView(this);button.setText(label);button.setContentDescription(label);button.setTextColor(0xffeadfcd);
-        button.setGravity(Gravity.CENTER);button.setTextSize(17);button.setBackgroundColor(0x70443930);
+        TextView button=new TextView(this);button.setText(label);button.setContentDescription(label);button.setTextColor(TouchControlsView.TEXT);
+        button.setGravity(Gravity.CENTER);button.setTextSize(17);button.setBackground(buttonBackground());
         FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(68),dp(58),gravity);
         if((gravity&Gravity.RIGHT)==Gravity.RIGHT)p.rightMargin=dp(horizontal);else p.leftMargin=dp(horizontal);
         if((gravity&Gravity.BOTTOM)==Gravity.BOTTOM)p.bottomMargin=dp(vertical);else p.topMargin=dp(vertical);

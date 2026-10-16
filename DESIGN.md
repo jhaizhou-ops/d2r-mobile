@@ -53,13 +53,18 @@ Native text status supplies an accessibility live region. No network permission.
 ## Android touch adapter
 The unchanged `dm/ios/Sources/dm_touch_controls.c` owns layout, hit testing,
 movement axes, skill aiming, skill-set timing and sampled-input pulse behavior.
-`TouchControlsView` owns rendering tokens: ink #30241b at 50% opacity,
-rim #a08359 at 73%, parchment #e9d9ba, pressed #80623c at 80%; its native
-Canvas painter consumes these canonical Java constants. Coordinates use dp,
-with original safe-inset and tall-screen scaling. Buttons remain anchored while
-pressed; the joystick knob follows actual output axes. Labels describe controller
-slots until native skill identity is audited. Virtual accessibility buttons expose
-clicks and directional movement without dragging.
+`TouchControlsView` renders in the iOS overlay's visual language
+(`dm/ios/Sources/DmTouchOverlay.m`): dark disc #16110c, bronze ring #997845,
+dark inner ring #1f170d, sparkle-knob bronze #c8a460, parchment #d9c9a6.
+Action buttons (skills, main, set switch) fade to 60% while idle
+(DM_SKILL_IDLE_ALPHA) and go solid while held; belt/menu/map cells draw a
+fainter ring (belt cells numbered 1–4) so the game's own HUD artwork stays readable; the joystick is a
+faint ring whose sparkle knob follows the output axes, with a ±30° aim arc
+while deflected. Its native Canvas painter consumes these canonical Java
+constants. Coordinates use dp, with original safe-inset and tall-screen
+scaling. Buttons remain anchored while pressed. Labels describe controller
+slots until native skill identity is audited. Virtual accessibility buttons
+expose clicks and directional movement without dragging.
 
 Menu and combat modes are explicitly selected because this Android build's
 91738 scene observer is not mapped yet. The mode switch cancels all held input.
