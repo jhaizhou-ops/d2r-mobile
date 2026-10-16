@@ -34,14 +34,18 @@ void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n);               // GPU 
 void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v);   // 完成后写事件值（0 写 / 1 加） | Write the event value after completion (0 write / 1 add)
 void mtl_sub_counter(uint64_t addr, uint32_t type);                       // 完成后写计数器记录 | Write the counter record after completion
 uint64_t mtl_sub_commit(void);
+/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android-isolation-analysis.md）==== */
 void mtl_sub_commit_async(void);                    // 提交后不等待，由完成线程按序发布 | Submit without waiting; a completion worker publishes in order
 int mtl_async_enabled(void);
+/* ==== ANDROID-END ==== */
 
 uint64_t mtl_last_fence(void);                       // 最近一次提交的栅栏值（0 = 从未提交） | Fence value of the most recent submit (0 = never submitted)
 int mtl_wait(uint64_t fence, uint64_t timeout_ns);   // GPU 完成到 fence 返回 1，超时 0 | Returns 1 when the GPU has completed up to fence, 0 on timeout
 void mtl_finish(void);                               // 等所有已提交的命令完成 | Wait for all submitted commands to complete
 void mtl_drain(void);                                // 等队列上全部命令（含出图）完成：提交空命令缓冲并等它 | Wait for all commands on the queue (including presents) to complete: submit an empty command buffer and wait for it
+/* ==== ANDROID-BEGIN（非上游新增区）==== */
 void mtl_pso_cache_flush(void);                      // 管线缓存立即落盘（挂起 / 关闭时调）：把本会话新编译的管线持久化，防强杀丢失 | Flush the pipeline cache to disk now (on suspend / shutdown): persist pipelines compiled this session so a force-kill does not lose them
+/* ==== ANDROID-END ==== */
 void mtl_xv_window_tex(uint64_t serial);   // 登记窗口（交换链）贴图：跨提交有效性账本永不收它 | Register a window (swapchain) texture: the cross-submit validity ledger never collects it
 void mtl_ui_ghost(int on, float px, float py, const float grid[4], float cx, float cy);   // 拖货跟手图：on=1 时把盖住屏幕点 (px,py)、压在货架格网 grid（左上角 x,y、一格宽高）上的那件货的图标在界面趟末尾平移到中心 (cx,cy) 再画一遍（归一化，左上原点）；任意线程调 | Drag-follow image for shop items: when on=1, the icon of the item that covers screen point (px,py) and sits on the shop shelf grid `grid` (top-left x,y, width and height of one cell) is translated to center (cx,cy) and drawn once more at the end of the UI pass (normalized, top-left origin); callable from any thread
 int mtl_ui_ghost_rect(float r[4]);   // 上面认到的那件货的屏幕矩形（归一化）；还没认到返回 0 | Screen rectangle (normalized) of the item recognized above; returns 0 if not recognized yet

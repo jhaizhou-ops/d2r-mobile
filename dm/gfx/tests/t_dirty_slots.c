@@ -1,5 +1,7 @@
 #include "../nvn/nvn_dirty.h"
+/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android-isolation-analysis.md）==== */
 #include "../nvn/nvn_vk_pool_upload.h"
+/* ==== ANDROID-END ==== */
 #include "../../host/dm.h"
 #include <sys/mman.h>
 #include <stdint.h>
@@ -24,15 +26,18 @@ static void *page_map(void) {
     return p;
 }
 
+/* ==== ANDROID-BEGIN（非上游新增区）==== */
 static void *page_map_n(size_t pages) {
     void *p = mmap(NULL, pages * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (p == MAP_FAILED) { perror("mmap"); exit(2); }
     return p;
 }
+/* ==== ANDROID-END ==== */
 
 int main(void) {
     crash_install();
 
+    /* ==== ANDROID-BEGIN：以下为新增的"脏页镜像只复制非 GPU 所有区间"测试块 ==== */
     uint8_t guest[512], mapped[512];
     for (size_t i = 0; i < sizeof guest; i++) guest[i] = (uint8_t)(i * 3 + 1);
     memset(mapped, 0xcd, sizeof mapped);
