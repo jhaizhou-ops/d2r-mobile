@@ -9,6 +9,7 @@ B = build
 run: \
 	$(B)/main.orig.bin \
 	$(B)/subsdk0.orig.bin \
+	$(B)/t_addon \
 	$(B)/t_altstack \
 	$(B)/t_audio \
 	$(B)/t_audio_spsc \
@@ -49,6 +50,8 @@ run: \
 	python3 mode_scan.py ../..
 	python3 ../../ios/tools/dm_i18n.py --check
 	python3 ../../i18n/scan_literals.py
+	$(B)/t_addon
+	DM_AOC_OWNED=0 $(B)/t_addon no-dlc
 	$(B)/t_thread_leak
 	$(B)/t_rift_clock
 	$(B)/t_rift_next
@@ -110,8 +113,8 @@ $(B)/t_cloudsync: t_cloudsync.c ../dm_cloudsync.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../dm_cloudsync.c
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_touch.c ../hle_touch.c
-$(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../dm_i18n.c
+$(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c ../hle_addon.c ../hle_addon.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../dm_i18n.c ../hle_addon.c
 $(B)/t_audio: t_audio.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
@@ -136,8 +139,8 @@ $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 $(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CV_OLD_ORDER -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
 
-$(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../dm_i18n.c
+$(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c ../hle_addon.c ../hle_addon.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../dm_i18n.c ../hle_addon.c
 $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h ../dm_i18n.c ../dm_i18n_tab.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c ../dm_i18n.c
 
@@ -172,3 +175,6 @@ $(B)/t_map_diag: t_map_diag.c ../dm_cursor.c ../dm_unit.h | $(B)
 
 $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 	clang -O1 -Wno-unused-function -Wl,-dead_strip -I.. -o $@ t_warp_diag.c
+
+$(B)/t_addon: t_addon.c ../hle_addon.c ../hle_addon.h ../hle_fs.c ../hle_misc.c ../dm_i18n.c | $(B)
+	clang -O1 -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_addon.c ../hle_addon.c ../dm_i18n.c

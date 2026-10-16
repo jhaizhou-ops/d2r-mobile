@@ -11,6 +11,7 @@
 // Paths look like "rom:/data/x". FileHandle / DirectoryHandle are 8 bytes passed by value, here they store the host fd / DIR*.
 // Struct layout follows the public Horizon ABI: DirectoryEntry = {char name[0x301], pad[3], s8 type, pad[3], s64 size} (0x310 bytes).
 #include "hle.h"
+#include "hle_addon.h"
 #include "front.h"
 #include <dirent.h>
 #include <errno.h>
@@ -40,7 +41,7 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry 布局");
 // Host: at mount, the committed directory commit (= $DM_SAVE) is clonefile'd as a whole tree into the working directory <commit>.work (APFS copy-on-write, nearly zero cost), and the mount points at the working directory,
 // all game reads and writes happen in the working directory; Commit = clonefile(work → <commit>.new), then renamex_np(RENAME_SWAP) swaps it atomically with commit, then the swapped-out old version is deleted.
 // Killed at any moment, commit is either the old version or the new version, never half-written / a mix of old and new; the next mount discards leftover .work / .new.
-typedef struct { char name[32]; char dir[1024]; char overlay[4096]; char commit[1024]; int ro; } mount_t;
+typedef struct { char name[32]; char dir[1024]; char overlay[4096]; char commit[1024]; int ro, addon_index; } mount_t;
 static mount_t g_mnt[MAX_MOUNT];   // commit 非空 = 事务式存档挂载 | commit non-empty = transactional save mount
 static int g_nmnt;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -105,7 +106,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
         if (!strcmp(g_mnt[i].name, name)) { pthread_mutex_unlock(&g_lock); return RES_OK; }
     if (g_nmnt >= MAX_MOUNT) die("挂载表满");
     strlcpy(g_mnt[g_nmnt].name, name, sizeof g_mnt[0].name);
-    g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0;
+    g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0; g_mnt[g_nmnt].addon_index = 0;
     if (!strcmp(name, "rom") && getenv("DM_ROMFS_OVERLAY"))
         strlcpy(g_mnt[g_nmnt].overlay, getenv("DM_ROMFS_OVERLAY"), sizeof g_mnt[0].overlay);
     int txn_err = 0;   // 事务目录建不起来（清不掉残留 / 克隆失败，盘满时真实可能）：不退出，改成只读挂载已提交目录——角色照常读得到，写一律失败、提交为空操作，已提交版本一个字节不动 | The transaction directory cannot be set up (leftovers cannot be cleared / clone failed, which really happens on a full disk): do not exit; mount the committed directory read-only instead. Characters still load, every write fails, commits are no-ops, and not one byte of the committed version changes
@@ -273,6 +274,28 @@ static Result err_res(const char *op, const char *path) {
 
 // ---------- 挂载 ----------
 // ---------- Mount ----------
+HLE_FORCE("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", "fsp-srv；本地 DLC 挂载缓存大小", Result, h_fs_QueryAddonCache, size_t *out, int index) {
+    char directory[1024];
+    if (!out || !dm_addon_path(index, directory, sizeof directory)) return RES_PATH_NOT_FOUND;
+    *out = 0x1000;
+    return RES_OK;
+}
+HLE_FORCE("_ZN2nn2fs17MountAddOnContentEPKciPvm", "fsp-srv；已校验 DLC → 独立只读目录", Result, h_fs_MountAddon, const char *name, int index, void *cache, size_t size) {
+    (void)cache; (void)size;
+    char directory[1024];
+    if (!name || !name[0] || strlen(name) >= sizeof g_mnt[0].name || strchr(name, ':') || strchr(name, '/') ||
+        !dm_addon_path(index, directory, sizeof directory)) return RES_PATH_NOT_FOUND;
+    PATH_LOCK();
+    for (int i = 0; i < g_nmnt; i++) if (!strcmp(g_mnt[i].name, name))
+        return g_mnt[i].addon_index == index ? RES_OK : RES_PATH_EXISTS;
+    if (g_nmnt == MAX_MOUNT) return RES_FAIL;
+    mount_t *m = &g_mnt[g_nmnt++];
+    memset(m, 0, sizeof *m);
+    strlcpy(m->name, name, sizeof m->name);
+    strlcpy(m->dir, directory, sizeof m->dir);
+    m->ro = 1; m->addon_index = index;
+    return RES_OK;
+}
 HLE_FORCE("_ZN2nn2fs22QueryMountRomCacheSizeEPm", "fsp-srv；rom 直读宿主目录，缓存只给最小值", Result, h_fs_QueryRomCache, size_t *out) { *out = 0x1000; return RES_OK; }
 HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv；rom → 宿主 RomFS 目录", Result, h_fs_MountRom, const char *name, void *cache, size_t sz) {
     (void)cache; (void)sz; char b[1024];
@@ -476,7 +499,14 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整�
     pthread_mutex_unlock(&g_lock);
     return r;
 }
-HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv；挂载表常驻，卸载为空操作", void, h_fs_Unmount, const char *name) { (void)name; }
+HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv；释放 DLC 挂载名，保留已有存档挂载行为", void, h_fs_Unmount, const char *name) {
+    PATH_LOCK();
+    for (int i = 0; name && i < g_nmnt; i++) if (g_mnt[i].addon_index && !strcmp(g_mnt[i].name, name)) {
+        memmove(&g_mnt[i], &g_mnt[i + 1], (g_nmnt - i - 1) * sizeof g_mnt[0]);
+        g_nmnt--;
+        return;
+    }
+}
 
 // ---------- 文件 ----------
 // 剔零档案：资源包里被填零的大段（过场视频、旧版音乐）不随包分发——档案文件里把这些零段剔掉，旁边放一张区段表
