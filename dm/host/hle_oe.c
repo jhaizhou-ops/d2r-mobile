@@ -417,8 +417,17 @@ static void android_scale3d_tick(void *return_address) {
         ((const uint8_t *)return_address<(const uint8_t *)main->base || (const uint8_t *)return_address>=(const uint8_t *)main->base+main->size))
         die("ANDROID_3D_SCALE unexpected caller %p outside main (94012 map)",return_address);
     uintptr_t renderer=*(uintptr_t *)(main->base+obj_off); if (!renderer) return;
-    if ((renderer&15) || renderer>UINTPTR_MAX-0xee90 || !android_scale_readable(renderer+0x66a4,4) || !android_scale_readable(renderer+0xee78,24))
-        die("ANDROID_3D_SCALE invalid renderer pointer %p",(void *)renderer);
+    /* readable() 会完整扫一遍 /proc/self/maps（毫秒级）——绝不能每次 tick 都做。缓存校验结果：
+     * 指针没变就不再扫（变更时或每 ~5 秒复核一次）。这个 tick 每次系统通知轮询都会进来，
+     * 之前的"每次扫两遍"把启用动态比例的会话拖慢近一倍。 | readable() scans all of
+     * /proc/self/maps (milliseconds) -- never do it per tick. Cache the validation: re-scan only
+     * when the pointer changes (or once every ~5 s as a safety net). This tick runs on every
+     * notification poll; scanning twice per call nearly halved throughput in dynamic-scale runs. */
+    { static uintptr_t checked; static uint64_t checked_at; uint64_t now_t=now_ns();
+      if (renderer!=checked || now_t-checked_at>5ull*1000000000ull) {
+        if ((renderer&15) || renderer>UINTPTR_MAX-0xee90 || !android_scale_readable(renderer+0x66a4,4) || !android_scale_readable(renderer+0xee78,24))
+            die("ANDROID_3D_SCALE invalid renderer pointer %p",(void *)renderer);
+        checked=renderer; checked_at=now_t; } }
     uint32_t *sizes=(uint32_t *)(renderer+0xee78);
     uint32_t ow=sizes[4],oh=sizes[5];
     if (!g_android_scale_94012) { if (ow!=1280 || oh!=720) return; }   // 91738 实验固定按 1280x720 输出 | the 91738 experiment assumed the fixed 1280x720 output

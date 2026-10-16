@@ -177,6 +177,26 @@ NVN(nvnWindowAcquireTexture,NVNwindowAcquireTextureResult,NVNwindow *window,NVNs
     if(sync){sync_t *s=(void *)sync;s->fenced=1;s->fence=mtl_last_fence();}
     dm_android_nvn_work_begin();android_gfx_leave();return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
+/* 游戏线程每帧 CPU（utime+stime，/proc/thread-self/stat 第 12/13 字段，USER_HZ=100）：
+ * 整帧账里"游戏逻辑 + HLE 记录路径"的盲区靠它与 vk 桶（只覆盖翻译侧）对照补上。
+ * 每 60 帧打一行。 | Game-thread CPU per frame (utime+stime, fields 12/13 of
+ * /proc/thread-self/stat; USER_HZ is 100 on Android): closes the "game logic + HLE record path"
+ * blind spot in the frame budget (the vk buckets only cover the translation side). One line per
+ * 60 frames. */
+static void android_game_thread_cpu_tick(uint64_t frame) {
+    static uint64_t prev_ticks, prev_frame;
+    FILE *f=fopen("/proc/thread-self/stat","r"); if(!f)return;
+    char buf[512]; size_t n=fread(buf,1,sizeof buf-1,f); fclose(f); buf[n]=0;
+    char *p=strrchr(buf,')'); if(!p)return;
+    unsigned long long ut=0,st=0; int idx=0;
+    for(char *tok=strtok(p+1," ");tok;tok=strtok(NULL," ")){ if(++idx==12)ut=strtoull(tok,NULL,10); else if(idx==13){st=strtoull(tok,NULL,10);break;} }
+    if(!ut&&!st)return;
+    uint64_t ticks=ut+st;
+    if(prev_ticks&&frame>prev_frame&&(frame/60)!=(prev_frame/60))
+        LOG("[nvn-android] 游戏线程每帧 CPU %.2f ms（游戏逻辑 + HLE 记录路径合计；帧 %llu）",
+            (double)(ticks-prev_ticks)*1000.0/100.0/(double)(frame-prev_frame),(unsigned long long)frame);
+    prev_ticks=ticks;prev_frame=frame;
+}
 int (*g_nvn_loadscreen_up)(void);
 NVN(nvnQueuePresentTexture,void,NVNqueue *q,NVNwindow *window,int index) {
     (void)q;win_t *w=(void *)window;if(index<0 || index>=w->ntex || index>=4 || !w->tex[index])die("NVN present index %d",index);
@@ -185,6 +205,6 @@ NVN(nvnQueuePresentTexture,void,NVNqueue *q,NVNwindow *window,int index) {
     memcpy(j.crop, w->crop, sizeof j.crop);
     w->ticket[index] = x_push(&j);   // 存任务号；取图时经 x_present_ticket 换成出图票号 | Store the job number; the acquire converts it via x_present_ticket
     w->presents++;
-    uint64_t frame=atomic_fetch_add(&android_nvn_frame,1)+1;mtl_set_frame(frame);dm_android_nvn_presented(frame);
+    uint64_t frame=atomic_fetch_add(&android_nvn_frame,1)+1;mtl_set_frame(frame);dm_android_nvn_presented(frame);android_game_thread_cpu_tick(frame);
     dm_android_nvn_work_end(frame);android_gfx_leave();
 }

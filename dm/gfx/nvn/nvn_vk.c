@@ -224,6 +224,11 @@ static struct {
 
     uint64_t profile_desc_alloc_ns,profile_desc_update_ns,profile_prep_ns,profile_lookup_ns,profile_pool_ns,profile_bind_ns,profile_render_ns,profile_present_ns,profile_state_ns,profile_vertex_ns,profile_pso_ns,profile_tail_ns;unsigned trace_meshes;
     uint64_t profile_bind_hits,profile_bind_full_calls,profile_bind_plan_ns,profile_bind_full_ns;   // bind_shader 细分：计划命中/全路径次数与各自耗时 | bind_shader split: plan hits / full-path calls and their times
+    uint64_t profile_plan_rev,profile_plan_epoch,profile_plan_state,profile_plan_reg,profile_plan_pool;   // 计划失效原因 | plan-invalidation reasons
+    uint64_t profile_plan_buf_none,profile_plan_buf_align,profile_plan_buf_addr,profile_plan_buf_pool,profile_plan_buf_off,profile_plan_buf_dynbig;   // 缓冲侧失效原因 | buffer-side miss reasons
+    uint64_t profile_plan_img_check,profile_plan_img_layout,profile_plan_img_samp;   // 图像侧失效原因 | image-side miss reasons
+    uint64_t profile_tail_bind_ns,profile_tail_state_ns,profile_tail_draw_ns;   // tail 子桶：管线+描述符 / 状态+查询 / 绘制调用 | tail sub-buckets
+    uint64_t profile_rp_flush_ns,profile_rp_attach_ns,profile_rp_key_ns,profile_rp_begin_ns;   // render_begin 子桶：冲刷 / 附件 / 键+创建 / 编码 | render_begin sub-buckets
     int diag_barrier,diag_loadstore,disable_barrier_elision,disable_sample_copy_cache,barrier_stats,pass_timing;
     uint32_t npacc;
 
@@ -2079,17 +2084,27 @@ static void binding_plan_remember(VShader *s,VkDescriptorSet set,const BindingRe
 static VkDescriptorSet binding_plan_try(VShader *s) {
     BindingPlan *plan=s->plan;
     if(!plan||G.disable_binding_plans||G.disable_desc_cache||G.trace_frame||!plan->eligible){G.profile_plan_fallbacks++;return VK_NULL_HANDLE;}
-    if(!plan->resolved||plan->epoch!=S.epoch||plan->state_revision!=G.binding_revision[s->h.stage]||
-       plan->registry_revision!=G.registry_revision||plan->pool_revision!=G.pool_revision||!plan->set){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+    { int why=!plan->resolved||!plan->set?0:plan->epoch!=S.epoch?1:plan->state_revision!=G.binding_revision[s->h.stage]?2:
+              plan->registry_revision!=G.registry_revision?3:plan->pool_revision!=G.pool_revision?4:-1;
+      if(why>=0){
+        if(why==0)G.profile_plan_rev++;
+        else if(why==1)G.profile_plan_epoch++;
+        else if(why==2)G.profile_plan_state++;
+        else if(why==3)G.profile_plan_reg++;
+        else G.profile_plan_pool++;
+        G.profile_plan_misses++;return VK_NULL_HANDLE;} }
     uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,sizeof(live_dyn));
     for(uint32_t n=0;n<plan->nbuffer;n++){
         unsigned i=plan->buffers[n];const RBinding *b=&s->b[i];
         Range r=G.state.uniform[s->h.stage][b->slot];uint64_t offset=0;
-        if(!r.addr||!r.size){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(!r.addr||!r.size){G.profile_plan_buf_none++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         VPool *pool=pool_read(r.addr,r.size,&offset);const BindingBuffer *cached=&plan->resources[i].buffer;
         int dynamic=(s->dyn_bindings>>i)&1;   // 动态绑定的偏移不算计划失效条件：它随绑定调用走 | A dynamic binding's offset is not a plan-invalidating condition: it rides the bind call
-        if(offset%G.properties.limits.minUniformBufferOffsetAlignment||r.addr!=cached->range.addr||r.size!=cached->range.size||
-           pool->serial!=cached->pool_serial||(!dynamic&&offset!=cached->offset)||(dynamic&&offset>0xffffffffu)){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(offset%G.properties.limits.minUniformBufferOffsetAlignment){G.profile_plan_buf_align++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(r.addr!=cached->range.addr||r.size!=cached->range.size){G.profile_plan_buf_addr++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(pool->serial!=cached->pool_serial){G.profile_plan_buf_pool++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(!dynamic&&offset!=cached->offset){G.profile_plan_buf_off++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(dynamic&&offset>0xffffffffu){G.profile_plan_buf_dynbig++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         if(dynamic)live_dyn[i]=(uint32_t)offset;
         G.profile_plan_buffers++;
     }
@@ -2101,12 +2116,12 @@ static VkDescriptorSet binding_plan_try(VShader *s) {
         if(t->source.d.target!=NVN_TEXTURE_TARGET_2D||
            (slot->has_view&&(slot->view.set_levels||slot->view.set_layers||slot->view.set_format||slot->view.set_target))||
            cached->descriptor_id!=tid||cached->texture.incarnation!=t->incarnation||cached->texture.slot!=(uint32_t)(t-G.textures)||
-           disjoint_sampling(t,slot,s->h.stage)){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+           disjoint_sampling(t,slot,s->h.stage)){G.profile_plan_img_check++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         VkImageLayout layout=sampled_layout(t,s->h.stage);texture_transition(t,layout);
-        if(layout!=cached->layout||t->view==VK_NULL_HANDLE){G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        if(layout!=cached->layout||t->view==VK_NULL_HANDLE){G.profile_plan_img_layout++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         if(b->type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER){
             unsigned sid=(unsigned)((b->sampler>=0?G.state.samp[s->h.stage][b->sampler]:handle)>>20)&0xfff;
-            if(sid>=LIMIT_OBJECTS||!G.sslot[sid].live){if(!(s->fetch_bindings&(1ull<<i))||sid||!G.fetch_sampler){G.profile_plan_misses++;return VK_NULL_HANDLE;}}
+            if(sid>=LIMIT_OBJECTS||!G.sslot[sid].live){if(!(s->fetch_bindings&(1ull<<i))||sid||!G.fetch_sampler){G.profile_plan_img_samp++;G.profile_plan_misses++;return VK_NULL_HANDLE;}}
         }
         G.profile_plan_images++;
     }
@@ -2418,8 +2433,10 @@ static VkRenderPass render_begin(void) {
         }
         return S.passes[S.active_pass];
     }
+    uint64_t rp_t0=prof_now();
     pass_end();G.pass_side_effects=0;S.pass_attach_n=0;
     if(G.chunk_draws)sub_chunk_flush();
+    G.profile_rp_flush_ns+=prof_now()-rp_t0;uint64_t rp_t1=prof_now();
     VkAttachmentDescription attachments[9];VkAttachmentReference color[8],depth;VkImageView views[9];uint32_t n=0,width=0,height=0;
     memset(attachments,0,sizeof(attachments));
     for(int i=0;i<rt->n;i++)color[i]=(VkAttachmentReference){VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -2455,6 +2472,7 @@ static VkRenderPass render_begin(void) {
         if(is_depth)depth=(VkAttachmentReference){n,layout};else color[i]=(VkAttachmentReference){n,layout};n++;
     }
     if(!n)die("render targets have no bound attachment",rt->n);
+    G.profile_rp_attach_ns+=prof_now()-rp_t1;uint64_t rp_t2=prof_now();
     VkSubpassDescription sub={.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS,.colorAttachmentCount=rt->n,.pColorAttachments=color,
         .pDepthStencilAttachment=rt->depth?&depth:NULL};
     VkSubpassDependency deps[3]={
@@ -2484,6 +2502,7 @@ static VkRenderPass render_begin(void) {
            .pAttachments=views,.width=width,.height=height,.layers=1};CHECK(vkCreateFramebuffer(G.device,&fi,NULL,&S.framebuffers[index]));
         S.framebuffer_keys[index]=key;G.profile_framebuffer_misses++;
     }else G.profile_framebuffer_hits++;
+    G.profile_rp_key_ns+=prof_now()-rp_t2;uint64_t rp_t3=prof_now();
     S.active_pass=index;G.pass_draws0=G.draws;{const tex_t *f0=rt->n>0?rt->color[0]:rt->depth;snprintf(G.pass_desc,sizeof G.pass_desc,"%ux%u c%d d%d s%llu",f0?f0->d.width:0,f0?f0->d.height:0,rt->n,rt->depth!=NULL,(unsigned long long)(f0?f0->serial:0));}
     VkRenderPassBeginInfo begin={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=S.passes[index],.framebuffer=S.framebuffers[index],
        .renderArea={{0,0},{(G.diag_shape&4)&&width>16?16:width,(G.diag_shape&4)&&height>16?16:height}}};
@@ -2492,6 +2511,7 @@ static VkRenderPass render_begin(void) {
         S.pt[S.npt].key=(rt->color[0]?rt->color[0]->serial:0)*1315423911ULL^(rt->depth?rt->depth->serial:0);S.pt_draws0=G.draws;S.pt_open=1;}
     if(G.precise_sync)hz_pass_sync();
     vkCmdBeginRenderPass(S.command,&begin,VK_SUBPASS_CONTENTS_INLINE);S.in_pass=1;G.pass_count++;
+    G.profile_rp_begin_ns+=prof_now()-rp_t3;
     S.pass_feedback_flags=S.feedback_flags;S.pass_depth_read_only=read_only;
     return S.passes[index];
 }
@@ -2647,6 +2667,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
      memcpy(draw_dyn,S.dyn_offset[vs->h.stage],ndyn*sizeof(*draw_dyn));
      if(ps){memcpy(draw_dyn+ndyn,S.dyn_offset[ps->h.stage],S.dyn_count[ps->h.stage]*sizeof(*draw_dyn));ndyn+=S.dyn_count[ps->h.stage];}
      command_bind_profile(NVN_VK_CMD_DESCRIPTORS,nvn_vk_cmd_descriptors(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pso.layout,ps?2:1,descriptor_sets,ndyn,draw_dyn));}
+    G.profile_tail_bind_ns+=prof_now()-tail_started;uint64_t tail_s2=prof_now();
     if(G.state.viewport.width<=0 || G.state.viewport.height<=0)die("viewport bounds",0);
     VkViewport viewport=G.state.viewport;if(upper_left){viewport.y+=viewport.height;viewport.height=-viewport.height;}
     command_bind_profile(NVN_VK_CMD_VIEWPORT,nvn_vk_cmd_viewport(&S.command_state,cache_commands,S.command,&viewport));
@@ -2661,6 +2682,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
         S.active_occlusion=S.nocc++;G.profile_occlusion_queries++;
         vkCmdBeginQuery(S.command,S.occlusion,S.active_occlusion,VK_QUERY_CONTROL_PRECISE_BIT);
     }
+    G.profile_tail_state_ns+=prof_now()-tail_s2;uint64_t tail_s3=prof_now();
     uint32_t query=S.active_occlusion;
     if(G.trace_frame)fprintf(stderr,"[nvn-vulkan] DRAW_QUERY draw=%llu query=%u\n",(unsigned long long)G.draws,query);
     int skip_class=0;
@@ -2673,6 +2695,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
         command_bind_profile(NVN_VK_CMD_INDEX,nvn_vk_cmd_index(&S.command_state,cache_commands,S.command,p->v.b,offset,idx->itype==NVN_INDEX_TYPE_UNSIGNED_SHORT?VK_INDEX_TYPE_UINT16:VK_INDEX_TYPE_UINT32));
         vkCmdDrawIndexed(S.command,(G.diag_shape&2)&&idx->count>3?3:idx->count,idx->instances,0,idx->base_vertex,idx->base_instance); }
     if(G.disable_query_batch||G.trace_frame)occlusion_end();
+    G.profile_tail_draw_ns+=prof_now()-tail_s3;
     if(G.trace_frame&&G.trace_ui&&ps&&!strcmp(ps->key,"62ddcb3faa41a92a")&&G.state.rt.n==1){
         VTexture *t=texture_get(G.state.rt.color[0],0);if(t->bpp!=4||aspect(t->format)!=VK_IMAGE_ASPECT_COLOR_BIT)die("UI result capture format",t->format);
         all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);uint64_t bytes=(uint64_t)t->width*t->height*4;
@@ -3186,6 +3209,9 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         fprintf(stderr,"[nvn-vulkan] RENDER_SUBMIT_CLASS_PROFILE frame=%llu total_submits=%llu observed_eligible_candidates=%llu candidate_fence_wait_ms=%.3f pool_writeback_bytes=%llu events=%llu counter_reports=%llu write_submits=%llu event_submits=%llu report_submits=%llu trace_submits=%llu cpu_readback_submits=%llu event_wait_submits=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_submits,(unsigned long long)G.profile_submit_candidates,G.profile_candidate_wait_ns/1e6,(unsigned long long)G.profile_writeback_bytes,(unsigned long long)G.profile_events,(unsigned long long)G.profile_reports,(unsigned long long)G.profile_write_submits,(unsigned long long)G.profile_event_submits,(unsigned long long)G.profile_report_submits,(unsigned long long)G.profile_trace_submits,(unsigned long long)G.profile_cpu_readback_submits,(unsigned long long)G.profile_event_wait_submits);
         fprintf(stderr,"[nvn-vulkan] RENDER_CPU_PROFILE frame=%llu lookup_ms=%.3f pool_ms=%.3f bind_ms=%.3f renderpass_ms=%.3f present_ms=%.3f desc_alloc_ms=%.3f desc_update_ms=%.3f prep_ms=%.3f state_ms=%.3f vertex_ms=%.3f pso_ms=%.3f tail_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_lookup_ns/1e6,G.profile_pool_ns/1e6,G.profile_bind_ns/1e6,G.profile_render_ns/1e6,G.profile_present_ns/1e6,G.profile_desc_alloc_ns/1e6,G.profile_desc_update_ns/1e6,G.profile_prep_ns/1e6,G.profile_state_ns/1e6,G.profile_vertex_ns/1e6,G.profile_pso_ns/1e6,G.profile_tail_ns/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_BIND_SPLIT frame=%llu plan_hits=%llu plan_ms=%.3f full_calls=%llu full_ms=%.3f\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_bind_hits,G.profile_bind_plan_ns/1e6,(unsigned long long)G.profile_bind_full_calls,G.profile_bind_full_ns/1e6);
+        fprintf(stderr,"[nvn-vulkan] RENDER_PLAN_REASON frame=%llu rev=%llu epoch=%llu state=%llu registry=%llu pool=%llu buf_none=%llu buf_align=%llu buf_addr=%llu buf_pool=%llu buf_off=%llu buf_dynbig=%llu img_check=%llu img_layout=%llu img_samp=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_plan_rev,(unsigned long long)G.profile_plan_epoch,(unsigned long long)G.profile_plan_state,(unsigned long long)G.profile_plan_reg,(unsigned long long)G.profile_plan_pool,(unsigned long long)G.profile_plan_buf_none,(unsigned long long)G.profile_plan_buf_align,(unsigned long long)G.profile_plan_buf_addr,(unsigned long long)G.profile_plan_buf_pool,(unsigned long long)G.profile_plan_buf_off,(unsigned long long)G.profile_plan_buf_dynbig,(unsigned long long)G.profile_plan_img_check,(unsigned long long)G.profile_plan_img_layout,(unsigned long long)G.profile_plan_img_samp);
+        fprintf(stderr,"[nvn-vulkan] RENDER_TAIL_SPLIT frame=%llu bind_ms=%.3f state_ms=%.3f draw_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_tail_bind_ns/1e6,G.profile_tail_state_ns/1e6,G.profile_tail_draw_ns/1e6);
+        fprintf(stderr,"[nvn-vulkan] RENDER_RP_SPLIT frame=%llu flush_ms=%.3f attach_ms=%.3f key_ms=%.3f begin_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_rp_flush_ns/1e6,G.profile_rp_attach_ns/1e6,G.profile_rp_key_ns/1e6,G.profile_rp_begin_ns/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_WRITEBACK_PROFILE frame=%llu enabled=%u raw_ranges=%llu copied_ranges=%llu raw_bytes=%llu copied_bytes=%llu plan_thread_cpu_ms=%.3f\n",(unsigned long long)G.present_count+1,G.enable_writeback_coalesce,(unsigned long long)G.profile_writeback_raw_ranges,(unsigned long long)G.profile_writeback_copy_ranges,(unsigned long long)G.profile_writeback_raw_bytes,(unsigned long long)G.profile_writeback_bytes,G.profile_writeback_plan_cpu_ns/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_PSO_PROFILE frame=%llu cached=%u hits=%llu misses=%llu\n",(unsigned long long)G.present_count+1,G.npso,(unsigned long long)G.profile_pso_hits,(unsigned long long)G.profile_pso_misses);
         if(G.profile_frames>=60)fprintf(stderr,"[nvn-vulkan] RENDER_PSO_HASH_PROFILE frame=%llu frames=%llu key_bytes=%zu hash_mode=byte_fnv1a last_cache=%d lookups=%llu hash_calls=%llu hash_ms=%.3f lookup_ms=%.3f last_hits=%llu last_misses=%llu table_hits=%llu misses=%llu table_probes=%llu max_probe=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,sizeof(PsoKey),G.enable_pso_last,(unsigned long long)G.profile_pso_lookups,(unsigned long long)G.profile_pso_hash_calls,G.profile_pso_hash_ns/1e6,G.profile_pso_lookup_ns/1e6,(unsigned long long)G.profile_pso_last_hits,(unsigned long long)G.profile_pso_last_misses,(unsigned long long)G.profile_pso_table_hits,(unsigned long long)G.profile_pso_misses,(unsigned long long)G.profile_pso_probes,(unsigned long long)G.profile_pso_max_probe);
@@ -3240,6 +3266,11 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_passes=G.pass_count;G.profile_barriers=G.profile_uniform_updates=G.profile_cpu_snapshots=G.profile_gpu_copies=G.profile_snapshot_reuses=0;
         G.profile_lookup_ns=G.profile_pool_ns=G.profile_bind_ns=G.profile_render_ns=G.profile_present_ns=G.profile_desc_alloc_ns=G.profile_desc_update_ns=G.profile_prep_ns=G.profile_state_ns=G.profile_vertex_ns=G.profile_pso_ns=G.profile_tail_ns=0;
         G.profile_bind_hits=G.profile_bind_full_calls=G.profile_bind_plan_ns=G.profile_bind_full_ns=0;
+        G.profile_plan_rev=G.profile_plan_epoch=G.profile_plan_state=G.profile_plan_reg=G.profile_plan_pool=0;
+        G.profile_plan_buf_none=G.profile_plan_buf_align=G.profile_plan_buf_addr=G.profile_plan_buf_pool=G.profile_plan_buf_off=G.profile_plan_buf_dynbig=0;
+        G.profile_plan_img_check=G.profile_plan_img_layout=G.profile_plan_img_samp=0;
+        G.profile_tail_bind_ns=G.profile_tail_state_ns=G.profile_tail_draw_ns=0;
+        G.profile_rp_flush_ns=G.profile_rp_attach_ns=G.profile_rp_key_ns=G.profile_rp_begin_ns=0;
         /* §1 带宽 A/B：运行时可翻转的 load/store（文件内容 = 0/1/2/3，语义同 DM_DIAG_LOADSTORE）。
          * 每个 profile 窗口（~1 秒）读一次；切换会改变后续渲染通道的键（新通道对象，旧的留在
          * 缓存里到会话结束）。文件不存在 = 保持当前模式。 | §1 bandwidth A/B: runtime load/store
@@ -3250,6 +3281,13 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(lsdir&&*lsdir&&snprintf(lsf,sizeof lsf,"%s/loadstore.txt",lsdir)<(int)sizeof lsf){FILE *fp=fopen(lsf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=3&&m!=G.diag_loadstore){G.diag_loadstore=m;
                 fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE 运行中切换 → %d（%s）\n",m,m?"内容将不正确（诊断）":"恢复正常");}fclose(fp);}}}
+        /* 分块提交粒度运行时切换：chunkd.txt = 每多少绘制冲刷一次（0 = 关，整帧一个命令缓冲）。
+         * 每个窗口（~1 秒）读一次，下一帧起生效。 | Runtime chunk-submit granularity: chunkd.txt =
+         * draws between flushes (0 = off, one command buffer per frame). Read once per window. */
+        { static const char *cddir; if(!cddir)cddir=getenv("DM_FRAME_DIR"); char cdf[1300];
+          if(cddir&&*cddir&&snprintf(cdf,sizeof cdf,"%s/chunkd.txt",cddir)<(int)sizeof cdf){FILE *fp=fopen(cdf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=1000&&m!=G.chunk_draws){G.chunk_draws=m;
+                fprintf(stderr,"[nvn-vulkan] CHUNK_DRAWS 运行中切换 → %d\n",m);}fclose(fp);}}}
         G.profile_submit_candidates=G.profile_candidate_wait_ns=G.profile_writeback_bytes=G.profile_events=G.profile_reports=0;
         G.profile_writeback_raw_bytes=G.profile_writeback_raw_ranges=G.profile_writeback_copy_ranges=G.profile_writeback_plan_cpu_ns=0;
         G.profile_write_submits=G.profile_event_submits=G.profile_report_submits=G.profile_trace_submits=G.profile_cpu_readback_submits=G.profile_event_wait_submits=0;
