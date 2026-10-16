@@ -2338,8 +2338,32 @@ static int ui_map_diag(module_t *m, uint64_t root) {
     LOG("小地图诊断：区域 %d 玩家有效 %d 局内 %d 读取 %d 对象 %s 重建 %d 可见 %d 配置 %d 微缩 %d 矩形 %d,%d,%d,%d 界面 %d,%d,%d,%d 真实 %dx%d", d.area, d.valid, d.ingame, d.load, d.object ? "有" : "无", rebuilt, d.visible, d.cfg, d.mini, d.x, d.y, d.w, d.h, d.ux, d.uy, d.uw, d.uh, d.rw, d.rh);
     return 1;
 }
+// 触屏小地图常驻：跨幕后可能留下已隐藏但仍挂树的AutoMap；档位回调不负责重新打开它。
+// 只在加载结束、HUD就绪且无其他面板时，用原版面板管理器恢复，不直接写可见位。
+// Touch minimap is persistent: Act travel can leave AutoMap hidden but attached; the mode callback does not reopen it.
+// Restore through the original panel manager only after loading, with a ready HUD and no other panels; never write visibility directly.
+static int ui_touch_mode(void);
+static struct { uint64_t root, widget, next, last; int area, tries; } g_map_recover;
+void dm_minimap_mode_leave(void) { memset(&g_map_recover, 0, sizeof g_map_recover); }
+static void ui_minimap_recover(module_t *m, uint64_t root, uint64_t fr) {
+    dm_hud_info hi; dm_hud_get(&hi); int cfg = *(int32_t *)(m->base + 0x2d479f4);
+    int ready = root && hi.valid && !hi.dead && hi.area > 0 && dm_uiscreen_ingame() && atomic_load(&g_load_up) == 0 && ui_touch_mode() && (cfg == 1 || cfg == 2);
+    uint64_t am = ready ? ui_panel(root, "AutoMap") : 0, hud = ready ? ui_panel(root, "HUDPanel") : 0;
+    if (!am || *(uint64_t *)am != (uint64_t)m->base + 0x20c58a0 || !hud || !*(uint8_t *)(hud + 0x50) || *(uint8_t *)(am + 0x50)) { memset(&g_map_recover, 0, sizeof g_map_recover); return; }
+    uint64_t ch = *(uint64_t *)(root + 0x58), n = *(uint64_t *)(root + 0x60); if (!ch || n > 256) return;
+    for (uint64_t i = 0; i < n; i++) { uint64_t p = *(uint64_t *)(ch + 8 * i); const char *nm = p ? (const char *)*(uint64_t *)(p + 8) : NULL;
+        if (nm && *(uint8_t *)(p + 0x50) && !panel_skip(nm) && !dm_ui_panel_resident(nm)) { memset(&g_map_recover, 0, sizeof g_map_recover); return; } }
+    if (g_map_recover.root != root || g_map_recover.widget != am || g_map_recover.area != hi.area || fr < g_map_recover.last) {
+        g_map_recover.root = root; g_map_recover.widget = am; g_map_recover.area = hi.area; g_map_recover.tries = 0; g_map_recover.next = fr + 30; }
+    g_map_recover.last = fr;
+    if (fr < g_map_recover.next || g_map_recover.tries >= 3) return;
+    g_map_recover.next = fr + 60; g_map_recover.tries++;
+    LOG("小地图恢复：区域 %d 加载结束后仍隐藏，原版OpenPanel请求 %d/3（配置 %d；不改档位与坐标）", hi.area, g_map_recover.tries, cfg);
+    fe_send("PanelManager", "OpenPanel", "AutoMap");
+}
 static void ui_minimap_pump(module_t *m, uint64_t root, int W, int H, uint64_t fr) {
     static uint64_t next; if (fr < next) return; next = fr + 30;
+    ui_minimap_recover(m, root, fr);
     ui_map_diag(m, root);
     uint64_t w = ui_panel(root, "AutoMap"); if (!w || *(uint64_t *)w != (uint64_t)m->base + 0x20c58a0) return;
     int32_t x = *(int32_t *)(w + 0x70), y = *(int32_t *)(w + 0x74), ww = *(int32_t *)(w + 0x78), hh = *(int32_t *)(w + 0x7c); float sc = *(float *)(w + 0x80);

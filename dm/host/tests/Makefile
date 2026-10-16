@@ -33,6 +33,7 @@ run: \
 	$(B)/t_rift_wave \
 	$(B)/t_interaction_diag \
 	$(B)/t_map_diag \
+	$(B)/t_minimap_recover \
 	$(B)/t_warp_diag \
 	$(B)/t_romfs_validate \
 	$(B)/t_rwlv \
@@ -55,6 +56,7 @@ run: \
 	$(B)/t_rift_oldrun
 	$(B)/t_interaction_diag
 	$(B)/t_map_diag
+	$(B)/t_minimap_recover
 	$(B)/t_warp_diag
 	$(B)/t_rift_wave
 	$(B)/t_textbox
@@ -173,3 +175,6 @@ $(B)/t_map_diag: t_map_diag.c ../dm_cursor.c ../dm_unit.h | $(B)
 
 $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 	clang -O1 -Wno-unused-function -Wl,-dead_strip -I.. -o $@ t_warp_diag.c
+
+$(B)/t_minimap_recover: t_minimap_recover.c ../dm_cursor.c ../dm_cursor.h ../dm_hud.h | $(B)
+	clang -O1 -Wno-unused-function -Wl,-dead_strip -I.. -o $@ t_minimap_recover.c
