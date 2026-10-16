@@ -45,7 +45,17 @@ ARGS=(--env DM_SAVE_FRESH=warlock --env DM_TOUCH_SCRIPT=touch_script.txt --env D
 [ "${E2E_DESK:-0}" = 1 ] && ARGS+=(--env DM_PRESENT_LINK=0)
 [ -n "${E2E_REF:-}" ] && ARGS+=(--env "DM_TOUCH_REF=$E2E_REF")
 [ -n "${PREFIX:-}" ] && ARGS+=(--env DM_C2S_REPLAY=e2e_prefix.jsonl --env DM_GAME_SEED=305419896 --env DM_FIXED_TIME=1790895128)
-if [ -n "${E2E_ENV:-}" ]; then while IFS= read -r kv; do ARGS+=(--env "$kv"); done < <(python3 -c "import json,sys;[print(f'{k}={v}') for k,v in json.loads(sys.argv[1]).items()]" "$E2E_ENV"); fi
+# 合并 E2E_ENV（同真机 touch_e2e.sh 的语义）：调用方的键覆盖上面的缺省；值写 null = 去掉这个缺省（如 {"DM_SAVE_FRESH":null,"DM_SAVE_TEST":"1"}：沿用上一局的 save.test）。
+# 之前是把 E2E_ENV 逐项追加在缺省后面：null 被拼成字符串「None」、缺省的 DM_SAVE_FRESH=warlock 去不掉，Mac 上沿用测试存档的局起不来（玩法线报）
+# Merge E2E_ENV (same semantics as touch_e2e.sh on device): the caller's keys override the defaults above; a null value removes that default (e.g. {"DM_SAVE_FRESH":null,"DM_SAVE_TEST":"1"}: keep the previous run's save.test).
+# Previously E2E_ENV was appended after the defaults item by item: null became the string 'None' and the default DM_SAVE_FRESH=warlock could not be removed, so Mac runs reusing the test save failed to start
+ENVL=(); while IFS= read -r kv; do ENVL+=(--env "$kv"); done < <(python3 -c "
+import json,sys
+a=sys.argv[2:]; env={}
+for i in range(0,len(a),2): k,v=a[i+1].split('=',1); env[k]=v   # a 是 --env K=V 成对 | a holds --env K=V in pairs
+env.update(json.loads(sys.argv[1] or '{}'))
+[print(f'{k}={v}') for k,v in env.items() if v is not None]" "${E2E_ENV:-}" "${ARGS[@]}")
+ARGS=("${ENVL[@]}")
 # iCloud 总闸（tools/cloud_guard.sh）：云端指到一次性本地目录；调用方用 E2E_ENV 自己指了本地云端的照它的
 # iCloud master gate (tools/cloud_guard.sh): the cloud is pointed at a one-off local directory; if the caller specified a local cloud itself through E2E_ENV, that one is used
 cloud_guard_env "$DOC" "$(python3 -c "import json,sys;print(' '.join(f'{k}={v}' for k,v in json.loads(sys.argv[1] or '{}').items()))" "${E2E_ENV:-}")" || exit 1

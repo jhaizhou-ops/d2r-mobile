@@ -230,5 +230,22 @@ void dm_backtrace(uint64_t fp) {
         uintptr_t next=(uintptr_t)pair[0]&0x00ffffffffffffffULL;if(next<=frame)break;frame=next;
     }
 }
-uint64_t front_game_res(int docked) { return ((uint64_t)(docked ? 900 : 720) << 32) | (docked ? 1600 : 1280); }
+/* 输出分辨率：iOS 前端返回设备原生值，安卓原先是写死的 Switch 两档。现在支持
+ * DM_GAME_RES=宽x高 覆盖（与 iOS 前端同源的旋钮），未设置时保持 Switch 档位。
+ * 值经 KRES0/KRES1 参数位喂给游戏，游戏据此重建输出与 3D 目标（3D 内部再乘 3D 比例）。
+ * Output resolution: the iOS front end returns the device's native value; Android used the
+ * hardcoded Switch tiers. Now DM_GAME_RES=WxH overrides it (the same knob the iOS front end
+ * honours); without it the Switch tiers stay. The value feeds the game's KRES0/KRES1 parameter
+ * slots, and the game rebuilds output and its 3D target from it (3D internal × the 3D scale). */
+uint64_t front_game_res(int docked) {
+    const char *e = getenv("DM_GAME_RES");
+    if (e) {
+        unsigned w = 0, h = 0; char tail = 0;
+        if (sscanf(e, "%ux%u%c", &w, &h, &tail) == 2 && w >= 640 && w <= 3840 && h >= 360 && h <= 2160)
+            return ((uint64_t)h << 32) | w;
+        static int bad;
+        if (!bad) { bad = 1; LOG("DM_GAME_RES 非法：%s（要 宽x高，如 1920x1080）", e); }
+    }
+    return ((uint64_t)(docked ? 900 : 720) << 32) | (docked ? 1600 : 1280);
+}
 uint64_t dm_game_res(int docked) { return front_game_res(docked); }

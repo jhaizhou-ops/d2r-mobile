@@ -404,7 +404,9 @@ static void android_scale3d_tick(void *return_address) {
     if ((renderer&15) || renderer>UINTPTR_MAX-0xee90 || !android_scale_readable(renderer+0x66a4,4) || !android_scale_readable(renderer+0xee78,24))
         die("ANDROID_3D_SCALE invalid renderer pointer %p",(void *)renderer);
     uint32_t *sizes=(uint32_t *)(renderer+0xee78);
-    uint32_t ow=sizes[4],oh=sizes[5]; if (ow!=1280 || oh!=720) return;
+    uint32_t ow=sizes[4],oh=sizes[5];
+    if (!g_android_scale_94012) { if (ow!=1280 || oh!=720) return; }   // 91738 实验固定按 1280x720 输出 | the 91738 experiment assumed the fixed 1280x720 output
+    else if (ow<640 || ow>3840 || oh<360 || oh>2160) return;          // 94012：接受宿主配置的输出分辨率 | 94012: accept the host-configured output resolution
     float *scale=(float *)(renderer+0x66a4),before=*scale,want=g_android_scale_want;
     if (!isfinite(before) || before<0.70f || before>1.0f)
         die("ANDROID_3D_SCALE unexpected current scale %.9g",(double)before);

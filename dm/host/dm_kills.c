@@ -112,13 +112,25 @@ static void save(void) {   // 整份重写：先写同目录的临时文件再�
     if (fclose(f) || rename(t, p)) { remove(t); LOG("【红】刷怪积分牌：写 %s 失败", p); }
 }
 
+// 每拍对服务端每只怪都要查一次名单：开局把名单按类号 / 超级独特号建成直查表（同一号取最前那一行，与逐行找的结果一致），每只怪 O(1)
+// Every tick each server monster is checked against the list: at game start the list is built into direct lookup tables by class id / superunique id (the first row wins for a given id, matching a row-by-row search), O(1) per monster
+enum { KLUT_CLS = 1024, KLUT_SU = 256 };
+static int8_t k_cls_row[KLUT_CLS], k_su_row[KLUT_SU], k_su_grp[KLUT_SU];   // 存行号 + 1 / 组号 × 3 + 成员 + 1；0 = 不在名单 | Stores row number + 1 / group number x 3 + member + 1; 0 = not on the list
+static void lut_init(void) {
+    static int done; if (done) return; done = 1;
+    for (int r = NROW - 1; r >= 0; r--) {   // 倒着填，前面的行覆盖后面的 = 取最前那一行 | Fill backwards so earlier rows overwrite later ones = take the first matching row
+        if (k_rows[r].kind == K_CLS && k_rows[r].id >= 0 && k_rows[r].id < KLUT_CLS) k_cls_row[k_rows[r].id] = (int8_t)(r + 1);
+        int su = k_rows[r].kind == K_SU ? k_rows[r].id : k_rows[r].kind == K_CLS ? k_rows[r].id2 : -1;
+        if (su >= 0 && su < KLUT_SU) k_su_row[su] = (int8_t)(r + 1); }
+    for (int g = 1; g >= 0; g--) for (int m = 2; m >= 0; m--) k_su_grp[k_grp_su[g][m]] = (int8_t)(g * 3 + m + 1);
+}
 static int row_of(uint64_t u, int *grp, int *gm) {   // 名单行号；一组的成员给 grp / gm（行号是组那一行）；不在名单 = -1 | Row number in the list; for a group member, gives grp / gm (the row number is the group's row); not in the list = -1
     *grp = -1; int cls = (int)*(uint32_t *)(uintptr_t)(u + 4);
-    for (int r = 0; r < NROW; r++) if (k_rows[r].kind == K_CLS && k_rows[r].id == cls) return r;
+    if (cls >= 0 && cls < KLUT_CLS && k_cls_row[cls]) return k_cls_row[cls] - 1;
     uint64_t md = rd(u + 0x10); if (!md || !(*(uint8_t *)(uintptr_t)(md + 0x1a) & 2)) return -1;
-    int su = *(uint16_t *)(uintptr_t)(md + 0x2a);
-    for (int r = 0; r < NROW; r++) if ((k_rows[r].kind == K_SU && k_rows[r].id == su) || (k_rows[r].kind == K_CLS && k_rows[r].id2 == su)) return r;
-    for (int g = 0; g < 2; g++) for (int m = 0; m < 3; m++) if (k_grp_su[g][m] == su) { *grp = g; *gm = m; for (int r = 0; r < NROW; r++) if (k_rows[r].kind == K_GRP && k_rows[r].id == g) return r; }
+    int su = *(uint16_t *)(uintptr_t)(md + 0x2a); if (su >= KLUT_SU) return -1;
+    if (k_su_row[su]) return k_su_row[su] - 1;
+    if (k_su_grp[su]) { int g = (k_su_grp[su] - 1) / 3; *grp = g; *gm = (k_su_grp[su] - 1) % 3; for (int r = 0; r < NROW; r++) if (k_rows[r].kind == K_GRP && k_rows[r].id == g) return r; }
     return -1;
 }
 static int client_has(uint32_t id) {   // 客户端单位表（main+0x2d603a0 + 类型 1 × 0x400，128 桶按 id 低 7 位，下一个 +0x158）里有这只 = 玩家这边已出现。只读、链长封顶（同首领掉落读数） | Present in the client unit table (main+0x2d603a0 + type 1 × 0x400, 128 buckets by the low 7 bits of id, next +0x158) = already appeared on the player's side. Read-only, chain length capped (same as the boss drop readout)
@@ -135,6 +147,7 @@ static void counted(int r, int d, uint32_t eng, uint32_t t) {
 
 void dm_kills_tick(uint64_t G, uint64_t player, uint8_t *main_base) {
     B = main_base; if (!G || !player || !B) return;
+    lut_init();
     uint32_t t = *(volatile uint32_t *)(uintptr_t)(G + 0x170);
     if (G != g_G || t < g_last_t) { g_G = G; nE = 0; nP = 0; g_maxit = 0; memset(GS, 0, sizeof GS); g_name[0] = 0; }   // 新的一局（认法同首领连战：G 变了或拍号倒退） | A new run (identified the same way as boss rush: G changed or the tick number went backwards)
     g_last_t = t;

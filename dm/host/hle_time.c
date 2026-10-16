@@ -83,15 +83,17 @@ HLE_FORCE("_ZN2nn4time13IsInitializedEv", "返回 Android 时间后端的实际�
 HLE_FORCE("_ZN2nn4time10InitializeEv", "连 time 服务；时钟改取宿主系统时间", Result, h_time_Initialize, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn4time13IsInitializedEv", "time 服务已被接管，恒为已初始化", int, h_time_IsInitialized, void) { return 1; }
 #endif
+// 游戏的用户时钟（秒）：角色档头 0x20 的「存档时刻」就是序列化时取的这个值（固定时钟局写出来正是 DM_FIXED_TIME）。个人仓库翻页拿它判「这一秒里刚存过盘」
+// The game's user clock (seconds): the save time at offset 0x20 of the character file header is this value, taken at serialization (with a fixed clock the written value is exactly DM_FIXED_TIME). Personal stash page turns use it to tell whether a save happened earlier in this same second
+static _Atomic int64_t g_clock_shift;   // 测试开关 DM_TEST_CLOCK_AT（dm_pages.c）拨的偏移：模拟玩家改系统时间 / 网络对时 | Offset set by the test switch DM_TEST_CLOCK_AT (dm_pages.c): simulates the player changing the system time / network time sync
+void dm_test_clock_shift(int64_t d) { atomic_fetch_add(&g_clock_shift, d); LOG("测试 DM_TEST_CLOCK_AT：用户时钟拨 %+lld 秒（累计 %+lld）", (long long)d, (long long)atomic_load(&g_clock_shift)); }
+int64_t dm_user_clock(void) { int64_t ft = fixed_time(); return ft >= 0 ? ft : time(NULL) + atomic_load(&g_clock_shift); }
+int dm_user_clock_fixed(void) { return fixed_time() >= 0; }
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "用户时钟 → 宿主 time()", Result, h_time_GetCurrentTime, int64_t *out) {
 #ifdef __ANDROID__
     if (!out || !atomic_load(&g_time_initialized)) return RES_FAIL;
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts)) return RES_FAIL;
-    int64_t ft = fixed_time(); *out = ft >= 0 ? ft : ts.tv_sec; return RES_OK;
-#else
-    int64_t ft = fixed_time(); *out = ft >= 0 ? ft : time(NULL); return RES_OK;
 #endif
+    *out = dm_user_clock(); return RES_OK;
 }
 // 首领连战第 6–10 关的强制恐怖地带（dm_bossrush.c 设）：g_dm_tz_time 非 0 且未过期时，只有「恐怖地带」那几处取时钟拿到它，存档时间等其余调用照旧。
 // 哪几处：返回点落在地带函数 0x58f1e0 起的那一簇（0x58f1e0–0x591440），或返回后 8 条指令内调地带日程 0x58f310（服务端 0x636b38 套地带、0x694b48 等 9 处）。

@@ -70,6 +70,14 @@ static pthread_mutex_t g_path_lock = PTHREAD_MUTEX_INITIALIZER;
 static void path_unlock(pthread_mutex_t **m) { pthread_mutex_unlock(*m); }
 #define PATH_LOCK() pthread_mutex_t *path_guard __attribute__((cleanup(path_unlock))) = &g_path_lock; pthread_mutex_lock(path_guard)
 static uint8_t g_fmode[65536];              // fd → 打开方式 | fd → open mode
+// 角色档写完的先后（个人仓库翻页 / iCloud 并回判「这份角色档是不是某一刻之后序列化的」用）：写方式打开的 *.d2s 关闭、或改名成 *.d2s 时取一个全局单调序号。
+// 只当「写完」的先后用，不当「序列化」的先后用——角色档由另一条线程写，序列化在前、写盘在后中间可以夹着服务端拍上的动作（dm_vault.c 文件头）
+// Order in which character files finished writing (used by personal stash page turns / iCloud merge to tell whether a character file was serialized after a given moment): a global monotonic number is taken when a *.d2s opened for writing is closed, or when a file is renamed to *.d2s.
+// Use it only for the order of finished writes, not the order of serialization: the character file is written by another thread, and actions on the server tick can fall between serialization and the write (see the header of dm_vault.c)
+static uint8_t g_fd2s[65536]; static _Atomic uint64_t g_seq, g_d2s_wseq;
+uint64_t dm_seq_next(void) { return atomic_fetch_add(&g_seq, 1) + 1; }
+uint64_t dm_fs_d2s_wseq(void) { return atomic_load(&g_d2s_wseq); }
+static int is_d2s(const char *p) { size_t n = strlen(p); return n > 4 && !strcmp(p + n - 4, ".d2s"); }
 static uint8_t g_fsave[65536];              // fd → 是否在事务式存档挂载上（存档写注入点只数这些） | fd → whether it is on a transactional save mount (the save write injection point only counts these)
 #ifdef __ANDROID__
 static unsigned g_file_mount[65536], g_next_mount_id = 1;
@@ -718,7 +726,7 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
     struct stat st; fstat(fd, &st);
     if (S_ISDIR(st.st_mode)) { close(fd); return RES_PATH_NOT_FOUND; }
     if (fd >= (int)sizeof g_fmode) die("fd 超出表");
-    g_fmode[fd] = (uint8_t)mode; *out = (uint64_t)fd;
+    g_fmode[fd] = (uint8_t)mode; *out = (uint64_t)fd; g_fd2s[fd] = (mode & (MODE_WRITE | MODE_APPEND)) && is_d2s(path);
     if (fd < 4096) g_hm[fd] = NULL;
     if (!(mode & (MODE_WRITE | MODE_APPEND))) dm_data_note_fd(fd, hp);
     { const char *c = strchr(path, ':'); size_t ln = c ? (size_t)(c - path) : 0; g_fsave[fd] = 0;
@@ -823,6 +831,7 @@ HLE_FORCE("_ZN2nn2fs9FlushFileENS0_10FileHandleE", "fsp-srv；Android 文件刷�
 HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void, h_fs_CloseFile, uint64_t h) {
     if (!h) return;   // 游戏在打开失败后也会关（句柄是 0）：原版无事可做 | The game also closes after a failed open (handle 0): nothing to do in the original either
     g_fmode[(int)h & 0xffff] = 0; g_fsave[(int)h & 0xffff] = 0;
+    int d2s = g_fd2s[(int)h & 0xffff]; g_fd2s[(int)h & 0xffff] = 0;
 #ifdef __ANDROID__
     g_file_mount[(int)h & 0xffff] = 0;
 #endif
@@ -832,6 +841,7 @@ HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void,
 #else
     close((int)h);
 #endif
+    if (d2s) atomic_store(&g_d2s_wseq, dm_seq_next());   // 先关再取号：取号时内容已落到文件 | Close first, then take the number: by then the content is in the file
 }
 HLE_FORCE("_ZN2nn2fs15GetFileOpenModeENS0_10FileHandleE", "fsp-srv；打开方式由宿主记录", int, h_fs_GetFileOpenMode, uint64_t h) { return g_fmode[(int)h & 0xffff]; }
 
@@ -878,6 +888,7 @@ HLE_FORCE("_ZN2nn2fs10RenameFileEPKcS2_", "fsp-srv → rename(2)", Result, h_fs_
         if (dm_fs_test_fail("renameback") || rename(hp2, hp)) {   // 回退也失败：文件留在新路径、客体名元数据不对；不退出——在事务存档里就让本事务提交被拒（已提交版本不变，重新克隆即复原） | Rollback also failed: the file stays at the new path with wrong guest-name metadata; do not exit. In a transactional save, this transaction's commit is refused (the committed version is unchanged and recloning restores it)
             LOG("【红】fs 改名元数据失败且回退失败 errno=%d：%s 留在新路径%s", errno, hp2, in_txn_dir(hp2) ? "，本事务存档提交将被拒" : ""); if (in_txn_dir(hp2)) save_poison(e); }
         errno = e; return err_res("rename name", hp2); }
+    if (is_d2s(to)) atomic_store(&g_d2s_wseq, dm_seq_next());
     return RES_OK;
 }
 HLE_FORCE("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", "fsp-srv → stat(2)", Result, h_fs_GetEntryType, int32_t *out, const char *path) {

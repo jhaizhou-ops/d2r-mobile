@@ -109,8 +109,11 @@ static long long live_items(uint64_t G, uint64_t player, cm_list *out) {
 
 // ---- 清单（plan-<仓库名>.bin，小端）：'SWCM' u8 版本 1 u8 0 u16 件数；i64 待还金币；每件 u16 位流长 + 位流
 // ---- List (plan-<stash name>.bin, little endian): 'SWCM' u8 version 1 u8 0 u16 item count; i64 gold to return; each item u16 bitstream length + bitstream
-typedef struct { int idx; uint32_t nid; uint16_t plen; uint8_t pb[VB]; } cm_pend;   // 放进背包、等证明的：清单里第几件（按内容找）、新物品 id、放好后的那一串 | Placed in the inventory, awaiting proof: index in the list (found by content), new item id, the bitstream after placement
+typedef struct { int idx; uint32_t nid; uint16_t plen; uint8_t pb[VB]; uint64_t h0, seen; } cm_pend;   // 放进背包、等证明的：清单里第几件（按内容找）、新物品 id、放好后的那一串、放时已提交几次、放时的上次存盘时刻 [G+0x5800] | Placed into the inventory and awaiting proof: index in the list (found by content), new item id, the bit stream after placing, the character file fingerprint at placement, and the commit at which a different character file was first seen
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+static void plan_prune(const char *wd);
+int dm_ser_state(void); uint64_t dm_fnv64(const uint8_t *d, size_t n);   // dm_pages.c：在途存盘、整份指纹（同个人仓库翻页的「翻页后序列化」证明） | dm_pages.c: save in flight, whole-file fingerprint (same proof of 'serialized after the change' as personal stash page turns)
+static uint64_t char_h(const char *wd);
 static char g_entry[600], g_stash[64];   // 当前在并的条目（相对存档根：_cloudinbox/<条目>）与仓库名；空 = 没有要并的 | Entry currently being merged (relative to the save root: _cloudinbox/<entry>) and stash name; empty = nothing to merge
 static cm_list g_plan; static long long g_gold; static int g_have, g_dirty;   // g_have：清单已算好 / 读到；g_dirty：要随下次提交写盘 | g_have: list computed / read; g_dirty: must be written with the next commit
 static cm_pend g_pend[32]; static int g_npend; static uint64_t g_gold_cno; static struct timespec g_gold_at; static long long g_gold_sent;   // 加了金币的墙钟时刻（证明用）与加了多少 | Wall-clock time when gold was added (for proof) and how much was added
@@ -150,7 +153,7 @@ static int entry_pick(const char *wd) {   // 1 = 找到（g_entry 设好，g_hav
         cm_list l = {0}; long long gold = 0; int r = plan_read(pp, &l, &gold);
         if (r < 0) { LOG("【红】iCloud 并回：清单 %s 坏了，跳过这个条目（文件不动）", pp); continue; }
         if (r == 1) { if (!l.n && gold <= 0) { cl_free(&l); continue; }   // 这一类并完了 | This type is fully merged
-            strlcpy(g_entry, ent, sizeof g_entry); cl_free(&g_plan); g_plan = l; g_gold = gold; g_have = 1; return 1; }
+            strlcpy(g_entry, ent, sizeof g_entry); cl_free(&g_plan); g_plan = l; g_gold = gold; g_have = 1; plan_prune(wd); return 1; }
         char mp[1500]; snprintf(mp, sizeof mp, "%s/%s/mine.pack", wd, ent); pick_ctx c = { g_stash, 0, 0, 0 };
         if (dm_cloud_pack_each(mp, pick_cb, &c) < 0) { LOG("【红】iCloud 并回：%s 读不了，跳过", mp); continue; }
         vpick_ctx vc = { g_stash, 0, 0 }; if (!c.copy) dm_cloud_pack_each(mp, vpick_cb, &vc);
@@ -197,7 +200,7 @@ static int plan_compute(uint64_t G, uint64_t player, const char *wd) {
     if (sm.bad) LOG("【红】iCloud 并回：本机那份有 %d 处拆不开的物品（拆开的照还）", sm.bad);
     if (nvm > 0) LOG("iCloud 并回：本机那份编年史仓库 %d 件、基准 %d 件、云端 %d 件，一起按同一件比", nvm, nvb, nvc);
     cl_free(&mine); cl_free(&base); cl_free(&cloud); free(cm.copy); free(cb.copy); free(vm.copy); free(vb.copy);
-    g_have = 1; g_dirty = 1; return 0;
+    g_have = 1; g_dirty = 1; plan_prune(wd); return 0;
 }
 
 // 测试开关 DM_TEST_KILL_AT=cm:<时刻>：在并回的关键时刻对自己发 SIGKILL（同 kill -9），核「已还」标记与角色档要么一起生效、要么都不生效。
@@ -222,7 +225,7 @@ static int take_one(uint64_t G, uint64_t player, int idx) {
     uint64_t one = nu, ox = 0; ((int (*)(uint64_t, uint64_t, uint64_t *, uint64_t *))(B + 0x6f1940))(G, player, &one, &ox);
     if (!*(uint64_t *)(nd + 0xa0)) { ((void (*)(uint64_t, uint64_t))(B + 0x658be0))(G, nu); LOG("【红】iCloud 并回：清单第 %d 件放进背包没成（格 %u,%u）", idx + 1, fx, fy); return 0; }
     ((void (*)(uint64_t, uint64_t, uint64_t, int, int, int, int, int, uint64_t))(B + 0x642f70))(G, player, nu, 1, 2, 0, 0, 0, (uint64_t)(fx & 0xffff) | (uint64_t)fy << 16);
-    cm_pend *p = &g_pend[g_npend++]; memset(p, 0, sizeof *p); p->idx = idx; p->nid = *(uint32_t *)(nu + 8);
+    cm_pend *p = &g_pend[g_npend++]; memset(p, 0, sizeof *p); p->idx = idx; p->nid = *(uint32_t *)(nu + 8); { const char *wd = dm_save_workdir(); p->h0 = wd && dm_ser_state() == 0 ? char_h(wd) : 0; }
     int len = dm_item_write(B, nu, p->pb); if (len > 0) p->plen = (uint16_t)len; else { p->plen = u->len; memcpy(p->pb, u->bits, u->len); LOG("【红】iCloud 并回：放好后的位流写不出，用清单那串作证据"); }
     LOG("iCloud 并回：清单第 %d 件（%d 字节）放到背包格 %u,%u（新 id %u），等落盘证明", idx + 1, u->len, fx, fy, p->nid);
     cm_kill(1);
@@ -244,20 +247,47 @@ static void add_gold(uint64_t G, uint64_t player) {   // 加到有空的共享�
 static int file_blob(const char *p, uint8_t **d, size_t *n) { FILE *f = fopen(p, "rb"); *d = NULL; *n = 0; if (!f) return 0;
     fseek(f, 0, SEEK_END); long L = ftell(f); fseek(f, 0, SEEK_SET); *d = L > 0 && L < (16 << 20) ? malloc((size_t)L) : NULL; *n = *d ? fread(*d, 1, (size_t)L, f) : 0; fclose(f); return *n > 0; }
 static char g_char[64];
+int dm_save_blobs(const char *wd, const char *stash, dm_blob *out, int max); void dm_blobs_free(dm_blob *bl, int nb);
+int dm_blobs_have(const dm_blob *bl, int nb, const uint8_t *bits, int len); int dm_bits_simple(const uint8_t *bits, int len);
+// 一件还回背包后它可能去的所有地方：所有角色档、共享仓库档、本角色的个人仓库侧文件（.swpage）与百宝囊侧文件（.swpouch）、编年史仓库侧文件（.swvault）。
+// 原先只看本角色的 .d2s：玩家在下一次存盘前就把它拖进共享仓库 / 个人仓库 2–5 页 / 编年史仓库，清单永远划不掉、每次进局再还一份（复制，随后个人仓库同字节的件被去重删掉）
+// Every place an item returned to the inventory may end up: all character files, the shared stash file, this character's personal stash side file (.swpage), pouch side file (.swpouch) and Chronicle vault side file (.swvault).
+// Previously only this character's .d2s was checked: if the player dragged the item into the shared stash / personal stash pages 2–5 / the Chronicle vault before the next save, the list was never crossed off and another copy was returned on every entry (duplication; later the personal stash dedup removed the item with the same bytes)
+static uint64_t char_h(const char *wd) { char p[1400]; uint8_t *d; size_t n; snprintf(p, sizeof p, "%s/%s/%s.d2s", wd, g_char, g_char); uint64_t h = file_blob(p, &d, &n) ? dm_fnv64(d, n) : 0; free(d); return h; }   // 本角色档整份指纹，读不到 0 | Fingerprint of this character's whole file; 0 if it cannot be read
+static int proof_blobs(const char *wd, dm_blob *bl, int max) {
+    int nb = dm_save_blobs(wd, g_stash, bl, max - 3); char p[1400]; uint8_t *d; size_t n;
+    const char *ext[2] = { "swpage", "swpouch" };
+    for (int k = 0; k < 2 && nb < max; k++) { snprintf(p, sizeof p, "%s/%s/%s.%s", wd, g_char, g_char, ext[k]); if (file_blob(p, &d, &n)) { bl[nb].d = d; bl[nb].n = n; nb++; } else free(d); }
+    if (nb < max && g_stash[0]) { snprintf(p, sizeof p, "%s/%s.swvault", wd, g_stash); if (file_blob(p, &d, &n)) { bl[nb].d = d; bl[nb].n = n; nb++; } else free(d); }
+    return nb; }
+// 进局核清单：有自己身份的件（简单物品字节相同认不出是哪一件，不判）已经在上面这些文件里 = 以前还过、证明没划掉，划掉不再还
+// Check the list on entering the game: items with their own identity (simple items with identical bytes cannot be told apart, so they are not judged) already in the files above were returned earlier but never crossed off; cross them off and do not return them again
+static void plan_prune(const char *wd) {
+    dm_blob bl[70]; int nb = proof_blobs(wd, bl, 70), drop = 0;
+    for (int i = 0; i < g_plan.n; ) { cm_item *it = &g_plan.v[i]; if (!dm_bits_simple(it->bits, it->len) && dm_blobs_have(bl, nb, it->bits, it->len)) { cl_del(&g_plan, i); drop++; } else i++; }
+    dm_blobs_free(bl, nb);
+    if (drop) { g_dirty = 1; LOG("iCloud 并回：清单里 %d 件已经在存档里（以前还过、没划掉）→ 划掉不再还，还剩 %d 件", drop, g_plan.n); } }
 static void cm_hook(const char *wd) {
     pthread_mutex_lock(&g_mu);
     if (g_entry[0] && g_have && (g_npend || g_gold_sent || g_dirty)) {
         uint64_t cno = dm_fs_commit_count() + 1; char p[1400];
         if (g_gold_sent && cno - 1 > g_gold_cno) cm_kill(4);   // 测试：加金币之后已有一次提交落盘、这一次还没证明金币 | Test: after gold was added, a commit has already been written to disk, and this one has not yet proven the gold
-        if (g_npend) { uint8_t *d; size_t n; snprintf(p, sizeof p, "%s/%s/%s.d2s", wd, g_char, g_char);
-            if (!file_blob(p, &d, &n)) LOG("【红】iCloud 并回：提交前核对 #%llu —— 读不到 %s 的角色档，这次不判", (unsigned long long)cno, g_char);
-            else for (int i = 0; i < g_npend; ) { cm_pend *q = &g_pend[i]; if (!dm_memfind(d, n, q->pb, q->plen)) { i++; continue; }
+        if (g_npend) { dm_blob bl[70]; int nb = proof_blobs(wd, bl, 70); uint64_t h = char_h(wd);
+            for (int i = 0; i < g_npend; ) { cm_pend *q = &g_pend[i]; int at = 0;
+                for (int k = 0; k < nb && !at; k++) if (dm_memfind(bl[k].d, bl[k].n, q->pb, q->plen)) at = 1;
+                // 证据二（事实）：某次提交的本角色档已不是放件时那份（放件时没有在途的存盘，之后的只能是放好之后序列化的）；再过一次提交
+                // （同一次存盘的共享仓库档也已落盘），这次提交的存档已是放好之后的状态，这件无论挪到哪、卖掉还是扔了都已落盘，再还就是复制
+                // Evidence two (a fact): some commit's character file is no longer the copy present at placement (no save was in flight at placement, so any later one was serialized after placing); after one more commit
+                // (the shared stash file from the same save is on disk too), the committed save reflects the state after placing. Wherever the item went, sold or dropped, that is on disk; returning it again would duplicate it
+                if (!at && !q->seen && q->h0 && h && h != q->h0) q->seen = cno;
+                int fresh = !at && q->seen && cno > q->seen;
+                if (!at && !fresh) { i++; continue; }
                 cm_kill(2);
                 int k = q->idx < g_plan.n ? q->idx : -1;
                 if (k >= 0) { for (int j = 0; j < g_npend; j++) if (g_pend[j].idx == g_plan.n - 1) g_pend[j].idx = k; cl_del(&g_plan, k); }   // 清单删件是「拿最后一件补位」：补位那件的待证明下标跟着改 | Removing an item from the list "moves the last item into the gap": the pending-proof index of the moved item is updated accordingly
-                LOG("iCloud 并回：提交前核对 #%llu —— 新 id %u 已在角色档里 → 从清单划掉，还剩 %d 件", (unsigned long long)cno, q->nid, g_plan.n);
+                LOG("iCloud 并回：提交前核对 #%llu —— 新 id %u %s → 从清单划掉，还剩 %d 件", (unsigned long long)cno, q->nid, at ? "已在存档里" : "放好之后游戏已序列化并落盘", g_plan.n);
                 g_pend[i] = g_pend[--g_npend]; g_dirty = 1; }
-            free(d); }
+            dm_blobs_free(bl, nb); }
         if (g_gold_sent) { char a[1400], b2[1400]; struct stat st; snprintf(a, sizeof a, "%s/%s/%s.d2i", wd, g_stash, g_stash); snprintf(b2, sizeof b2, "%s/%s.d2i", wd, g_stash);
             if ((!stat(a, &st) || !stat(b2, &st)) && (st.st_mtimespec.tv_sec > g_gold_at.tv_sec || (st.st_mtimespec.tv_sec == g_gold_at.tv_sec && st.st_mtimespec.tv_nsec > g_gold_at.tv_nsec))) { g_gold -= g_gold_sent; if (g_gold < 0) g_gold = 0; g_gold_sent = 0; g_dirty = 1;
                 LOG("iCloud 并回：提交前核对 #%llu —— 共享仓库档在加金币之后重写过 → 金币划掉，还剩 %lld", (unsigned long long)cno, g_gold); } }
@@ -293,7 +323,7 @@ void dm_cloudmerge_srv_tick(uint8_t *b, uint64_t G, uint64_t player) {
           LOG("测试 DM_TEST_CM_KEYS：%s 盘上 %d 件（拆不开 %d、金币 %lld、编年史 %d 字节），服务端 %d 件（金币 %lld）；去位置键个数一致 %d 件、不一致 %d 件；原串逐字节相同 %d 件",
               sn, disk.n, s.bad, s.gold, s.chron, live.n, lg, hit, miss, raw);
           free(d); cl_free(&disk); cl_free(&live); } }
-    if (none || !open || !near) return;
+    if (none || !open || !near || dm_ser_state() == 1) return;   // 有在途的存盘：等它写完再放（放件时记下的角色档指纹才是唯一的「放件前那份」），等过 50 拍就照放、不记指纹 | A save is in flight: wait for it to finish writing before placing (only then is the character file fingerprint taken at placement the unique pre-placement copy); after 50 ticks, place anyway without a fingerprint
     static uint32_t last; if (tq - last < 25) return; last = tq;
     pthread_mutex_lock(&g_mu); int saved = 0, full = 0;
     if (!g_have) plan_compute(G, player, wd), saved = 1;

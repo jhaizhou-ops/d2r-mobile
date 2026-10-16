@@ -103,6 +103,7 @@ typedef struct { uint32_t magic,version,stage,nb,na,c1n,ncap,local[3],fout,reser
 typedef struct {
     char key[17]; RHeader h; RBinding b[LIMIT_BINDINGS]; uint32_t attr[32][2],caps[32];
     VBuffer c1; VkShaderModule module; VkDescriptorSetLayout layout; uint64_t fetch_bindings,dref_bindings,large_bindings_seen;
+    uint64_t image_bindings,sampled_bindings,side_effect_bindings;   // 逐 draw 预筛：图像/采样/副作用绑定掩码 | per-draw prefilter masks: image / sampled / side-effect bindings
     uint64_t dyn_bindings; uint32_t dyn_count;   // kind-2 uniform bindings switched to DYNAMIC descriptors | 改成动态描述符的 kind2 统一缓冲绑定
     SBInfo storage_bias;
     BindingPlan *plan;
@@ -1687,6 +1688,14 @@ static VShader *shader_get(const void *control,uint32_t stage) {
         if(((op>=87&&op<=94)||op==96||op==97||op==105||(op>=305&&op<=312)||op==314||op==315)&&n>=4&&words[o+3]<resource_bound)used_sampler|=resource[words[o+3]];
     }
     s->fetch_bindings=extracted&~used_sampler;free(resource);
+    /* 逐 draw 预筛掩码：加载期算一次，热路径只遍历相关绑定。 | Per-draw prefilter masks: computed once at load, hot paths iterate only the relevant bindings. */
+    s->image_bindings=s->sampled_bindings=s->side_effect_bindings=0;
+    for(uint32_t i=0;i<s->h.nb;i++){
+        const RBinding *b=&s->b[i];
+        if(b->kind==4||b->kind==6)s->image_bindings|=1ull<<i;
+        if(b->kind==4)s->sampled_bindings|=1ull<<i;
+        if(((b->kind==3||b->kind==9)&&b->flags)||b->kind==6||b->type==VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)s->side_effect_bindings|=1ull<<i;
+    }
     /* DRIVER resources are the original binding tables, not zero constants.
      * Verify every direct access is a statically known table field before
      * constructing them from live NVN bindings. Reject unknown/dynamic reads.
