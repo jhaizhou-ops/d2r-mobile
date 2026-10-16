@@ -1288,6 +1288,9 @@ static void refresh_compressed_cpu(VTexture *t,const tex_t *source) {
     }
     free(t->cpu_snapshot);t->cpu_snapshot=snapshot;t->upload_stamp=stamp;
     if(changed_regions){tex_dirty(t);G.uploads++;fprintf(stderr,"[nvn-vulkan] BC_STREAM_REFRESH serial=%llu changed_regions=%u gpu_blocks_preserved=1\n",(unsigned long long)t->serial,changed_regions);}
+    {uint64_t refresh_ms=(dm_android_nvn_clock_ns()-started)/1000000ull;
+     if(refresh_ms>=20) fprintf(stderr,"[nvn-vulkan] TEXTURE_REFRESH_SLOW serial=%llu %ux%u bytes=%llu fmt=%#x bc=%u changed=%u ms=%llu\n",
+         (unsigned long long)t->serial,t->source.d.width,t->source.d.height,(unsigned long long)t->source.L.size,t->source.d.format,t->bc_block,changed_regions,(unsigned long long)refresh_ms);}
     G.profile_decode_ns+=dm_android_nvn_clock_ns()-started;
 }
 /* Resident slots never move. Both the descriptor registry and shader plans
@@ -1428,6 +1431,9 @@ upload_existing:
             vkCmdCopyBufferToImage(S.command,staging->b,t->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
         }
         G.profile_decode_ns+=dm_android_nvn_clock_ns()-decode_start;
+        {uint64_t decode_ms=(dm_android_nvn_clock_ns()-decode_start)/1000000ull;
+         if(decode_ms>=20) fprintf(stderr,"[nvn-vulkan] TEXTURE_UPLOAD_SLOW serial=%llu %ux%u levels=%u layers=%u bytes=%llu fmt=%#x bc=%u ms=%llu\n",
+             (unsigned long long)source->serial,source->d.width,source->d.height,source->d.levels,source->L.layers,(unsigned long long)source->L.size,source->d.format,t->bc_block,(unsigned long long)decode_ms);}
         t->cpu_owned=1;t->upload_stamp=stamp;tex_dirty(t); G.uploads++;
     }
     return t;
