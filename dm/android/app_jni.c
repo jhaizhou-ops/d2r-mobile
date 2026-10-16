@@ -6,6 +6,7 @@
 #include "input_backend.h"
 #include <jni.h>
 #include <android/native_window_jni.h>
+#include <dlfcn.h>
 #include <stdatomic.h>
 #include <errno.h>
 #include <limits.h>
@@ -390,6 +391,27 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeSurface(JNIEn
         dm_android_input_config input={.source="Android.SurfaceView.MotionEvent",.panel_width=1280,.panel_height=720,
             .source_ready=input_source_ready,.logical_npad_style=1,.logical_npad_id=0};
         int rc=dm_android_input_bind(&input);if(rc)return rc;atomic_store(&input_bound,1);
+    }
+    if (next) {
+        /* 面板刷新率请求：游戏目标 30/60 帧，120Hz 面板只会白烧电。API 30+ 才有
+         * ANativeWindow_setFrameRate，用 dlsym 取，缺失就跳过。DM_DISPLAY_HZ 可覆盖。
+         * Display refresh hint: the game targets 30/60 fps; a 120 Hz panel just burns power.
+         * ANativeWindow_setFrameRate exists on API 30+ only: resolve it by name and skip if
+         * missing. DM_DISPLAY_HZ overrides (30..120). */
+        static int (*set_frame_rate)(ANativeWindow *, float, int32_t);
+        static int looked_up;
+        if (!looked_up) { looked_up = 1;
+            void *lib = dlopen("libandroid.so", RTLD_NOW|RTLD_LOCAL);
+            if (lib) *(void **)(void *)&set_frame_rate = dlsym(lib, "ANativeWindow_setFrameRate");
+        }
+        if (set_frame_rate) {
+            const char *fr = getenv("DM_DISPLAY_HZ");
+            float target = fr ? strtof(fr, NULL) : 60.0f;
+            if (target >= 30.0f && target <= 120.0f) {
+                int rc = set_frame_rate(next, target, 0);   /* COMPATIBILITY_DEFAULT：让系统自适应 */
+                LOG("DISPLAY_HZ 请求 %.0f Hz -> rc=%d", (double)target, rc);
+            }
+        }
     }
     if (!next || focus!=1) dm_android_input_cancel();
     dm_vk_set_display_hz((int)(hz+0.5f));
