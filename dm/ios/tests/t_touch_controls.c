@@ -37,8 +37,10 @@ static void layout_at(float w, float h) {
     float k = g_tall && h > 440 ? h/440 : 1;   /* 缺省 1；前端开了大画面放大（g_tall）且画面比手机高（iPad 的 16:9 块）时技能钮按画面高度等比放大 | Default 1; when the front end has large-display scale-up on (g_tall) and the display is taller than a phone (the iPad 16:9 block), skill buttons scale up proportionally with display height */
     NEAR(l.target[DM_TC_MAIN].r,40*k,0.001);
     for (int i=DM_TC_SKILL1; i<=DM_TC_SKILL4; ++i) {
-        NEAR(l.target[i].r,26*k,0.001);
-        NEAR(hypotf(l.target[i].x-l.target[0].x,l.target[i].y-l.target[0].y),112*k,0.001);
+        const float x[4]={-76,-76,-30,30},y[4]={28,-32,-78,-78};
+        NEAR(l.target[i].r,24*k,0.001);
+        NEAR(l.target[i].x-l.target[0].x,x[i-DM_TC_SKILL1]*k,0.001);
+        NEAR(l.target[i].y-l.target[0].y,y[i-DM_TC_SKILL1]*k,0.001);
     }
     /* 底部 UI v4 六格（第 0 格难度）：腰带四列 → 第 1–4 格，功能入口 → 第 5 格；效果图 2868×1320 里格心 x = 1090 + 120×格号、y = 1241.5、
        格半宽 57，按屏高换算、以屏宽中线（效果图 1434）居中。
@@ -52,7 +54,7 @@ static void layout_at(float w, float h) {
         NEAR(t.y,1241.5*u,0.001);
         NEAR(t.x,w/2+(1090+120*(c+1)-1434)*u,0.01);
     }
-    /* 回城钮（不在底栏）：技能弧最上面那颗（技能四）正上方的圆钮，同半径、间距 12 | Town portal button (not in the bottom bar): the round button directly above the topmost one on the skill arc (skill four), same radius, gap 12 */
+    /* 回城钮（不在底栏）：技能弧最上面那颗（技能四）正上方的圆钮，半径 26、间距 12 | Town portal button (not in the bottom bar): the round button directly above the topmost one on the skill arc (skill four), radius 26, gap 12 */
     { dm_tc_target p=l.target[DM_TC_PORTAL], s4=l.target[DM_TC_SKILL4];
       NEAR(p.r,26*k,0.001); NEAR(p.x,s4.x,0.001); NEAR(p.y,s4.y-s4.r-12*k-p.r,0.001); }
 }
@@ -117,11 +119,11 @@ static void two_fingers_same_key(void) {
     dm_tc_end(&s,1); CHECK(s.buttons==0);
 }
 static void joystick_deadzone(void) {
-    /* 浮动底盘。667×375（k = 1、安全区 0）手算：静止位 (max(90, 0+60)+30, 375−115) = (120, 260)；起摇杆区 x < 667×0.40 = 266.8 且 y > 375×0.45 = 168.75；
+    /* 浮动底盘。667×375（k = 1、安全区 0）手算：静止位 (max(90, 0+50), 375−70) = (90, 305)；起摇杆区 x < 667×0.40 = 266.8 且 y > 375×0.45 = 168.75；
        夹回只为底盘整圈在屏内：x ≥ 60+8 = 68、y ≤ 375−60−8 = 307（不让安全区）。落在区里起手：圆心 = 落点，位移为零
-       Floating base. Worked by hand for 667x375 (k = 1, safe area 0): rest position (max(90, 0+60)+30, 375-115) = (120, 260); stick-start zone x < 667x0.40 = 266.8 and y > 375x0.45 = 168.75;
+       Floating base. Worked by hand for 667x375 (k = 1, safe area 0): rest position (max(90, 0+50), 375-70) = (90, 305); stick-start zone x < 667x0.40 = 266.8 and y > 375x0.45 = 168.75;
               clamping only keeps the whole base on screen: x >= 60+8 = 68, y <= 375-60-8 = 307 (not respecting the safe area). Starting inside the zone: centre = touch point, zero displacement */
-    dm_tc_state s; dm_tc_init(&s,667,375); NEAR(s.layout.joy_x,120,0.001); NEAR(s.layout.joy_y,260,0.001);
+    dm_tc_state s; dm_tc_init(&s,667,375); NEAR(s.layout.joy_x,90,0.001); NEAR(s.layout.joy_y,305,0.001);
     NEAR(s.layout.joy_zone_r,266.8,0.001); NEAR(s.layout.joy_zone_t,168.75,0.001); NEAR(s.layout.joy_min_x,68,0.001); NEAR(s.layout.joy_max_y,307,0.001);
     dm_tc_begin(&s,0,90,275);
     CHECK(s.joy_slot==0); NEAR(s.joy_origin_x,90,0); NEAR(s.joy_origin_y,275,0);
@@ -134,7 +136,7 @@ static void joystick_deadzone(void) {
     dm_tc_begin(&s,0,200,200); CHECK(s.joy_slot==0); NEAR(s.joy_origin_x,200,0); NEAR(s.joy_origin_y,200,0); CHECK(s.lx==0 && s.ly==0);
     dm_tc_move(&s,0,600,200); CHECK(s.lx==DM_STICK_MAX && s.ly==0); NEAR(s.joy_origin_x,200,0);
     dm_tc_move(&s,0,200,25); CHECK(s.lx==0 && s.ly==DM_STICK_MAX); NEAR(s.joy_origin_y,200,0);
-    dm_tc_end(&s,0); CHECK(s.joy_slot==-1 && s.lx==0 && s.ly==0); NEAR(s.layout.joy_x,120,0.001);
+    dm_tc_end(&s,0); CHECK(s.joy_slot==-1 && s.lx==0 && s.ly==0); NEAR(s.layout.joy_x,90,0.001);
     /* 贴左下角落指 (10,370)：底盘画在夹回后的 (68,307)，轴值按手指相对落点算——落指那一下为 0；向右挪 6 点仍在死区；7 点起出值 (7−6)/54 × 32767 = 607；
        向右拖满 60 点 = 向右满偏（不是按底盘圆心算出来的「左下」）。底盘不跟手走
        touching down against the bottom-left corner (10,370): the base is drawn at the clamped (68,307), and the axes are computed from the finger relative to the touch point - 0 on touch-down; moving 6 points right is still inside the dead zone; from 7 points the output is (7-6)/54 x 32767 = 607;
@@ -453,24 +455,25 @@ static void pointer_pulse_queue(void) {
     CHECK(!dm_tc_pulse_resume(&s)); CHECK(dm_tc_pulse_end(&s,s.pulse_epoch)); CHECK(!dm_tc_pulse_pending(&s));
 }
 
-/* 安全区内缩：956×440、左右各 62 点。期望手算：主键右沿 = 956−62 = 894 → 主键中心 x = 854（原 900，移 46）；弧上四键与换组键同移 46；
-   摇杆中心 x = 62+60 = 122（原 90）；y 都不变。设回 0 后恢复原布局。
-   Safe area inset: 956×440, 62 points on each of left and right. Expected values hand-computed: main button right edge = 956−62 = 894 → main button center x = 854 (was 900, moved 46); the four buttons on the arc and the set-switch button move the same 46;
-      stick center x = 62+60 = 122 (was 90); all y unchanged. After setting back to 0 the original layout is restored. */
+/* 956×440、左右安全区 62：回城钮右沿 894 → 主钮 x=838；整组左移 62。
+   摇杆静止中心 (112,370)，浮动夹回范围仍为 (68,372)。
+   At 956×440 with 62-point side insets: portal right edge 894 → primary x=838; the cluster moves left by 62.
+   The idle stick center is (112,370); floating clamp bounds remain (68,372). */
 static void safe_insets(void) {
     dm_tc_layout a, b; dm_tc_layout_make(&a, 956, 440);
     dm_tc_set_safe_insets(62, 62); dm_tc_layout_make(&b, 956, 440); dm_tc_set_safe_insets(0, 0);
-    NEAR(a.target[DM_TC_MAIN].x, 900, 0.001); NEAR(b.target[DM_TC_MAIN].x, 854, 0.001); NEAR(b.target[DM_TC_MAIN].y, a.target[DM_TC_MAIN].y, 0.001);
-    for (int i = DM_TC_SKILL1; i <= DM_TC_SKILL4; ++i) { NEAR(a.target[i].x - b.target[i].x, 46, 0.001); NEAR(a.target[i].y, b.target[i].y, 0.001); CHECK(b.target[i].x + b.target[i].r <= 894.001f); }
-    NEAR(a.swap.x - b.swap.x, 46, 0.001); NEAR(a.joy_x, 120, 0.001); NEAR(b.joy_x, 152, 0.001); NEAR(b.joy_min_x, 68, 0.001); NEAR(a.joy_y, 325, 0.001); NEAR(a.joy_max_y, 372, 0.001);   /* 静止位 max(90, 安全区 + 60) + 30、440 − 115（让安全区）；夹回界 60 + 8、440 − 60 − 8（不让安全区） | rest position max(90, safe area + 60) + 30, 440 - 115 (respecting the safe area); clamp bounds 60 + 8, 440 - 60 - 8 (not respecting the safe area) */
+    NEAR(a.target[DM_TC_MAIN].x, 900, 0.001); NEAR(b.target[DM_TC_MAIN].x, 838, 0.001); NEAR(b.target[DM_TC_MAIN].y, a.target[DM_TC_MAIN].y, 0.001);
+    for (int i = DM_TC_SKILL1; i <= DM_TC_SKILL4; ++i) { NEAR(a.target[i].x - b.target[i].x, 62, 0.001); NEAR(a.target[i].y, b.target[i].y, 0.001); CHECK(b.target[i].x + b.target[i].r <= 894.001f); }
+    NEAR(a.swap.x - b.swap.x, 62, 0.001); NEAR(a.joy_x, 90, 0.001); NEAR(b.joy_x, 112, 0.001); NEAR(b.joy_min_x, 68, 0.001); NEAR(a.joy_y, 370, 0.001); NEAR(a.joy_max_y, 372, 0.001);
     dm_tc_layout c; dm_tc_layout_make(&c, 956, 440); NEAR(c.target[DM_TC_MAIN].x, 900, 0.001);
 }
-/* 换组键：956×440 下主键中心 (900,358)，换组键在技能一正下方 (900−112, 358+52) = (788,410)，半径 22；不与技能一（中心 (788,358) 半径 26）重叠、不出屏 | Set-switch button: at 956×440 the main button center is (900,358), the set-switch button is directly below skill one at (900−112, 358+52) = (788,410), radius 22; it does not overlap skill one (center (788,358), radius 26) and does not go off screen */
+/* 换组入口位于技能簇左上角 (788,246)，不压技能或底栏。
+   The set switch is above-left of the cluster at (788,246), clear of skills and the bottom bar. */
 static void swap_key(void) {
     dm_tc_layout l; dm_tc_layout_make(&l, 956, 440);
-    NEAR(l.swap.x, 788, 0.001); NEAR(l.swap.y, 410, 0.001); NEAR(l.swap.r, 22, 0.001);
-    CHECK(l.swap.y - l.swap.r >= l.target[DM_TC_SKILL1].y + l.target[DM_TC_SKILL1].r); CHECK(l.swap.y + l.swap.r <= 440);
-    CHECK(dm_tc_hit(&l, 788, 410) == DM_TC_SWAP);
+    NEAR(l.swap.x, 788, 0.001); NEAR(l.swap.y, 246, 0.001); NEAR(l.swap.r, 22, 0.001);
+    CHECK(l.swap.y+l.swap.r < l.target[DM_TC_SKILL2].y-l.target[DM_TC_SKILL2].r); CHECK(l.swap.y + l.swap.r <= 440);
+    CHECK(dm_tc_hit(&l, 788, 246) == DM_TC_SWAP);
 }
 /* 腰带展开手势（956×440，u = 440/1320 = 1/3：腰带第 1 列格心 x = 478 + (1210−1434)/3 = 403.33、y = 1241.5/3 = 413.83）。
    （腰带一律松手后等过双击窗才喝。）只有 1 排：按下不发键、松手过窗 → 一个脉冲。4 排：按下不发键；松手没滑 → 过窗一个脉冲；上滑过 24 点 → 请求 1（展开）且不发键；下滑 → 请求 2。

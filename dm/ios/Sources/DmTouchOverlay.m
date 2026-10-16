@@ -1,5 +1,5 @@
 #import "DmTouchOverlay.h"
-#include "DmTouchButtonArt.h"
+#include "DmTouchControlArt.h"
 #include <math.h>
 #include <TargetConditionals.h>
 #include "dm_touch_native_art.h"
@@ -39,14 +39,17 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     return g;
 }
 @implementation DmTouchOverlay {
-    UIImage *_circle, *_joy, *_map, *_menu, *_nativeAtlases[DM_TA_ATLASES], *_silAtlases[DM_TA_ATLASES];   // _sil：同帧位的银色剪影图集（gen_hud_v4.py） | _sil: silver silhouette atlas at the same frame positions (gen_hud_v4.py)
+    UIImage *_circle, *_socket, *_map, *_menu, *_nativeAtlases[DM_TA_ATLASES], *_silAtlases[DM_TA_ATLASES];   // _sil：同帧位的银色剪影图集（gen_hud_v4.py） | _sil: silver silhouette atlas at the same frame positions (gen_hud_v4.py)
     NSMutableDictionary<NSString *,UIImage *> *_glyphFrames, *_buttonFrames;
     dm_ta_glyph _nativeVisualGlyphs[5];
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     self.backgroundColor = UIColor.clearColor; self.opaque = NO; self.userInteractionEnabled = NO;
-    _circle=[UIImage imageNamed:@"dm_native_circle"]; _joy=[UIImage imageNamed:@"dm_touch_joy"];
+    _circle=[UIImage imageNamed:@"dm_native_circle"];
+    // 通用按钮材质为新生成的美术，技能图案仍来自玩家自己的游戏文件。
+    // The generic socket texture is newly generated artwork; skill glyphs still come from the player's own game files.
+    _socket=[UIImage imageNamed:@"dm_mobile_socket"];
     _map=[UIImage imageNamed:@"dm_native_map"]; _menu=[UIImage imageNamed:@"dm_native_menu"];
     _glyphFrames=[NSMutableDictionary dictionary]; _buttonFrames=[NSMutableDictionary dictionary];
     for(int i=0;i<DM_TA_ATLASES;i++) _nativeAtlases[i]=[UIImage imageNamed:[NSString stringWithUTF8String:dm_ta_atlases[i].asset]];
@@ -78,27 +81,52 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     if(g.status!=DM_TA_GLYPH)return nil;
     int frame=held?g.pressed_frame:g.normal_frame;dm_ta_frame f;
     if(!dm_ta_frame_at(g.atlas,frame,&f))return nil;
-    UIImage *atlas=_nativeAtlases[g.atlas]?:_silAtlases[g.atlas];
-    // 完整技能美术占满内槽；裁掉原方形按钮的外边框，避免出现两层不一致的边框。
-    // Full skill artwork fills the socket; crop the original square button border to avoid mismatched nested frames.
-    CGFloat trim=round(f.width*.08);
-    return [self frameImage:atlas key:[NSString stringWithFormat:@"socket:%d:%d",g.atlas,frame] rect:CGRectInset(CGRectMake(f.x,f.y,f.width,f.height),trim,trim)];
+    UIImage *sil=_silAtlases[g.atlas],*atlas=sil?:_nativeAtlases[g.atlas];
+    CGFloat trim=sil?0:round(f.width*.08);
+    UIImage *glyph=[self frameImage:atlas key:[NSString stringWithFormat:@"socket:%d:%d",g.atlas,frame] rect:CGRectInset(CGRectMake(f.x,f.y,f.width,f.height),trim,trim)];
+    if(!sil || !glyph) return glyph;
+    // 保留原版技能轮廓，用低饱和职业色衬托；这只是外观，不表示冷却、法力或可施放状态。
+    // Preserve original skill silhouettes with muted class tones; purely visual, never a cooldown, mana or castability signal.
+    NSString *key=[NSString stringWithFormat:@"tinted:%d:%d",g.atlas,frame];UIImage *image=_glyphFrames[key];
+    if(!image) {
+        UIGraphicsImageRendererFormat *format=[UIGraphicsImageRendererFormat preferredFormat];format.opaque=NO;format.scale=glyph.scale;
+        image=[[[UIGraphicsImageRenderer alloc] initWithSize:glyph.size format:format] imageWithActions:^(UIGraphicsImageRendererContext *ctx){
+            CGRect r=(CGRect){CGPointZero,glyph.size};[glyph drawInRect:r];dm_skill_tint(ctx.CGContext,r,g.atlas);
+        }];_glyphFrames[key]=image;
+    }
+    return image;
 }
-// 缓存有限尺寸与状态的槽框，避免每帧创建渐变；图标仍按游戏快照绘制。
-// Cache slot frames by size and state to avoid creating gradients every frame; icons still follow the game snapshot.
-- (void)drawButton:(CGRect)rect held:(BOOL)held empty:(BOOL)empty primary:(BOOL)primary {
-    NSString *key=[NSString stringWithFormat:@"%.3f:%.1f:%d:%d:%d",rect.size.width,self.contentScaleFactor,held,empty,primary];
+// 缓存控件的静态底图；移动时只换摇杆头坐标，不在每帧创建渐变。
+// Cache static control art; movement only changes the thumb position, without creating gradients every frame.
+- (UIImage *)controlArt:(NSString *)key size:(CGSize)size draw:(void (^)(CGContextRef))draw {
+    key=[NSString stringWithFormat:@"%@:%.3f:%.1f",key,size.width,self.contentScaleFactor];
     UIImage *image=_buttonFrames[key];
     if(!image) {
-        UIGraphicsImageRendererFormat *format=[UIGraphicsImageRendererFormat preferredFormat]; format.opaque=NO; format.scale=self.contentScaleFactor;
-        image=[[[UIGraphicsImageRenderer alloc] initWithSize:rect.size format:format] imageWithActions:^(UIGraphicsImageRendererContext *ctx){
-            dm_button_draw(ctx.CGContext,(CGRect){CGPointZero,rect.size},held,empty,primary);
-        }];
-        // 旋转 / 窗口缩放可产生任意尺寸，限制缓存数量。
-        // Rotation / window resizing can produce arbitrary sizes; bound the cache count.
-        if(_buttonFrames.count>=64) [_buttonFrames removeAllObjects];
-        _buttonFrames[key]=image;
+        UIGraphicsImageRendererFormat *format=[UIGraphicsImageRendererFormat preferredFormat];format.opaque=NO;format.scale=self.contentScaleFactor;
+        image=[[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *ctx){draw(ctx.CGContext);}];
+        // 限制旋转 / 窗口缩放产生的缓存数量。
+        // Bound the cache count produced by rotation / window resizing.
+        if(_buttonFrames.count>=64) [_buttonFrames removeAllObjects];_buttonFrames[key]=image;
     }
+    return image;
+}
+- (void)drawButton:(CGRect)rect held:(BOOL)held empty:(BOOL)empty primary:(BOOL)primary {
+    NSString *key=[NSString stringWithFormat:@"skill:%d:%d:%d",held,empty,primary];
+    UIImage *image=[self controlArt:key size:rect.size draw:^(CGContextRef c){
+        CGRect r=(CGRect){CGPointZero,rect.size};
+        if(self->_socket && !empty) {
+            [self->_socket drawInRect:r];
+            if(held) { CGContextSetRGBStrokeColor(c,.54,.83,.76,.9);CGContextSetLineWidth(c,r.size.width*.015);CGContextStrokeEllipseInRect(c,CGRectInset(r,r.size.width*.052,r.size.width*.052)); }
+        } else dm_button_draw(c,r,held,empty,primary);
+    }];
+    [image drawInRect:rect];
+}
+- (void)drawJoystickPart:(CGRect)rect base:(BOOL)base active:(BOOL)active {
+    NSString *key=[NSString stringWithFormat:@"stick:%d:%d",base,active];
+    UIImage *image=[self controlArt:key size:rect.size draw:^(CGContextRef c){
+        if(base) dm_joystick_base_draw(c,(CGRect){CGPointZero,rect.size},active);
+        else dm_joystick_thumb_draw(c,(CGRect){CGPointZero,rect.size},active);
+    }];
     [image drawInRect:rect];
 }
 - (void)setNavigationMode:(BOOL)n { _navigationMode = n; [self setNeedsDisplay]; }
@@ -231,13 +259,13 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         if(skillKey) {   // 技能美术居中；无图的未知槽保留原标签回退 | Center skill artwork; unknown slots with no image keep the existing label fallback
             BOOL bare=icon!=nil;   // 有图标的技能钮不写字（最大的钮是「主技能 / 交互」、可绑任意技能，钮上只画所绑技能的图标，不写「攻击」）：图标放大并居中。取不到图标时主钮仍落回「攻击」字样 | skill buttons that have an icon carry no text (the largest button is "main skill / interact" and can be bound to any skill, so the button draws only the bound skill's icon and does not say 「攻击」(Attack)): the icon is enlarged and centered. When no icon can be obtained the main button still falls back to the 「攻击」(Attack) text
             BOOL spent=(ssKind&2) && ssCharges<=0;   // 充能用完：钮变灰（灰底上按亮度贴图标 = 去色），按下也不换武器（dm_actions.c） | charges used up: the button turns gray (the icon applied by luminance on a gray base = desaturated), and pressing does not swap weapons either (dm_actions.c)
-            if(icon) { CGFloat size=b.size.width*(bare?.82:.68); CGSize in_=icon.size; CGFloat fit=size/MAX(in_.width,in_.height);
+            if(icon) { CGFloat size=b.size.width*(bare?.76:.68); CGSize in_=icon.size; CGFloat fit=size/MAX(in_.width,in_.height);
                 CGRect ir=CGRectMake(t->x-in_.width*fit/2,t->y-(bare?0:t->r*.12)-in_.height*fit/2,in_.width*fit,in_.height*fit);
                 CGContextSaveGState(c); CGContextAddEllipseInRect(c,CGRectInset(b,b.size.width*.09,b.size.height*.09)); CGContextClip(c);
                 if(spent) { CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:.30 alpha:1].CGColor); CGContextFillEllipseInRect(c,CGRectInset(b,b.size.width*.08,b.size.height*.08));
                     [icon drawInRect:ir blendMode:kCGBlendModeLuminosity alpha:.55];
                     CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:0 alpha:.35].CGColor); CGContextFillEllipseInRect(c,CGRectInset(b,b.size.width*.06,b.size.height*.06)); }
-                else [icon drawInRect:ir blendMode:kCGBlendModeNormal alpha:held?1:.94]; CGContextRestoreGState(c); }   // 图标保持清晰，只有空槽框淡出 | Keep icons clear; only empty slot frames fade
+                else { CGContextSetShadowWithColor(c,CGSizeZero,held?t->r*.10:t->r*.055,[UIColor colorWithRed:.43 green:.64 blue:.58 alpha:.32].CGColor); [icon drawInRect:ir blendMode:kCGBlendModeNormal alpha:held?1:.94]; } CGContextRestoreGState(c); }   // 图标保持清晰，只有空槽框淡出 | Keep icons clear; only empty slot frames fade
             // 副手组技能角标：右上「Ⅱ」= 技能在另一组武器上，按下先换武器；右下剩余次数 = 充能技能，字用腰带药水件数那套（ui.json badge）
             // Secondary weapon set skill badges: top right "Ⅱ" = the skill is on the other weapon set, pressing swaps weapons first; bottom right remaining count = charged skill, the text uses the same style as the belt potion count (ui.json badge)
             if(ssKind&1) { CGFloat br=t->r*.30, bx=t->x+t->r*.74, by=t->y-t->r*.74; CGRect bb=CGRectMake(bx-br,by-br,br*2,br*2), lw2=CGRectInset(bb,MAX(1,br*.08),MAX(1,br*.08));
@@ -278,15 +306,11 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     CGPoint o = moving ? CGPointMake(s->joy_origin_x,s->joy_origin_y) : CGPointMake(l->joy_x,l->joy_y);
     CGFloat radius=l->joy_radius;
     CGRect base=CGRectMake(o.x-radius,o.y-radius,radius*2,radius*2);
-    CGContextSetLineWidth(c,k); CGContextSetStrokeColorWithColor(c,bronze(moving ?.32:.12).CGColor); CGContextStrokeEllipseInRect(c,base);
+    [self drawJoystickPart:base base:YES active:moving];
     CGFloat dx=s->lx/32767.0*radius,dy=-s->ly/32767.0*radius;
-    CGRect thumb=CGRectMake(o.x+dx-23*k,o.y+dy-23*k,46*k,46*k);
-    if (_joy) [_joy drawInRect:thumb blendMode:kCGBlendModeNormal alpha:moving ?.8:.18];
-    if (moving && (s->lx || s->ly)) {
-        CGFloat angle=atan2(dy,dx);
-        CGContextSetStrokeColorWithColor(c,bronze(.7).CGColor); CGContextSetLineWidth(c,2*k);
-        CGContextAddArc(c,o.x,o.y,radius+3*k,angle-M_PI/6,angle+M_PI/6,0); CGContextStrokePath(c);
-    }
+    CGRect thumb=CGRectMake(o.x+dx-21*k,o.y+dy-21*k,42*k,42*k);
+    [self drawJoystickPart:thumb base:NO active:moving];
+
 }
 - (NSDictionary *)controlMetadata {
     const dm_tc_state *s=self.controls; if (!s) return @{};
@@ -305,7 +329,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
             BOOL held=button_held(s,i);
             BOOL drawn=!self.navigationMode && [self skillImage:g held:held]!=nil;
             NSString *status=self.navigationMode?@"navigation_label":(g.status==DM_TA_EMPTY?@"empty_slot":(drawn?@"current_skill":@"empty_unknown"));
-            entry[@"currentSkill"]=@{@"schema":@"dm-current-skill-visual-1",@"status":status,@"reason":[NSString stringWithUTF8String:g.reason],@"raw_skill_id":@(g.raw_skill_id),@"slot":@(g.slot),@"effective_slot":@(g.effective_slot),@"atlas":@(g.atlas),@"normal_frame":@(g.normal_frame),@"pressed_frame":@(g.pressed_frame),@"display_frame":@(held?g.pressed_frame:g.normal_frame),@"glyph_drawn":@(drawn),@"icon_diameter_ratio":@(.91*.82),@"visual_rect_pt":@[@(dm_button_rect(t->x,t->y,t->r).origin.x),@(dm_button_rect(t->x,t->y,t->r).origin.y),@(t->r*1.82),@(t->r*1.82)]};
+            entry[@"currentSkill"]=@{@"schema":@"dm-current-skill-visual-1",@"status":status,@"reason":[NSString stringWithUTF8String:g.reason],@"raw_skill_id":@(g.raw_skill_id),@"slot":@(g.slot),@"effective_slot":@(g.effective_slot),@"atlas":@(g.atlas),@"normal_frame":@(g.normal_frame),@"pressed_frame":@(g.pressed_frame),@"display_frame":@(held?g.pressed_frame:g.normal_frame),@"glyph_drawn":@(drawn),@"icon_diameter_ratio":@(.94*.76),@"visual_rect_pt":@[@(dm_button_rect(t->x,t->y,t->r).origin.x),@(dm_button_rect(t->x,t->y,t->r).origin.y),@(t->r*1.88),@(t->r*1.88)]};
         }
         [a addObject:entry];
     }
@@ -313,7 +337,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     BOOL moving=s->joy_slot>=0; CGFloat k=s->layout.joy_radius/60;
     CGFloat jx=moving?s->joy_origin_x:s->layout.joy_x,jy=moving?s->joy_origin_y:s->layout.joy_y,r=s->layout.joy_radius;
     CGFloat tx=jx+s->lx/32767.0*r,ty=jy-s->ly/32767.0*r;
-    NSDictionary *joystick=@{@"id":@"joystick",@"active":@(moving),@"base_rect_pt":@[@(jx-r),@(jy-r),@(2*r),@(2*r)],@"thumb_rect_pt":@[@(tx-23*k),@(ty-23*k),@(46*k),@(46*k)]};
+    NSDictionary *joystick=@{@"id":@"joystick",@"active":@(moving),@"base_rect_pt":@[@(jx-r),@(jy-r),@(2*r),@(2*r)],@"thumb_rect_pt":@[@(tx-21*k),@(ty-21*k),@(42*k),@(42*k)]};
     dm_tg_snapshot native=self.nativeMapping;
     NSMutableArray *mapping=[NSMutableArray array],*ids=[NSMutableArray array];
     for(int i=0;i<DM_TG_FACETS;i++) [mapping addObject:@{@"logical":@(native.mapping[i].logical),@"normal":@(native.mapping[i].normal),@"alt":@(native.mapping[i].alt)}];
@@ -323,9 +347,9 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         @"portal":@{@"valid":@(native.portal.valid),@"slot":@(native.portal.slot),@"raw_skill_id":@(native.portal.raw_skill_id),@"buttons":@(native.portal.buttons)}};
     // capture版本与布局版本分开；期望state由测试输入提供，不用visible反推。
     // The capture version and the layout version are separate; the expected state is supplied by the test input, not inferred back from visible.
-    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
+    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"control_layout":@"immortal_compact_v1",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
         @"layout_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"geometry_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"binding_protocol_sha256":[NSString stringWithUTF8String:dm_ta_binding_sha],
-        @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"button_style":@"forged_socket_v2",@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
+        @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"button_style":@"immortal_reference_v4",@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
         @"source":TARGET_OS_SIMULATOR?@"uikit_simulator_overlay":@"uikit_device_overlay",
         @"right_aim":@{@"rx":@(s->rx),@"ry":@(s->ry),@"owner_slot":@(s->aim_slot),@"map_cancel_active":@(s->map_cancel_active),@"navigation_suppressed":@(s->navigation_mode),@"mapping":@"UIKit dx/r, -dy/r; independent clamped SDK axes"},
         @"state":self.navigationMode?@"navigation":@"game",@"joystick":joystick,@"coordinate_space":@"UIKit points",@"view_size_pt":@[@(s->layout.width),@(s->layout.height)],@"navigation":@(self.navigationMode),@"controls":a,@"portal_request":@{@"gesture_epoch":@(s->gesture_epoch),@"binding_identity":@(s->portal_binding_identity),@"scene_epoch":@(s->portal_scene_epoch),@"phase":@(s->portal_phase),@"pending":@(s->portal_pending)},@"portal_binding_verified":@NO,@"game_hud_relayout_verified":@NO};
