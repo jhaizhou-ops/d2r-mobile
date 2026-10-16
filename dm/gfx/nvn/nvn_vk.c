@@ -236,11 +236,13 @@ static struct {
     uint64_t profile_rp_chunk_ns,profile_rp_scan_ns,profile_rp_create_ns,profile_tail_idx_ns;   // 细分：分块提交 / 键构建+扫描 / 创建对象 / 索引读
     uint64_t profile_chunk_end_ns,profile_chunk_submit_ns,profile_chunk_begin_ns;   // 分块提交三分：vkEndCommandBuffer / vkQueueSubmit / 新缓冲开始+状态重置
     uint64_t profile_query_breaks,profile_query_preresets,profile_pass_splits;
+    uint64_t profile_counter_resets,profile_counter_reports,profile_counter_ops;
+    uint64_t profile_full_clears,profile_scissor_clears;
     uint64_t pass_end_draws[8192];
     int diag_barrier,diag_loadstore,disable_barrier_elision,disable_sample_copy_cache,barrier_stats,pass_timing;
     uint32_t npacc;
 
-    PassAcc pacc[128];char skip_ps[17];struct{char key[17];uint32_t draws;}hot[64];uint32_t nhot;int disable_desc_cache,disable_control_cache,diag_no_occlusion,diag_img_usage,barrier_pass_elide,pass_side_effects,diag_no_pass_deps,precise_sync,draw_store,xition_vertex;uint64_t profile_wait_elided,profile_hz_barriers,hz_count[8];int hz_diag,chunk_draws,chunk_log,profile_detail,seg_index,diag_skip_draws,diag_skip_xfer,diag_skip_class,diag_shape,enable_narrow_access,diag_fixed_desc,disable_wait_elision,want_cached,wb_stage_enabled,wb_stage_type,disable_setrt_skip,disable_subres,disable_pass_reuse,disable_cpu_uniform_snapshot,query_pre_reset,pass_split_draws;uint64_t setrt_total,setrt_same;char pass_desc[96],last_ps[20],last_uses[100];int last_count,last_barrier_bits;uint64_t pass_draws0;uint64_t gts_busy[4],gts_span[4],gts_gap[4],gts_chunks[4],pres_acq_ns,pres_fence_ns,pres_idle_ns,pres_submit_ns,seg_begin_ns,seg_record_ns[4],seg_wait_ns[4],seg_tail_ns[4],seg_draws[4],seg_chunks[4];uint64_t profile_chunks;uint32_t barrier_bits[256],barrier_kept[256],barrier_nopass,barrier_sidefx;uint32_t barrier_sites[4096],pass_end_sites[8192];
+    PassAcc pacc[128];char skip_ps[17];struct{char key[17];uint32_t draws;}hot[64];uint32_t nhot;int disable_desc_cache,disable_control_cache,diag_no_occlusion,diag_img_usage,barrier_pass_elide,pass_side_effects,diag_no_pass_deps,precise_sync,draw_store,xition_vertex;uint64_t profile_wait_elided,profile_hz_barriers,hz_count[8];int hz_diag,chunk_draws,chunk_log,profile_detail,seg_index,diag_skip_draws,diag_skip_xfer,diag_skip_class,diag_shape,enable_narrow_access,diag_fixed_desc,disable_wait_elision,want_cached,wb_stage_enabled,wb_stage_type,disable_setrt_skip,disable_subres,disable_pass_reuse,disable_cpu_uniform_snapshot,query_pre_reset,pass_split_draws,diag_imprecise_occlusion;uint64_t setrt_total,setrt_same;char pass_desc[96],last_ps[20],last_uses[100];int last_count,last_barrier_bits;uint64_t pass_draws0;uint64_t gts_busy[4],gts_span[4],gts_gap[4],gts_chunks[4],pres_acq_ns,pres_fence_ns,pres_idle_ns,pres_submit_ns,seg_begin_ns,seg_record_ns[4],seg_wait_ns[4],seg_tail_ns[4],seg_draws[4],seg_chunks[4];uint64_t profile_chunks;uint32_t barrier_bits[256],barrier_kept[256],barrier_nopass,barrier_sidefx;uint32_t barrier_sites[4096],pass_end_sites[8192];
     ControlCache *control_cache;
     uint64_t profile_desc_hits,profile_desc_misses,profile_control_hits,profile_control_misses,profile_control_evict,profile_control_changed,profile_barriers_skipped,profile_sample_copy_hits,profile_sample_copy_misses;
     uint64_t profile_passes,profile_barriers,profile_uniform_updates,profile_cpu_snapshots,profile_gpu_copies,profile_snapshot_reuses;char trace_shader[17];
@@ -1048,7 +1050,7 @@ void mtl_sub_event(volatile uint32_t *addr,uint32_t mode,uint32_t value) {
 }
 static void counter_op(uint32_t kind,uint32_t query,uint64_t address) {
     if(S.ncounter==LIMIT_WRITES)die("counter operation limit",S.ncounter);
-    S.counter_ops[S.ncounter++]=(CounterOp){kind,query,address};
+    S.counter_ops[S.ncounter++]=(CounterOp){kind,query,address};G.profile_counter_ops++;
 }
 void mtl_sub_counter(uint64_t addr,uint32_t type) {
     if(type!=NVN_COUNTER_TYPE_SAMPLES_PASSED && type!=NVN_COUNTER_TYPE_TIMESTAMP && type!=NVN_COUNTER_TYPE_TIMESTAMP_TOP)
@@ -1068,7 +1070,7 @@ static CommitInfo commit_submit(void) {
     if(getenv("DM_RESOURCE_STATS"))fprintf(stderr,"[nvn-vulkan] QUERY_RESET_STATS enabled=%d occ_reset=%u time_reset=%u pass_reset=%u occ_used=%u time_used=%u pass_used=%u\n",G.enable_query_reset_range,S.occlusion_reset_count,S.timestamp_reset_count,S.pass_reset_count,S.nocc,S.ntime,S.npt*2);
     /* Observed candidates only: resource lifetime and mapped-pool hazards have
      * not been solved. Internal counter reset/add operations are not reports. */
-    unsigned reports=0;for(int i=0;i<S.ncounter;i++)if(S.counter_ops[i].kind==2 || S.counter_ops[i].kind==3)reports++;
+    unsigned reports=0;for(int i=0;i<S.ncounter;i++)if(S.counter_ops[i].kind==2 || S.counter_ops[i].kind==3)reports++;G.profile_counter_reports+=reports;
     int traced=G.trace_frame || S.ntrace_captures;
     int candidate=!S.nwrites && !S.nevents && !reports && !traced && !S.submission_cpu_readback && !S.submission_event_wait;
     wb_stage_record();
@@ -2821,7 +2823,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     if(S.active_occlusion==UINT32_MAX&&!G.diag_no_occlusion){
         if(!G.precise_occlusion || S.nocc==LIMIT_WRITES)die("precise occlusion query support/count",S.nocc);
         S.active_occlusion=S.nocc++;G.profile_occlusion_queries++;
-        vkCmdBeginQuery(S.command,S.occlusion,S.active_occlusion,VK_QUERY_CONTROL_PRECISE_BIT);
+        vkCmdBeginQuery(S.command,S.occlusion,S.active_occlusion,G.diag_imprecise_occlusion?0:VK_QUERY_CONTROL_PRECISE_BIT);
     }
     G.profile_tail_state_ns+=prof_now()-tail_s2;uint64_t tail_s3=prof_now();
     uint32_t query=S.active_occlusion;
@@ -3050,10 +3052,10 @@ static void clear_color(const p_clear_color *p) {
         if((unsigned)s.offset.x>=w || (unsigned)s.offset.y>=h)return;
         if(s.extent.width>w-s.offset.x)s.extent.width=w-s.offset.x;if(s.extent.height>h-s.offset.y)s.extent.height=h-s.offset.y;
         render_begin();VkClearAttachment a={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.colorAttachment=p->index};memcpy(a.clearValue.color.float32,p->rgba,16);
-        VkClearRect r={s,0,1};vkCmdClearAttachments(S.command,1,&a,1,&r);t->cpu_owned=0;tex_dirty(t);return;
+        VkClearRect r={s,0,1};vkCmdClearAttachments(S.command,1,&a,1,&r);t->cpu_owned=0;tex_dirty(t);G.profile_scissor_clears++;return;
     }
     all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);VkClearColorValue color;memcpy(color.float32,p->rgba,sizeof(p->rgba));
-    vkCmdClearColorImage(S.command,t->image,t->layout,&color,1,&range);t->cpu_owned=0;tex_dirty(t);
+    vkCmdClearColorImage(S.command,t->image,t->layout,&color,1,&range);t->cpu_owned=0;tex_dirty(t);G.profile_full_clears++;
 }
 static void clear_ds(const p_clear_ds *p) {
     if(G.trace_frame)fprintf(stderr,"[nvn-vulkan] CLEAR_DS depth=%g depth_mask=%#x stencil=%#x stencil_mask=%#x serial=%llu\n",p->depth,p->depth_mask,p->stencil,p->stencil_mask,
@@ -3070,10 +3072,10 @@ static void clear_ds(const p_clear_ds *p) {
         if((unsigned)s.offset.x>=w || (unsigned)s.offset.y>=h)return;
         if(s.extent.width>w-s.offset.x)s.extent.width=w-s.offset.x;if(s.extent.height>h-s.offset.y)s.extent.height=h-s.offset.y;
         render_begin();VkClearAttachment a={.aspectMask=flags,.clearValue.depthStencil={p->depth,(uint32_t)p->stencil}};
-        VkClearRect r={s,0,1};vkCmdClearAttachments(S.command,1,&a,1,&r);t->cpu_owned=0;tex_dirty(t);return;
+        VkClearRect r={s,0,1};vkCmdClearAttachments(S.command,1,&a,1,&r);t->cpu_owned=0;tex_dirty(t);G.profile_scissor_clears++;return;
     }
     all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);VkClearDepthStencilValue value={p->depth,(uint32_t)p->stencil};
-    vkCmdClearDepthStencilImage(S.command,t->image,t->layout,&value,1,&range);t->cpu_owned=0;tex_dirty(t);
+    vkCmdClearDepthStencilImage(S.command,t->image,t->layout,&value,1,&range);t->cpu_owned=0;tex_dirty(t);G.profile_full_clears++;
 }
 static void clear_tex(const p_clear_tex *p) {
     const view_t *v=p->has_view?&p->view:NULL;
@@ -3188,7 +3190,7 @@ static void execute(const uint8_t *p,unsigned depth) {
         case OP_REPORT_COUNTER:{uint64_t type,address;payload_check(&h,16);memcpy(&type,a,8);memcpy(&address,a+8,8);mtl_sub_counter(address,type);break;}
         case OP_RESET_COUNTER:{uint64_t type;payload_check(&h,8);memcpy(&type,a,8);
             if(type!=NVN_COUNTER_TYPE_SAMPLES_PASSED)die("GPU counter reset type implementation pending",type);
-            occlusion_end();counter_op(0,0,0);break;}
+            occlusion_end();G.profile_counter_resets++;counter_op(0,0,0);break;}
         case OP_COPY_B2B:{uint64_t src,dst,len;payload_check(&h,24);memcpy(&src,a,8);memcpy(&dst,a+8,8);memcpy(&len,a+16,8);mtl_sub_copy(src,dst,len);break;}
         case OP_UPDATE_UB:{uint64_t dst,len;payload_check(&h,16);memcpy(&dst,a,8);memcpy(&len,a+8,8);if(len>h.size-24)die("uniform update payload",len);
             G.profile_uniform_updates++;
@@ -3499,7 +3501,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_plan_hits=G.profile_plan_misses=G.profile_plan_fallbacks=G.profile_plan_buffers=G.profile_plan_images=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_VIEW_CACHE_PROFILE frame=%llu view_hits=%llu view_misses=%llu framebuffer_hits=%llu framebuffer_misses=%llu rp_hits=%llu rp_creates=%llu rp_overflow=%llu rtv_hits=%llu rtv_creates=%llu rtv_stale=%llu rtf_hits=%llu rtf_creates=%llu rtf_stale=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_view_hits,(unsigned long long)G.profile_view_misses,(unsigned long long)G.profile_framebuffer_hits,(unsigned long long)G.profile_framebuffer_misses,(unsigned long long)G.profile_rpc_hits,(unsigned long long)G.profile_rpc_creates,(unsigned long long)G.profile_rpc_overflow,(unsigned long long)G.profile_rtv_hits,(unsigned long long)G.profile_rtv_creates,(unsigned long long)G.profile_rtv_stale,(unsigned long long)G.profile_rtf_hits,(unsigned long long)G.profile_rtf_creates,(unsigned long long)G.profile_rtf_stale);
         G.profile_view_hits=G.profile_view_misses=G.profile_framebuffer_hits=G.profile_framebuffer_misses=G.profile_rpc_hits=G.profile_rpc_creates=G.profile_rpc_overflow=G.profile_rtv_hits=G.profile_rtv_creates=G.profile_rtv_stale=G.profile_rtf_hits=G.profile_rtf_creates=G.profile_rtf_stale=0;
-        fprintf(stderr,"[nvn-vulkan] RENDER_POOL_UPLOAD_PROFILE frame=%llu uploaded_bytes=%llu reused_ranges=%llu reused_bytes=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_pool_uploaded_bytes,(unsigned long long)G.profile_pool_reused_ranges,(unsigned long long)G.profile_pool_reused_bytes);
+        fprintf(stderr,"[nvn-vulkan] RENDER_POOL_UPLOAD_PROFILE frame=%llu pools=%d uploaded_bytes=%llu reused_ranges=%llu reused_bytes=%llu\n",(unsigned long long)G.present_count+1,G.npool,(unsigned long long)G.profile_pool_uploaded_bytes,(unsigned long long)G.profile_pool_reused_ranges,(unsigned long long)G.profile_pool_reused_bytes);
         G.profile_pool_uploaded_bytes=G.profile_pool_reused_ranges=G.profile_pool_reused_bytes=0;
         if(G.pass_timing){for(uint32_t a=0;a<G.npacc;a++)for(uint32_t b=a+1;b<G.npacc;b++)if(G.pacc[b].ms>G.pacc[a].ms){PassAcc tmp=G.pacc[a];G.pacc[a]=G.pacc[b];G.pacc[b]=tmp;}
             double total=0;for(uint32_t a=0;a<G.npacc;a++)total+=G.pacc[a].ms;fprintf(stderr,"[nvn-vulkan] PASS_TIME_TOTAL frame=%llu groups=%u gpu_ms=%.3f\n",(unsigned long long)G.present_count+1,G.npacc,total);
@@ -3507,16 +3509,28 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
             for(uint32_t a=0;a<G.nhot;a++)for(uint32_t b=a+1;b<G.nhot;b++)if(G.hot[b].draws>G.hot[a].draws){char tk[17];uint32_t td=G.hot[a].draws;memcpy(tk,G.hot[a].key,17);memcpy(G.hot[a].key,G.hot[b].key,17);G.hot[a].draws=G.hot[b].draws;memcpy(G.hot[b].key,tk,17);G.hot[b].draws=td;}
             for(uint32_t a=0;a<G.nhot&&a<12;a++)fprintf(stderr,"[nvn-vulkan] HOT_PS rank=%u key=%s draws=%u\n",a,G.hot[a].key,G.hot[a].draws);
             G.nhot=0;G.npacc=0;}
-        fprintf(stderr,"[nvn-vulkan] RENDER_RESOURCE_PROFILE frame=%llu driver_tables=%llu driver_table_reuses=%llu buffer_allocs=%llu buffer_bytes=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_driver_tables,(unsigned long long)G.profile_driver_table_reuses,(unsigned long long)G.profile_buffer_allocs,(unsigned long long)G.profile_buffer_bytes);
-        G.profile_driver_tables=G.profile_driver_table_reuses=G.profile_buffer_allocs=G.profile_buffer_bytes=0;
+        fprintf(stderr,"[nvn-vulkan] RENDER_RESOURCE_PROFILE frame=%llu driver_tables=%llu driver_table_reuses=%llu buffer_allocs=%llu buffer_bytes=%llu full_clears=%llu scissor_clears=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_driver_tables,(unsigned long long)G.profile_driver_table_reuses,(unsigned long long)G.profile_buffer_allocs,(unsigned long long)G.profile_buffer_bytes,(unsigned long long)G.profile_full_clears,(unsigned long long)G.profile_scissor_clears);
+        G.profile_driver_tables=G.profile_driver_table_reuses=G.profile_buffer_allocs=G.profile_buffer_bytes=G.profile_full_clears=G.profile_scissor_clears=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_TEMP_PROFILE frame=%llu reuses=%llu cached=%u cached_bytes=%llu clear_ms=%.3f allocate_ms=%.3f aligned_bytes=%llu comparison_bytes=%llu driver_bytes=%llu other_bytes=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_temp_reuses,G.nretired,(unsigned long long)G.retired_bytes,G.profile_temp_clear_ns/1e6,G.profile_buffer_allocate_ns/1e6,(unsigned long long)G.profile_temp_bytes[TEMP_ALIGNED],(unsigned long long)G.profile_temp_bytes[TEMP_COMPARISON],(unsigned long long)G.profile_temp_bytes[TEMP_DRIVER],(unsigned long long)G.profile_temp_bytes[TEMP_OTHER]);
         G.profile_temp_reuses=G.profile_temp_clear_ns=G.profile_buffer_allocate_ns=0;memset(G.profile_temp_bytes,0,sizeof G.profile_temp_bytes);
         fprintf(stderr,"[nvn-vulkan] RENDER_STORAGE_BIAS_PROFILE frame=%llu bindings=%llu avoided_snapshot_bytes=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_storage_bias_bindings,(unsigned long long)G.profile_storage_bias_bytes);
         G.profile_storage_bias_bindings=G.profile_storage_bias_bytes=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_QUERY_PROFILE frame=%llu queries=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_occlusion_queries);
         G.profile_occlusion_queries=0;
-        fprintf(stderr,"[nvn-vulkan] RENDER_QUERY_RESET_PROFILE frame=%llu frames=%llu enabled=%d calls=%llu slots=%llu pre_resets=%llu reserve_breaks=%llu pass_splits=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,G.enable_query_reset_range,(unsigned long long)G.profile_query_reset_calls,(unsigned long long)G.profile_query_reset_slots,(unsigned long long)G.profile_query_preresets,(unsigned long long)G.profile_query_breaks,(unsigned long long)G.profile_pass_splits);
+        fprintf(stderr,"[nvn-vulkan] RENDER_QUERY_RESET_PROFILE frame=%llu frames=%llu enabled=%d calls=%llu slots=%llu pre_resets=%llu reserve_breaks=%llu pass_splits=%llu counter_resets=%llu counter_reports=%llu counter_ops=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,G.enable_query_reset_range,(unsigned long long)G.profile_query_reset_calls,(unsigned long long)G.profile_query_reset_slots,(unsigned long long)G.profile_query_preresets,(unsigned long long)G.profile_query_breaks,(unsigned long long)G.profile_pass_splits,(unsigned long long)G.profile_counter_resets,(unsigned long long)G.profile_counter_reports,(unsigned long long)G.profile_counter_ops);
+        { /* 频率/GPU 忙时监控：每个剖面窗口读一次（诊断用，判断 fps 波动与 GPU 负载）。
+             gpubusy = "busy total" 累计计数（kgsl）；窗口 delta 直接给出 GPU 忙时。
+             | frequency / GPU-busy monitor, read once per profile window: gpubusy is kgsl's
+             cumulative busy/total counter; the per-window delta yields GPU busy time. */
+          unsigned cpu7=0;FILE *f;
+          f=fopen("/sys/devices/system/cpu/cpu7/cpufreq/scaling_cur_freq","r");if(f){if(fscanf(f,"%u",&cpu7)!=1)cpu7=0;fclose(f);}
+          unsigned long long busy=0,total=0;
+          f=fopen("/sys/class/kgsl/kgsl-3d0/gpubusy","r");if(f){if(fscanf(f,"%llu %llu",&busy,&total)!=2){busy=total=0;}fclose(f);}
+          /* gpubusy 是即时占用率读数（busy/total 为滚动窗口内的时间对），不是累计计数。 */
+          double util=(total)?100.0*(double)busy/(double)total:-1.0;
+          fprintf(stderr,"[nvn-vulkan] SYS_FREQ frame=%llu cpu7_khz=%u gpu_busy_raw=%llu gpu_total_raw=%llu gpu_util_pct=%.1f\n",(unsigned long long)G.present_count+1,cpu7,busy,total,util); }
         G.profile_query_reset_calls=G.profile_query_reset_slots=G.profile_query_preresets=G.profile_query_breaks=G.profile_pass_splits=0;
+        G.profile_counter_resets=G.profile_counter_reports=G.profile_counter_ops=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_SYNC_PROFILE frame=%llu passes=%llu all_barriers=%llu uniform_updates=%llu aligned_cpu_snapshots=%llu aligned_gpu_copies=%llu aligned_snapshot_reuses=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)(G.pass_count-G.profile_passes),(unsigned long long)G.profile_barriers,(unsigned long long)G.profile_uniform_updates,(unsigned long long)G.profile_cpu_snapshots,(unsigned long long)G.profile_gpu_copies,(unsigned long long)G.profile_snapshot_reuses);
         fprintf(stderr,"[nvn-vulkan] PRESENT_PARTS acquire_ms=%.1f fence_ms=%.1f idle_ms=%.1f\n",G.pres_acq_ns/1e6,G.pres_fence_ns/1e6,G.pres_idle_ns/1e6);G.pres_acq_ns=G.pres_fence_ns=G.pres_idle_ns=0;
         for(int q=0;q<4;q++){fprintf(stderr,"[nvn-vulkan] SEG%d record_ms=%.1f wait_ms=%.1f last_chunk_draws=%llu chunks=%llu gpu_busy_ms=%.1f gpu_gap_ms=%.1f gpu_span_ms=%.1f\n",q,G.seg_record_ns[q]/1e6,G.seg_wait_ns[q]/1e6,(unsigned long long)G.seg_draws[q],(unsigned long long)G.seg_chunks[q],G.gts_busy[q]/1e6,G.gts_gap[q]/1e6,G.gts_span[q]/1e6);G.gts_busy[q]=G.gts_gap[q]=G.gts_span[q]=G.gts_chunks[q]=0;G.seg_record_ns[q]=G.seg_wait_ns[q]=G.seg_draws[q]=G.seg_chunks[q]=0;}
@@ -3566,6 +3580,18 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(qrdir&&*qrdir&&snprintf(qrf,sizeof qrf,"%s/prereset.txt",qrdir)<(int)sizeof qrf){FILE *fp=fopen(qrf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.query_pre_reset){G.query_pre_reset=m;
                 fprintf(stderr,"[nvn-vulkan] QUERY_PRERESET 运行中切换 → %d\n",m);}fclose(fp);}}}
+        /* 遮挡查询成本诊断（A/B，仅统计用途）：nooccl.txt=1 完全不发查询；imprecise.txt=1 去掉
+         * PRECISE 位。两者都会让游戏读到错误的遮挡计数（纯诊断，不得用于游玩）。 | Occlusion query
+         * cost diagnostics (A/B, measurement only): nooccl.txt=1 disables queries entirely;
+         * imprecise.txt=1 drops the PRECISE bit. Both feed wrong counts to the game (diagnostic only). */
+        { static const char *nodir; if(!nodir)nodir=getenv("DM_FRAME_DIR"); char nof[1300];
+          if(nodir&&*nodir&&snprintf(nof,sizeof nof,"%s/nooccl.txt",nodir)<(int)sizeof nof){FILE *fp=fopen(nof,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.diag_no_occlusion){G.diag_no_occlusion=m;
+                fprintf(stderr,"[nvn-vulkan] DIAG_NO_OCCLUSION 运行中切换 → %d\n",m);}fclose(fp);}}}
+        { static const char *imdir; if(!imdir)imdir=getenv("DM_FRAME_DIR"); char imf[1300];
+          if(imdir&&*imdir&&snprintf(imf,sizeof imf,"%s/imprecise.txt",imdir)<(int)sizeof imf){FILE *fp=fopen(imf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.diag_imprecise_occlusion){G.diag_imprecise_occlusion=m;
+                fprintf(stderr,"[nvn-vulkan] DIAG_IMPRECISE_OCCLUSION 运行中切换 → %d\n",m);}fclose(fp);}}}
         /* 有意通道分割器运行时切换：passsplit.txt = 单通道 draw 上限（0=关）。 | Intentional
          * pass splitter: passsplit.txt = draws per pass cap (0 = off). */
         { static const char *psdir; if(!psdir)psdir=getenv("DM_FRAME_DIR"); char psf[1300];

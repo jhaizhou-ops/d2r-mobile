@@ -395,4 +395,30 @@ renderpass key/flush（~2+2.4ms/帧，70 个通道对象随 epoch 重建）与 t
 - 新增可用探针：`RENDER_RP_SPLIT` 现含 `cend_ms/csub_ms/cbeg_ms`（vkEndCommandBuffer / vkQueueSubmit /
   新缓冲开始 三段拆解，待下一轮 detail 会话取数）。
 
+### 7.8 GPU 侧深挖（2026-10-17 凌晨，PASS_TIME/gpubusy/普查）
+
+**方法升级（重大）**：`RENDER_PROFILE` 窗口行新增 `SYS_FREQ`（cpu7 当前频 + `gpubusy` 占用率，
+kgsl 即时读数 busy/total）与查询普查（`RENDER_QUERY_PROFILE/RESET_PROFILE`：查询数、重置/报告/op 计数）。
+**跨时段 fps 波动的根因查明**：整晚 27→24→21→14 fps 的漂移 = **热限**：热时 `cpu7 cur=787MHz、
+scaling_max 被冷却设备压到 2131MHz`（满血 3.19GHz，time_in_state 有 3.19G 频点），健康窗
+`cur=2131MHz`；与此同时 GPU 占用率仅 72-76%、通道 GPU 时间 23→33ms 随热态放大。**结论：本机现在
+的 fps 主要由 SoC 热包线决定，代码侧已接近该热包线下的平衡点。**
+
+**遮挡查询真相（反直觉）**：普查发现每帧 **~800-1050 个查询**（`DM_DISABLE_QUERY_BATCH` 未设，
+查询随逐 draw 的 CounterReset 循环）、重置 21/帧、报告 4/帧。**关掉全部查询反而更慢**
+（19.8 vs 24-26，gpu_wait 571→1191）；去掉 `PRECISE` 位无影响。→ 逐 draw 的 query begin/end 在这块
+Adreno 上起**有益的同步点**作用（与"查询打断保护通道"同源现象）；**不得优化掉**。
+
+**GPU 每通道时间（PASS_TIME，新维度）**：总 GPU 通道时间 ~23ms/帧（健康时）：世界色通道
+**11.4ms**（1968×915，15 pass 实例/帧、327 draws/帧）；同 draw 量的纯深度通道 2.7ms；2100² 阴影
+1.95ms；全屏效果链 1.6+1.1ms；UI（2624×1220，166 draws/帧）仅 0.78ms；合成 0.5ms。
+
+**Clear 折叠候选（已否决）**：查 `clear_color/ds` 全目标路径（vkCmdClearColorImage）想折叠进
+`loadOp=CLEAR`——**实测 `full_clears=0`**：游戏的清屏全部走**通道内 `vkCmdClearAttachments`**
+（29 次/帧，瓦片内直写=已是优路径）→ 无"清屏+重载"双重流量，方案作废（先量化后动手的价值示范）。
+
+**遗留（代码侧，价值排序已重排）**：① 热态：档位（1080-080 = GPU 像素 −35%，长时间游玩推荐）
+是唯一量级够大的热包线杠杆；② 提交三段拆解（cend/csub/cbeg 探针已就绪，未取数）；③ 其余微优化
+在当前热包线平衡下预期 <2%。
+
 
