@@ -20,33 +20,30 @@ def find_bar(path):
     im = Image.open(path).convert("RGB")
     W, H = im.size
     px = im.load()
-    best_y, best_n = -1, 0
-    for y in range(int(H * 0.35), int(H * 0.97), 2):
-        n = 0
-        for x in range(0, W, 2):
-            if yellow(*px[x, y]):
-                n += 1
-        if n > best_n:
-            best_n, best_y = n, y
-    if best_y < 0:
+    y0, y1 = int(H * 0.40), int(H * 0.98)
+    # 血条 = 细长金黄线：行内 ≥2 条「长连续段」（≥25px）。火把/光斑/图标 = 短段行，被排除；
+    # 经验条/药水格为短段或段数多、总分低。得分 = 长段总长，取最高分行。
+    best = None
+    for y in range(y0, y1):
+        runs = []
+        inrun = False
+        for x in range(W):
+            ok = yellow(*px[x, y])
+            if ok and not inrun:
+                inrun, start = True, x
+            elif not ok and inrun:
+                inrun = False
+                if x - start >= 25:
+                    runs.append((start, x - 1))
+        if inrun and W - start >= 25:
+            runs.append((start, W - 1))
+        if len(runs) >= 2:
+            score = sum(e - s + 1 for s, e in runs)
+            if score >= 100 and (best is None or score > best[0]):
+                best = (score, y, runs)
+    if not best:
         return None
-    # 在最佳行附近做逐行细分，取黄像素最多的一行（±4）
-    for y in range(max(0, best_y - 4), min(H, best_y + 5)):
-        n = sum(1 for x in range(0, W) if yellow(*px[x, y]))
-        if n > best_n:
-            best_n, best_y = n, y
-    runs = []
-    inrun = False
-    for x in range(W):
-        ok = yellow(*px[x, best_y])
-        if ok and not inrun:
-            inrun, start = True, x
-        elif not ok and inrun:
-            inrun = False
-            if x - start >= 6:
-                runs.append((start, x - 1))
-    if inrun and W - start >= 6:
-        runs.append((start, W - 1))
+    score, best_y, runs = best
     # 合并微生物（间隔 ≤ 2px）——文字/光泽会切断金黄
     merged = []
     for s, e in runs:
