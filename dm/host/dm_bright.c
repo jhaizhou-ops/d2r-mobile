@@ -25,7 +25,14 @@
 #include "dm_hud.h"
 #include "dm_uiscreen.h"
 #include <math.h>
+#ifdef __ANDROID__
+#include <string.h>
+#include <sys/uio.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#else
 #include <mach/mach.h>
+#endif
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -34,7 +41,26 @@ static const struct { uint16_t lv; uint8_t act, drlg; int8_t varies; } k_lv[] = 
 #include "dm_bright_levels.inc"
 };
 
+#ifdef __ANDROID__
+/* 用 process_vm_readv 读自己进程：内核校验地址，坏指针只返回错误。直接解引用会 SEGV——
+ * 首测踩过：act=0 时读 act+8（地址 0x8）当场崩。 | Read our own process via process_vm_readv:
+ * the kernel validates the address, so a bad pointer merely returns an error. Direct dereferencing
+ * crashes -- the first test read act+8 (address 0x8) with act = 0 and died. */
+static int rd(uint64_t a, void *buf, size_t n) {
+    if (!a || n > 128) return 0;
+    struct iovec local = {buf, n}, remote = {(void *)(uintptr_t)a, n};
+    return syscall(SYS_process_vm_readv, getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;
+}
+/* 安卓暂缺做局内/区域/读取画面判定的宿主设施：v1 一律按“局内”处理（规则 ④ 按原版环境亮度）。
+ * 宿主若将来提供强定义，链接时自动覆盖这里。 | Android lacks the host facilities for the in-run /
+ * area / loading-screen decisions for now: v1 always treats the session as "in a run" (rule (4),
+ * original ambient brightness). Strong host definitions would override these at link time. */
+__attribute__((weak)) int dm_uiscreen_ingame(void) { return 1; }
+__attribute__((weak)) void dm_hud_get(dm_hud_info *out) { memset(out, 0, sizeof *out); out->area = -1; }
+__attribute__((weak)) int dm_loadscreen_up(void) { return 0; }
+#else
 static int rd(uint64_t a, void *buf, size_t n) { vm_size_t got = 0; return a && !vm_read_overwrite(mach_task_self(), a, n, (vm_address_t)buf, &got) && got == n; }
+#endif
 static uint64_t main_base(void) { static uint64_t b; if (!b) for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) b = (uint64_t)g_mod[i].base; return b; }
 static uint64_t env_ptr(void) { uint64_t act = 0, env = 0, mb = main_base(); return mb && rd(mb + 0x2d20bd0, &act, 8) && rd(act + 8, &env, 8) ? env : 0; }
 

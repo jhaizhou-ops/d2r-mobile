@@ -1,0 +1,32 @@
+// 3D 画面加亮：调色表重写内核（与 nvn_mtl.m 的 k_lut_msl 逐式等价）。
+// L'(u) = L(PQ(k · PQ⁻¹(u))) + 高光保护（提亮后越接近白越收回原值）。
+// 由 vk 后端在游戏算完调色表的那次 dispatch（着色器键 552f45c348a61b86）之后调用。
+// 3D picture brightening: LUT rewrite kernel (formula-identical to nvn_mtl.m's k_lut_msl).
+// Invoked by the vk backend right after the dispatch in which the game finishes computing
+// the palette table (shader key 552f45c348a61b86).
+#version 450
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(binding = 0) uniform sampler3D src;      // 游戏刚算好的表（临时副本） | the table the game just computed (temporary copy)
+#ifdef LUT_RGBA16F
+layout(binding = 1, rgba16f) uniform image3D dst;
+#else
+layout(binding = 1, rgba8) uniform image3D dst;
+#endif
+layout(push_constant) uniform Params { float k; } params;
+
+const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;   // 与游戏色调映射里的 PQ 常数逐位相同 | bit-identical to the PQ constants in the game tone mapping
+vec3 pq(vec3 v)     { vec3 p = pow(abs(v), vec3(m1)); return pow((c1 + c2 * p) / (1.0 + c3 * p), vec3(m2)); }
+vec3 pq_inv(vec3 u) { vec3 q = pow(u, vec3(1.0 / m2)); return pow(max(q - c1, 0.0) / max(c2 - c3 * q, vec3(1e-6)), vec3(1.0 / m1)); }
+
+void main() {
+    ivec3 n = imageSize(dst);
+    ivec3 g = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(g, n))) return;
+    vec3 u  = (vec3(g) + 0.5) / vec3(n);
+    vec3 u2 = clamp(pq(params.k * pq_inv(u)), 0.0, 1.0);
+    vec4 b = texture(src, u2);            // 按曝光 k 提亮后的输出 | output after brightening by exposure k
+    vec4 o = imageLoad(dst, g);           // 原版这一格 | this cell in the original game
+    float s = smoothstep(0.65, 1.0, dot(b.rgb, vec3(0.2126, 0.7152, 0.0722)));   // 高光保护 | highlight protection
+    imageStore(dst, g, vec4(max(mix(b.rgb, o.rgb, s), o.rgb), b.a));
+}

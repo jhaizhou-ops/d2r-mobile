@@ -24,6 +24,7 @@ add_library(dm_android_core OBJECT
   ${DM_HOST}/hle_hid.c ${DM_HOST}/hle_touch.c input_backend.c
   ../ios/Sources/dm_touch_controls.c touch_controls_android.c
   ${DM_HOST}/hle_oe.c ${DM_HOST}/hle_account.c ${DM_HOST}/hle_net.c
+  ${DM_HOST}/dm_bright.c
   ${DM_HOST}/hle_lifecycle.c ${DM_HOST}/hle_friends.c ${DM_HOST}/hle_misc.c
   ${DM_HOST}/hle_swkbd.c keyboard_android.c
   services_fs.c services_fs_probe.c services_platform.c diagnostics.c)

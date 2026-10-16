@@ -12,6 +12,7 @@
 #include "nvn_mtl.h"
 #include "nvn_dirty.h"
 #include "nvn_dirty_summary.h"
+#include "nvn_bright_spv.h"
 #include "../tex/nvn_deswizzle.h"
 #include "../tex/nvn_bcdec.h"
 #include <stdatomic.h>
@@ -2705,6 +2706,119 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     G.profile_tail_ns+=prof_now()-tail_started;
     G.draws++;aligned_writeback();
 }
+/* ── 3D 画面加亮（调色表重写；与 nvn_mtl.m 的 bright_lut 同构）─────────────────────────────
+ * 游戏的色调映射用一张 32³ 调色表（每帧由计算着色器 552f45c348a61b86 重算；本文件里键相同）。
+ * 在它算完之后把表复制到临时图并原地重写 L'(u) = L(PQ(k·PQ⁻¹(u)))，加高光保护——等价于给 3D
+ * 世界乘曝光 k；UI / 文字在色调映射之后合成，不受影响。k 由宿主 dm_bright_k()（dm_bright.c）
+ * 每帧给；k≈1 什么都不做。认表失败只报一次红并不加亮（安全降级）。
+ * 裸 vkCmd* 会打乱命令状态去重缓存：写完重置它，让后续绑定全部重发。
+ * 3D picture brightening (palette-table rewrite; isomorphic to nvn_mtl.m's bright_lut): the game's
+ * tone mapping uses a 32^3 palette table recomputed every frame by compute shader 552f45c348a61b86
+ * (same key in this file). Right after that dispatch the table is copied to a temp image and
+ * rewritten in place as L'(u) = L(PQ(k * PQ^-1(u))) with highlight protection -- equivalent to
+ * multiplying the 3D world by exposure k; UI / text are composited after tone mapping and are
+ * unaffected. k comes from the host's dm_bright_k() (dm_bright.c) every frame; k ~= 1 does nothing.
+ * A failed table identification logs once and does not brighten (safe fallback). Raw vkCmd* calls
+ * would desync the command-state dedupe cache: reset it afterwards so later binds re-emit. */
+__attribute__((weak)) float dm_bright_k(void);
+typedef struct {
+    int failed, ready; VkFormat fmt; VkImageLayout tmp_layout;
+    VkPipeline pipeline; VkPipelineLayout play; VkDescriptorSetLayout slay;
+    VkDescriptorPool pool; VkDescriptorSet set; VkSampler sampler;
+    VkImage tmp; VkImageView tmp_view; VkDeviceMemory tmp_mem;
+} BrightLut;
+static BrightLut g_bright;
+static void bright_tmp_transition(VkImageLayout layout) {
+    if (g_bright.tmp_layout == layout) return;
+    VkImageMemoryBarrier b = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = g_bright.tmp_layout, .newLayout = layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+        .image = g_bright.tmp, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    vkCmdPipelineBarrier(S.command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+    g_bright.tmp_layout = layout;
+}
+static void bright_lut_after_dispatch(VShader *s) {
+    if (g_bright.failed || strncmp(s->key, "552f45c348a61b86", 16)) return;
+    float k = dm_bright_k ? dm_bright_k() : 1.0f;
+    if (!(k > 1.005f)) return;
+    if (k > 4.0f) k = 4.0f;
+    VTexture *t = NULL;
+    for (unsigned i = 0; i < s->h.nb && !t; i++) {
+        RBinding *b = &s->b[i];
+        if (b->kind != 6 || b->slot < 0 || b->slot >= 32) continue;
+        unsigned id = (unsigned)G.state.img[s->h.stage][b->slot] & 0xfffff;
+        if (id >= (unsigned)G.texture_pool_n || id >= G.texture_slots || !G.tslot[id].live) continue;
+        VTexture *c = slot_texture(&G.tslot[id], 1);
+        if (c && c->source.d.target == NVN_TEXTURE_TARGET_3D && c->width == 32 && c->height == 32 && c->source.d.depth == 32) t = c;
+    }
+    if (!t) { g_bright.failed = 1; fprintf(stderr, "[nvn-vulkan] 【红】3D 画面加亮：调色表认不出，不加亮\n"); return; }
+    int variant = t->format == VK_FORMAT_R8G8B8A8_UNORM ? 0 : t->format == VK_FORMAT_R16G16B16A16_SFLOAT ? 1 : -1;
+    if (variant < 0) { g_bright.failed = 1; fprintf(stderr, "[nvn-vulkan] 【红】3D 画面加亮：调色表格式 %d 不认识（只要 rgba8/rgba16f），不加亮\n", (int)t->format); return; }
+    if (!g_bright.ready || g_bright.fmt != t->format) {
+        if (g_bright.ready) { g_bright.failed = 1; fprintf(stderr, "[nvn-vulkan] 【红】3D 画面加亮：调色表格式变了，不再加亮\n"); return; }
+        VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_3D, .format = t->format,
+            .extent = {32, 32, 32}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+        CHECK(vkCreateImage(G.device, &ii, NULL, &g_bright.tmp)); VkMemoryRequirements r; vkGetImageMemoryRequirements(G.device, g_bright.tmp, &r);
+        VkMemoryAllocateInfo ma = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = r.size,
+            .memoryTypeIndex = memory_type(r.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
+        CHECK(vkAllocateMemory(G.device, &ma, NULL, &g_bright.tmp_mem)); CHECK(vkBindImageMemory(G.device, g_bright.tmp, g_bright.tmp_mem, 0));
+        VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = g_bright.tmp, .viewType = VK_IMAGE_VIEW_TYPE_3D,
+            .format = t->format, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        CHECK(vkCreateImageView(G.device, &vi, NULL, &g_bright.tmp_view));
+        VkSamplerCreateInfo sc = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO, .magFilter = VK_FILTER_LINEAR, .minFilter = VK_FILTER_LINEAR,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, .maxLod = 0};
+        CHECK(vkCreateSampler(G.device, &sc, NULL, &g_bright.sampler));
+        VkDescriptorSetLayoutBinding db[2] = {
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL},
+            {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL}};
+        VkDescriptorSetLayoutCreateInfo dl = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 2, .pBindings = db};
+        CHECK(vkCreateDescriptorSetLayout(G.device, &dl, NULL, &g_bright.slay));
+        VkPushConstantRange pr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 4};
+        VkPipelineLayoutCreateInfo pl = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &g_bright.slay,
+            .pushConstantRangeCount = 1, .pPushConstantRanges = &pr};
+        CHECK(vkCreatePipelineLayout(G.device, &pl, NULL, &g_bright.play));
+        VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}};
+        VkDescriptorPoolCreateInfo dp = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 1, .poolSizeCount = 2, .pPoolSizes = ps};
+        CHECK(vkCreateDescriptorPool(G.device, &dp, NULL, &g_bright.pool));
+        VkDescriptorSetAllocateInfo da = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = g_bright.pool,
+            .descriptorSetCount = 1, .pSetLayouts = &g_bright.slay};
+        CHECK(vkAllocateDescriptorSets(G.device, &da, &g_bright.set));
+        const uint32_t *spv = variant ? k_lutk_spv_rgba16f : k_lutk_spv_rgba8;
+        size_t spv_bytes = variant ? sizeof k_lutk_spv_rgba16f : sizeof k_lutk_spv_rgba8;
+        VkShaderModuleCreateInfo sm = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = spv_bytes, .pCode = spv};
+        VkShaderModule mod; CHECK(vkCreateShaderModule(G.device, &sm, NULL, &mod));
+        VkComputePipelineCreateInfo cp = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = mod, .pName = "main"},
+            .layout = g_bright.play};
+        CHECK(vkCreateComputePipelines(G.device, G.pipeline_cache, 1, &cp, NULL, &g_bright.pipeline));
+        vkDestroyShaderModule(G.device, mod, NULL);
+        g_bright.fmt = t->format; g_pso_cache_dirty = 1;
+        VkDescriptorImageInfo src = {g_bright.sampler, g_bright.tmp_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo dst = {VK_NULL_HANDLE, t->view, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[2] = {
+            {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = g_bright.set, .dstBinding = 0, .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &src},
+            {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = g_bright.set, .dstBinding = 1, .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &dst}};
+        vkUpdateDescriptorSets(G.device, 2, w, 0, NULL);
+        g_bright.ready = 1; g_bright.tmp_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        fprintf(stderr, "[nvn-vulkan] 3D 画面加亮：建好（调色表 32x32x32 格式 %d）\n", (int)t->format);
+    }
+    texture_transition(t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    bright_tmp_transition(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageCopy region = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .extent = {32, 32, 32}};
+    vkCmdCopyImage(S.command, t->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_bright.tmp, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    bright_tmp_transition(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    texture_transition(t, VK_IMAGE_LAYOUT_GENERAL);
+    vkCmdBindPipeline(S.command, VK_PIPELINE_BIND_POINT_COMPUTE, g_bright.pipeline);
+    vkCmdBindDescriptorSets(S.command, VK_PIPELINE_BIND_POINT_COMPUTE, g_bright.play, 0, 1, &g_bright.set, 0, NULL);
+    vkCmdPushConstants(S.command, g_bright.play, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &k);
+    vkCmdDispatch(S.command, 8, 8, 8);
+    nvn_vk_command_state_reset(&S.command_state); S.command_dirty = 1;   // 裸绑定已改状态：去重缓存重置 | raw binds changed the state: reset the dedupe cache
+}
 static void dispatch(const p_dispatch *p) {
     S.read_snapshots_allowed=0;
     pass_end();if(p->x<0 || p->y<0 || p->z<0)die("dispatch dimensions",p->x);VShader *s=program_stage(5);
@@ -2728,6 +2842,7 @@ static void dispatch(const p_dispatch *p) {
     command_bind_profile(NVN_VK_CMD_DESCRIPTORS,nvn_vk_cmd_descriptors(&S.command_state,cache_commands,S.command,VK_PIPELINE_BIND_POINT_COMPUTE,pso.layout,1,&set,S.dyn_count[s->h.stage],S.dyn_offset[s->h.stage]));
     if(G.precise_sync)hz_sync(HZ_CS,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_UNIFORM_READ_BIT);
     vkCmdDispatch(S.command,p->x,p->y,p->z);
+    bright_lut_after_dispatch(s);
     aligned_writeback();
 }
 

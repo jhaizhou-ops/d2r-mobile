@@ -315,6 +315,7 @@ extern uint64_t dm_nvn_frame_count(void) __attribute__((weak));
 static module_t *g_android_scale_main;
 static float g_android_scale_want=1.0f;   // 配置值（DM_3D_SCALE，缺省 1.0）——也是动态档的 0 档 | configured value (DM_3D_SCALE, default 1.0) -- also level 0 of the dynamic table
 static _Atomic float g_android_scale_cur=1.0f;
+static uint32_t g_android_scale_ref_w, g_android_scale_ref_h;   // DM_3D_SCALE_REF：只在大时把 3D 域的输出抬到该尺寸（对齐 iOS 的 0.75×原生世界密度） | DM_3D_SCALE_REF: lift the 3D domain's output to this size only when larger
 static int g_android_scale_armed;   // 1 = 实验已武装（DM_3D_SCALE 或 DM_3D_SCALE_DYN 任一） | experiment armed (either DM_3D_SCALE or DM_3D_SCALE_DYN)
 static int g_android_scale_dyn;     // 1 = 动态档位生效 | dynamic levels active
 static pthread_once_t g_android_scale_once=PTHREAD_ONCE_INIT;
@@ -392,10 +393,14 @@ static void android_scale_configure(void) {
         base=want; }
     if (!dm_nvn_frame_count)
         die("ANDROID_3D_SCALE requires graphics presented-frame counter; unavailable in core-only probes");
+    { const char *rf=getenv("DM_3D_SCALE_REF");
+      if (rf) { unsigned w=0,h=0; char tail=0;
+        if (sscanf(rf,"%ux%u%c",&w,&h,&tail)==2 && w>=640 && w<=3840 && h>=360 && h<=2160) { g_android_scale_ref_w=w; g_android_scale_ref_h=h; }
+        else die("ANDROID_3D_SCALE_REF invalid value %s; expected WxH",rf); } }
     for (int i=0;i<g_nmod;i++) if (!strcmp(g_mod[i].name,"main")) g_android_scale_main=&g_mod[i];
     android_scale_build_guard(g_android_scale_main);
     g_android_scale_want=base; g_android_scale_dyn=dyn?1:0; g_android_scale_armed=1;
-    LOG("ANDROID_3D_SCALE_CONFIG build=%s base=%.3f dyn=%d",g_android_scale_94012?"94012":"91738",(double)base,g_android_scale_dyn);
+    LOG("ANDROID_3D_SCALE_CONFIG build=%s base=%.3f dyn=%d ref=%ux%u",g_android_scale_94012?"94012":"91738",(double)base,g_android_scale_dyn,g_android_scale_ref_w,g_android_scale_ref_h);
 }
 static int android_scale_readable(uintptr_t address,size_t length) {
     if (address>UINTPTR_MAX-length) return 0;
@@ -432,6 +437,12 @@ static void android_scale3d_tick(void *return_address) {
     uint32_t ow=sizes[4],oh=sizes[5];
     if (!g_android_scale_94012) { if (ow!=1280 || oh!=720) return; }   // 91738 实验固定按 1280x720 输出 | the 91738 experiment assumed the fixed 1280x720 output
     else if (ow<640 || ow>3840 || oh<360 || oh>2160) return;          // 94012：接受宿主配置的输出分辨率 | 94012: accept the host-configured output resolution
+    /* 参考输出（DM_3D_SCALE_REF）：游戏默认停在 720p 输出（iOS 侧是真原生 2556x1179）。只在参考值更大
+     * 时把输出抬到参考值——用于把 3D 世界密度对齐 iOS 的"0.75×原生"。校验仍按实际字段做；应用失败
+     * 会回退并放弃（不重试）。 | Reference output: the game's default output can sit at 720p (iOS reports
+     * its true native). Lift it to the reference only when larger, to match iOS's world density
+     * (0.75x native). Verification reads the real fields; a failure reverts and gives up. */
+    if (g_android_scale_ref_w>ow || g_android_scale_ref_h>oh) { ow=g_android_scale_ref_w; oh=g_android_scale_ref_h; }
     /* 目标比例：固定档 = 配置值；动态档 = 档位表（0 档 = 配置值，clamp 到不高于它）。
        与当前值一致就什么都不做（固定档因此天然只应用一次）。 | Target scale: fixed mode =
        configured value; dynamic mode = level table (level 0 = configured value, clamped not to
