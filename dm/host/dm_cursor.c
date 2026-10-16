@@ -2071,9 +2071,9 @@ static void ui_note_dock_pump(uint64_t root) {
     if (panel != g_nd_on) { g_nd_on = panel; static int lg; if (lg++ < 40) LOG("提示框停靠：%s，目标 y %d（布局原值 %d，矩形高 %d）", panel ? "面板态" : "无面板", *t, g_nd_orig, h); }
 }
 static void ui_lift_pump(uint64_t root, uint64_t fr) {
-    // 重建中间态的坐标会被下一轮布局继承：等事务和控件树稳定后再上提，避免把上提后的值当作新原位。
-    // Intermediate geometry may be inherited by the next layout pass. Lift only after the transaction and widget tree settle.
-    if (dm_ui_unstable()) return;
+    // 普通轮询等控件树稳定，避免下一轮布局继承已上提的坐标；加载消息（fr=0）仍当场更新。两条路都避开模式切换事务。
+    // Polling waits for the widget tree to settle so the next layout cannot inherit lifted coordinates; loading messages (fr=0) still update immediately. Both paths avoid mode-switch transactions.
+    int dm_padmode_busy(void); if (dm_ui_unstable() && (fr || dm_padmode_busy())) return;
     if (fr < g_lift_next) return; g_lift_next = fr + 6;
     int x, y, w, h; dm_ui_rect(&x, &y, &w, &h); int lift = h > 0 && dm_uiscreen_ingame() ? (int)((long)y * 2160 / h) : 0;
     g_mv_want[MV_LIFT] = lift != 0; if (!lift) { mv_restore(root, MV_LIFT); return; }   // 不上提（不在局内 / 不是真全屏）：全部写回原值 | No lift (not in-game / not true fullscreen): write everything back to the original values
