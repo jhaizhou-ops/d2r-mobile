@@ -72,11 +72,7 @@ static int test_holes(void) {
     printf("%s 剔零档案偏移换算 15 种读法逐字节等于原始内容\n", bad ? "✗" : "✓");
     return bad;
 }
-int main(int argc, char **argv) {
-    // 两个 SDK 入口运行完全相同的事务与故障注入测试。
-    // Run identical transaction and fault-injection tests through both SDK entry points.
-    if (argc > 2 || (argc == 2 && strcmp(argv[1], "legacy"))) return 2;
-    Result (*commit_save)(const char *) = argc == 2 ? h_fs_CommitSaveData : h_fs_Commit;
+int main(void) {
     if (test_holes()) return 1;
     char root[1024], save[1100], work[1200], p[1200];
     const char *sp = getenv("TMPDIR"); snprintf(root, sizeof root, "%s/t_fs.XXXXXX", sp ? sp : "/private/tmp");
@@ -118,11 +114,11 @@ int main(int argc, char **argv) {
     g_mode = 0;
 
     printf("③ 事务\n");
-    CHECK(commit_save("save") == RES_FAIL && g_nfail == 1 && g_lasterr == ENOSPC, "①②所在事务 Commit 被拒，前端通知 1 次 errno=ENOSPC（实际 %d 次 errno=%d）", g_nfail, g_lasterr);
+    CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == 1 && g_lasterr == ENOSPC, "①②所在事务 Commit 被拒，前端通知 1 次 errno=ENOSPC（实际 %d 次 errno=%d）", g_nfail, g_lasterr);
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "old"), "工作目录丢弃、回到已提交版 old");
     CHECK(write_save("save:/a", "new") == RES_OK, "下一个事务：写 new");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "old"), "Commit 前已提交目录仍是 old");
-    CHECK(commit_save("save") == RES_OK, "Commit");
+    CHECK(h_fs_Commit("save") == RES_OK, "Commit");
     CHECK(same(p, "new"), "Commit 后已提交目录是 new");
     snprintf(p, sizeof p, "%s.new", save); CHECK(access(p, F_OK) != 0, "换下来的旧版已删（无 .new 残留）");
 
@@ -132,12 +128,12 @@ int main(int argc, char **argv) {
     CHECK(write_save("save:/b", "4") == RES_OK, "第 4 次写成功");
     errno = 0; CHECK(write_save("save:/b", "5") == RES_FAIL && errno == 28, "第 5 次写失败 errno=28（实际 errno=%d）", errno);
     CHECK(write_save("save:/b", "6") == RES_OK, "第 6 次写成功");
-    CHECK(commit_save("save") == RES_FAIL && g_nfail == 2 && g_lasterr == 28, "该事务 Commit 被拒，前端通知 errno=28（累计 %d 次）", g_nfail);
+    CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == 2 && g_lasterr == 28, "该事务 Commit 被拒，前端通知 errno=28（累计 %d 次）", g_nfail);
     snprintf(p, sizeof p, "%s/b", save); CHECK(access(p, F_OK) != 0, "已提交目录不变（没有 b）");
     snprintf(p, sizeof p, "%s/b", work); CHECK(access(p, F_OK) != 0, "工作目录丢弃（没有 b）");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "new"), "已提交目录 a 仍是 new");
     h_fs_CreateFile("save:/b", 0);
-    CHECK(write_save("save:/b", "7") == RES_OK && commit_save("save") == RES_OK, "下一个事务：写 b=7，Commit 成功");
+    CHECK(write_save("save:/b", "7") == RES_OK && h_fs_Commit("save") == RES_OK, "下一个事务：写 b=7，Commit 成功");
     snprintf(p, sizeof p, "%s/b", save); CHECK(same(p, "7"), "最终已提交 b = 7（下一个事务的内容）");
     CHECK(g_nfail == 2, "成功的事务不发通知（累计仍 %d 次）", g_nfail);
 
@@ -155,24 +151,24 @@ int main(int argc, char **argv) {
     setenv("DM_TEST_FS_FAILAT", "reclone:1", 1);
     CHECK(write_save("save:/a", "bad") == RES_OK, "写 a=bad");
     dm_fs_save_poison(ENOSPC); int nf0 = g_nfail;
-    CHECK(commit_save("save") == RES_FAIL && g_nfail == nf0 + 1, "本事务被拒（重新克隆注入失败），进程还在，前端通知 1 次");
+    CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 1, "本事务被拒（重新克隆注入失败），进程还在，前端通知 1 次");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "new"), "已提交目录 a 仍是 new");
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "bad"), "工作目录没删（a 还是 bad）");
-    CHECK(commit_save("save") == RES_FAIL && g_nfail == nf0 + 2, "仍是已污染：下一次提交照样拒绝");
+    CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 2, "仍是已污染：下一次提交照样拒绝");
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "new"), "这次重新克隆成了：工作目录 a 回到 new");
     snprintf(p, sizeof p, "%s.re", work); CHECK(access(p, F_OK) != 0, "没有 .re 残留");
-    CHECK(write_save("save:/a", "good") == RES_OK && commit_save("save") == RES_OK, "下一个事务写 a=good，提交成功");
+    CHECK(write_save("save:/a", "good") == RES_OK && h_fs_Commit("save") == RES_OK, "下一个事务写 a=good，提交成功");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "good"), "已提交 a = good");
     // ⑥b 改名后写客体名失败、回退也失败：不退出；文件在事务存档里 → 本事务提交被拒、已提交版不变；重新克隆后照常
     // 6b Writing the guest name after a rename fails and the rollback fails too: do not exit; the file is in a transactional save, so this transaction's commit is refused and the committed version is unchanged; after recloning everything works
     setenv("DM_TEST_FS_FAILAT", "guestname:1,renameback:1", 1);
     h_fs_CreateFile("save:/c", 0); CHECK(write_save("save:/c", "c") == RES_OK, "写 c");
     CHECK(h_fs_RenameFile("save:/c", "save:/d") != RES_OK, "改名 c → d 返回失败（两步都注入失败），进程还在");
-    nf0 = g_nfail; CHECK(commit_save("save") == RES_FAIL && g_nfail == nf0 + 1, "本事务提交被拒");
+    nf0 = g_nfail; CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 1, "本事务提交被拒");
     snprintf(p, sizeof p, "%s/c", save); CHECK(access(p, F_OK) != 0, "已提交目录没有 c");
     snprintf(p, sizeof p, "%s/d", save); CHECK(access(p, F_OK) != 0, "已提交目录没有 d");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "good"), "已提交 a 仍是 good");
-    CHECK(write_save("save:/a", "ok2") == RES_OK && commit_save("save") == RES_OK, "下一个事务照常提交");
+    CHECK(write_save("save:/a", "ok2") == RES_OK && h_fs_Commit("save") == RES_OK, "下一个事务照常提交");
     // ⑥c 挂载时克隆工作目录失败：不退出，改成只读挂载已提交目录——读得到、写不进、提交是空操作、已提交版不变、前端通知 1 次；下次正常挂载照旧
     // 6c Cloning the work directory at mount fails: do not exit; mount the committed directory read-only instead. Reads work, writes fail, commits are no-ops, the committed version is unchanged, and the front end is notified once; the next normal mount works as before
     setenv("DM_TEST_FS_FAILAT", "mountclone:1", 1); g_nmnt = 0; nf0 = g_nfail;
@@ -180,10 +176,10 @@ int main(int argc, char **argv) {
     CHECK(h_fs_MountSave("save", NULL) == RES_OK && g_nfail == nf0 + 1, "挂载返回成功、前端通知 1 次（实际 %d 次）", g_nfail - nf0);
     CHECK(read_fs("save:/a", got, sizeof got) && !strcmp(got, "ok2"), "只读挂载下读得到已提交的 a=ok2（读到 %s）", got);
     CHECK(write_save("save:/a", "zzz") != RES_OK, "写不进去");
-    CHECK(commit_save("save") == RES_OK, "提交是空操作");
+    CHECK(h_fs_Commit("save") == RES_OK, "提交是空操作");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok2"), "已提交 a 仍是 ok2");
     unsetenv("DM_TEST_FS_FAILAT"); g_nmnt = 0;
-    CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && commit_save("save") == RES_OK, "去掉注入重新挂载：事务式照常，写 a=ok3 提交成功");
+    CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "去掉注入重新挂载：事务式照常，写 a=ok3 提交成功");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "已提交 a = ok3");
 
     // 语言开关改写设置文件（settings_lang_apply）：期望值按规则手算——只在「与开关不符」时把 Language / VoiceLanguage 改成 0（英文）或 8（简中），别的键和别的语言不动

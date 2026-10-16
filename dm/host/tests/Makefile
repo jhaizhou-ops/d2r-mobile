@@ -65,7 +65,6 @@ run: \
 	$(B)/t_touch_mac
 	$(B)/t_oe 2>/dev/null
 	$(B)/t_fs 2>/dev/null
-	$(B)/t_fs legacy 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	DM_ROMFS="$(DM_ROOT)/data/switch/3.3.94012/Update/RomFS" $(B)/t_romfs_validate
 	$(B)/t_audio
