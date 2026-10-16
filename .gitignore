@@ -3,3 +3,7 @@
 .iosdd_mac/
 .iosdd_*/
 .DS_Store
+
+# 编辑器生成物（IDE artifacts）
+.idea/
+*.iml
