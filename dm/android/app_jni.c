@@ -183,6 +183,15 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     unsetenv("DM_PSO_LAST_CACHE");
     path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-pso-last-cache");
     if(access(driver_option,F_OK)==0)setenv("DM_PSO_LAST_CACHE","1",1);
+    /* 翻译队列（Apple v1.0.15 同构）在本设备实测：轻场景无差、重场景因大核吞吐受限无增益
+       （游戏逻辑+翻译+驱动已吃满 CPU），且同步模式久经考验 —— 默认回同步；flag-nvn-queue
+       可开启队列做实验。 | The translation queue (Apple v1.0.15 shape) measured on this device:
+       no difference in light scenes and no gain in heavy ones (the big cores are already saturated
+       by game logic + translation + driver), so the proven synchronous mode stays the default;
+       flag-nvn-queue enables the queue for experiments. */
+    setenv("DM_NVN_SYNC","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/flag-nvn-queue");
+    if(access(driver_option,F_OK)==0)unsetenv("DM_NVN_SYNC");
     setenv("DM_WRITEBACK_PREPARE","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-writeback-prepare");
     if(access(driver_option,F_OK)==0)setenv("DM_WRITEBACK_PREPARE","0",1);

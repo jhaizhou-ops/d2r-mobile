@@ -346,6 +346,9 @@ static const prog_t *snap_prog(const NVNprogram *p) {
 #ifndef __ANDROID__
 static void x_drain(void);
 static uint64_t x_fence(void);
+#else
+uint64_t x_sync_mark(void);                    // 翻译队列生效时返回带高位的任务标记，否则后端栅栏 | high-bit task mark when the queue is live, else the backend fence
+uint64_t x_sync_mark_resolve(uint64_t m);      // 需要时排空队列到标记点，返回后端栅栏值 | drain to the mark when needed, return the backend fence
 #endif
 // 对象 Finalize / 换序号前调：本序号的副本退役（按值拷来的同序号对象之后再录会重新取副本）
 // Called before an object is Finalized / changes serial: retire this serial's snapshot (an object with the same serial copied by value takes a new snapshot when recorded later)
@@ -470,7 +473,7 @@ NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
 NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; ((sync_t *)s)->fenced = 1;
 #ifdef __ANDROID__
-    ((sync_t *)s)->fence = mtl_last_fence();
+    ((sync_t *)s)->fence = x_sync_mark();
 #else
     ((sync_t *)s)->fence = x_fence();
 #endif
@@ -480,8 +483,14 @@ NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f)
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     const sync_t *o = (const sync_t *)s;
     if (!o->fenced) return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+#ifdef __ANDROID__
+    { uint64_t f = x_sync_mark_resolve(o->fence);   // 翻译队列模式：先排空到标记点再等 GPU | queue mode: drain to the mark, then wait for the GPU
+      if (!f || mtl_wait(f, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
+      return mtl_wait(f, timeout) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED; }
+#else
     if (mtl_wait(o->fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
     return mtl_wait(o->fence, timeout) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+#endif
 }
 NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
 NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { *(ev_builder_t *)b = (ev_builder_t){(const pool_t *)p, off}; }

@@ -578,9 +578,24 @@ int mtl_addr(uint64_t addr,uint64_t len,void **buf,uint64_t *off) {
 int mtl_gpu_addr(uint64_t addr,uint64_t len,void **buf,uint64_t *off,uint64_t *gpu) {
     if(!mtl_addr(addr,len,buf,off)) return 0; *gpu=addr; return 1; /* NVN virtual address, resolved through descriptors. */
 }
+/* 翻译线程可能在执行提交（G.active）：宿主线程要释放/改注册资源时等到这次提交发布完。
+ * 等待期间放开 G.lock —— 翻译线程与异步发布者需要它推进（等待窗口只有发布间隙，极短）。
+ * 调用时必须已持有 G.lock；返回时仍持有。 | The translation thread may be running a submission
+ * (G.active): host-side resource release/re-registration waits until it is published. The lock is
+ * released while waiting because the translation thread and the async publisher need it to make
+ * progress (only the publish gap is ever waited on). Must be called with G.lock held; returns
+ * with it held. */
+static void wait_submission_idle_locked(void) {
+    while (G.active) {
+        pthread_mutex_unlock(&G.lock);
+        struct timespec pause = {0, 200000};
+        nanosleep(&pause, NULL);
+        pthread_mutex_lock(&G.lock);
+    }
+    async_drain_locked();
+}
 void mtl_pool_del(const void *mem) {
-    if(G.active) die("pool deleted during submission",(long long)(uintptr_t)mem);
-    pthread_mutex_lock(&G.lock);async_drain_locked(); for(int i=0;i<G.npool;i++) if(G.pools[i].guest==mem) {
+    pthread_mutex_lock(&G.lock);wait_submission_idle_locked(); for(int i=0;i<G.npool;i++) if(G.pools[i].guest==mem) {
         buffer_free(&G.pools[i].v); G.pools[i]=G.pools[--G.npool];G.pool_revision++; pthread_mutex_unlock(&G.lock); return; }
     pthread_mutex_unlock(&G.lock); die("unknown memory pool delete",(long long)(uintptr_t)mem);
 }
@@ -1477,8 +1492,7 @@ static VTexture *slot_texture(TSlot *slot,int upload) {
     VTexture *t=texture_acquire(&slot->texture,upload,slot->resident);slot->resident=texture_reference(t);return t;
 }
 void mtl_tex_release(tex_t *source) {
-    if(G.active) die("texture release during submission",source->serial);
-    pthread_mutex_lock(&G.lock);async_drain_locked();int found=0;uint32_t slot=texture_table_slot(source->serial,&found);
+    pthread_mutex_lock(&G.lock);wait_submission_idle_locked();int found=0;uint32_t slot=texture_table_slot(source->serial,&found);
     if(found){VTexture *t=&G.textures[G.texture_table[slot]-1];
        free(t->cpu_snapshot);
        if(t->shadow){vkDestroyImageView(G.device,t->shadow_view,NULL);vkDestroyImage(G.device,t->shadow,NULL);vkFreeMemory(G.device,t->shadow_memory,NULL);}
@@ -1501,7 +1515,7 @@ static VkSamplerAddressMode wrap(unsigned w) { switch(w) {
     case NVN_WRAP_MODE_CLAMP_TO_BORDER:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;default:die("sampler wrap mode",w); } }
 void mtl_reg_samp(int id,const samp_par *p) {
     mtl_init();pthread_mutex_lock(&G.lock); if(id<0 || id>=LIMIT_OBJECTS || !p)die("sampler descriptor id",id); SSlot *s=&G.sslot[id];
-    async_drain_locked();if(s->live) { if(G.active)die("sampler re-register in flight",id); vkDestroySampler(G.device,s->sampler,NULL); }
+    async_drain_locked();if(s->live) { wait_submission_idle_locked(); vkDestroySampler(G.device,s->sampler,NULL); }
     s->source=*p;
     VkSamplerCreateInfo i={.sType=VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
        .magFilter=p->magf==NVN_MAG_FILTER_NEAREST?VK_FILTER_NEAREST:VK_FILTER_LINEAR,
