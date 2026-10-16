@@ -77,6 +77,7 @@ typedef struct {
     VkPipelineLayout layouts[LIMIT_WRITES];
     int npipeline;
     PassKey pass_key;
+    void *pass_attach_t[9];uint32_t pass_attach_level[9];int pass_attach_n;   // pass 内附件缓存：快路径标脏不用再查纹理表 | attachment cache: fast-path dirty marking skips texture-table lookups
     VkRenderPass passes[LIMIT_WRITES];
     VkFramebuffer framebuffers[LIMIT_WRITES];
     int npass;
