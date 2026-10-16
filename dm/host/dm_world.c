@@ -6,6 +6,7 @@
 // The command reuses the game's own click entry main+0x4ace20(player, action, x, y, flags) -- shared by the controller primary button (0x2b5c38 action 7 press / 0x2b5ae4 action 2 release) and the keyboard-and-mouse left button,
 // which itself handles "walk over first when far away, interact on arrival" (pending interaction) and the command packets for each kind of target (item 0x16, NPC 0x2f, object 0x41, exit 0x40).
 // The target is handed to it through the "designated target" slot [+0xd10] of the input manager (returned by main+0x2acecc()) (0x4acec4: used whenever non-null). Addresses are offsets into the original 3.3.94012 image. May only be called from the game main thread.
+#include "touch_mac.h"
 #include "dm_uiscreen.h"
 #include "dm_world.h"
 #include "hle.h"
@@ -399,12 +400,13 @@ int dm_world_tap_result(unsigned seq) { return atomic_load(&g_tap_done) == seq ?
 int dm_world_has_target(void) { return atomic_load(&g_has_target); }   // 按主键会去交互的目标存在（游戏手柄版自己的选择，main+0x2f7a0c）；任意线程读 | a target that the primary button would interact with exists (the game's own controller-version selection, main+0x2f7a0c); read from any thread
 #if TARGET_OS_OSX
 static int w_hostile(uint8_t *b, uint64_t u) { if (*(uint32_t *)u != 1) return 0; uint64_t pl = w_player(); int c = pl ? ((int (*)(int, uint64_t, uint64_t))(b + 0x2f7b7c))(0x165, pl, u) : 0; return c == 1 || c == 0xa; }
-static void w_attack(uint64_t u, const char *how) { if (g_go.on) g_go.on = 0; int r = w_interact(u); static int lg; if (lg++ < 300) LOG("鼠标攻击：%s 类型 1 cls %u id %u → 点击入口 %d", how, *(uint32_t *)(u + 4), *(uint32_t *)(u + 8), r); }
+static uint64_t g_mouse_attack_at;
+static void w_attack(uint64_t u, const char *how) { g_mouse_attack_at = w_now_ns(); if (g_go.on) g_go.on = 0; int r = w_interact(u); static int lg; if (lg++ < 300) LOG("鼠标攻击：%s 类型 1 cls %u id %u → 点击入口 %d", how, *(uint32_t *)(u + 4), *(uint32_t *)(u + 8), r); }
 static void w_walk_step(uint8_t *b) {
     uint64_t t = atomic_exchange(&g_walk, 0); if (!t) return; uint64_t dm_stick_last_ns(void); uint64_t pl = w_player(), scene = *(uint64_t *)(b + 0x2e2a698); int W = 0, H = 0, px = 0, py = 0; float f[2];
     dm_screen_real(&W, &H); if (!pl || !scene || W <= 0 || H <= 0 || !w_unit_xy(pl, &px, &py) || !w_project(b, scene, pl, f, 0)) return;
     { float d0 = 0; int lab0 = 0; g_hit_mon = 1; uint64_t mu = w_hit(b, ((t >> 16) & 0xffff) / 65535.0f * W, (t & 0xffff) / 65535.0f * H, H * 0.10f, &d0, &lab0); g_hit_mon = 0;
-      if (mu && w_hostile(b, mu)) { if (w_now_ns() - g_gnd_stick_at >= 300000000ull) w_attack(mu, "按住"); return; } }   // 按住时光标下是敌对怪：再打一下（摇杆 / W A S D 刚动过就让给它） | while held with a hostile monster under the pointer: hit once more (yielding to the stick / W A S D if they have just moved)
+      if (mu && w_hostile(b, mu)) { if (w_now_ns() - g_gnd_stick_at >= 300000000ull && w_now_ns() - g_mouse_attack_at >= 200000000ull) w_attack(mu, "按住"); return; } }   // 按住时光标下是敌对怪：再打一下（摇杆 / W A S D 刚动过就让给它） | while held with a hostile monster under the pointer: hit once more (yielding to the stick / W A S D if they have just moved)
     if (g_go.on && g_go.type != W_GROUND) return;   // 正走向某个目标去交互：不打断 | walking towards some target to interact: do not interrupt
     if (w_now_ns() - g_gnd_stick_at < 300000000ull) return;   // 摇杆 / W A S D 0.3 秒内动过：让给它 | the stick / W A S D moved within 0.3 s: yield to it
     float sx = ((t >> 16) & 0xffff) / 65535.0f * W, sy = (t & 0xffff) / 65535.0f * H, k = H * 0.00206f, a = (sx - f[0]) / k / 16, c = (sy - f[1]) / k / 8;
@@ -422,12 +424,19 @@ static void w_walk_step(uint8_t *b) {
 #if TARGET_OS_OSX
 // ---- Mac 鼠标：点怪 = 攻击 ----
 // 发令走游戏自己的点击入口（同 w_interact：手柄主键与键鼠左键共用的 main+0x4ace20，带上这只怪当指定目标）：近战它自己走过去打，主键上绑的是技能就对它放那个技能，不另写攻击逻辑。
-// 按住不放时 touch_mac.c 每 0.2 秒来一次「朝光标走」的请求（dm_world_walk）：光标下是敌对怪就改成对它再发一次攻击（追着打），不是怪才走路。
+// 按住不放时 touch_mac.c 每 30 Hz 拍更新「朝光标走」（dm_world_walk）：敌对怪改成攻击（追着打），重复攻击仍至少间隔 0.2 秒，不是怪才走路。
 // ---- Mac mouse: clicking a monster = attack ----
 // The order goes through the game's own click entry (same as w_interact: main+0x4ace20, shared by the gamepad main button and the keyboard-and-mouse left button, with this monster as the designated target): for melee it walks over and hits by itself, and if a skill is bound to the main button it uses that skill on it; no separate attack logic is written.
-// While held, touch_mac.c sends a "walk towards the pointer" request every 0.2 s (dm_world_walk): when a hostile monster is under the pointer it becomes another attack order on it (chasing it), and only otherwise is it walking.
+// While held, touch_mac.c updates "walk towards the pointer" every 30 Hz tick (dm_world_walk): a hostile monster becomes an attack (chasing it), with repeat attacks still at least 0.2 s apart; only otherwise is it walking.
 static _Atomic int g_tap_mouse;
 unsigned dm_world_click(float nx, float ny) { atomic_store(&g_tap_mouse, 1); return dm_world_tap(nx, ny); }   // 任意线程：鼠标左键点世界（比触屏的点按多认敌对怪） | any thread: left mouse click on the world (recognises hostile monsters in addition to what a touch tap does)
+// 世界泵早于鼠标 hook：消费前也要取消暂停、面板或离局期间排队的鼠标指令，触屏/脚本点按不动。
+// The world pump precedes the mouse hook: also cancel queued mouse commands before consumption during pause, panels or game exit; leave touch/script taps alone.
+static void w_mouse_cancel_pending(void) {
+    if (dm_touch_host_world_active()) return;
+    if (atomic_exchange(&g_tap_mouse, 0)) atomic_store(&g_tap, 0);
+    atomic_store(&g_walk, 0);
+}
 #endif
 static void w_tap_step(uint8_t *b) {
     uint64_t t = atomic_exchange(&g_tap, 0); if (!t) return; unsigned seq = (unsigned)(t >> 32); int res = 0;
@@ -654,6 +663,9 @@ int dm_map_goals(dm_map_goal_view *v) {
     v->n = 0; return 0;
 }
 void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at the controller poll
+#if TARGET_OS_OSX
+    w_mouse_cancel_pending();
+#endif
     { void dm_rift_client_pump(uint8_t *); DM_PROF(0, "w.rift_client", dm_rift_client_pump(wb())); }   // 秘境爬塔：认击杀（dm_rift.c） | rift tower climb: recognize kills (dm_rift.c)
     { int nd = atomic_load(&g_dm_dur_sync_n); uint8_t *b0 = nd ? wb() : NULL; if (b0) { atomic_store(&g_dm_dur_sync_n, 0); for (int i = 0; i < nd && i < 16; i++) { uint64_t c = w_find(4, g_dm_dur_sync[i][0]); if (c) ((void (*)(uint64_t, int, int, int))(b0 + 0x5bc1f0))(c, 72, (int)g_dm_dur_sync[i][1], 0); } } }   // DM_TEST_DUR 的客户端一半（diag.c） | client half of DM_TEST_DUR (diag.c)
     DM_PROF(0, "w.test_seek", w_test_seek_step());
