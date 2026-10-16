@@ -59,7 +59,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)         # 构建号（testflight.sh 传月日时分）；xcodegen 缺省写死 1，TestFlight 会当重复构建 | Build number (testflight.sh passes month-day-hour-minute); xcodegen hardcodes 1 by default, which TestFlight treats as a duplicate build
         CFBundleShortVersionString: $(MARKETING_VERSION)
         SWUpdateURL: $(DM_UPDATE_URL)                       # 新版本提示查的版本文件地址（Sources/dm_update.m）；出包脚本传，地址不进仓库。空 = 不查不提示 | URL of the version file checked for the new-version prompt (Sources/dm_update.m); passed by the packaging script, the URL is not committed to the repository. Empty = no check, no prompt
-        UILaunchStoryboardName: ""
+        UILaunchScreen: {}   # 声明启动屏，避免 iPhone 以旧尺寸兼容模式运行 | Declare a launch screen so iPhone uses its native screen size instead of legacy compatibility mode
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations:   # 游戏画面 16:9 横屏（1600x900），只允许横屏两向 | The game picture is 16:9 landscape (1600x900); only the two landscape orientations are allowed
