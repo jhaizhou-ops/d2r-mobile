@@ -223,6 +223,7 @@ static struct {
     uint64_t profile_write_submits,profile_event_submits,profile_report_submits,profile_trace_submits,profile_cpu_readback_submits,profile_event_wait_submits;
 
     uint64_t profile_desc_alloc_ns,profile_desc_update_ns,profile_prep_ns,profile_lookup_ns,profile_pool_ns,profile_bind_ns,profile_render_ns,profile_present_ns,profile_state_ns,profile_vertex_ns,profile_pso_ns,profile_tail_ns;unsigned trace_meshes;
+    uint64_t profile_bind_hits,profile_bind_full_calls,profile_bind_plan_ns,profile_bind_full_ns;   // bind_shader 细分：计划命中/全路径次数与各自耗时 | bind_shader split: plan hits / full-path calls and their times
     int diag_barrier,diag_loadstore,disable_barrier_elision,disable_sample_copy_cache,barrier_stats,pass_timing;
     uint32_t npacc;
 
@@ -282,6 +283,7 @@ static pthread_once_t init_once=PTHREAD_ONCE_INIT;
 static _Thread_local unsigned replay_cpu_depth,present_cpu_depth;
 static _Thread_local uint64_t replay_cpu_started,present_cpu_started;
 static char g_pso_cache_path[1024];   // PSO 缓存落盘路径（DM_FRAME_DIR/pso-cache.bin） | pipeline-cache blob path (DM_FRAME_DIR/pso-cache.bin)
+static _Atomic unsigned long g_pso_create_count, g_pso_slow_count, g_pso_slow_total_ns;   // 冷建统计：g_pso2 未命中才会走到 vkCreate*Pipelines | cold-creation statistics: vkCreate*Pipelines is only reached on a g_pso2 miss
 static int g_pso_cache_dirty,g_pso_cache_presents;
 static int g_bc_passthrough;          // 设备支持 textureCompressionBC：压缩纹理直传 GPU | device supports textureCompressionBC: upload compressed textures as-is
 static VkDebugUtilsMessengerEXT validation_messenger;
@@ -516,6 +518,7 @@ static void backend_init(void) {
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
      const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
+     fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}
     VkCommandPoolCreateInfo ci={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.queueFamilyIndex=G.family,
        .flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT}; CHECK(vkCreateCommandPool(G.device,&ci,NULL,&S.command_pool));CHECK(vkCreateCommandPool(G.device,&ci,NULL,&G.submission_slot2.command_pool));
@@ -1171,6 +1174,19 @@ static void pso_cache_save(void) {
     }
     free(buf);g_pso_cache_dirty=0;
 }
+/* 冷建统计（上游建议 §2 的尺子）：只有 g_pso2 未命中才走 vkCreate*Pipelines；耗时 ≥2ms 判"冷"（驱动缓存的
+ * 热命中通常 <1ms）。逐条记慢建 + 累计计数，RENDER_PROFILE 行带出——决定要不要做启动预热 / 后台编译。
+ * Cold-creation accounting (the ruler for upstream advice §2): vkCreate*Pipelines is only reached on a
+ * g_pso2 miss; ≥2 ms counts as cold (a driver-cache hit is normally <1 ms). Slow builds are logged
+ * individually plus cumulative counters, carried on the RENDER_PROFILE line -- this decides whether
+ * startup pre-warm / background compilation is worth building. */
+static void pso_create_account(const char *kind,uint64_t ns,uint64_t key,uint64_t frame) {
+    atomic_fetch_add(&g_pso_create_count,1);
+    if(ns<2000000ull)return;
+    atomic_fetch_add(&g_pso_slow_count,1);atomic_fetch_add(&g_pso_slow_total_ns,(unsigned long)ns);
+    fprintf(stderr,"[nvn-vulkan] PSO_COLD kind=%s ms=%.1f frame=%llu key=%016llx\n",kind,(double)ns/1e6,(unsigned long long)frame,(unsigned long long)key);
+}
+void mtl_pso_cache_flush(void) { mtl_init(); pthread_mutex_lock(&G.lock); if(g_pso_cache_dirty)pso_cache_save(); pthread_mutex_unlock(&G.lock); }
 void mtl_finish(void) { mtl_init(); pthread_mutex_lock(&G.lock); async_drain_locked(); CHECK(cpu_work_queue_idle(G.queue)); pso_cache_save(); pthread_mutex_unlock(&G.lock); }
 void mtl_drain(void) { mtl_finish(); }
 
@@ -2100,7 +2116,9 @@ static VkDescriptorSet binding_plan_try(VShader *s) {
 static VkDescriptorSet bind_shader(VShader *s) {
     memset(S.storage_bias[s->h.stage],0,sizeof S.storage_bias[s->h.stage]);
     S.dyn_count[s->h.stage]=0;
-    VkDescriptorSet planned=binding_plan_try(s);if(planned)return planned;
+    uint64_t bs_plan=prof_now();VkDescriptorSet planned=binding_plan_try(s);G.profile_bind_plan_ns+=prof_now()-bs_plan;
+    if(planned){G.profile_bind_hits++;return planned;}
+    uint64_t bs_full=prof_now();G.profile_bind_full_calls++;
     VkWriteDescriptorSet w[LIMIT_BINDINGS];VkDescriptorBufferInfo bi[LIMIT_BINDINGS];VkDescriptorImageInfo ii[LIMIT_BINDINGS];
     uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,sizeof(live_dyn));
     BindingResource plan_resources[LIMIT_BINDINGS];memset(plan_resources,0,sizeof(plan_resources));
@@ -2299,7 +2317,7 @@ static VkDescriptorSet bind_shader(VShader *s) {
             vkCmdCopyBuffer(S.command,bi[i].buffer,capture->b,1,&copy);char name[160];snprintf(name,sizeof(name),"ui-effective-%04llu-%llu-ps-ubo%d",(unsigned long long)G.present_count+1,(unsigned long long)G.draws,s->b[i].slot);trace_capture_queue(capture,bytes,name);
         }
     }
-    binding_plan_remember(s,set,plan_resources,plan_safe);return set;
+    binding_plan_remember(s,set,plan_resources,plan_safe);G.profile_bind_full_ns+=prof_now()-bs_full;return set;
 }
 static VShader *program_stage_optional_impl(int stage) {
     const prog_t *p=G.state.program;if(!p)die("draw/dispatch without program",stage);
@@ -2618,7 +2636,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     if(cached)pso=*cached;
     else{
         uint64_t pipeline_start=dm_android_nvn_clock_ns();CHECK(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout));gp.layout=pso.layout;
-        CHECK(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline));G.profile_pipeline_ns+=dm_android_nvn_clock_ns()-pipeline_start;g_pso_cache_dirty=1;
+        CHECK(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline));{uint64_t pns=dm_android_nvn_clock_ns()-pipeline_start;G.profile_pipeline_ns+=pns;g_pso_cache_dirty=1;pso_create_account("gfx",pns,hash,G.present_count+1);}
         pso=pso_remember(&key,hash,pso);
     }
     G.profile_pso_ns+=prof_now()-pso_started;
@@ -2679,7 +2697,7 @@ static void dispatch(const p_dispatch *p) {
     if(cached)pso=*cached;
     else{
         uint64_t pipeline_start=dm_android_nvn_clock_ns();CHECK(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout));ci.layout=pso.layout;
-        CHECK(vkCreateComputePipelines(G.device,G.pipeline_cache,1,&ci,NULL,&pso.pipeline));G.profile_pipeline_ns+=dm_android_nvn_clock_ns()-pipeline_start;g_pso_cache_dirty=1;
+        CHECK(vkCreateComputePipelines(G.device,G.pipeline_cache,1,&ci,NULL,&pso.pipeline));{uint64_t pns=dm_android_nvn_clock_ns()-pipeline_start;G.profile_pipeline_ns+=pns;g_pso_cache_dirty=1;pso_create_account("compute",pns,hash,G.present_count+1);}
         pso=pso_remember(&key,hash,pso);
     }
     int cache_commands=G.enable_command_cache&&!G.trace_frame;
@@ -3164,9 +3182,10 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
     if(G.trace_frame || G.profile_frames>=60 || G.present_count<2){uint64_t now=dm_android_nvn_clock_ns();
         double elapsed_ms=(now-G.profile_start_ns)/1e6;
         double fps=elapsed_ms>0?1000.0*G.profile_frames/elapsed_ms:0;
-        fprintf(stderr,"[nvn-vulkan] RENDER_PROFILE frame=%llu frames=%llu fps=%.3f elapsed_ms=%.3f pipeline_ms=%.3f gpu_wait_ms=%.3f upload_decode_ms=%.3f submits=%llu draws=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,fps,elapsed_ms,G.profile_pipeline_ns/1e6,G.profile_wait_ns/1e6,G.profile_decode_ns/1e6,(unsigned long long)G.profile_submits,(unsigned long long)(G.draws-G.profile_draws));
+        fprintf(stderr,"[nvn-vulkan] RENDER_PROFILE frame=%llu frames=%llu fps=%.3f elapsed_ms=%.3f pipeline_ms=%.3f gpu_wait_ms=%.3f upload_decode_ms=%.3f submits=%llu draws=%llu pso_new=%lu pso_slow=%lu pso_slow_ms=%.1f\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,fps,elapsed_ms,G.profile_pipeline_ns/1e6,G.profile_wait_ns/1e6,G.profile_decode_ns/1e6,(unsigned long long)G.profile_submits,(unsigned long long)(G.draws-G.profile_draws),(unsigned long)atomic_load(&g_pso_create_count),(unsigned long)atomic_load(&g_pso_slow_count),(double)atomic_load(&g_pso_slow_total_ns)/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_SUBMIT_CLASS_PROFILE frame=%llu total_submits=%llu observed_eligible_candidates=%llu candidate_fence_wait_ms=%.3f pool_writeback_bytes=%llu events=%llu counter_reports=%llu write_submits=%llu event_submits=%llu report_submits=%llu trace_submits=%llu cpu_readback_submits=%llu event_wait_submits=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_submits,(unsigned long long)G.profile_submit_candidates,G.profile_candidate_wait_ns/1e6,(unsigned long long)G.profile_writeback_bytes,(unsigned long long)G.profile_events,(unsigned long long)G.profile_reports,(unsigned long long)G.profile_write_submits,(unsigned long long)G.profile_event_submits,(unsigned long long)G.profile_report_submits,(unsigned long long)G.profile_trace_submits,(unsigned long long)G.profile_cpu_readback_submits,(unsigned long long)G.profile_event_wait_submits);
         fprintf(stderr,"[nvn-vulkan] RENDER_CPU_PROFILE frame=%llu lookup_ms=%.3f pool_ms=%.3f bind_ms=%.3f renderpass_ms=%.3f present_ms=%.3f desc_alloc_ms=%.3f desc_update_ms=%.3f prep_ms=%.3f state_ms=%.3f vertex_ms=%.3f pso_ms=%.3f tail_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_lookup_ns/1e6,G.profile_pool_ns/1e6,G.profile_bind_ns/1e6,G.profile_render_ns/1e6,G.profile_present_ns/1e6,G.profile_desc_alloc_ns/1e6,G.profile_desc_update_ns/1e6,G.profile_prep_ns/1e6,G.profile_state_ns/1e6,G.profile_vertex_ns/1e6,G.profile_pso_ns/1e6,G.profile_tail_ns/1e6);
+        fprintf(stderr,"[nvn-vulkan] RENDER_BIND_SPLIT frame=%llu plan_hits=%llu plan_ms=%.3f full_calls=%llu full_ms=%.3f\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_bind_hits,G.profile_bind_plan_ns/1e6,(unsigned long long)G.profile_bind_full_calls,G.profile_bind_full_ns/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_WRITEBACK_PROFILE frame=%llu enabled=%u raw_ranges=%llu copied_ranges=%llu raw_bytes=%llu copied_bytes=%llu plan_thread_cpu_ms=%.3f\n",(unsigned long long)G.present_count+1,G.enable_writeback_coalesce,(unsigned long long)G.profile_writeback_raw_ranges,(unsigned long long)G.profile_writeback_copy_ranges,(unsigned long long)G.profile_writeback_raw_bytes,(unsigned long long)G.profile_writeback_bytes,G.profile_writeback_plan_cpu_ns/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_PSO_PROFILE frame=%llu cached=%u hits=%llu misses=%llu\n",(unsigned long long)G.present_count+1,G.npso,(unsigned long long)G.profile_pso_hits,(unsigned long long)G.profile_pso_misses);
         if(G.profile_frames>=60)fprintf(stderr,"[nvn-vulkan] RENDER_PSO_HASH_PROFILE frame=%llu frames=%llu key_bytes=%zu hash_mode=byte_fnv1a last_cache=%d lookups=%llu hash_calls=%llu hash_ms=%.3f lookup_ms=%.3f last_hits=%llu last_misses=%llu table_hits=%llu misses=%llu table_probes=%llu max_probe=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,sizeof(PsoKey),G.enable_pso_last,(unsigned long long)G.profile_pso_lookups,(unsigned long long)G.profile_pso_hash_calls,G.profile_pso_hash_ns/1e6,G.profile_pso_lookup_ns/1e6,(unsigned long long)G.profile_pso_last_hits,(unsigned long long)G.profile_pso_last_misses,(unsigned long long)G.profile_pso_table_hits,(unsigned long long)G.profile_pso_misses,(unsigned long long)G.profile_pso_probes,(unsigned long long)G.profile_pso_max_probe);
@@ -3220,6 +3239,17 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         memset(G.barrier_sites,0,sizeof G.barrier_sites);
         G.profile_passes=G.pass_count;G.profile_barriers=G.profile_uniform_updates=G.profile_cpu_snapshots=G.profile_gpu_copies=G.profile_snapshot_reuses=0;
         G.profile_lookup_ns=G.profile_pool_ns=G.profile_bind_ns=G.profile_render_ns=G.profile_present_ns=G.profile_desc_alloc_ns=G.profile_desc_update_ns=G.profile_prep_ns=G.profile_state_ns=G.profile_vertex_ns=G.profile_pso_ns=G.profile_tail_ns=0;
+        G.profile_bind_hits=G.profile_bind_full_calls=G.profile_bind_plan_ns=G.profile_bind_full_ns=0;
+        /* §1 带宽 A/B：运行时可翻转的 load/store（文件内容 = 0/1/2/3，语义同 DM_DIAG_LOADSTORE）。
+         * 每个 profile 窗口（~1 秒）读一次；切换会改变后续渲染通道的键（新通道对象，旧的留在
+         * 缓存里到会话结束）。文件不存在 = 保持当前模式。 | §1 bandwidth A/B: runtime load/store
+         * override (file content = 0/1/2/3, same meaning as DM_DIAG_LOADSTORE), read once per
+         * profile window (~1 s). A switch changes the render-pass keys from the next pass on (new
+         * objects are created; old ones stay for the session). File absent: keep the current mode. */
+        { static const char *lsdir; if(!lsdir)lsdir=getenv("DM_FRAME_DIR"); char lsf[1300];
+          if(lsdir&&*lsdir&&snprintf(lsf,sizeof lsf,"%s/loadstore.txt",lsdir)<(int)sizeof lsf){FILE *fp=fopen(lsf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=3&&m!=G.diag_loadstore){G.diag_loadstore=m;
+                fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE 运行中切换 → %d（%s）\n",m,m?"内容将不正确（诊断）":"恢复正常");}fclose(fp);}}}
         G.profile_submit_candidates=G.profile_candidate_wait_ns=G.profile_writeback_bytes=G.profile_events=G.profile_reports=0;
         G.profile_writeback_raw_bytes=G.profile_writeback_raw_ranges=G.profile_writeback_copy_ranges=G.profile_writeback_plan_cpu_ns=0;
         G.profile_write_submits=G.profile_event_submits=G.profile_report_submits=G.profile_trace_submits=G.profile_cpu_readback_submits=G.profile_event_wait_submits=0;
@@ -3236,10 +3266,10 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 memcpy(G.trace_shader,key,16);G.trace_shader[16]=0;
             }
             fprintf(stderr,"[nvn-vulkan] TRACE_NEXT_FRAME frame=%llu\n",(unsigned long long)G.present_count+2);}}
-    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=1800){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return pticket;}
+    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return pticket;}
     if(S.nwrites || S.nevents || S.ncounter)die("present has unpublished guest effects",S.epoch);
     submission_publish(&S);submission_released(&S);
-    uint64_t ticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=1800){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return ticket;
+    uint64_t ticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return ticket;
 }
 void mtl_present_wait(uint64_t ticket) { if(ticket>G.present_count)die("unknown present ticket",ticket); }
 void mtl_present_flush(void) { mtl_finish(); }

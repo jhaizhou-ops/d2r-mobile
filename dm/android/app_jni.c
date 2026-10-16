@@ -344,6 +344,10 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
         {"flag-scale-75",          "DM_3D_SCALE",                      "0.75"},
         {"flag-scale-80",          "DM_3D_SCALE",                      "0.80"},
         {"flag-scale-85",          "DM_3D_SCALE",                      "0.85"},
+        {"flag-3d-scale-dyn",      "DM_3D_SCALE_DYN",                  "1"},
+        {"flag-3d-floor-85",       "DM_3D_SCALE_FLOOR",                "0.85"},
+        {"flag-3d-floor-80",       "DM_3D_SCALE_FLOOR",                "0.80"},
+        {"flag-3d-floor-75",       "DM_3D_SCALE_FLOOR",                "0.75"},
         {"flag-chunk-12",          "DM_CHUNK_DRAWS",                   "12"},
         {"flag-chunk-24",          "DM_CHUNK_DRAWS",                   "24"},
         {"flag-chunk-96",          "DM_CHUNK_DRAWS",                   "96"},
@@ -357,10 +361,11 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
         {"flag-gameres-native",    "DM_GAME_RES",                       "2168x1220"},
         {"flag-present-hz-120",    "DM_PRESENT_HZ",                     "120"},
         {"flag-present-hz-30",     "DM_PRESENT_HZ",                     "30"},
+        {"flag-resource-stats",    "DM_RESOURCE_STATS",                 "1"},
       };
       for (unsigned i = 0; i < sizeof env_flags / sizeof *env_flags; i++) {
         char f[PATH_MAX]; path(f, sizeof f, logs, env_flags[i].file);
-        if (access(f, F_OK) == 0) setenv(env_flags[i].name, env_flags[i].value, 1);
+        if (access(f, F_OK) == 0) { setenv(env_flags[i].name, env_flags[i].value, 1); LOG("ANDROID_FLAG %s → %s=%s", env_flags[i].file, env_flags[i].name, env_flags[i].value); }
       }
     }
     /* TEST PATCH (not in dodola's tree): K=V lines in diagnostics/env.txt are imported into the

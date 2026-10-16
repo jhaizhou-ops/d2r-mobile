@@ -182,8 +182,17 @@ int dm_android_diagnostics_flush(void) {
 }
 void crash_watch_frame(void) { atomic_fetch_add(&frames, 1); }
 __attribute__((weak)) void dm_android_front_presented(uint64_t frame);
+__attribute__((weak)) void dm_3d_scale_feed(double iv_ms);   // 动态 3D 比例（hle_oe.c）；core-only 探针里为空 | the dynamic 3D scale (hle_oe.c); null in core-only probes
 void dm_android_nvn_presented(uint64_t frame) {
     dm_guest_frame_tick(); crash_watch_frame();
+    /* 动态 3D 比例的输入（上游建议 §0e）：在出图点算两帧节拍之差当实际上屏间隔（ms）。
+     * 与共享层 mg_pres_iv 同源思路，但 Android 拿不到 presentedTime，就用出图时刻推。
+     * Input for the dynamic 3D scale (§0e): the delta between present points as the actual
+     * on-screen interval (ms). Same idea as the shared g_pres_iv, but Android has no presented
+     * timestamps, so the present-call time is used. */
+    { static uint64_t prev_ns; uint64_t t=now_ns();
+      if (dm_3d_scale_feed) dm_3d_scale_feed(prev_ns && t>prev_ns ? (double)(t-prev_ns)/1e6 : 0);
+      prev_ns=t; }
     if (dm_android_front_presented) dm_android_front_presented(frame);
 }
 void dm_prof_add(int id, uint64_t ns, uint64_t bytes) {

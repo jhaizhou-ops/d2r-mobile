@@ -313,9 +313,10 @@ static void scale3d_tick(void) {
  * counter is mandatory only when the explicit scaling experiment is enabled. */
 extern uint64_t dm_nvn_frame_count(void) __attribute__((weak));
 static module_t *g_android_scale_main;
-static float g_android_scale_want=1.0f;
+static float g_android_scale_want=1.0f;   // 配置值（DM_3D_SCALE，缺省 1.0）——也是动态档的 0 档 | configured value (DM_3D_SCALE, default 1.0) -- also level 0 of the dynamic table
 static _Atomic float g_android_scale_cur=1.0f;
-static _Atomic int g_android_scale_applied;
+static int g_android_scale_armed;   // 1 = 实验已武装（DM_3D_SCALE 或 DM_3D_SCALE_DYN 任一） | experiment armed (either DM_3D_SCALE or DM_3D_SCALE_DYN)
+static int g_android_scale_dyn;     // 1 = 动态档位生效 | dynamic levels active
 static pthread_once_t g_android_scale_once=PTHREAD_ONCE_INIT;
 static int g_android_scale_94012;   // 1 = 用 Apple 侧 build94012 地址映射（已对本镜像做锚点校验） | 1 = Apple-side build94012 address map (anchor-verified against this image)
 
@@ -368,18 +369,33 @@ static void android_scale_build_guard(module_t *main) {
     }
     die("ANDROID_3D_SCALE unsupported main layout (neither verified 91738 nor 94012)");
 }
+/* ── 动态 3D 比例（Android）：档位表与状态（控制器函数在文件尾；规则与 Apple 分支逐条相同）──
+ * Dynamic 3D scale (Android): level table and state (controller functions at the end of the file;
+ * rules line-for-line the same as the Apple branch). */
+#define S3_SEC_A 1000000000ull
+#define S3_NLV_A ((int)(sizeof g_s3_levels_a/sizeof g_s3_levels_a[0]))
+#define S3_FLOOR_DEF_A 0.70f   // 待真机扫档（热机稳态最后 30 秒掉帧 ≤ 1%）定 | To be set by a device sweep (dropped frames ≤ 1% in the last 30 s of warm steady state)
+static const float g_s3_levels_a[]={0.85f,0.80f,0.75f,0.70f,0.65f};   // 1 档起 | starting from level 1
+typedef struct { int level,max_level; double period_ms; uint64_t hold_until,last_up; double win_ms; unsigned win_n,win_d;
+                 uint16_t wn[30],wd[30]; int nw; int good_run,need_good; double last_r10,last_r60; } scale3d_ctl_a;
+static _Atomic int g_scale3d_level;            // 动态档（0 = 配置值，k = g_s3_levels_a[k−1]） | dynamic level (0 = configured value, k = g_s3_levels_a[k-1])
+static _Atomic int g_scale3d_resumed;
+static _Atomic int g_3d_quality_mode;          // 0 = 流畅优先（缺省），1 = 画质优先 | 0 = smoothness first (default), 1 = quality first
 static void android_scale_configure(void) {
-    const char *e=getenv("DM_3D_SCALE");
-    if (!e) return;
-    char *end; errno=0; float want=strtof(e,&end);
-    if (end==e || *end || errno==ERANGE || !isfinite(want) || want<0.70f || want>1.0f)
-        die("ANDROID_3D_SCALE invalid value %s; expected finite 0.70..1.0",e);
+    const char *e=getenv("DM_3D_SCALE"),*d=getenv("DM_3D_SCALE_DYN");
+    int dyn=d && strcmp(d,"0") && !getenv("DM_THERMAL_NOFALLBACK");
+    if (!e && !dyn) return;   // 没要求比例实验 → 不武装（缺省行为不变） | nothing requested: stay unarmed (default behaviour unchanged)
+    float base=1.0f;
+    if (e) { char *end; errno=0; float want=strtof(e,&end);
+        if (end==e || *end || errno==ERANGE || !isfinite(want) || want<0.70f || want>1.0f)
+            die("ANDROID_3D_SCALE invalid value %s; expected finite 0.70..1.0",e);
+        base=want; }
     if (!dm_nvn_frame_count)
         die("ANDROID_3D_SCALE requires graphics presented-frame counter; unavailable in core-only probes");
     for (int i=0;i<g_nmod;i++) if (!strcmp(g_mod[i].name,"main")) g_android_scale_main=&g_mod[i];
     android_scale_build_guard(g_android_scale_main);
-    g_android_scale_want=want;
-    LOG("ANDROID_3D_SCALE_CONFIG build=%s fixed_scale=%.3f output=1280x720",g_android_scale_94012?"94012":"91738",(double)want);
+    g_android_scale_want=base; g_android_scale_dyn=dyn?1:0; g_android_scale_armed=1;
+    LOG("ANDROID_3D_SCALE_CONFIG build=%s base=%.3f dyn=%d",g_android_scale_94012?"94012":"91738",(double)base,g_android_scale_dyn);
 }
 static int android_scale_readable(uintptr_t address,size_t length) {
     if (address>UINTPTR_MAX-length) return 0;
@@ -392,7 +408,7 @@ static int android_scale_readable(uintptr_t address,size_t length) {
 static void android_scale3d_tick(void *return_address) {
     static _Thread_local int rebuilding;
     pthread_once(&g_android_scale_once,android_scale_configure);
-    if (g_android_scale_want==1.0f || atomic_load(&g_android_scale_applied) || rebuilding || dm_nvn_frame_count()<30) return;
+    if (!g_android_scale_armed || rebuilding || dm_nvn_frame_count()<30) return;
     module_t *main=g_android_scale_main;
     uintptr_t obj_off=g_android_scale_94012?0x31e0848:0x31b2528, fn_off=g_android_scale_94012?0x8582f0:0x841540;
     if (!g_android_scale_94012 && return_address!=main->base+0xdf7bb8 && return_address!=main->base+0xdf7c10)
@@ -407,9 +423,16 @@ static void android_scale3d_tick(void *return_address) {
     uint32_t ow=sizes[4],oh=sizes[5];
     if (!g_android_scale_94012) { if (ow!=1280 || oh!=720) return; }   // 91738 实验固定按 1280x720 输出 | the 91738 experiment assumed the fixed 1280x720 output
     else if (ow<640 || ow>3840 || oh<360 || oh>2160) return;          // 94012：接受宿主配置的输出分辨率 | 94012: accept the host-configured output resolution
-    float *scale=(float *)(renderer+0x66a4),before=*scale,want=g_android_scale_want;
-    if (!isfinite(before) || before<0.70f || before>1.0f)
+    /* 目标比例：固定档 = 配置值；动态档 = 档位表（0 档 = 配置值，clamp 到不高于它）。
+       与当前值一致就什么都不做（固定档因此天然只应用一次）。 | Target scale: fixed mode =
+       configured value; dynamic mode = level table (level 0 = configured value, clamped not to
+       exceed it). Equal to the current value: nothing to do (which makes fixed mode apply once). */
+    float want=g_android_scale_want;
+    if (g_android_scale_dyn) { int lv=atomic_load(&g_scale3d_level); if (lv>0) { int k=lv>S3_NLV_A?S3_NLV_A:lv; want=g_s3_levels_a[k-1]; if (want>g_android_scale_want) want=g_android_scale_want; } }
+    float *scale=(float *)(renderer+0x66a4),before=*scale;
+    if (!isfinite(before) || before<0.50f || before>1.0f)
         die("ANDROID_3D_SCALE unexpected current scale %.9g",(double)before);
+    if (fabsf(before-want)<1e-4f) { atomic_store(&g_android_scale_cur,before); return; }
     uint32_t expected_w=(uint32_t)lroundf((float)ow*want),expected_h=(uint32_t)lroundf((float)oh*want);
     LOG("ANDROID_3D_SCALE_BEGIN before=%.3f want=%.3f internal=%ux%u output=%ux%u frame=%llu caller=%#zx",(double)before,(double)want,sizes[0],sizes[1],ow,oh,(unsigned long long)dm_nvn_frame_count(),(size_t)((uint8_t *)return_address-main->base));
     rebuilding=1;
@@ -422,22 +445,103 @@ static void android_scale3d_tick(void *return_address) {
         if (!g_android_scale_94012)
             die("ANDROID_3D_SCALE resize verification failed: expected internal=%ux%u output=%ux%u",expected_w,expected_h,ow,oh);
         /* 94012 映射：校验失败必须能回退到原状——比例写回原值并重跑一次改分辨率函数，恢复了才继续；
-           恢复不了（尺寸仍不对）才 die。 | 94012 map: a verification failure must revert: write the old
-           scale back and run the resize function again; only die if the revert itself fails. */
+           恢复不了（尺寸仍不对）才 die。回退成功后放弃动态调整（固定在回退值），游戏继续。 | 94012 map:
+           a verification failure must revert: write the old scale back and run the resize function
+           again; only die if the revert itself fails. After a successful revert, dynamic levels are
+           given up (the reverted value is kept) and the game continues. */
         LOG("【红】ANDROID_3D_SCALE (94012) resize verification failed; reverting to %.3f (got internal=%ux%u duplicate=%ux%u output=%ux%u)",(double)before,sizes[0],sizes[1],sizes[2],sizes[3],sizes[4],sizes[5]);
         dm_guest_write_prepare(scale,sizeof *scale); *scale=before;
         ((void (*)(uint32_t,uint32_t))(main->base+fn_off))(ow,oh);
         uint32_t revert_w=(uint32_t)lroundf((float)ow*before),revert_h=(uint32_t)lroundf((float)oh*before);
         if (sizes[0]!=revert_w || sizes[1]!=revert_h || sizes[4]!=ow || sizes[5]!=oh)
             die("ANDROID_3D_SCALE (94012) revert failed: internal=%ux%u expected=%ux%u",sizes[0],sizes[1],revert_w,revert_h);
-        atomic_store(&g_android_scale_applied,1);   // 放弃这次实验，不再重试 | give the experiment up, do not retry
+        g_android_scale_dyn=0;   // 放弃动态调整，不再重试 | give dynamic adjustments up, do not retry
+        atomic_store(&g_android_scale_cur,before);
         rebuilding=0; return;
     }
-    atomic_store(&g_android_scale_cur,want); atomic_store(&g_android_scale_applied,1); rebuilding=0;
+    atomic_store(&g_android_scale_cur,want); rebuilding=0;
 }
 float dm_3d_scale_cur(void) { return atomic_load(&g_android_scale_cur); }
-void dm_3d_scale_feed(double interval_ms) { (void)interval_ms; }
-void dm_3d_scale_resumed(void) {}
+/* ── 动态 3D 比例（Android 侧）──────────────────────────────────────────────────────────────
+ * 规则与上面 Apple 分支逐条相同（判据、窗口、阈值、升降停判）：掉帧率 >5% / 10 秒或 >1.5% / 60 秒
+ * 降一档；30 秒一帧不掉升一档；刚升 15 秒内又掉，下次升要 90 秒。改阈值时两处一起改。
+ * 差别只有两处：①判据输入 = Android 出图点喂来的实际上屏间隔（diagnostics.c → dm_3d_scale_feed），
+ * 拿不到系统丢弃标志；②周期取本平台节拍（inc 的 dm_android_nvn_period_ms）。
+ * 档位表按本平台定：原生输出下从 0.85 起降，缺省下限 0.70（DM_3D_SCALE_FLOOR 可改）。
+ * 默认关：DM_3D_SCALE_DYN=1 才生效（倒档同 Apple：=0 或 DM_THERMAL_NOFALLBACK=1 关）。
+ * Rules line-for-line the same as the Apple branch above (criterion, windows, thresholds, hold
+ * after a change): dropped-frame rate >5% over 10 s or >1.5% over 60 s lowers one level; 15 clean
+ * windows (30 s) raise one level; knocked back within 15 s of a raise means the next raise needs
+ * 90 s. Tune both sides together. Only two differences: (1) the input is the actual present
+ * interval fed by the Android present point (no system discard flag); (2) the period comes from
+ * this platform's pacer (dm_android_nvn_period_ms in the inc). Level table tuned here: start at
+ * 0.85 under native output, default floor 0.70 (DM_3D_SCALE_FLOOR overrides). Off by default:
+ * DM_3D_SCALE_DYN=1 enables it (=0 or DM_THERMAL_NOFALLBACK=1 disables, like Apple). */
+/* 档位表 / 结构体已上移到 android_scale_configure 之前（tick 要用） | level table and struct moved
+ * above android_scale_configure (used by the tick). */
+static void scale3d_ctl_hold_a(scale3d_ctl_a *c,uint64_t now,uint64_t ns) {   // 停判一段时间：窗与历史清零 | pause judging: clear windows and history
+    if (now+ns>c->hold_until) c->hold_until=now+ns;
+    c->win_ms=0; c->win_n=c->win_d=0; c->nw=0; c->good_run=0;
+}
+static double s3_rate_a(const scale3d_ctl_a *c,int k) {   // 最近 k 窗的掉帧率 | dropped-frame rate over the last k windows
+    unsigned n=0,d=0; for (int i=0;i<k && i<c->nw;i++) { n+=c->wn[i]; d+=c->wd[i]; } return n?(double)d/n:0;
+}
+static int scale3d_ctl_step_a(scale3d_ctl_a *c,double iv_ms,uint64_t now) {   // 返回当前级 | returns the current level
+    if (now<c->hold_until || iv_ms==0) return c->level;   // 停判中 / 无读数 | judging paused / no reading
+    double per=c->period_ms>0?c->period_ms:1000.0/60;
+    c->win_n++; if (iv_ms<0 || iv_ms>per*1.5) c->win_d++;   // 超过 1.5 个周期算掉帧 | >1.5 periods counts as a dropped frame
+    c->win_ms+=iv_ms>0?iv_ms:per;
+    if (c->win_ms<2000) return c->level;
+    memmove(c->wn+1,c->wn,sizeof c->wn-sizeof c->wn[0]); memmove(c->wd+1,c->wd,sizeof c->wd-sizeof c->wd[0]);
+    c->wn[0]=(uint16_t)c->win_n; c->wd[0]=(uint16_t)c->win_d; if (c->nw<30) c->nw++;
+    int clean=c->win_d==0; c->win_ms=0; c->win_n=c->win_d=0;
+    c->last_r10=s3_rate_a(c,5); c->last_r60=c->nw>=30?s3_rate_a(c,30):0;
+    if (c->level<c->max_level && ((c->nw>=5 && c->last_r10>0.05) || (c->nw>=30 && c->last_r60>0.015))) {
+        if (c->last_up && now-c->last_up<15*S3_SEC_A) c->need_good=45;   // 刚升又掉：下次升档要 90 秒 | raised then knocked back: the next raise needs 90 s
+        c->level++; scale3d_ctl_hold_a(c,now,3*S3_SEC_A); return c->level;
+    }
+    if (clean) { if (++c->good_run>=(c->need_good?c->need_good:15) && c->level>0) { c->level--; c->last_up=now; c->need_good=0; scale3d_ctl_hold_a(c,now,3*S3_SEC_A); } }
+    else c->good_run=0;
+    return c->level;
+}
+/* 状态原子量已上移（见 android_scale_configure 之前） | state atomics moved above */
+void dm_3d_quality_mode_set(int mode) { atomic_store(&g_3d_quality_mode,mode==1?1:0); }
+int dm_3d_quality_mode_get(void) { return atomic_load(&g_3d_quality_mode); }
+void dm_3d_scale_resumed(void) { atomic_store(&g_scale3d_resumed,1); }   // 前端：刚回前台，回头的慢帧是恢复不是 GPU 吃紧 → 停判 3 秒 | front end: just returned to foreground; the slow frames after a return are recovery, not GPU pressure -> pause 3 s
+void dm_3d_scale_feed(double iv_ms) {   // 出图线程每帧调（diagnostics.c：实际上屏间隔 ms；0 = 无读数） | called by the present thread every frame (diagnostics.c: actual present interval in ms; 0 = no reading)
+    static scale3d_ctl_a c; static int on=-1; static long inj0=-1,inj1=-1;
+    if (on<0) { const char *e=getenv("DM_3D_SCALE_DYN"),*j=getenv("DM_3D_SCALE_DYN_INJECT"); on=!!(e && strcmp(e,"0")) && !getenv("DM_THERMAL_NOFALLBACK");
+        if (j) { inj0=atol(j); inj1=strchr(j,'-')?atol(strchr(j,'-')+1):inj0; }
+        const char *fe=getenv("DM_3D_SCALE_FLOOR"); float fl=fe?strtof(fe,NULL):S3_FLOOR_DEF_A;
+        for (int k=0;k<S3_NLV_A;k++) if (g_s3_levels_a[k]>=fl-1e-4f) c.max_level=k+1;
+        LOG("3D 比例控制（Android）：%s，0.85 起降、下限 %.2f（第 %d 档）",on?"开":"关",c.max_level?g_s3_levels_a[c.max_level-1]:0.0f,c.max_level); }
+    if (!on) return;
+    // 进程内交替测量（owner 方法，消除跨会话热差）：flag-3d-quality 文件在 → 画质优先（钉住
+    // 配置值）；撤掉 → 动态档恢复。约每 2 秒查一次盘；切换点记帧号，便于按窗口分段统计。
+    // In-process alternating measurement (the owner's method, removes cross-session thermal
+    // drift): while flag-3d-quality exists, quality-first pins the configured value; removing it
+    // restores the dynamic levels. Polled about every 2 s; the switch point is logged with the
+    // frame number so windows can be attributed to a phase.
+    { static unsigned abtick; if ((abtick++ & 127u) == 0) {
+        char f[1200] = ""; const char *dir = getenv("DM_FRAME_DIR"); int wq = 0;
+        if (dir && *dir && snprintf(f, sizeof f, "%s/flag-3d-quality", dir) < (int)sizeof f) wq = access(f, F_OK) == 0;
+        if (wq != atomic_load(&g_3d_quality_mode)) { atomic_store(&g_3d_quality_mode, wq);
+            LOG("3D 比例 A/B：%s（帧 %llu）", wq ? "画质优先（钉住配置值）" : "动态档恢复", (unsigned long long)(dm_nvn_frame_count ? dm_nvn_frame_count() : 0)); } } }
+    if (atomic_load(&g_3d_quality_mode)==1) { if (c.level) { c.level=0; LOG("3D 比例控制：画质优先，回到配置值"); } atomic_store(&g_scale3d_level,0); return; }
+    uint64_t now=now_ns();
+    if (atomic_exchange(&g_scale3d_resumed,0)) scale3d_ctl_hold_a(&c,now,3*S3_SEC_A);
+    { static int seen; if (!seen) { seen=1; scale3d_ctl_hold_a(&c,now,20*S3_SEC_A); } }   // 首帧起停判 20 秒（装载 / 进局慢帧不算） | hold 20 s from the first frame (loading / entry slowness does not count)
+    // Android 还没接"局内"信号：菜单 / 读取画面的长帧也会进窗，降档日志带窗数据，回查用 | No in-game
+    // signal is wired on Android yet: menu / loading long frames also enter the windows; the level-
+    // change log line carries the window rates for review.
+    { extern double dm_android_nvn_period_ms(void) __attribute__((weak)); double p=dm_android_nvn_period_ms?dm_android_nvn_period_ms():0;
+      if (!(p>0)) p=1000.0/60; if (p!=c.period_ms) { c.period_ms=p; scale3d_ctl_hold_a(&c,now,2*S3_SEC_A); } }
+    if (inj0>=0) { long f=dm_nvn_frame_count?(long)dm_nvn_frame_count():0; double per=c.period_ms>0?c.period_ms:1000.0/60; iv_ms=f>=inj0&&f<=inj1?2*per:per; }   // 注入诊断：段内每帧当掉一帧 | injection diagnostic: every frame within the segment counts as dropped
+    int was=c.level,lv=scale3d_ctl_step_a(&c,iv_ms,now);
+    if (lv!=was) LOG("3D 比例控制（Android）：最近 10 秒掉帧 %.1f%%、60 秒 %.1f%% → %s到第 %d 档（3D 比例 %.2f）%s",c.last_r10*100,c.last_r60*100,lv>was?"降":"升",lv,
+                     lv?g_s3_levels_a[lv-1]:-1.0f,c.need_good?"（刚升又掉：下次升档要 90 秒）":"");
+    atomic_store(&g_scale3d_level,lv);
+}
 void dm_3d_scale_hot(int hot) { dm_android_platform_setting("thermal_warning", hot != 0); }
 #endif
 HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "系统通知队列；前端状态变化入队", unsigned, h_oe_TryPopMsg, uint32_t *msg) {

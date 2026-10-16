@@ -27,7 +27,8 @@ void dm_gfx_suspend(int on) {
     pthread_mutex_lock(&android_suspend_mu);android_suspended=on!=0;
     if(on)while(android_inflight)pthread_cond_wait(&android_suspend_cv,&android_suspend_mu);
     else pthread_cond_broadcast(&android_suspend_cv);
-    pthread_mutex_unlock(&android_suspend_mu);if(on){x_drain();dm_android_nvn_work_reset(0);mtl_drain();}
+    pthread_mutex_unlock(&android_suspend_mu);if(on){x_drain();dm_android_nvn_work_reset(0);mtl_drain();mtl_pso_cache_flush();}   // 挂起时把新编译的管线立即持久化 | persist pipelines compiled this session before the app may be killed
+    else { extern void dm_3d_scale_resumed(void) __attribute__((weak)); if(dm_3d_scale_resumed) dm_3d_scale_resumed(); }   // 刚回前台：动态 3D 比例停判 3 秒（恢复期的慢帧不是 GPU 吃紧） | just returned to foreground: the dynamic 3D scale pauses judging for 3 s (recovery slowness is not GPU pressure)
     pthread_mutex_unlock(&android_lifecycle_mu);
 }
 uint64_t dm_nvn_frame_count(void) {return atomic_load(&android_nvn_frame);}
@@ -153,6 +154,7 @@ NVN(nvnWindowSetCrop,void,NVNwindow *window,int x,int y,int width,int height) {
     int crop[4]={x,y,width,height};memcpy(((win_t *)window)->crop,crop,sizeof(crop));
 }
 static int android_present_hz=-1,android_display_intervals;
+static _Atomic uint64_t android_last_period_ns;   // 最近一次算出的节拍周期（ns）：动态 3D 比例拿它当目标周期 | most recent pacing period (ns): the dynamic 3D scale uses it as the target period
 void nvn_present_config(int hz,int display_intervals) {if(hz<0 || hz>1000)die("NVN pacing hz=%d",hz);android_present_hz=hz;android_display_intervals=display_intervals;LOG("NVN 节拍配置 hz=%d display_intervals=%d",hz,display_intervals);}
 static uint64_t android_present_period(const win_t *w) {
     if(android_present_hz<0) {const char *e=getenv("DM_PRESENT_HZ");android_present_hz=e?atoi(e):60;
@@ -161,8 +163,11 @@ static uint64_t android_present_period(const win_t *w) {
     /* Original frame-counting behavior remains limited to 60 Hz unless the
      * front end explicitly supplies another tested game cadence. */
     uint64_t interval=w->interval>0?(uint64_t)w->interval:1;
-    return (1000000000ULL/(uint64_t)android_present_hz)*(android_display_intervals?interval:1);
+    uint64_t p=(1000000000ULL/(uint64_t)android_present_hz)*(android_display_intervals?interval:1);
+    atomic_store(&android_last_period_ns,p);
+    return p;
 }
+double dm_android_nvn_period_ms(void) { return (double)atomic_load(&android_last_period_ns)/1e6; }   // 动态 3D 比例（hle_oe.c）读目标周期 | the dynamic 3D scale (hle_oe.c) reads the target period
 NVN(nvnWindowAcquireTexture,NVNwindowAcquireTextureResult,NVNwindow *window,NVNsync *sync,int *index) {
     win_t *w=(void *)window;if(!index || w->ntex<1 || w->ntex>4)die("NVN acquire window",0);
     android_gfx_enter();dm_android_nvn_schedule_thread("acquire");dm_android_nvn_work_check_thread();*index=w->next++%w->ntex;
