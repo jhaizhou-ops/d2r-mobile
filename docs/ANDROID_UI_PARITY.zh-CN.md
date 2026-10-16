@@ -1,12 +1,11 @@
 # Android 复刻 iOS UI 体验：实施方案（评审稿 v1）
 
-> **迁移注记（整合树）**：本文写作基线为合并前的 `android-ours@0149751` 快照（自研 Vulkan 层位于 `dm/gfx/vk/`）。
-> 现仓库为 `android-integration`（dodola 的 Android/Vulkan 层已合并，后端在 `dm/gfx/nvn/nvn_vk.c`），
-> 文中 `dm/gfx/vk/...` 路径与部分行号需按新树重新对照；交互模型、隔离协议与阶段划分的结论不受影响。
-> Migration note (integration tree): this document was written against the pre-merge snapshot
-> `android-ours@0149751` (self-developed Vulkan layer under `dm/gfx/vk/`). This tree is
-> `android-integration` with dodola's Android/Vulkan layer merged (`dm/gfx/nvn/nvn_vk.c`); re-check
-> the `dm/gfx/vk/...` paths and line numbers, the design conclusions are unaffected.
+> **这份文档是什么（人话）**：把 iPhone 版的触摸和界面操作手感搬到 Android 的**设计方案**
+> （写的时候还没开始写代码）。核心结论：手感不需要重新发明——算法、界面数据、时序参数三大块
+> 直接复用，工作量全在"写一个 Android 外壳 + 接线"。
+> **现在还有用吗**：当参考稿看。这套方案后来**已经实施了相当一部分**（触摸覆盖层等已在设备上
+> 实际运行），所以文中引用的旧路径/行号只是历史对照。要了解整机现状看
+> `docs/android-perf-notes.md`；要接着做这条线，先对照代码复核文中各子项的实际完成度。
 
 > **状态：方案评审稿 —— 未动任何代码。** 评审定稿后才进入实施；实现开始前把本文转成英文版 `ANDROID_UI_PARITY.md`（仓库惯例：英文主文档 + 简体中文对照，见 ANDROID.md / ANDROID.zh-CN.md）。
 >

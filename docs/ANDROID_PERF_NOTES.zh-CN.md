@@ -1,13 +1,11 @@
 # Android 性能核对清单（上游经验 × 仓库实测）
 
-> **迁移注记（整合树）**：本文写作基线为合并前的 `android-ours@0149751` 快照（自研 Vulkan 层位于 `dm/gfx/vk/`）。
-> 现仓库为 `android-integration`（dodola 的 Android/Vulkan 层已合并，后端在 `dm/gfx/nvn/nvn_vk.c`），行号/路径需按新树重新对照。
-> 独立审计（2026-10-16）：约 85% 条目属实，**6 处必修尚未应用**——管线缓存已落盘（`224c00c`）、分块 DONT_CARE 实测无 fps 增益、
-> §2.2 交换链 loadOp 机会点无效、翻译队列已移植（默认同步、`flag-nvn-queue` 实验）、测量基建部分已有（Apple `DM_NVN_UB` / 300 帧窗 / >25ms 口径）、
-> 若干数字口径与归属待更正（详见整合树 `docs/android-perf-notes.md` §0"文档审计"）。
-> Migration note (integration tree): baseline = pre-merge snapshot `android-ours@0149751`; this tree is `android-integration`
-> with the merged backend in `dm/gfx/nvn/nvn_vk.c`. An independent audit found ~85% accurate with six pending corrections
-> (details in `docs/android-perf-notes.md` §0).
+> **这份文档是什么（人话）**：合并前"旧代码快照"时代写的一份核对清单——当时把上游（iPhone 版）
+> 的性能经验逐条对照我们的仓库，列出"该做什么、优先级多高"。
+> **现在还有用吗**：基本只剩历史价值。清单里的事**到现在基本都做完了**（管线缓存落盘、带宽、
+> 翻译线程、测量工具……），而且当时引用的文件路径和行号是旧结构、早已对不上。
+> **别照这份干活。** 所有条目的最新结论都在 `docs/android-perf-notes.md`（大白话版）；踩坑规矩在
+> `docs/android-perf-lessons.zh-CN.md`。
 
 > **状态：核对清单 v1 —— 未动任何代码。** 来源 = 上游来信（2026-10-16，iOS 实测经验）+ 5 路并发深度解剖（分块带宽 / 管线缓存 / 翻译线程 / 测量工具链 / 现成收益）。
 > 相关文档：[VK_RENDER_PROGRESS.zh-CN.md](VK_RENDER_PROGRESS.zh-CN.md)（实测日志）、[VK_CORRECTNESS_PLAN.zh-CN.md](VK_CORRECTNESS_PLAN.zh-CN.md)（正确性）、[ANDROID.zh-CN.md](ANDROID.zh-CN.md)（总体计划）、[ANDROID_UI_PARITY.zh-CN.md](ANDROID_UI_PARITY.zh-CN.md)（UI 对齐，独立工作线）。

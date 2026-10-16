@@ -1,11 +1,9 @@
 # Android 复刻 iOS UI 体验：实现设计（实现文档 v1）
 
-> **迁移注记（整合树）**：本文写作基线为合并前的 `android-ours@0149751` 快照（自研 Vulkan 层位于 `dm/gfx/vk/`）。
-> 现仓库为 `android-integration`（dodola 的 Android/Vulkan 层已合并，后端在 `dm/gfx/nvn/nvn_vk.c`），
-> 文中 `dm/gfx/vk/...` 路径、iOS 参照行号与部分 `file:line` 需按新树重新对照；实现契约与验收钩子不受影响。
-> Migration note (integration tree): written against the pre-merge snapshot `android-ours@0149751`;
-> this tree is `android-integration` with dodola's layer merged (`dm/gfx/nvn/nvn_vk.c`) — re-check paths
-> and line numbers, the implementation contract is unaffected.
+> **这份文档是什么（人话）**：上面那份"实施方案"的**细节版**——接口快照、要改哪些文件、
+> JNI 怎么接、伪代码、验收办法、容易踩的坑。同样写于"还没动代码"的时候。
+> **现在还有用吗**：当参考稿看；文中路径/行号是旧快照时代的，对不上现在的代码。
+> 现状看 `docs/android-perf-notes.md`；继续做这条线前先对照代码复核完成度。
 
 > **状态：实现前置设计稿 —— 未动任何代码。**
 > 总纲（结论 / 差距矩阵 / 阶段划分 / 隔离协议 / 决策点）见 [ANDROID_UI_PARITY.zh-CN.md](ANDROID_UI_PARITY.zh-CN.md)。
