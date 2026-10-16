@@ -279,6 +279,8 @@ static pthread_once_t init_once=PTHREAD_ONCE_INIT;
  * writeback is a retire subset. These phase totals must not be summed blindly. */
 static _Thread_local unsigned replay_cpu_depth,present_cpu_depth;
 static _Thread_local uint64_t replay_cpu_started,present_cpu_started;
+static char g_pso_cache_path[1024];   // PSO 缓存落盘路径（DM_FRAME_DIR/pso-cache.bin） | pipeline-cache blob path (DM_FRAME_DIR/pso-cache.bin)
+static int g_pso_cache_dirty,g_pso_cache_presents;
 static VkDebugUtilsMessengerEXT validation_messenger;
 static VKAPI_ATTR VkBool32 VKAPI_CALL validation_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity,VkDebugUtilsMessageTypeFlagsEXT type,const VkDebugUtilsMessengerCallbackDataEXT *data,void *user) {
     (void)type;(void)user;
@@ -460,7 +462,32 @@ static void backend_init(void) {
      * An empty cache belongs only to this device; no cross-device data is loaded. */
     if(!getenv("DM_DISABLE_PIPELINE_CACHE")){
         VkPipelineCacheCreateInfo cache={.sType=VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-        CHECK(vkCreatePipelineCache(G.device,&cache,NULL,&G.pipeline_cache));
+        /* 跨会话持久化：从 DM_FRAME_DIR/pso-cache.bin 加载上一次的驱动编译结果。
+         * 后果：遇到新怪/新特效时的 300~600ms 现场编译只在第一次发生，
+         * 之后每次启动直接命中。（驱动会自行校验 blob；非法则视为空缓存。） */
+        void *blob=NULL; size_t blob_size=0;
+        const char *dir=getenv("DM_FRAME_DIR");
+        if(dir){
+            snprintf(g_pso_cache_path,sizeof g_pso_cache_path,"%s/pso-cache.bin",dir);
+            FILE *f=fopen(g_pso_cache_path,"rb");
+            if(f){
+                fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
+                if(n>0 && (unsigned long)n<(256ul<<20)){
+                    blob=malloc((size_t)n);
+                    if(blob && fread(blob,1,(size_t)n,f)!=(size_t)n){free(blob);blob=NULL;}
+                    else if(blob){blob_size=(size_t)n;cache.pInitialData=blob;cache.initialDataSize=blob_size;}
+                }
+                fclose(f);
+            }
+            if(blob) fprintf(stderr,"[nvn-vulkan] PSO_CACHE load %zu bytes from %s\n",blob_size,g_pso_cache_path);
+        }
+        VkResult cr=vkCreatePipelineCache(G.device,&cache,NULL,&G.pipeline_cache);
+        free(blob);
+        if(cr!=VK_SUCCESS){
+            VkPipelineCacheCreateInfo empty={.sType=VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+            fprintf(stderr,"[nvn-vulkan] PSO_CACHE load rejected (%d); starting empty\n",(int)cr);
+            CHECK(vkCreatePipelineCache(G.device,&empty,NULL,&G.pipeline_cache));
+        }
     }
     fprintf(stderr,"[nvn-vulkan] driver_pipeline_cache=%d\n",G.pipeline_cache!=VK_NULL_HANDLE);
     G.disable_pso_reuse=getenv("DM_DISABLE_PSO_REUSE")!=NULL;
@@ -1096,7 +1123,23 @@ int mtl_wait(uint64_t fence,uint64_t timeout) {
     }
     return 1;
 }
-void mtl_finish(void) { mtl_init(); pthread_mutex_lock(&G.lock); async_drain_locked(); CHECK(cpu_work_queue_idle(G.queue)); pthread_mutex_unlock(&G.lock); }
+static void pso_cache_save(void) {
+    if(!G.pipeline_cache || !g_pso_cache_path[0]) return;
+    size_t n=0;
+    if(vkGetPipelineCacheData(G.device,G.pipeline_cache,&n,NULL)!=VK_SUCCESS || !n) return;
+    void *buf=malloc(n); if(!buf) return;
+    size_t got=n;
+    if(vkGetPipelineCacheData(G.device,G.pipeline_cache,&got,buf)==VK_SUCCESS && got){
+        char tmp[sizeof g_pso_cache_path+8];
+        snprintf(tmp,sizeof tmp,"%s.tmp",g_pso_cache_path);
+        FILE *f=fopen(tmp,"wb");
+        if(f){ size_t w=fwrite(buf,1,got,f); int ok=!fclose(f) && w==got;
+            if(ok)rename(tmp,g_pso_cache_path);
+            fprintf(stderr,"[nvn-vulkan] PSO_CACHE save %zu bytes%s\n",got,ok?"":" (写入失败)"); }
+    }
+    free(buf);g_pso_cache_dirty=0;
+}
+void mtl_finish(void) { mtl_init(); pthread_mutex_lock(&G.lock); async_drain_locked(); CHECK(cpu_work_queue_idle(G.queue)); pso_cache_save(); pthread_mutex_unlock(&G.lock); }
 void mtl_drain(void) { mtl_finish(); }
 
 static VkFormat format(int nvn) {
@@ -2444,7 +2487,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     if(cached)pso=*cached;
     else{
         uint64_t pipeline_start=dm_android_nvn_clock_ns();CHECK(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout));gp.layout=pso.layout;
-        CHECK(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline));G.profile_pipeline_ns+=dm_android_nvn_clock_ns()-pipeline_start;
+        CHECK(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline));G.profile_pipeline_ns+=dm_android_nvn_clock_ns()-pipeline_start;g_pso_cache_dirty=1;
         pso=pso_remember(&key,hash,pso);
     }
     int cache_commands=G.enable_command_cache&&!G.trace_frame;
@@ -2502,7 +2545,7 @@ static void dispatch(const p_dispatch *p) {
     if(cached)pso=*cached;
     else{
         uint64_t pipeline_start=dm_android_nvn_clock_ns();CHECK(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout));ci.layout=pso.layout;
-        CHECK(vkCreateComputePipelines(G.device,G.pipeline_cache,1,&ci,NULL,&pso.pipeline));G.profile_pipeline_ns+=dm_android_nvn_clock_ns()-pipeline_start;
+        CHECK(vkCreateComputePipelines(G.device,G.pipeline_cache,1,&ci,NULL,&pso.pipeline));G.profile_pipeline_ns+=dm_android_nvn_clock_ns()-pipeline_start;g_pso_cache_dirty=1;
         pso=pso_remember(&key,hash,pso);
     }
     int cache_commands=G.enable_command_cache&&!G.trace_frame;
@@ -3059,10 +3102,10 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 memcpy(G.trace_shader,key,16);G.trace_shader[16]=0;
             }
             fprintf(stderr,"[nvn-vulkan] TRACE_NEXT_FRAME frame=%llu\n",(unsigned long long)G.present_count+2);}}
-    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;pthread_mutex_unlock(&G.lock);return pticket;}
+    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=1800){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return pticket;}
     if(S.nwrites || S.nevents || S.ncounter)die("present has unpublished guest effects",S.epoch);
     submission_publish(&S);submission_released(&S);
-    uint64_t ticket=++G.present_count;pthread_mutex_unlock(&G.lock);return ticket;
+    uint64_t ticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=1800){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return ticket;
 }
 void mtl_present_wait(uint64_t ticket) { if(ticket>G.present_count)die("unknown present ticket",ticket); }
 void mtl_present_flush(void) { mtl_finish(); }
