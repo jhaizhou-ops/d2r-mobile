@@ -18,6 +18,9 @@ typedef struct {
     TextureRef texture;
     uint32_t descriptor_id;
     VkImageLayout layout;
+    VkSampler sampler;   /* 解析后的采样器对象身份：独立槽可被改绑成别的对象，粗 state 闸门取消后必须逐绑定比对。
+                          * Resolved sampler object identity: a sampler slot can be rebound to another object;
+                          * with the coarse state gate bypassed the walk must compare it like every other binding. */
 } BindingImage;
 typedef union { BindingBuffer buffer; BindingImage image; } BindingResource;
 

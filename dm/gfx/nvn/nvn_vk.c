@@ -189,7 +189,7 @@ static struct {
     VShader shaders[LIMIT_OBJECTS]; int nshader; VTexture textures[LIMIT_OBJECTS]; int ntexture;
     uint32_t texture_used,texture_free_count,texture_free[LIMIT_OBJECTS],texture_table[2*LIMIT_OBJECTS];
     uint64_t texture_incarnation,registry_revision,pool_revision,binding_revision[6],ssbo_revision[6],texbind_revision[6],driver_revision[6][2];DriverCacheEntry driver_cache[6][2];
-    int disable_binding_plans,enable_command_cache;
+    int disable_binding_plans,plan_precise_state,enable_command_cache;
     uint64_t profile_cmd_issued[NVN_VK_CMD_STATE_COUNT],profile_cmd_skipped[NVN_VK_CMD_STATE_COUNT];
     NvnDirtyQueryStats profile_dirty_base;
     uint64_t profile_plan_hits,profile_plan_misses,profile_plan_fallbacks,profile_plan_buffers,profile_plan_images,profile_driver_revision_hits;
@@ -512,7 +512,7 @@ static void backend_init(void) {
     {const char *range=getenv("DM_QUERY_RESET_RANGE");G.enable_query_reset_range=range&&atoi(range)!=0;}
     G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
     G.disable_resource_cache=getenv("DM_DISABLE_RESOURCE_CACHE")!=NULL;
-    G.disable_binding_plans=getenv("DM_DISABLE_BINDING_PLANS")!=NULL;
+    G.disable_binding_plans=getenv("DM_DISABLE_BINDING_PLANS")!=NULL;G.plan_precise_state=getenv("DM_PLAN_PRECISE_STATE")!=NULL;
     {const char *cache=getenv("DM_COMMAND_STATE_CACHE");G.enable_command_cache=cache&&atoi(cache)!=0;}
     G.disable_dirty_uploads=getenv("DM_DISABLE_DIRTY_UPLOADS")!=NULL;
     {const char *prepare=getenv("DM_WRITEBACK_PREPARE");G.enable_writeback_prepare=prepare&&atoi(prepare)!=0;}
@@ -2085,7 +2085,8 @@ static void binding_plan_remember(VShader *s,VkDescriptorSet set,const BindingRe
 static VkDescriptorSet binding_plan_try(VShader *s) {
     BindingPlan *plan=s->plan;
     if(!plan||G.disable_binding_plans||G.disable_desc_cache||G.trace_frame||!plan->eligible){G.profile_plan_fallbacks++;return VK_NULL_HANDLE;}
-    { int why=!plan->resolved||!plan->set?0:plan->epoch!=S.epoch?1:plan->state_revision!=G.binding_revision[s->h.stage]?2:
+    { int why=!plan->resolved||!plan->set?0:plan->epoch!=S.epoch?1:
+              (!G.plan_precise_state&&plan->state_revision!=G.binding_revision[s->h.stage])?2:
               plan->registry_revision!=G.registry_revision?3:plan->pool_revision!=G.pool_revision?4:-1;
       if(why>=0){
         if(why==0)G.profile_plan_rev++;
@@ -2121,8 +2122,15 @@ static VkDescriptorSet binding_plan_try(VShader *s) {
         VkImageLayout layout=sampled_layout(t,s->h.stage);texture_transition(t,layout);
         if(layout!=cached->layout||t->view==VK_NULL_HANDLE){G.profile_plan_img_layout++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         if(b->type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER){
-            unsigned sid=(unsigned)((b->sampler>=0?G.state.samp[s->h.stage][b->sampler]:handle)>>20)&0xfff;
-            if(sid>=LIMIT_OBJECTS||!G.sslot[sid].live){if(!(s->fetch_bindings&(1ull<<i))||sid||!G.fetch_sampler){G.profile_plan_img_samp++;G.profile_plan_misses++;return VK_NULL_HANDLE;}}
+            unsigned sid=(unsigned)((b->sampler>=0?G.state.samp[s->h.stage][b->sampler]:handle)>>20)&0xfff;VkSampler sampler;
+            if(sid>=LIMIT_OBJECTS||!G.sslot[sid].live){if(!(s->fetch_bindings&(1ull<<i))||sid||!G.fetch_sampler){G.profile_plan_img_samp++;G.profile_plan_misses++;return VK_NULL_HANDLE;}sampler=G.fetch_sampler;}
+            else sampler=G.sslot[sid].sampler;
+            /* 采样器对象身份逐绑定比对（精确模式下闸门不含 state_revision，这里是唯一防线）。
+             * mtl_reg_samp 换对象会 bump registry_revision（另一道闸门），对象销毁后句柄复用也由此兜住。
+             * Per-binding sampler identity compare (the only line of defence once the precise mode drops
+             * the state_revision gate). Sampler re-registration bumps registry_revision (a separate gate),
+             * which also covers driver handle reuse after a destroy. */
+            if(sampler!=cached->sampler){G.profile_plan_img_samp++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         }
         G.profile_plan_images++;
     }
@@ -2297,7 +2305,7 @@ static VkDescriptorSet bind_shader(VShader *s) {
                int custom_view=slot->has_view&&(slot->view.set_levels||slot->view.set_layers||slot->view.set_format||slot->view.set_target);
                if(b->kind!=4||alias||sampled_copy||ranged||custom_view||t->source.d.target!=NVN_TEXTURE_TARGET_2D||ii[i].imageView!=t->view)
                    plan_safe=0;
-               else plan_resources[i].image=(BindingImage){.texture=texture_reference(t),.descriptor_id=tid,.layout=ii[i].imageLayout};
+               else plan_resources[i].image=(BindingImage){.texture=texture_reference(t),.descriptor_id=tid,.layout=ii[i].imageLayout,.sampler=ii[i].sampler};
            }
            w[i].pImageInfo=&ii[i];continue;
        } else die("Vulkan shader resource kind",b->kind);
@@ -3403,6 +3411,14 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(cddir&&*cddir&&snprintf(cdf,sizeof cdf,"%s/chunkd.txt",cddir)<(int)sizeof cdf){FILE *fp=fopen(cdf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=1000&&m!=G.chunk_draws){G.chunk_draws=m;
                 fprintf(stderr,"[nvn-vulkan] CHUNK_DRAWS 运行中切换 → %d\n",m);}fclose(fp);}}}
+        /* 绑定计划校验模式运行时切换：planstate.txt = 1 精确（逐绑定校验，含采样器身份；不做 state 粗闸门）
+         * / 0 粗闸门（原行为）。A/B 用；每窗口读一次。 | Binding-plan validation mode: planstate.txt = 1
+         * precise (per-binding validation incl. sampler identity; no coarse state gate) / 0 coarse (previous
+         * behaviour). For in-process A/B; read once per window. */
+        { static const char *psdir; if(!psdir)psdir=getenv("DM_FRAME_DIR"); char psf[1300];
+          if(psdir&&*psdir&&snprintf(psf,sizeof psf,"%s/planstate.txt",psdir)<(int)sizeof psf){FILE *fp=fopen(psf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.plan_precise_state){G.plan_precise_state=m;
+                fprintf(stderr,"[nvn-vulkan] PLAN_STATE 运行中切换 → %d（%s）\n",m,m?"精确逐绑定校验":"粗 state 闸门");}fclose(fp);}}}
         G.profile_submit_candidates=G.profile_candidate_wait_ns=G.profile_writeback_bytes=G.profile_events=G.profile_reports=0;
         G.profile_writeback_raw_bytes=G.profile_writeback_raw_ranges=G.profile_writeback_copy_ranges=G.profile_writeback_plan_cpu_ns=0;
         G.profile_write_submits=G.profile_event_submits=G.profile_report_submits=G.profile_trace_submits=G.profile_cpu_readback_submits=G.profile_event_wait_submits=0;
