@@ -15,6 +15,8 @@ static dm_android_input_config configuration;
 static char input_source[128];
 static dm_android_input_status status;
 static struct { int active; uint32_t id; } pointer_slots[16];
+/* 面板态"挂起抬起"用：驱动界面点击的那根手指 | for the deferred lift in panel state: the finger driving the UI click */
+static int32_t ui_id = -1; static float ui_x, ui_y;
 static struct { uint64_t buttons, pressed; int32_t lx, ly, rx, ry; } actions;
 static int32_t sampled_rx, sampled_ry;
 static uint64_t last_stick_activity;
@@ -61,18 +63,23 @@ int dm_android_input_publish_touch(const dm_android_pointer *points, size_t coun
     /* P2 直接点击（对齐 iOS front_ios.m:177/505）：局外页面触摸 = 原生界面鼠标点击（dm_ui_touch，游戏自己命中与执行），
      * 面板态并行（点击 + 触摸屏）；游戏态照旧只走触摸屏。只有"第一根手指"驱动界面点击（同 iOS 的 _uiFinger）。
      * 局外不再推触摸屏（iOS: frontend 分支直接 return，不 pushFrom），免得同一根手指又当鼠标又当屏。 */
-    static int32_t ui_id = -1; static float ui_x, ui_y;
     { void dm_ui_touch(int, float, float);
       int fe = dm_android_ui_frontend(), nm = dm_android_ui_panel_mode();
       int ui_click = fe || nm;
       if (!ui_click) { ui_id = -1; }
-      else if (count == 0) { if (ui_id >= 0) { dm_ui_touch(2, ui_x, ui_y); ui_id = -1; } }
+      else if (count == 0) {
+          if (ui_id >= 0) {
+              if (fe) { dm_ui_touch(2, ui_x, ui_y); ui_id = -1; }   /* 局外：即点即抬 | front-end: press+lift immediately */
+              /* 面板态：抬起挂起（触摸层按"这是不是物品区"的分类收尾：不是物品才发抬=点击；是物品/页签发作废） | panel state: defer the lift until the classification answer arrives */
+          }
+      }
       else {
           const dm_android_pointer *p = NULL;
           for (size_t i = 0; i < count; i++) if ((int32_t)points[i].id == ui_id) p = &points[i];
           if (p) { ui_x = p->x; ui_y = p->y; dm_ui_touch(1, ui_x, ui_y); }
           else if (ui_id < 0) { ui_id = (int32_t)points[0].id; ui_x = points[0].x; ui_y = points[0].y; dm_ui_touch(0, ui_x, ui_y); }
-          else { dm_ui_touch(2, ui_x, ui_y); ui_id = -1; }
+          else if (fe) { dm_ui_touch(2, ui_x, ui_y); ui_id = -1; }
+          /* 面板态：抬起挂起（同上） | panel state: deferred (see above) */
       }
       if (fe) return 0;   /* 局外：只走界面点击，不推触摸屏 | front-end: UI clicks only, no touchscreen push */
     }
@@ -94,9 +101,17 @@ int dm_android_input_publish_touch(const dm_android_pointer *points, size_t coun
     dm_touch_set(touches, (int)count); status.touch_publications++;
     pthread_mutex_unlock(&input_lock); return 0;
 }
+/* 面板态挂起的界面抬起：cancel=1 → 作废（相位 3），否则正常抬（相位 2）；由触摸层在分类结果到达后调。 */
+void dm_android_input_ui_up(int cancel) {
+    void dm_ui_touch(int, float, float);
+    if (ui_id < 0) return;
+    dm_ui_touch(cancel ? 3 : 2, ui_x, ui_y);
+    ui_id = -1;
+}
 void dm_android_input_cancel(void) {
     pthread_mutex_lock(&input_lock);
     memset(pointer_slots, 0, sizeof pointer_slots); memset(&actions, 0, sizeof actions);
+    ui_id = -1;
     dm_touch_cancel();
     pthread_mutex_unlock(&input_lock);
 }
@@ -149,11 +164,12 @@ int dm_android_input_publish_actions(uint64_t buttons, int32_t lx, int32_t ly, i
     pthread_mutex_unlock(&input_lock); return 0;
 }
 void dm_ui_frontend_pump(void); void dm_ui_mouse_pump(void); void dm_cursor_apply(uint64_t *, int32_t *, int32_t *); void dm_aim_cone_pump(void);
+void dm_actions_pump(void); void dm_world_pump(void); uint64_t dm_swapskill_filter(uint64_t);
 int dm_android_input_read_npad(dm_android_npad_state *out, uint32_t id, uint32_t style) {
     if (!out || !valid_id(id) || (style != 1 && style != 2)) return EINVAL;
-    /* 每次取手柄：先跑界面泵（替按键/发消息/鼠标），再取本拍值，最后 dm_cursor_apply 改写本次按键与摇杆
-     * （顺序对照 hle_hid.c fill()：frontend_pump → mouse_pump → 打包 → cursor_apply → aim_cone_pump）。 */
-    dm_ui_frontend_pump(); dm_ui_mouse_pump();
+    /* 每次取手柄：先跑每拍泵（界面/商人/世界点按/鼠标），再取本拍值，最后改键（副手换手过滤 → 光标改写）
+     * （顺序对照 hle_hid.c fill()：frontend → actions → world → mouse_pump → … → swapskill_filter → cursor_apply → aim_cone）。 */
+    dm_ui_frontend_pump(); dm_actions_pump(); dm_world_pump(); dm_ui_mouse_pump();
     pthread_mutex_lock(&input_lock);
     if (!status.npad_initialized) { pthread_mutex_unlock(&input_lock); return ENODEV; }
     memset(out, 0, sizeof *out); out->sampling = (int64_t)++status.npad_samples;
@@ -162,6 +178,7 @@ int dm_android_input_read_npad(dm_android_npad_state *out, uint32_t id, uint32_t
         out->lx = actions.lx; out->ly = actions.ly; out->rx = actions.rx; out->ry = actions.ry;
         out->attributes = 1; sampled_rx = out->rx; sampled_ry = out->ry;
         if (out->lx || out->ly) last_stick_activity = now_ns();
+        out->buttons = dm_swapskill_filter(out->buttons);
         dm_cursor_apply(&out->buttons, &out->lx, &out->ly);
     }
     dm_aim_cone_pump();

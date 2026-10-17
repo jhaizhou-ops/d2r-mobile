@@ -334,3 +334,28 @@ P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插；P7 依赖 P
 - **性能**：自绘层变重（底栏/图标）是 CPU canvas——做前后帧时间 spot 测（此前 UI 通道 GPU
   仅 0.78ms，留有余量）。
 - **隔离**：模块产物不进仓库；`hle_oe.c` 解锁用 Android 分支小改；`romfs_image.c` 是 Android 专属。
+
+---
+
+## 6. 本轮进展记录（2026-10-17，设备实测）
+
+- **P0 完成并验收**：touch 规则域模块（48 切点/21 门，`DM_TARGET=android` 必带）上机；
+  svc_host_android.c 真分发（0x80 libdeflate / 0x86 瞄准门 / 0x85 渲染门移植；其余原样代调）。
+  实测：启动进局正常；满偏推杆 20 秒全程跑步（体力补丁生效）；瞄准门日志正常（"对位置放"）。
+- **P1 完成并验收**：OBS_UIMSG 门 → ui_state_android.c 状态机（面板栈/scene/panel_mode）；
+  触摸层动态掩码（面板态不给圆钮、只对话菜单给十字、面板态不画摇杆/换组）；覆盖层局外自动隐藏。
+  实测：进局 frontend=0、开背包 panel_mode=1 mask=0、消息流与 iOS 同构。
+- **P2 核心完成并验收**：dm_cursor 全家（cursor/item/actions/world/hud/uiscreen）编入+链接
+  （TargetConditionals 垫片；39+20 个未移植子系统中和桩，P8 逐段换真）；取手柄处接
+  frontend/actions/world/mouse 四泵 + swapskill 过滤 + cursor_apply + aim_cone；
+  裸触摸→dm_ui_touch（局外只走鼠标、面板态并行、物品/页签分类"挂起抬起"）；模型序号派发
+  （item/use/long/ident/tab/world/stack）。实测：
+  - OPTIONS/PLAY 等**直接点击生效**（不经任何手柄按钮）；**PLAY 直接进游戏**；
+  - 面板**页签点击直接切页**；点装备格**光标跟手+高亮、不拿起**；
+  - 游戏态**点储物箱：自动走过去并打开**（世界点按 → dm_world 命中框 → 游戏自己交互）。
+- 构建/打包/部署工具全部收入仓库：`dm/android/tools/{build_modules,build_apk,deploy_apk,
+  gen_romfs_samples,gen_module_manifest}.py/sh`。
+
+**下一步（P2 尾 + P3/P4）**：双击使用/装备、长按、拖放、面板外点按关面板（需要把分类结果
+在松手前喂回模型——完整"挂起"）；底栏 v4+血条（P3）；overlay 生成+padmode（P4：A/B 消失、
+选角页换触屏版、首屏对齐）。

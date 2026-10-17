@@ -3,6 +3,7 @@
 #include "../ios/Sources/dm_touch_controls.h"
 #include "input_backend.h"
 #include "ui_state_android.h"
+#include "../host/dm_cursor.h"
 #include "../host/dm.h"
 #include <jni.h>
 #include <errno.h>
@@ -36,6 +37,28 @@ static void restrict_layout(void) {
 static uint32_t game_mask(void){return ((1u<<DM_TC_COUNT)-1)&~(1u<<DM_TC_PORTAL);}
 static unsigned applied_rev=0xffffffffu;static uint32_t applied_mask;
 static int applied_nav;
+/* P2：模型序号 → dm_ui_* 派发（对照 front_ios.m:622-649 的序号差分） | P2: model sequences -> dm_ui_* dispatch (front_ios.m:622-649) */
+static unsigned last_seq[8];
+static void dispatch_seqs(void) {
+    void dm_ui_world_tap(float,float,float,float); void dm_ui_item_tap(void); void dm_ui_use_item(void); void dm_ui_long_press(void);
+    void dm_ui_identify_hovered(void); void dm_ui_tab_go(void); void dm_stash_take(int);
+    unsigned cur[8]={controls.item_tap_seq,controls.use_seq,controls.long_press_seq,controls.ident_seq,
+                     controls.tab_tap_seq,controls.world_tap_seq,controls.stack_take_seq,controls.mouse_click_seq};
+    if(cur[0]!=last_seq[0])dm_ui_item_tap();
+    if(cur[1]!=last_seq[1])dm_ui_use_item();
+    if(cur[2]!=last_seq[2])dm_ui_long_press();
+    if(cur[3]!=last_seq[3])dm_ui_identify_hovered();
+    if(cur[4]!=last_seq[4])dm_ui_tab_go();
+    if(cur[5]!=last_seq[5]){float nx=controls.world_tap_x/(controls.layout.width>0?controls.layout.width:1),
+                                   ny=controls.world_tap_y/(controls.layout.height>0?controls.layout.height:1);
+        dm_ui_world_tap(nx,ny,nx,ny);}
+    if(cur[6]!=last_seq[6])dm_stash_take(1);
+    { static unsigned dbg; unsigned diff=0; for(int i=0;i<8;i++)diff|=(cur[i]!=last_seq[i])<<i;
+      if(diff&&dbg++<64)LOG("TOUCH_SEQ 派发 diff=%#x item=%u use=%u long=%u ident=%u tab=%u world=%u stack=%u click=%u",diff,cur[0],cur[1],cur[2],cur[3],cur[4],cur[5],cur[6],cur[7]); }
+    memcpy(last_seq,cur,sizeof cur);
+}
+/* 面板态"挂起抬起"：落下时问分类（这是不是物品区），答案到了收尾——物品/页签发作废（不点），其余收尾成一次点击（对齐 front_ios 的挂起抬起） */
+static unsigned pend_q; static int pend_slot=-1; static int pend_up; static double pend_at;
 static void apply_ui_locked(void) {
     unsigned rev=dm_android_ui_rev();
     if(rev==applied_rev)return;
@@ -49,6 +72,10 @@ static void apply_ui_locked(void) {
     LOG("TOUCH_UI_MODE panel=%d mask=%#x frontend=%d",nm,applied_mask,dm_android_ui_frontend());
 }
 static int publish(void) {
+    { void dm_cursor_set_screen(float,float,float,float); void dm_cursor_clear(void);
+      if(controls.pointer_valid&&controls.layout.width>0&&controls.layout.height>0)
+          dm_cursor_set_screen(controls.pointer_x/controls.layout.width,controls.pointer_y/controls.layout.height,1.f,1.f);
+      else dm_cursor_clear(); }
     int32_t axes[4]={controls.lx,controls.ly,controls.rx,controls.ry};
     if(published && controls.buttons==last_buttons && !memcmp(axes,last_axes,sizeof axes))return 0;
     int rc=dm_android_input_publish_actions(controls.buttons,axes[0],axes[1],axes[2],axes[3]);
@@ -75,7 +102,14 @@ static void tick(void) {
             dm_tc_pulse_end(&controls,pulse_epoch);pulse_samples=input.npad_samples;pulse_start=now;
         }
     }else if(dm_tc_pulse_pending(&controls) && (input.npad_samples-pulse_samples>=2 || now-pulse_start>0.5))dm_tc_pulse_resume(&controls);
+    if(controls.belt_request){int br=controls.belt_request;controls.belt_request=0;
+        void dm_belt_expand(int);void dm_belt_use(int,int);
+        if(br==1||br==2)dm_belt_expand(br==1);else dm_belt_use(br&0xf,br>>4&0xf);}
     (void)publish();
+    dispatch_seqs();
+    { int any=0;for(int i=0;i<16;i++)any|=controls.finger[i].active;
+      dm_ui_hand_idle(!any&&!controls.pulse_button&&!dm_cursor_pending());
+      dm_tc_set_hover_unid(dm_ui_hover_unid()); }
 }
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeResize(JNIEnv *env,jclass cls,jfloat w,jfloat h,jfloat left,jfloat right) {
     (void)env;(void)cls;if(!isfinite(w)||!isfinite(h)||w<=0||h<=0)return;
@@ -102,13 +136,15 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
     if(!ready||!enabled){pthread_mutex_unlock(&lock);return ENODEV;}
     double now=seconds();
     for(int slot=0;slot<16;slot++)if(slots[slot].active){int seen=0;for(int i=0;i<n;i++)seen|=slots[slot].id==id[i];
-        if(!seen){dm_tc_end_at(&controls,slot,now);slots[slot].active=0;}}
+        if(!seen){dm_tc_end_at(&controls,slot,now);slots[slot].active=0;if(slot==pend_slot)pend_up=1;}}
     dm_android_pointer raw[16];int nr=0;
     for(int i=0;i<n;i++) {
         int slot=0;while(slot<16&&(!slots[slot].active||slots[slot].id!=id[i]))slot++;
         float px=x[i]*controls.layout.width,py=y[i]*controls.layout.height;
         if(slot==16){slot=0;while(slot<16&&(slots[slot].active||controls.finger[slot].active))slot++;if(slot==16){pthread_mutex_unlock(&lock);return EOVERFLOW;}
             slots[slot].active=1;slots[slot].id=id[i];dm_tc_begin_at(&controls,slot,px,py,now);
+            if(!controls.navigation_mode&&!dm_android_ui_panel_mode()){}else if(controls.navigation_mode){
+                pend_q=dm_ui_item_query(x[i],y[i]);pend_slot=slot;pend_up=0;pend_at=now;}
         }else dm_tc_move_at(&controls,slot,px,py,now);
         if(controls.finger[slot].target==DM_TC_NONE)raw[nr++]=(dm_android_pointer){.id=(uint32_t)id[i],.x=x[i],.y=y[i]};
     }
@@ -117,6 +153,16 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
 }
 JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeFrame(JNIEnv *env,jclass cls) {
     (void)cls;jfloat data[58]={0};pthread_mutex_lock(&lock);apply_ui_locked();tick();
+    if(pend_up&&pend_slot>=0&&controls.navigation_mode){
+        int r=dm_ui_item_result(pend_q);double now=seconds();
+        if(r>=0||now-pend_at>0.25){
+            void dm_android_input_ui_up(int);
+            if(r==1){dm_android_input_ui_up(1);}                     /* 物品区：不发点击（光标盖住它，说明自己出） */
+            else if(r==2){dm_android_input_ui_up(1);void dm_ui_tab_go(void);dm_ui_tab_go();}   /* 页签：不打鼠标，直接切页 */
+            else {dm_android_input_ui_up(0);}                        /* 其它（面板内控件）：收尾成一次点击 */
+            pend_up=0;pend_slot=-1;
+        }
+    }
     for(int i=0;i<DM_TC_COUNT;i++){dm_tc_target t=controls.layout.target[i];data[i*3]=t.x;data[i*3+1]=t.y;data[i*3+2]=(applied_mask&(1u<<i))?t.r:0;
         for(int j=0;j<16;j++)if(controls.finger[j].active&&controls.finger[j].target==i)data[44+i]=1;}
     data[36]=controls.layout.joy_x;data[37]=controls.layout.joy_y;data[38]=controls.layout.joy_radius;
