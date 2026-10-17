@@ -56,6 +56,11 @@ static void dispatch_seqs(void) {
                                    ny=controls.world_tap_y/(controls.layout.height>0?controls.layout.height:1);
         dm_ui_world_tap(nx,ny,nx,ny);}
     if(cur[6]!=last_seq[6])dm_stash_take(1);
+    if(cur[7]!=last_seq[7]){   /* 面板内非物品区点按 = 界面鼠标点击（暂停菜单按钮、布局里插回的关闭/修理等只认鼠标；对齐 front_ios.m:649） */
+        float w=controls.layout.width>0?controls.layout.width:1.f,h=controls.layout.height>0?controls.layout.height:1.f;
+        float nx=controls.mouse_click_x/w,ny=controls.mouse_click_y/h;
+        dm_ui_touch(0,nx,ny);dm_ui_touch(2,nx,ny);
+    }
     { static unsigned dbg; unsigned diff=0; for(int i=0;i<8;i++)diff|=(cur[i]!=last_seq[i])<<i;
       if(diff&&dbg++<64)LOG("TOUCH_SEQ 派发 diff=%#x item=%u use=%u long=%u ident=%u tab=%u world=%u stack=%u click=%u",diff,cur[0],cur[1],cur[2],cur[3],cur[4],cur[5],cur[6],cur[7]); }
     memcpy(last_seq,cur,sizeof cur);
@@ -166,7 +171,7 @@ static void tick(void) {
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeResize(JNIEnv *env,jclass cls,jfloat w,jfloat h,jfloat left,jfloat right) {
     (void)env;(void)cls;if(!isfinite(w)||!isfinite(h)||w<=0||h<=0)return;
     pthread_mutex_lock(&lock);dm_tc_set_tall_scale(1);dm_tc_set_safe_insets(left,right);
-    if(ready){cancel();dm_tc_resize(&controls,w,h);}else{dm_tc_init(&controls,w,h);ready=1;}
+    if(ready){cancel();dm_tc_resize(&controls,w,h);}else{dm_tc_init(&controls,w,h);controls.mouse_click_mode=1;ready=1;}   /* 功能页里非物品区的点按走界面鼠标点击（front_ios.m:145 同一句） | taps outside the item area in function pages go through UI mouse clicks */
     restrict_layout();apply_ui_locked();pthread_mutex_unlock(&lock);
 }
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEnable(JNIEnv *env,jclass cls,jboolean on) {
