@@ -366,6 +366,8 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmTvNoAstcIndex", "老机型补充包的覆盖层索引不在（romfs_overlay_astc/data/.build.config）", "The Legacy Device Pack index is missing (romfs_overlay_astc/data/.build.config)" },
     { "dmTvGpuFail", "图形设备初始化失败，请看启动日志", "Could not set up the graphics device; see the launch log" },
     { "dmTcMap", "地图", "Map" },
+    { "dmTcMain", "主技能", "Main Skill" },
+    { "dmTcSkill", "技能 %d", "Skill %d" },
     { "dmTcCancel", "取消", "Cancel" },
     { "dmTcNavConfirm", "确认／交换", "Confirm / Swap" },
     { "dmTcNavBack", "返回", "Back" },

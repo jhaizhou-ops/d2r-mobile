@@ -364,6 +364,8 @@ dmTvNoRomfs	游戏文件还不齐全：\n%s	The game files are incomplete:\n%s	�
 dmTvNoAstcIndex	老机型补充包的覆盖层索引不在（romfs_overlay_astc/data/.build.config）	The Legacy Device Pack index is missing (romfs_overlay_astc/data/.build.config)	补充包到了、配套的覆盖层索引没拷进来
 dmTvGpuFail	图形设备初始化失败，请看启动日志	Could not set up the graphics device; see the launch log	建不起 Metal 4 命令队列
 dmTcMap	地图	Map	触屏圆钮的字：右上地图键（DmTouchOverlay.m，取不到图标时）
+dmTcMain	主技能	Main Skill	触屏主技能钮（取不到技能图标时的字；iOS 用 lbl_main.png=固定中文，安卓走串表跟语言）
+dmTcSkill	技能 %d	Skill %d	触屏技能钮 1-4（取不到技能图标时的字）
 dmTcCancel	取消	Cancel	触屏圆钮的字：全屏地图开着时地图键变成「取消」（DmTouchOverlay.m）
 dmTcNavConfirm	确认／交换	Confirm / Swap	触屏圆钮的字：面板态的虚拟手柄圆钮（只在 DM_TOUCH_NAV_PAD=1 调试时出现）
 dmTcNavBack	返回	Back	同上

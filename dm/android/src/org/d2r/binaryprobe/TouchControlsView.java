@@ -28,7 +28,8 @@ import org.json.JSONObject;
  *  dark disc + bronze double ring, action buttons fade while idle, and the
  *  joystick is a faint ring with a bronze sparkle knob and a ±30° aim arc. */
 public final class TouchControlsView extends View {
-    private static native void nativeResize(float width,float height,float left,float right);
+    private static native void nativeResize(float width,float height,float left,float right,float bottom);   // bottom = 手势条安全边距：技能弧整体上抬这么多（不然主技能钮压在手势条下不好按）
+    private static native String nativeUiText(String key);   // 串表（dm/i18n/ui_text.tsv）：界面文案跟游戏语言（英文版进英文）
     private static native void nativeEnable(boolean active);
     private static native void nativeCancel();
     private static native int nativeEvent(int[] ids,float[] xs,float[] ys,boolean cancelled,float liftNx,float liftNy);   // 抬起点：抬起那根手指的位置（拖放落点按松手这一刻问，前端面板页同 iOS）
@@ -41,7 +42,10 @@ public final class TouchControlsView extends View {
     static final int INK=0xff16110c, RIM=0xff997845, RIM_DARK=0xff1f170d, TEXT=0xffd9c9a6;
     private static final int KNOB_RING=0xffb08e4e, STAR=0xffc8a460, STAR_CORE=0xffecd696;
     private static final float IDLE=0.6f;   // iOS DM_SKILL_IDLE_ALPHA: idle fade of action-button base and rings
-    private static final String[] LABELS={"主技能","技能1","技能2","技能3","技能4","回城","药水1","药水2","药水3","药水4","菜单","地图"};
+    private String[] labels(){String[] l=new String[12];
+        l[0]=nativeUiText("dmTcMain");for(int i=1;i<=4;i++)l[i]=String.format(nativeUiText("dmTcSkill"),i);
+        for(int i=6;i<=9;i++)l[i]=Integer.toString(i-5);l[11]=nativeUiText("dmTcMap");for(int i=5;i<12;i++)if(l[i]==null)l[i]="";
+        return l;}
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path star=new Path();
     private final BooleanSupplier ready;
@@ -74,7 +78,7 @@ public final class TouchControlsView extends View {
     }
     /** 技能钮图标：先剪影后原图；充能用完（kind&2 且余量<=0）画成灰色（iOS 用 luminosity 混合，安卓用灰底+半透明近似）。 */
     private Bitmap skillIcon(int idx,boolean held,boolean[]spentOut){
-        if(icons==null||icons.length<70)return null;
+        if(icons==null||icons.length<84)return null;
         int base=idx*14,status=(int)icons[base];if(status!=2)return null;
         int a=(int)icons[base+1];if(a<0||a>8)return null;
         float[] r=held?new float[]{icons[base+8],icons[base+9],icons[base+10],icons[base+11]}
@@ -90,7 +94,9 @@ public final class TouchControlsView extends View {
     public void cancel(){nativeCancel();}
     private void resize(){if(getWidth()==0||getHeight()==0)return;float left=0,right=0;WindowInsets insets=getRootWindowInsets();
         if(insets!=null&&insets.getDisplayCutout()!=null){left=insets.getDisplayCutout().getSafeInsetLeft()/density;right=insets.getDisplayCutout().getSafeInsetRight()/density;}
-        nativeResize(getWidth()/density,getHeight()/density,left,right);frame=nativeFrame();}
+        float bottom=0;
+        if(insets!=null&&insets.getStableInsetBottom()>0)bottom=insets.getStableInsetBottom()/density;
+        nativeResize(getWidth()/density,getHeight()/density,left,right,bottom);frame=nativeFrame();}
     @Override protected void onSizeChanged(int w,int h,int ow,int oh){super.onSizeChanged(w,h,ow,oh);resize();}
     private void disc(Canvas c,float x,float y,float r,int color,int alpha){if(r<=0)return;
         paint.setStyle(Paint.Style.FILL);paint.setColor(color);paint.setAlpha(alpha);c.drawCircle(x,y,r,paint);}
@@ -182,8 +188,8 @@ public final class TouchControlsView extends View {
             int ticks=(int)e.optDouble("ticks",20);paint.setColor(track);
             for(int t=1;t<ticks;t++){float tx=X(x0+Math.round((x1-x0)*t/(double)ticks),W,u);c.drawRect(tx,(ey0+1)*u,tx+u,(ey0+eh-1)*u,paint);}
             JSONObject vt=ui.getJSONObject("vital"),vg=vt.getJSONObject("glyphs");
-            v4text(c,String.format(java.util.Locale.ROOT,"生命: %d / %d",(int)hud[1],(int)hud[2]),vg,(float)vt.getDouble("left_x"),(float)vt.getDouble("baseline"),0,W,u);
-            v4text(c,String.format(java.util.Locale.ROOT,"法力: %d / %d",(int)hud[3],(int)hud[4]),vg,(float)vt.getDouble("right_x"),(float)vt.getDouble("baseline"),0,W,u);
+            v4text(c,String.format(java.util.Locale.ROOT,nativeUiText("dmHudLife"),(int)hud[1],(int)hud[2]),vg,(float)vt.getDouble("left_x"),(float)vt.getDouble("baseline"),0,W,u);
+            v4text(c,String.format(java.util.Locale.ROOT,nativeUiText("dmHudMana"),(int)hud[3],(int)hud[4]),vg,(float)vt.getDouble("right_x"),(float)vt.getDouble("baseline"),0,W,u);
             JSONObject lv=ui.getJSONObject("lv");
             v4text(c,String.format(java.util.Locale.ROOT,"Lv %d · %d%%",(int)hud[5],(int)(hud[6]/10)),lv.getJSONObject("glyphs"),(float)lv.getDouble("x"),(float)lv.getDouble("baseline"),0,W,u);
             JSONObject bd=ui.getJSONObject("badge");JSONArray in=ui.getJSONArray("inner");
@@ -203,7 +209,8 @@ public final class TouchControlsView extends View {
         canvas.save();canvas.scale(density,density);
         drawV4(canvas);   // 底栏 v4：垫在圆钮之下
         icons=nativeSkillIcons();
-        for(int i=0;i<12;i++){if(v4on&&i>=6&&i<=10)continue;   // 腰带1-4 + 十字：底栏 v4 画，这几格只留命中区
+        for(int i=0;i<12;i++){if(i==11)continue;   // 地图块：只留命中区（右上角小地图那一块 = 开/关地图），不画圆钮与字
+            if(v4on&&i>=6&&i<=10)continue;   // 腰带1-4 + 十字：底栏 v4 画，这几格只留命中区
             float x=frame[i*3],y=frame[i*3+1],r=frame[i*3+2];if(r<=0)continue;boolean pressed=frame[44+i]>0;
             if(i<=5){
                 actionButton(canvas,x,y,r,pressed);
@@ -221,9 +228,9 @@ public final class TouchControlsView extends View {
                     if((kind&2)!=0&&!spent[0])badgeCount(canvas,x+r*.66f,y+r*.42f,chg);  // 剩余充能（角标字形与腰带件数同一套）
                     continue;   // 有图标不写字
                 }
-                caption(canvas,x,y,Math.max(11,r*(i==0?.30f:.40f)),LABELS[i],(int)(255*(pressed?1:.84f)));}
+                caption(canvas,x,y,Math.max(11,r*(i==0?.30f:.40f)),labels()[i],(int)(255*(pressed?1:.84f)));}
             else if(i>=6&&i<=9){utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y+r*.42f,Math.max(8,r*.40f),Integer.toString(i-5),(int)(255*(pressed?.95f:.68f)));}
-            else{utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y,Math.max(8,r*.38f),LABELS[i],(int)(255*(pressed?.95f:.68f)));}}
+            else{utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y,Math.max(8,r*.38f),labels()[i],(int)(255*(pressed?.95f:.68f)));}}
         float sx=frame[39],sy=frame[40],sr=frame[41];
         if(sr>0){actionButton(canvas,sx,sy,sr,false);caption(canvas,sx,sy,Math.max(11,sr*.62f),frame[56]>0?"Ⅱ":"Ⅰ",255);}
         float jx=frame[36],jy=frame[37],jr=frame[38];
@@ -256,7 +263,7 @@ public final class TouchControlsView extends View {
         @Override public AccessibilityNodeInfo createAccessibilityNodeInfo(int id){AccessibilityNodeInfo node=AccessibilityNodeInfo.obtain();node.setPackageName(getContext().getPackageName());node.setSource(TouchControlsView.this,id);
             if(id==View.NO_ID){onInitializeAccessibilityNodeInfo(node);if(frame!=null){for(int i=0;i<12;i++)if(frame[i*3+2]>0)node.addChild(TouchControlsView.this,i);node.addChild(TouchControlsView.this,12);for(int i=20;i<24;i++)node.addChild(TouchControlsView.this,i);}return node;}
             if(frame==null)return null;float x,y,r;String label;
-            if(id>=0&&id<12){x=frame[id*3];y=frame[id*3+1];r=frame[id*3+2];label=LABELS[id];}
+            if(id>=0&&id<12){x=frame[id*3];y=frame[id*3+1];r=frame[id*3+2];label=labels()[id];}
             else if(id==12){x=frame[39];y=frame[40];r=frame[41];label="切换技能组";}
             else if(id>=20&&id<24){r=frame[38]/3;x=frame[36]+(id==20?-r*2:id==21?r*2:0);y=frame[37]+(id==22?-r*2:id==23?r*2:0);label=new String[]{"向左移动","向右移动","向上移动","向下移动"}[id-20];}
             else return null;

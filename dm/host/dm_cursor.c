@@ -1923,32 +1923,34 @@ static void ui_map_center(module_t *m, uint64_t root, int mini) {
 }
 static void ui_map_pump(module_t *m) {
     int cfg = *(volatile int32_t *)(m->base + 0x2d479f4), mini = *(volatile int32_t *)(m->base + 0x2d5c748);
-    // 触屏界面的小地图（右上角地名、点它切全屏、任务终点标记）都建立在微缩档上；原版选项页「透视地图尺寸」是三档循环（全屏 → 微缩地图放左 → 微缩地图放右），
-    // 玩家把它转到「全屏」（0）之后小地图整块没了，点那一块也切不回来（线上：进选项页按了一下右箭头，「小地图消失了」）。
-    // 触屏模式在局里读到 0 就改回缺省「微缩地图放右」（2）并调原版的变更回调重排——想看全屏地图点一下小地图即可。手柄模式是原版界面，三档照原版不动。
+    // 触屏界面的小地图（右上角地名、点它切全屏、任务终点标记）建立在微缩档上；原版选项页「透视地图尺寸」是三档循环（全屏 → 微缩地图放左 → 微缩地图放右）。
+    // 档位只由玩家决定：以前触屏模式在局里读到「全屏」(0) 就强行改回微缩（2），用户真机口径「改成 iOS 那个迷你样式之前，我感觉还可以」——已去掉，三档全部尊重玩家设置。
+    // 「点地图块」按档位走（触屏层 dm_ui_automap_mode）：
+    //   微缩档（1/2）：微缩 ↔ 全屏（调原版变更回调，配置值不动、不落盘）；全屏档（0）：按原版地图键（MINUS）开 / 关。
     // 测试开关 DM_TEST_AUTOMAP=<帧>:<档>：到帧把配置改成这一档并调回调（当作玩家在选项页选了它）
-    // The touch UI's minimap (area name at the top right, tap it to switch to full screen, quest goal markers) is all built on the minimap
-    // setting; the original game's "automap size" option on the options page cycles through three settings (full screen -> minimap on the
-    // left -> minimap on the right).
-    // Once the player turns it to "full screen" (0), the whole minimap is gone and tapping that area cannot switch it back (in released builds:
-    // entered the options page and pressed the right arrow once, "the minimap disappeared").
-    // In touch mode, reading 0 while in game changes it back to the default "minimap on the right" (2) and calls the original game's change
-    // callback to lay things out again; to see the full-screen map, just tap the minimap. Controller mode uses the original UI, so the
-    // three settings are left as in the original game.
+    // The touch UI's minimap (area name at the top right, tap it to switch to full screen, quest goal markers) is all built on the minimap setting;
+    // the original game's "automap size" option on the options page cycles through three settings (full screen -> minimap on the left -> minimap on the right).
+    // The setting itself is up to the player: touch mode used to force it back to the minimap (2) whenever it read "full screen" (0), and the device
+    // verdict was "before you changed it to that iOS mini style it was fine" -- that forcing is gone; all three settings respect the player.
+    // "Tapping the map block" follows the setting (touch layer dm_ui_automap_mode):
+    //   mini settings (1/2): mini <-> full screen (calls the original change callback, config value untouched, nothing persisted); full screen (0): presses the original map key (MINUS) to open / close.
     // Test switch DM_TEST_AUTOMAP=<frame>:<setting>: at that frame, change the config to this setting and call the callback (as if the
     // player had picked it on the options page).
     { static long at = -1; static int tv; uint64_t fr = dm_guest_frame(); if (at < 0) { const char *e = getenv("DM_TEST_AUTOMAP"); at = e ? atol(e) : 0; const char *c = e ? strchr(e, ':') : NULL; tv = c ? atoi(c + 1) : 0; }
-      if (at > 0 && fr >= (uint64_t)at) { at = 0; *(volatile int32_t *)(m->base + 0x2d479f4) = tv; ((void (*)(int))(m->base + 0x40f780))(tv); cfg = tv; LOG("测试 DM_TEST_AUTOMAP：帧 %llu 把「透视地图尺寸」改成 %d", (unsigned long long)fr, tv); }
-      int dm_padmode_current(void); dm_hud_info hi; dm_hud_get(&hi);
-      if (cfg == 0 && hi.valid && !dm_padmode_current()) { *(volatile int32_t *)(m->base + 0x2d479f4) = 2; ((void (*)(int))(m->base + 0x40f780))(2); cfg = 2; mini = *(volatile int32_t *)(m->base + 0x2d5c748);
-          LOG("地图：触屏模式读到「透视地图尺寸」是全屏（0）→ 改回微缩地图放右（2），小地图恢复"); } }
+      if (at > 0 && fr >= (uint64_t)at) { at = 0; *(volatile int32_t *)(m->base + 0x2d479f4) = tv; ((void (*)(int))(m->base + 0x40f780))(tv); cfg = tv; LOG("测试 DM_TEST_AUTOMAP：帧 %llu 把「透视地图尺寸」改成 %d", (unsigned long long)fr, tv); } }
+    /* 玩家自己那一档照玩家说的来：不再把「全屏」(0) 强行改回微缩档。
+       用户真机口径：把地图固定成 iOS 那种右上角迷你图之后「明显没有之前清楚」——迷你档的线条本来就淡（参考图 en_map.jpg 也一样淡），
+       全屏档由游戏自己把画面压暗，线条才清楚。所以档位只由玩家的设置页决定（触屏 / 手柄一致）；地图能不能点开、点开是哪种，见下面的 g_map_req。 */
     int r = atomic_exchange(&g_map_req, -1);
     if (r >= 0) {
-        if (cfg != 1 && cfg != 2) { static int n; if (n++ < 4) LOG("地图切换：玩家的「透视地图尺寸」是 %d（不是微缩档），不切", cfg); }
-        else if ((mini == 0) != r) { ((void (*)(int))(m->base + 0x40f780))(r ? 0 : cfg); mini = *(volatile int32_t *)(m->base + 0x2d5c748); LOG("地图切换：→ %s（配置值 %d 不动，不落盘）", r ? "全屏" : cfg == 1 ? "微缩放左" : "微缩放右", cfg); }
+        if (cfg == 1 || cfg == 2) { if ((mini == 0) != r) { ((void (*)(int))(m->base + 0x40f780))(r ? 0 : cfg); mini = *(volatile int32_t *)(m->base + 0x2d5c748); LOG("地图切换：→ %s（配置值 %d 不动，不落盘）", r ? "全屏" : cfg == 1 ? "微缩放左" : "微缩放右", cfg); } }
+        else { void dm_ui_key_pulse(uint64_t, int); dm_ui_key_pulse(DM_BTN_MINUS, 4);
+            LOG("地图切换：玩家的「透视地图尺寸」是全屏档（0）→ 按原版地图键开 / 关（点地图块 = 显示 / 隐藏，不碰档位、不落盘）"); }
     }
     atomic_store(&g_map_full_now, mini == 0 && (cfg == 1 || cfg == 2));   // 只把「我们切出来的全屏」算全屏；玩家自己选全屏档的不算 | Only "the fullscreen we switched to" counts as fullscreen; the fullscreen mode chosen by the player does not
 }
+/* 玩家「透视地图尺寸」的档位（0 全屏 / 1 微缩放左 / 2 微缩放右）：触屏层用它决定「点地图块」怎么切（见 ui_map_pump）。读不到返回 -1 */
+int dm_ui_automap_mode(void) { module_t *m = main_module(); if (!m) return -1; return *(volatile int32_t *)(m->base + 0x2d479f4); }
 // ---------- 右上角小地图的位置：触摸层把它当点击区（点一下 = 地图开关键），矩形取游戏自己的 AutoMap 面板，不写死 ----------
 // AutoMap 控件（虚表 main+0x20c58a0）：+0x70 / +0x74 = x / y、+0x78 / +0x7c = 宽 / 高（布局单位，2160 = 画面高；微缩地图放右时 x = −宽，即贴着画面右边），+0x80 缩放。
 // 微缩地图放右 = (−1279, 78, 1279, 720)，即画面右侧宽 0.59 个屏高、从上往下 3.6% – 36.9% 的那一块。面板关着 / 没加载时沿用最近一次读到的。
@@ -3163,6 +3165,25 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
           return; } }
     if (atomic_exchange(&g_fe_skip_tut, 0)) { fe_key(DM_BTN_B); next = fr + 8; LOG("前端路径：教学提示框 → 自动跳过（B）"); return; }
     if (atomic_exchange(&g_fe_back, 0)) { fe_key(DM_BTN_B); next = fr + 8; LOG("前端路径：模式页点了牌子以外 → 返回（B）"); return; }
+    // 模式页自动接受缺省（对齐上面的前端路径清单「建角的模式页 CharacterOptionsPanel：自动接受缺省」）：
+    // 这一页的牌子（标准 / 专家）是手柄版的开关控件，只认手柄焦点 —— 触屏版点不动、也不会发 ToggleCharacterOptions 消息，
+    // 页上唯一能点的就是布局里补的「极乐世界」勾选框（触摸控件，宿主直接读状态）。所以进页后等 90 帧替玩家按 A；
+    // 期间勾选一变（玩家在勾极乐世界）就重新计时，把决定权让给玩家；玩家点了牌子那条路（g_fe_options）由上面处理
+    { static int st; static uint64_t at; static int last_bliss;
+      if (!atomic_load(&g_fe_opt_open) || atomic_load(&g_fe_confirm_open)) st = 0;
+      else if (!st) { st = 1; at = fr + 90; last_bliss = atomic_load(&g_fe_bliss); }
+      else { int b = atomic_load(&g_fe_bliss);
+          if (b != last_bliss) { last_bliss = b; at = fr + 90; }
+          if (fr >= at) {
+              st = 0;
+              /* 直接调游戏自己的「接受」（main+0xc3213c，参数 = 模式页面板）：焦点行 / 替按 A 那条路点在触屏版上不稳
+                 （原版进页时焦点停在挪走的天梯行上，替按十字键下再按 A 实测仍退回了职业页），函数入口是游戏自己的接受逻辑，
+                 勾选专家时会自己弹警告框（走确认框那条路）。 */
+              module_t *m2 = main_module(); uint64_t rt = 0; if (m2) memcpy(&rt, m2->base + 0x2f05458, 8);
+              uint64_t pn2 = rt ? ui_find(rt, "CharacterOptionsPanel", 0) : 0;
+              if (pn2 && m2) { ((void (*)(uint64_t))(m2->base + 0xc3213c))(pn2);
+                  LOG("前端路径：模式页自动接受缺省（调原版接受入口 main+0xc3213c；等 %d 帧让玩家先勾极乐世界，勾选一变化就重计时）", 90); return; }
+              LOG("【红】前端路径：模式页找不到面板，自动接受没做"); return; } } }
     // 模式页点了牌子 → 替玩家「接受」。原版「接受」（main+0xc3213c）认的是专家牌的勾选状态：[面板+0x211]（这一行在用）且 [[面板+0x1e0]+0xa88]（专家牌控件的勾选字节）非 0 = 专家，弹警告。
     // 牌子是原版的开关按钮：鼠标点专家牌 = 把它的勾翻一下（实跑读数：连点三次专家牌，状态 专家 → 标准 → 专家）；点标准牌不动专家牌的勾。
     // 所以「点专家 → 警告 → 取消 → 再点标准」时专家牌还勾着，替按的 A 又弹专家警告（线上反馈；更早的包同样）；「取消后再点一次专家」则反而进了标准。

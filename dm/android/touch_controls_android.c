@@ -6,6 +6,8 @@
 #include "../host/dm_cursor.h"
 #include "../host/dm_actions.h"
 #include "../host/dm_hud.h"
+#include "../host/dm_i18n.h"
+#include "../ios/Sources/dm_touch_game_state.h"
 #include "../ios/Sources/dm_touch_native_art.h"
 #include "../host/dm.h"
 #include <jni.h>
@@ -27,17 +29,34 @@ static int access_slot=-1;
 static double access_until;
 
 static double seconds(void) {return now_ns()/1e9;}
+/* 小地图那一块（对齐 front_ios.m:296-310 的 inMinimap / 579-587 的 _mapTouch，命中区按用户口径放大到整块小地图）：
+ * 微缩档（1 左 / 2 右）= 宿主读出的原版小地图矩形整块（iOS 只认顶上 1/4 那条「区域名」横条，用户真机口径「触发位置不对、居然是最右上、不符合直觉」）；
+ * 全屏档（0，玩家自己在设置页选的）= 全屏地图铺满整屏、游戏给不出「那一块」的矩形，用右上角那一块当开 / 关键（点一下 = 原版地图键开 / 关）；
+ * 两种档都排除落在控件命中圆上的点（回城钮挪到技能弧上方后在营地里被小地图矩形盖住），面板态不拦。 */
+static int in_minimap(float x,float y) {
+    if(controls.navigation_mode)return 0;
+    float w=controls.layout.width,h=controls.layout.height; if(w<=0||h<=0)return 0;
+    int dm_ui_automap_mode(void); int mode=dm_ui_automap_mode();
+    if(mode==0)return x>=w*0.72f&&y<=h*0.35f&&dm_tc_hit(&controls.layout,x,y)<0;
+    if(mode!=1&&mode!=2)return 0;
+    float r[4]; int dm_ui_minimap_rect(float r[4]);
+    if(!dm_ui_minimap_rect(r))return 0;
+    if(x<r[0]*w||x>r[2]*w||y<r[1]*h||y>r[3]*h)return 0;
+    if(dm_tc_hit(&controls.layout,x,y)>=0)return 0;
+    return 1;
+}
 static void restrict_layout(void) {
-    /* These upstream widgets require an audited original-game bridge. Keep
-     * them absent until 91738 has native binding/scene identities. */
-    controls.layout.target[DM_TC_PORTAL].r=0;
+    /* 难度条 / 8 格选择条仍缺原版桥梁，继续留空（These upstream widgets require an audited original-game bridge
+     * and stay absent until 91738 has native binding/scene identities）。
+     * 回城钮（技能四上方圆钮）已按 iOS 口径接上：位置由布局给（不出按键），
+     * 点下由宿主 dm_freetp 施放原版回城技能（front_ios.m:516 同口径）——此前照老注释一起藏了，用户口径「iOS 有它」。 */
     controls.layout.diff.r=0;
     for(int i=0;i<8;i++)controls.layout.pick[i].r=0;
     controls.belt_rows=1;
 }
 /* UI 状态机（P1）：游戏态掩码 = 全部除回城（地图键暂时保留，等 P2 接了"点小地图开图"再按 iOS 去掉）；
  * 面板态（对齐 front_ios.m:183-185）：导航态不给五个手柄圆钮（dm_tc_nav_mask(0)=0），只开对话菜单（3）时给底栏十字。 */
-static uint32_t game_mask(void){return ((1u<<DM_TC_COUNT)-1)&~(1u<<DM_TC_PORTAL);}
+static uint32_t game_mask(void){return ((1u<<DM_TC_COUNT)-1)&~(1u<<DM_TC_MAP);}   /* 游戏态不要右上地图键（对齐 front_ios.m:186）：小地图那一块由宿主认（in_minimap）、这根手指不进模型，不进才不会按 MINUS 把小地图关掉 */
 static unsigned applied_rev=0xffffffffu;static uint32_t applied_mask;
 static int applied_nav;
 /* P2：模型序号 → dm_ui_* 派发（对照 front_ios.m:622-649 的序号差分） | P2: model sequences -> dm_ui_* dispatch (front_ios.m:622-649) */
@@ -72,6 +91,8 @@ static void dispatch_seqs(void) {
  *         拖放的按松手这一刻的位置重问落点 → dm_tc_pointer_release[_at]。
  * 喂回模型之后，双击（使用 / 装备 / 免费鉴定 / 取一件）、长按（补充到腰带）、单击（鉴定态鉴定）、页签、点面板外关面板
  * 全都由模型自己判出来，序号派发（dispatch_seqs）照旧把它们发成 dm_ui_*。 */
+static unsigned map_seq; static int map_asked; static int map_slot=-1; static float map_x,map_y; static double map_t;   /* 小地图块点按（对齐 front_ios.m:579-587 的 _mapTouch） */
+static int mapbk_slot=-1; static float mapbk_x,mapbk_y; static double mapbk_t;   /* 全屏地图开着时点空处那根（对齐 front_ios.m:517 / 591-593 的 _mapBackTouch） */
 static unsigned pend_q; static int pend_slot=-1; static int pend_up; static double pend_at,pend_end_at;
 static unsigned pend_rel; static int pend_rel_asked; static int ui_drag_on; static float lift_x, lift_y; static int item_fed;
 /* 命中答案一回来就告诉手势层（只有物品区驱动手柄光标、才算拖放）——对齐 front_ios.m:426 */
@@ -143,13 +164,19 @@ static void cancel(void) {
     if(ready)dm_tc_cancel_all(&controls);
     memset(slots,0,sizeof slots);pulse_epoch=0;published=0;
     access_slot=-1;pend_slot=-1;pend_up=0;pend_q=0;pend_rel=0;pend_rel_asked=0;ui_drag_on=0;item_fed=0;
+    map_slot=-1;mapbk_slot=-1;
     dm_android_input_cancel();
 }
+int dm_ui_map_is_full(void); void dm_ui_map_full(int);
+unsigned dm_world_tap(float,float); int dm_world_tap_result(unsigned);
 static void tick(void) {
     if(!ready || !enabled)return;
     feed_item_kind();resolve_pending();
     double now=seconds();dm_android_input_status input;dm_android_input_status_get(&input);
     if(access_slot>=0 && now>=access_until){dm_tc_end_at(&controls,access_slot,now);access_slot=-1;}
+    if(map_asked){int wr=dm_world_tap_result(map_seq);
+        if(wr>=0){map_asked=0; if(wr==0&&!controls.navigation_mode){dm_ui_map_full(1);LOG("地图块：底下没有目标 → 全屏地图");}
+            else LOG("地图块：底下有世界目标（类 %d）→ 交互、不切地图",wr);}}
     dm_tc_tick(&controls,now);
     if(controls.pulse_button) {
         if(pulse_epoch!=controls.pulse_epoch){pulse_epoch=controls.pulse_epoch;pulse_samples=input.npad_samples;pulse_start=now;pulse_seen=0;}
@@ -168,11 +195,26 @@ static void tick(void) {
       dm_ui_hand_idle(!any&&!controls.pulse_button&&!dm_cursor_pending());
       dm_tc_set_hover_unid(dm_ui_hover_unid()); }
 }
-JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeResize(JNIEnv *env,jclass cls,jfloat w,jfloat h,jfloat left,jfloat right) {
+static void raise_skill_arc_locked(float bottom) {   /* 手势条安全边距：技能弧（主技能 / 技能 1-4 / 换组）整体上抬，别压在手势条下（用户口径"攻击键偏下不好按"） */
+    if(bottom<=0)return;
+    float max_up=controls.layout.height*0.06f; if(bottom>max_up)bottom=max_up;   /* 最多抬屏高的 6%，别把弧抬到腰带上 */
+    for(int i=0;i<=5;i++)controls.layout.target[i].y-=bottom;   /* 主技能 / 技能 1-4 / 回城钮（回城钮在技能四正上方，一起抬才保住间距） */
+    if(controls.layout.swap.r>0)controls.layout.swap.y-=bottom;
+}
+JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeResize(JNIEnv *env,jclass cls,jfloat w,jfloat h,jfloat left,jfloat right,jfloat bottom) {
     (void)env;(void)cls;if(!isfinite(w)||!isfinite(h)||w<=0||h<=0)return;
     pthread_mutex_lock(&lock);dm_tc_set_tall_scale(1);dm_tc_set_safe_insets(left,right);
     if(ready){cancel();dm_tc_resize(&controls,w,h);}else{dm_tc_init(&controls,w,h);controls.mouse_click_mode=1;ready=1;}   /* 功能页里非物品区的点按走界面鼠标点击（front_ios.m:145 同一句） | taps outside the item area in function pages go through UI mouse clicks */
+    if(isfinite(bottom)&&bottom>0)raise_skill_arc_locked(bottom);
     restrict_layout();apply_ui_locked();pthread_mutex_unlock(&lock);
+}
+/* 取串（dm/i18n/ui_text.tsv）：界面文案跟游戏语言（英文版进英文） */
+JNIEXPORT jstring JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeUiText(JNIEnv *env,jclass cls,jstring key) {
+    (void)cls;if(!key)return NULL;
+    const char *k=(*env)->GetStringUTFChars(env,key,NULL);if(!k)return NULL;
+    const char *s=dm_ui(k);(*env)->ReleaseStringUTFChars(env,key,k);
+    if(!s)return NULL;
+    jstring r=(*env)->NewStringUTF(env,s);return r;
 }
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEnable(JNIEnv *env,jclass cls,jboolean on) {
     (void)env;(void)cls;pthread_mutex_lock(&lock);cancel();enabled=on!=0;apply_ui_locked();pthread_mutex_unlock(&lock);
@@ -195,14 +237,44 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
     double now=seconds();
     for(int slot=0;slot<16;slot++)if(slots[slot].active){int seen=0;for(int i=0;i<n;i++)seen|=slots[slot].id==id[i];
         if(!seen){slots[slot].active=0;
+            if(slot==map_slot){   /* 小地图那一块：没进模型（iOS 同口径），松手这一刻定去向 */
+                map_slot=-1;
+                { float w=controls.layout.width>0?controls.layout.width:1.f,h=controls.layout.height>0?controls.layout.height:1.f;
+                  float lx=lift_x>=0?lift_x*w:map_x,ly=lift_y>=0?lift_y*h:map_y;   /* 抬起那根手指的位置（前端给了就用它，判点按/拖动） */
+                  if(hypotf(lx-map_x,ly-map_y)<=14.f&&now-map_t<0.6){
+                      int dm_ui_automap_mode(void);
+                      if(dm_ui_automap_mode()==0){   /* 玩家自己那档是全屏（0）：点地图块 = 原版地图键开 / 关（显示 / 隐藏），档位不动（dm_cursor.c ui_map_pump） */
+                          dm_ui_map_full(1);LOG("地图块：玩家的地图是全屏档 → 按原版地图键开 / 关");}
+                      else if(dm_ui_map_is_full()){dm_ui_map_full(0);LOG("地图块：点小地图那一块 → 回小地图");}
+                      else{map_seq=dm_world_tap(map_x/w,map_y/h);map_asked=1;LOG("地图块：点小地图那一块 (%.0f,%.0f) → 先看底下有没有世界目标",map_x,map_y);}
+                  } }
+                continue; }
+            if(slot==mapbk_slot){   /* 全屏地图开着、点在空处：点按 = 回小地图（front_ios.m:591-593）；这根进过模型，照常走下面的结束 */
+                mapbk_slot=-1;
+                { float w=controls.layout.width>0?controls.layout.width:1.f,h=controls.layout.height>0?controls.layout.height:1.f;
+                  float lx=lift_x>=0?lift_x*w:mapbk_x,ly=lift_y>=0?lift_y*h:mapbk_y;
+                  if(hypotf(lx-mapbk_x,ly-mapbk_y)<=14.f&&now-mapbk_t<0.6&&dm_ui_map_is_full()){dm_ui_map_full(0);LOG("地图块：全屏地图开着点空处 → 回小地图");} } }
             if(slot==pend_slot){pend_up=1;pend_end_at=now;}   /* 指针手指挂起：等宿主的分类 / 落点答案 */
-            else dm_tc_end_at(&controls,slot,now);}}
+            else dm_tc_end_at(&controls,slot,now); }}
     dm_android_pointer raw[16];int nr=0;
     for(int i=0;i<n;i++) {
         int slot=0;while(slot<16&&(!slots[slot].active||slots[slot].id!=id[i]))slot++;
         float px=x[i]*controls.layout.width,py=y[i]*controls.layout.height;
         if(slot==16){slot=0;while(slot<16&&(slots[slot].active||controls.finger[slot].active))slot++;if(slot==16){pthread_mutex_unlock(&lock);return EOVERFLOW;}
-            slots[slot].active=1;slots[slot].id=id[i];dm_tc_begin_at(&controls,slot,px,py,now);
+            slots[slot].active=1;slots[slot].id=id[i];
+            if(in_minimap(px,py)){map_slot=slot;map_x=px;map_y=py;map_t=now;   /* 小地图那一块：这根手指不进手势层（iOS 同口径）——不进就不会按 MINUS 把小地图关掉，只在松手时定去向 */
+                LOG("地图块：按在小地图上（%.0f,%.0f，松手定去向）",px,py);
+                continue;}
+            dm_tc_begin_at(&controls,slot,px,py,now);
+            { int tg=controls.finger[slot].target;
+              if(tg==DM_TC_PORTAL&&!controls.navigation_mode){   /* 回城钮：不出按键，点下由宿主施放原版回城技能（dm_freetp.c；front_ios.m:516 同口径） */
+                  void dm_tp_request(void);dm_tp_request();LOG("前端：点回城钮 → 免费回城（宿主 dm_freetp.c）"); }
+              if(tg==DM_TC_NONE&&!controls.navigation_mode&&dm_ui_map_is_full()){mapbk_slot=slot;mapbk_x=px;mapbk_y=py;mapbk_t=now;}   /* 全屏地图开着、这根手指没落在任何键上：松手若是点按就回小地图（front_ios.m:517） */
+              if(tg>=DM_TC_MAIN&&tg<=DM_TC_SKILL4&&!controls.navigation_mode){   /* 空技能位：点一下 = 给这个位选技能（宿主开技能树） */
+                  dm_tg_snapshot snap;memset(&snap,0,sizeof snap);dm_touch_game_snapshot(&snap);
+                  dm_ta_glyph g=dm_ta_current_set(&snap,controls.layout.target[tg].button,now_ns(),controls.skill_set);
+                  if(g.status!=DM_TA_GLYPH){ void dm_ui_bind_begin(uint64_t); dm_ui_bind_begin((uint64_t)controls.layout.target[tg].button);
+                      LOG("触屏：点空技能位（位 %d）→ 给键 %#llx 选技能",tg,(unsigned long long)controls.layout.target[tg].button); } } }
             if(controls.navigation_mode&&controls.pointer_slot==slot){   /* 功能页里的指针手指：问宿主这是不是物品区 */
                 pend_q=dm_ui_item_query(x[i],y[i]);pend_slot=slot;pend_up=0;pend_at=now;pend_end_at=0;pend_rel=0;pend_rel_asked=0;item_fed=0;}
         }else{
@@ -265,22 +337,29 @@ JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeH
     jfloatArray out=(*env)->NewFloatArray(env,18);if(out)(*env)->SetFloatArrayRegion(env,out,0,18,d);return out;
 }
 
-/* P7 技能钮图标（对齐 iOS shown_glyph + skillImage）：5 个技能钮各 10 个数
+/* P7 技能钮图标（对齐 iOS shown_glyph + skillImage）：6 个圆钮各 14 个数
  * {status, atlas, frame_常态, frame_按住, 帧 x, y, w, h, 换武器组位, 剩余充能}；status：0 未知 1 空位 2 有图。
+ * 前 5 个 = 主技能 / 技能 1-4（按绑定快照取图）；第 6 个 = 回城钮（固定取原版回城技能 359 的图，
+ * 对齐 DmTouchOverlay.m:203 的 dm_ta_skill(359)；不出按键、无次数角标）。
  * 快照只是旧了（>250ms 没刷新）照取到那一刻画——绑定没变，只是没人刷新（front_ios.m shown_glyph 同一口径）。 */
 JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeSkillIcons(JNIEnv *env,jclass cls) {
     (void)cls;pthread_mutex_lock(&lock);
     dm_tg_snapshot snap;memset(&snap,0,sizeof snap);dm_touch_game_snapshot(&snap);
-    uint64_t now=now_ns();jfloat d[70];
-    for(int i=0;i<5;i++){
-        dm_tc_target t=controls.layout.target[i];
-        dm_ta_glyph g=dm_ta_current_set(&snap,t.button,now,controls.skill_set);
-        if(g.status==DM_TA_UNKNOWN&&snap.captured_ns&&now>snap.captured_ns&&now-snap.captured_ns>DM_TG_MAX_AGE_NS)
-            g=dm_ta_current_set(&snap,t.button,snap.captured_ns,controls.skill_set);
+    uint64_t now=now_ns();jfloat d[84];
+    for(int i=0;i<6;i++){
+        dm_ta_glyph g;
+        int kind=0,charges=0;
+        if(i==5){   /* 回城钮：原版回城技能图（技能描述表 Town Portal：通用技能页第 18 格，219 / 220 / 411 同一张），不显示次数 */
+            g=dm_ta_skill(359);
+        }else{
+            dm_tc_target t=controls.layout.target[i];
+            g=dm_ta_current_set(&snap,t.button,now,controls.skill_set);
+            if(g.status==DM_TA_UNKNOWN&&snap.captured_ns&&now>snap.captured_ns&&now-snap.captured_ns>DM_TG_MAX_AGE_NS)
+                g=dm_ta_current_set(&snap,t.button,snap.captured_ns,controls.skill_set);
+            if(g.status==DM_TA_GLYPH)kind=dm_swapskill_slot(g.slot,&charges);
+        }
         dm_ta_frame f={0,0,0,0},pf={0,0,0,0};
         if(g.status==DM_TA_GLYPH){dm_ta_frame_at(g.atlas,g.normal_frame,&f);dm_ta_frame_at(g.atlas,g.pressed_frame,&pf);}
-        int kind=0,charges=0;
-        if(g.status==DM_TA_GLYPH)kind=dm_swapskill_slot(g.slot,&charges);
         jfloat *o=d+i*14;
         o[0]=(jfloat)g.status;o[1]=(jfloat)g.atlas;o[2]=(jfloat)g.normal_frame;o[3]=(jfloat)g.pressed_frame;
         o[4]=(jfloat)f.x;o[5]=(jfloat)f.y;o[6]=(jfloat)f.width;o[7]=(jfloat)f.height;
@@ -288,5 +367,5 @@ JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeS
         o[12]=(jfloat)kind;o[13]=(jfloat)charges;
     }
     pthread_mutex_unlock(&lock);
-    jfloatArray out=(*env)->NewFloatArray(env,70);if(out)(*env)->SetFloatArrayRegion(env,out,0,70,d);return out;
+    jfloatArray out=(*env)->NewFloatArray(env,84);if(out)(*env)->SetFloatArrayRegion(env,out,0,84,d);return out;
 }

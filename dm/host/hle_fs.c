@@ -394,8 +394,11 @@ HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv；确保存�
 //       开关式下点一次即一直显示，退出重进下一局仍保持；玩家想关就把这一项改回「长按」。
 //   "Item Tooltip Hotkey Appender": 0 —— 物品说明条不带手柄键位提示（游戏缺省 1）。
 //   小地图（放右上角：迷你、半透明）：
-//   "AutoMapMode": 2 = 微缩地图放右（0 全屏 / 1 放左 / 2 放右，游戏缺省也是 2，这里写明）；透明度（AutoMapFade）不补、用游戏缺省 0 = 不淡化——选「全部」（3）时小地图的线条淡到几乎只剩文字，地图本来就是叠在画面上的线条，不淡化也透得过去；
-//   "AutoMap Open On Load": 1 = 进局自动开启（游戏缺省 0）。点小地图 = 地图开关键，见 front_ios.m。
+//   小地图（右上角、进局自动开；档位与透明度都归玩家）：
+//   "AutomapAutoOpen": 1 = 进局自动开启（显示名是「AutoMap Open On Load」，配置键是 AutomapAutoOpen；游戏缺省 0 = 不显示）。点小地图 = 地图开关键，见 front_ios.m。
+//   「透视地图尺寸」（AutoMapMode：0 全屏 / 1 放左 / 2 放右；游戏缺省 2）与透明度（AutomapFade；游戏缺省 0 = 不淡化）都不写：由玩家在设置页自己选（用户真机口径「原版默认就是右上角」，触屏层按档位决定点地图块怎么切，见 dm_cursor.c ui_map_pump）。
+//     真机踩到的坑：自动开小地图的键写成了显示名（"AutoMap Open On Load"），游戏自己又把缺省写进设置文件，于是「没有才补」的 seed 永远补不上，小地图一直不显示（用户口径「默认显示小地图」）——
+//     所以这几项改由 touch_settings_fix() 按产品缺省强制改（键名以模块里的原版配置键为准），seed 只管首次安装那一份。
 // iOS 包缺省做；Mac 宿主缺省不做（闸门对 Switch 真值比图），DM_TOUCH_DEFAULTS=1 开 / =0 关。
 // 共享仓库预置：存档目录里没有 ModernSharedStashSoftCoreV2/ModernSharedStashSoftCoreV2.d2i 时写入预置文件（stash_seed.h），已有的一个字节不动。
 // 在挂存档、克隆出工作目录之前做，所以游戏第一次读到的就是它。iOS 上缺省开、DM_STASH_SEED=0 关掉；Mac 宿主缺省关、DM_STASH_SEED=1 打开。
@@ -456,7 +459,7 @@ static void low_vision_off(const char *save_dir) {
 static void settings_seed(const char *save_dir) {
     const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : DM_TOUCH_DEFAULTS_ON; if (!on) return;
     static const char *kv[][2] = {{"\"Item Name Display\"", "1"}, {"\"Item Tooltip Hotkey Appender\"", "0"},
-                                  {"\"AutoMapMode\"", "2"}, {"\"AutoMap Open On Load\"", "1"}};
+                                  {"\"AutomapAutoOpen\"", "1"}};
     char dir[1100], path[1200]; snprintf(dir, sizeof dir, "%s/Settings", save_dir); snprintf(path, sizeof path, "%s/Settings.json", dir);
     static char buf[65536], out[66000]; size_t n = 0; FILE *f = fopen(path, "rb");   // static：挂存档的游戏线程栈小（两块 64 KB 放栈上直接越栈，实测崩）；挂存档只在一个线程上做 | static: the game thread that mounts the save has a small stack (two 64 KB blocks on the stack overflow it outright, measured crash); mounting the save is done on one thread only
     int first = f == NULL;   // 没有设置文件 = 首次安装 | no settings file = first install
@@ -476,7 +479,7 @@ static void settings_seed(const char *save_dir) {
     mkdir(dir, 0755); char tmp[1300]; snprintf(tmp, sizeof tmp, "%s.seed", path);
     f = fopen(tmp, "wb"); if (!f || fwrite(out, 1, o, f) != o) { if (f) fclose(f); LOG("【红】设置缺省：写 %s 失败", tmp); return; }
     fclose(f); if (rename(tmp, path)) { LOG("【红】设置缺省：改名到 %s 失败", path); return; }
-    LOG("设置缺省：%s 补了 %d 个键（显示物品 = 开关式 / 说明条热键 = 关 / 小地图放右、进局自动开%s；已有的键不动）", path, added, first ? " / 首次安装按系统语言写 Language" : "");
+    LOG("设置缺省：%s 补了 %d 个键（显示物品 = 开关式 / 说明条热键 = 关 / 小地图进局自动开%s；已有的键不动）", path, added, first ? " / 首次安装按系统语言写 Language" : "");
 }
 // 语言开关（自定义页标题行那一格，dm_custom.c 的 lang_en）：玩家点过「应用」后设置文件里有明确的值，每次挂存档（游戏读设置之前）按它把原版设置文件的
 // Language（文字）和 VoiceLanguage（语音，语音跟着切）改成 0 英文 / 8 简中。只在「与开关不符」时改：开关 = 英文而文字不是 0；开关 = 中文而文字是 0。
@@ -491,6 +494,32 @@ static int json_int_set(char *buf, size_t cap, const char *key, int val) {   // 
     char *v = strchr(k + strlen(key), ':'); if (!v) return 0; v++; while (*v == ' ' || *v == '\t') v++; char *e = v; if (*e == '-') e++; while (*e >= '0' && *e <= '9') e++;
     if (e == v || atoi(v) == val) return 0; size_t nl = strlen(num); if (strlen(buf) + nl + 1 >= cap) return 0;
     memmove(v + nl, e, strlen(e) + 1); memcpy(v, num, nl); return 1; }
+/* 触摸产品在界面上必须有确定值的几项设置，按产品缺省强制改（挂在 settings_seed 之后）。
+ * 为什么要强制：游戏自己会把缺省值写进 Settings/Settings.json，于是「文件里没有这个键才补」的 settings_seed 永远补不上，
+ * 玩家看到的就是游戏缺省（小地图不显示 / 名字长按显示 / 说明条带手柄键位）。键名以模块里的原版配置键为准（main.patched.bin 的字符串）：
+ *   AutomapAutoOpen 1 —— 进局自动开小地图（用户口径「默认显示小地图」）
+ *   Item Name Display 1 / Item Tooltip Hotkey Appender 0 —— 同 settings_seed 的说明
+ * 不碰的两项（用户口径「改成 iOS 那个迷你样式之前，我感觉还可以」）：
+ *   AutoMapMode —— 「透视地图尺寸」由玩家自己的设置页决定（全屏档最清楚；强行改成微缩档线条淡、看不清）。触屏层按档位决定点地图块怎么切（dm_cursor.c ui_map_pump）。
+ *   AutomapFade —— 透明度也不动，保持游戏自己的渲染，清晰度跟改之前一致。
+ * 调试用：放一个诊断目录下的 automap_mode.txt（内容 0 / 1 / 2）= 把「透视地图尺寸」写成这一档，不用重新出包。
+ * 与 settings_seed 同一个开关（iOS / 安卓缺省开；Mac 宿主对拍闸门缺省关）。 */
+static void touch_settings_fix(const char *save_dir) {
+    const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : DM_TOUCH_DEFAULTS_ON; if (!on) return;
+    char path[1200]; snprintf(path, sizeof path, "%s/Settings/Settings.json", save_dir); static char buf[66000]; FILE *f = fopen(path, "rb"); if (!f) return;
+    size_t n = fread(buf, 1, sizeof buf - 1, f); fclose(f); if (n == sizeof buf - 1) return; buf[n] = 0;
+    int ch = 0;
+    ch |= json_int_set(buf, sizeof buf, "\"AutomapAutoOpen\"", 1);
+    ch |= json_int_set(buf, sizeof buf, "\"Item Name Display\"", 1);
+    ch |= json_int_set(buf, sizeof buf, "\"Item Tooltip Hotkey Appender\"", 0);
+    { char ov[1300]; snprintf(ov, sizeof ov, "%s/../diagnostics/automap_mode.txt", save_dir); FILE *g = fopen(ov, "rb");
+      if (g) { char v[8] = {0}; size_t k = fread(v, 1, 7, g); fclose(g); if (k && v[0] >= '0' && v[0] <= '2') { int mode = v[0] - '0'; if (json_int_set(buf, sizeof buf, "\"AutoMapMode\"", mode)) { ch = 1; LOG("触摸设置：按诊断文件把「透视地图尺寸」写成 %d（%s）", mode, mode == 0 ? "全屏" : mode == 1 ? "微缩放左" : "微缩放右"); } } } }
+    if (!ch) return;
+    char tmp[1300]; snprintf(tmp, sizeof tmp, "%s.fix", path); f = fopen(tmp, "wb"); size_t m = strlen(buf);
+    if (!f || fwrite(buf, 1, m, f) != m) { if (f) fclose(f); LOG("【红】触摸设置：写 %s 失败", tmp); return; }
+    fclose(f); if (rename(tmp, path)) { LOG("【红】触摸设置：改名到 %s 失败", path); return; }
+    LOG("触摸设置：AutomapAutoOpen=1 / Item Name Display=1 / Item Tooltip Hotkey Appender=0 已写进 %s（地图档位与透明度不动，见函数注释）", path);
+}
 static void settings_lang_apply(const char *save_dir) {
     int dm_custom_lang_explicit(void); int en = dm_custom_lang_explicit(); if (en < 0) return;
     char path[1200]; snprintf(path, sizeof path, "%s/Settings/Settings.json", save_dir); static char buf[66000]; FILE *f = fopen(path, "rb"); if (!f) return;
@@ -522,7 +551,7 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv；存档 �
 #if !defined(__ANDROID__) || defined(DM_ANDROID_SETTINGS_SEED)
     stash_seed(dd);
     low_vision_off(dd);
-    settings_seed(dd); settings_lang_apply(dd);
+    settings_seed(dd); touch_settings_fix(dd); settings_lang_apply(dd);
     // 掉落过滤的规则文件（原版启动时载入，dm_lootfilter.c 用构造函数登记这个钩子；只链 hle_fs.c 的单测里它是空的）。与 settings_seed 同一个开关：
     // iOS 上缺省写；Mac 宿主的对拍闸门（存档要和真机真值逐文件相同）不写
     // Rule files for the loot filter (the game loads them at startup; dm_lootfilter.c registers this hook from a constructor; it is null in unit tests that link only hle_fs.c). Same switch as settings_seed:
