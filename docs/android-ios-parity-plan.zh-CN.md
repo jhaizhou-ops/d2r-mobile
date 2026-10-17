@@ -388,8 +388,15 @@ P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插；P7 依赖 P
   Apply/Default/Discard 正常，确认框能开能关，无 FATAL。
 
 **遗留（下一轮）**：
-1. **确认框点不到**：模态框（ConfirmationModal）在面板里时，分类命中"设置页盖着的暂停菜单按钮"
-   （类 6 = 不点），需要查 dm_cursor 的面板树命中顺序（模态层要压在最上）。
+1. ~~**确认框点不到**~~ **已修（同日）**：三处一起——
+   ① 宿主替按的键（设置页 X 后的返回键）在安卓没并进取手柄的值（iOS 在 hle_hid.c fill() 里并，
+   安卓分支没有）→ 确认框不出、面板关不掉；input_backend.c 取手柄处照同一口径补
+   `| dm_ui_auto_buttons() & ~dm_ui_auto_release()`。
+   ② 模态框判定（ConfirmationModal）原先排在「设置页盖着的暂停菜单按钮（不点）」之后，而 Apply/Discard
+   正好落在暂停菜单按钮位置上 → 被按成"不点"；改为模态框先判（`modal_in`），共享文件 dm_cursor.c 的顺序修正。
+   ③ 瞄准泵自锁死（真机 ANR 实锤栈：`dm_android_input_read_npad` 持 input_lock → `dm_aim_cone_pump`
+   → `dm_input_sampled_right` 再拿同一把非递归锁）：右摇杆采样值改无锁原子快照。
+   实测：Options→改设置→X→确认框弹出→Discard 关掉并丢弃；暂停菜单 X 关面板；瞄准拖动不再 ANR。
 2. **前端建角入口**：选角页（有一个存档时）看不到"创建新角色"入口——布局与 iOS 同源，需要确认
    iOS 侧的入口位置（PC 布局里那个按钮在右侧存档列表面板内，可能要展开列表）。
 3. **P8 各页逐个上机验收**：个人仓库多页 / 编年史 / 百宝囊 / 符文之语 / 秘境 / 首领连战 逐个走一遍
