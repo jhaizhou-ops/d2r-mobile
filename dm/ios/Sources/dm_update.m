@@ -4,7 +4,7 @@
 //   ② 每次选角页出现（启动、从局里退回来）都在后台取一次版本文件（这是我们自己加的唯一一处联网，只读一个小文件，单次 10 秒超时、失败隔几秒重试共 3 次，不挡启动与进局；同一时刻只有一个查询在途）；
 //   ③ 玩家点了「更新」→ 把版本文件里的安装链接交给系统打开（系统安装，整包覆盖，存档与资源不动）。
 // 版本文件地址不在仓库里：出包脚本写进 Info.plist 的 SWUpdateURL（tools/adhoc.sh 传 DM_UPDATE_URL）。没有这个键、或构建号不是大于 1 的整数
-// （开发签名包是 1）→ 不联网、不提示。不比自己新：画面上什么都不出；没网 / 超时 / 地址失效 / 格式不对：选角页构建号右边出一行失败提示（dm_update_fail：没有无线数据许可 → 提示去设置里允许；其余 → 提示去浏览器打开版本文件所在的站点），这次启动取到了就撤掉。
+// （开发签名包是 1）→ 不联网、不提示。不比自己新：画面上什么都不出；没网 / 超时 / 地址失效 / 格式不对：选角页构建号右边出一行失败提示（dm_update_fail：没有无线数据许可 → 提示去设置里允许；HTTP 5xx → 提示服务暂不可用；其余 → 提示去浏览器打开版本文件所在的站点），这次启动取到了就撤掉。
 // 版本文件 latest.json（UTF-8）四个字段：{"build": 10051432, "note": "一句话 ≤ 24 个汉字", "urgent": false, "install_url": "…"}，缺字段或类型不对 = 格式不对。
 // 每次查完按新结果处理（不限一天一次，进首页就查、有新的就提示）：比自己新 → 显示 / 换成这次的；不比自己新 → 撤掉已有提示；
 // 取不到 / 格式不对 → 已有的提示留着不动（一次网络抖动不该把确实存在的新版本提示抹掉；这次启动还没提示过的话照旧什么都不出）。
@@ -16,7 +16,7 @@
 //   ② Each time the character select page appears (launch, returning from a run), fetch the version file once in the background (this is the only network access we added ourselves; it reads one small file, 10-second timeout per attempt, retries a few seconds after a failure for 3 attempts in total, does not block launch or entering a run; only one query is in flight at any moment);
 //   ③ The player tapped 「更新」(Update) → hand the install link from the version file to the system to open (system install, whole-package overwrite, saves and assets untouched).
 // The version file address is not in the repository: the packaging script writes it into SWUpdateURL in Info.plist (tools/adhoc.sh passes DM_UPDATE_URL). Without this key, or when the build number is not an integer greater than 1
-// (dev-signed builds are 1) → no network access, no notice. Not newer than ours: nothing appears on screen; no network / timeout / dead address / bad format: a failure notice line appears to the right of the build number on the character select page (dm_update_fail: no wireless data permission → tell the player to allow it in Settings; otherwise → tell the player to open in a browser the site that serves the version file), removed once a fetch succeeds during this launch.
+// (dev-signed builds are 1) → no network access, no notice. Not newer than ours: nothing appears on screen; no network / timeout / dead address / bad format: a failure notice line appears to the right of the build number on the character select page (dm_update_fail: no wireless data permission → tell the player to allow it in Settings; HTTP 5xx → service-unavailable notice; otherwise → tell the player to open in a browser the site that serves the version file), removed once a fetch succeeds during this launch.
 // The version file latest.json (UTF-8) has four fields: {"build": 10051432, "note": "one sentence, ≤ 24 Chinese characters", "urgent": false, "install_url": "..."}; a missing field or wrong type = bad format.
 // After each query, act on the new result (not limited to once a day; query on entering the home page and show a notice if there is a new one): newer than ours → show / replace with this one; not newer than ours → remove the existing notice;
 // fetch failed / bad format → leave the existing notice untouched (one network glitch should not erase a notice for a new version that really exists; if nothing has been shown yet during this launch, still show nothing as before).
@@ -53,20 +53,7 @@ static void upd_net_why(void) {
     nw_path_monitor_start(m);
 }
 
-// 版本文件 → 要不要提示。返回 nil = 提示（out 填好），否则是不提示的原因（进日志）
-// Version file → whether to show a notice. Returns nil = show it (out is filled in); otherwise the reason for not showing it (goes to the log)
-static NSString *upd_parse(NSData *d, int *build, NSString **note, int *urgent, NSString **install) {
-    NSDictionary *j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-    if (![j isKindOfClass:NSDictionary.class]) return @"格式不对：不是 JSON 对象";
-    NSNumber *b = j[@"build"], *u = j[@"urgent"]; NSString *n = j[@"note"], *i = j[@"install_url"];
-    if (![b isKindOfClass:NSNumber.class] || ![u isKindOfClass:NSNumber.class] || ![n isKindOfClass:NSString.class] || ![i isKindOfClass:NSString.class]) return @"格式不对：四个字段缺了或类型不对";
-    if (!(b.doubleValue >= 1 && b.doubleValue < 2e9) || b.doubleValue != b.intValue) return @"格式不对：build 不是正整数";
-    NSString *sch = [NSURL URLWithString:i].scheme.lowercaseString;
-    if (![sch isEqualToString:@"https"] && ![sch isEqualToString:@"itms-services"]) return @"格式不对：install_url 不是 https / itms-services 链接";
-    n = [[n componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] componentsJoinedByString:@" "];
-    if (n.length > 24) n = [n substringWithRange:[n rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, 24)]];   // 说明只有一行的位置：超过 24 个字截掉 | The note has room for only one line: truncate beyond 24 characters
-    *build = b.intValue; *note = n; *urgent = u.boolValue; *install = i; return nil;
-}
+#include "dm_update_response.h"
 static void upd_fetch(int n);
 static void on_select(void) {   // 宿主在游戏主线程调：选角页每出现一次调一次 | Called by the host on the game main thread: once each time the character select page appears
     dispatch_async(dispatch_get_main_queue(), ^{   // 左安全区换成布局单位（2160 高）交给宿主，算法同 front_ios.m 给佣兵头像用的那处 | Convert the left safe area into layout units (2160 high) and hand it to the host; same algorithm as the place in front_ios.m used for the mercenary portrait
@@ -97,21 +84,15 @@ static void upd_fetch(int n) {
     const char *tf = getenv("DM_TEST_UPDATE_FAIL_FIRST"); NSString *us = tf && n <= atoi(tf) ? @"https://nonexistent-dm.invalid/latest.json" : g_url;
     NSURL *url = [NSURL URLWithString:us]; if (!url) { plog("更新：版本文件地址 %s 不是合法地址，不查", us.UTF8String); g_url = nil; atomic_store(&g_inflight, 0); return; }
     [[ses dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        int build = 0, urgent = 0; NSString *note = nil, *install = nil, *why = nil;
-        if (e) why = [NSString stringWithFormat:@"取不到：%@", e.localizedDescription];
-        else if ([r isKindOfClass:NSHTTPURLResponse.class] && [(NSHTTPURLResponse *)r statusCode] != 200) why = [NSString stringWithFormat:@"取不到：HTTP %ld", (long)[(NSHTTPURLResponse *)r statusCode]];
-        else if (d.length > 4096) why = @"格式不对：超过 4096 字节";
-        else why = upd_parse(d, &build, &note, &urgent, &install);
-        if (!e && d.length && d.length <= 4096) {   // 远程退回画法：版本文件里 "render_safe": true → 本局退回原画法；没有这个字段 = 新画法 | Remote fallback of the drawing method: "render_safe": true in the version file → this run falls back to the old drawing method; without this field = the new drawing method
-            NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil]; NSNumber *rs = [j isKindOfClass:NSDictionary.class] ? j[@"render_safe"] : nil;
-            extern int g_dm_rt_ab; if ([rs isKindOfClass:NSNumber.class] && rs.boolValue) { if (g_dm_rt_ab) { g_dm_rt_ab = 0; plog("画法：版本文件 render_safe = true → 本局退回原画法"); } }
-            else plog("画法：版本文件没有 render_safe（或为 false）→ 新画法照常"); }
+        int build = 0, urgent = 0, safe = 0, fail_kind = 2; NSString *note = nil, *install = nil;
+        NSString *why = dm_update_response(d, r, e, &build, &note, &urgent, &install, &safe, &fail_kind);
+        if (safe) { extern int g_dm_rt_ab; if (g_dm_rt_ab) { g_dm_rt_ab = 0; plog("画法：版本文件 render_safe = true → 本局退回原画法"); } }
         if (why) {
             plog("更新：查 %s（第 %d / %d 次）→ %s%s", us.UTF8String, n, UPD_TRIES, why.UTF8String, n < UPD_TRIES ? "，稍后再试" : "，已有的提示不动");
             if (e) plog("更新：第 %d 次取不到的错误码 %s %ld", n, e.domain.UTF8String, (long)e.code);
             if (n < UPD_TRIES) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * n) * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ upd_fetch(n + 1); }); return; }
             atomic_store(&g_inflight, 0);
-            if (e) upd_net_why(); else dm_update_fail(2);   // 三次都失败才出字：网络错误由系统网络路径定原因（upd_net_why 里设），HTTP 非 200 / 格式不对 = 其余失败 | Text appears only after all three attempts fail: for a network error the reason is determined by the system network path (set in upd_net_why); HTTP non-200 / bad format = other failures
+            if (e) upd_net_why(); else dm_update_fail(fail_kind);   // 三次都失败才出字：网络错误由系统网络路径定原因（upd_net_why 里设），HTTP 5xx = 服务故障，其余非 200 / 格式不对 = 其他失败 | Text appears only after all three attempts fail: for a network error the reason is determined by the system network path (set in upd_net_why); HTTP 5xx = service failure, other non-200 / bad format = other failures
             return; }
         atomic_store(&g_inflight, 0);
         if (n > 1) plog("更新：第 %d 次取到了（前面 %d 次失败）", n, n - 1);

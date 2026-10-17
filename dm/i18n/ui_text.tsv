@@ -375,3 +375,4 @@ dmCustomTouchSwapNear	换组键：传送门左侧	Skill-set switch: left of port
 dmCustomTouchSwapNearHint	沿传送门外侧弧线排布，松手后切换	On the portal arc; release to switch	换组近位说明
 dmCustomTouchSwapFar	换组键：技能区上方	Skill-set switch: above skills	分离位置，touch_swap_above=1
 dmCustomTouchSwapFarHint	位于技能区左上，松手后切换	Above-left of skills; release to switch	换组上位说明
+dmUpdService	更新服务暂不可用 · 稍后重试	Update service unavailable · Try later	dm_update.c

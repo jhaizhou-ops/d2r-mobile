@@ -42,7 +42,9 @@ t_joy_travel: t_joy_travel.c ../Sources/dm_touch_controls.c ../Sources/dm_touch_
 	$(CC) $(CFLAGS) -I../Sources t_joy_travel.c ../Sources/dm_touch_controls.c -lm -o $@
 t_metal_cache_guard: t_metal_cache_guard.c ../Sources/dm_metal_cache_guard.c ../Sources/dm_metal_cache_guard.h
 	$(CC) $(CFLAGS) -I../Sources t_metal_cache_guard.c ../Sources/dm_metal_cache_guard.c -o $@
-test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL_CACHE_TARGET)
+UPDATE_RESPONSE_TARGET = $(if $(filter Darwin,$(shell uname -s)),t_update_response,)
+test: $(UPDATE_RESPONSE_TARGET) $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL_CACHE_TARGET)
+	$(if $(UPDATE_RESPONSE_TARGET),./$(UPDATE_RESPONSE_TARGET),@echo "SKIP update response: Foundation requires macOS")
 	./$(METAL_CACHE_TARGET)
 	./$(TARGET)
 	./t_skill_aim
@@ -62,4 +64,9 @@ test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL
 	python3 test_skill_aim_front.py
 	python3 test_touch_receipt.py --source ../Sources/front_ios.m
 clean:
-	rm -f $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL_CACHE_TARGET)
+	rm -f t_update_response $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL_CACHE_TARGET)
+
+# 更新响应的Foundation宿主测试，不依赖游戏资源或UIKit。
+# Foundation host test for update responses; no game resources or UIKit needed.
+t_update_response: t_update_response.m ../Sources/dm_update_response.h
+	clang -fobjc-arc -framework Foundation -o $@ t_update_response.m

@@ -18,7 +18,7 @@ host/dm_vault.c	*	编年史存取对账说明，只进日志
 host/dm_pages.c	*	翻页对账说明，只进日志
 host/dm_cloudsync.c	*	iCloud 备份来源标签（写进备份文件名旁的日志）
 host/dm_drophaptic.c	*	掉落震动名单的说明列，只进日志（LOG 的「第 N 档（%s）」）
-ios/Sources/dm_update.m	*	查更新失败原因 / 网络路径状态，只进日志（界面只显示 dm_update.c 的三种固定文字，已进中英表）
+ios/Sources/dm_update.m	*	查更新失败原因 / 网络路径状态，只进日志（界面只显示 dm_update.c 的固定文字，已进中英表）
 ios/Sources/cloud_ios.m	*	iCloud 同步日志
 host/diag.c	@res_report	资源读数日志标签
 host/diag.c	@crash_watch_progress	看门狗进展标签，只进日志

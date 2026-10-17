@@ -34,11 +34,13 @@ void dm_update_offer(int new_build, const char *note, int urgent) {
     atomic_store(&g_dirty, 30);
 }
 // 查新版本失败（玩家停在旧包、更新查询静默失败，玩家不知道有新版）：任意线程调。
-// 0 = 这次取到了（撤掉失败提示）；1 = 系统说这个 App 没有无线数据许可（玩家自己能在设置里开）；2 = 其余取不到（地址失效、断网、格式不对…）。
+// 0 = 这次取到了（撤掉失败提示）；1 = 系统说这个 App 没有无线数据许可（玩家自己能在设置里开）；2 = 其余取不到（地址失效、断网、格式不对…）；3 = HTTP 5xx 服务故障。
 // 失败提示只在没有新版本提示时显示（已有的新版本提示照旧留着），写在普通更新提示那一行（TouchUpdNote），不出「更新」按钮
 // New version check failed (the player stays on an old package, the update query fails silently, and the player does not know there is a new version): callable from any thread.
-// 0 = fetched this time (remove the failure notice); 1 = the system says this App has no wireless data permission (the player can turn it on in Settings); 2 = any other fetch failure (URL dead, offline, bad format...).
+// 0 = fetched this time (remove the failure notice); 1 = the system says this App has no wireless data permission (the player can turn it on in Settings); 2 = other fetch failures (URL dead, offline, bad format...); 3 = HTTP 5xx service failure.
 // The failure notice is shown only when there is no new version notice (an existing new version notice stays as before), written on the ordinary update notice line (TouchUpdNote), without the 「更新」(Update) button
+// 3 = HTTP 5xx 服务故障，提示稍后重试，不引导去同一故障站点。
+// 3 = HTTP 5xx service failure: suggest retrying later, not visiting the same failed host.
 static _Atomic int g_fail;
 static char g_site[96];   // 手动更新去哪：版本文件地址里的主机名（外壳在启动时给，之后不变）；没配更新地址就为空 | Where to go for a manual update: the host name in the version file URL (given by the shell at startup, unchanged afterwards); empty if no update URL is configured
 void dm_update_site(const char *host) { snprintf(g_site, sizeof g_site, "%s", host ? host : ""); }
@@ -105,7 +107,7 @@ void dm_update_pump(void) {   // 取手柄处每帧调（游戏主线程） | Ca
     snprintf(t, sizeof t, dm_str(b, "dmUpdNew"), build, note);
     char ft[192]; if (g_site[0]) snprintf(ft, sizeof ft, dm_str(b, "dmUpdFailSite"), g_site); else snprintf(ft, sizeof ft, "%s", dm_str(b, "dmUpdFail"));
     if (pad && normal) { size_t L = strlen(t); snprintf(t + L, sizeof t - L, "   \xee\x80\x91 %s", dm_str(b, "dmUpdButton")); }   // 手柄：行尾接「Y 键帽 + 更新」（键帽 = 界面字体里的手柄键字形 U+E011，原版提示条用的同一个） | Controller: append "Y keycap + Update" at the end of the line (keycap = the controller button glyph U+E011 in the UI font, the same one the original legend uses)
-    set_text(b, nt, normal ? t : fail == 1 ? dm_str(b, "dmUpdNoNet") : fail ? ft : "");
+    set_text(b, nt, normal ? t : fail == 1 ? dm_str(b, "dmUpdNoNet") : fail == 3 ? dm_str(b, "dmUpdService") : fail ? ft : "");
     snprintf(t, sizeof t, dm_str(b, "dmUpdNewUrgent"), build, note); if (pad && urg) { size_t L = strlen(t); snprintf(t + L, sizeof t - L, "   \xee\x80\x91 %s", dm_str(b, "dmUpdButton")); } set_text(b, de, urg ? t : ""); set_text(b, ti, urg ? dm_str(b, "dmUpdUrgentTitle") : "");
     if (pad) { place(bg, urg ? xr / 2 - 700 : 99999, urg ? 1506 : 99999); place(ti, xr / 2 - 700, 1524); place(de, xr / 2 - 700, 1610); }
     else { place(bg, urg ? -700 : 99999, urg ? 1506 : 99999); place(big, urg ? -303 : 99999, urg ? 1712 : 99999); }
@@ -115,7 +117,7 @@ void dm_update_pump(void) {   // 取手柄处每帧调（游戏主线程） | Ca
     if (pad) { place(nt, xr - 2000 - bx, 130); place(sm, 99999, 99999); place(big, 99999, 99999); }   // 手柄：提示字在构建号下面一行；两个「更新」按钮不摆出来（按 Y，见上） | Controller: the hint text goes on the line below the build number; the two 「更新」(Update) buttons are not shown (press Y, see above)
     else { place(nt, bx + 341, 2046); place(sm, normal ? bx + 341 + nw + 34 : 99999, normal ? 2030 : 99999); }
     static dm_wref lw; static int ls = -1, lnw; int st = normal ? 1 : urg ? 2 : fail ? 2 + fail : 0;
-    if (dm_wref_get(&lw) != bw || ls != st || (normal && lnw != nw)) { dm_wref_set(&lw, bw); ls = st; lnw = nw; LOG("更新：选角页写上构建 %d%s（提示字宽 %d）", g_own, normal ? "，普通更新提示" : urg ? "，建议立即更新提示" : fail == 1 ? "，查更新失败提示（无线数据许可）" : fail ? "，查更新失败提示（浏览器手动更新）" : "，无提示", normal ? nw : 0); }
+    if (dm_wref_get(&lw) != bw || ls != st || (normal && lnw != nw)) { dm_wref_set(&lw, bw); ls = st; lnw = nw; LOG("更新：选角页写上构建 %d%s（提示字宽 %d）", g_own, normal ? "，普通更新提示" : urg ? "，建议立即更新提示" : fail == 1 ? "，查更新失败提示（无线数据许可）" : fail == 3 ? "，更新服务故障提示（稍后重试）" : fail ? "，查更新失败提示（浏览器手动更新）" : "，无提示", normal ? nw : 0); }
 }
 #if TARGET_OS_OSX
 // Mac App：鼠标点主菜单右上角那行「有新版本…」= 按 Y（打开下载页）。Mac 玩家第一反应是点它；这一行在手柄版里是纯文字、没有按钮可点，所以按位置认：
