@@ -50,10 +50,6 @@ uint32_t dm_vault_ui_held(void) { return 0; }
 int dm_vault_ui_over(int x, int y) { (void)x; (void)y; return 0; }
 int dm_vault_ui_tip_gate(int x, int y) { (void)x; (void)y; return 0; }
 /* ---- dm_padmode.c（P4：手柄↔触屏；此处恒"触屏且不忙"）---- */
-int dm_padmode_busy(void) { return 0; }
-void dm_padmode_legend(int slot, const char *text) { (void)slot; (void)text; }
-uint64_t dm_padmode_page_keys(uint64_t keys) { return keys; }   /* 不改写键位 | no key rewrite */
-void dm_padmode_step(uint8_t *b, uint64_t frame) { (void)b; (void)frame; }
 /* ---- dm_pages.c（P8a：个人仓库多页）---- */
 int dm_pages_count(void) { return 1; }
 int dm_pages_cur(void) { return 0; }
@@ -66,11 +62,6 @@ int dm_custom_get(const char *key) { (void)key; return 0; }                     
 int dm_diag_difficulty(void) { return -1; }                                     /* 不在局内的读数；一键重开用（P8b 接 diag 后给真值） */
 int dm_diag_srv_merc(uint32_t id, int *hp, int *mx, int *healing) { (void)id; if (hp) *hp = 0; if (mx) *mx = 0; if (healing) *healing = 0; return 0; }
 void dm_game_notice(uint8_t *main_base, const char *text) { (void)main_base; (void)text; }
-void dm_padmode_ident_hint(int on) { (void)on; }
-void dm_padmode_legend_hide(const char *legend, int act) { (void)legend; (void)act; }
-uint64_t dm_padmode_page_held(void) { return 0; }
-void dm_padmode_page_pulse(uint64_t mask) { (void)mask; }
-void dm_padmode_request(int want) { (void)want; }                               /* P4 接 dm_padmode.c 前不切布局 | no layout switching before P4 */
 int dm_rift_cleared_any(void) { return 0; }
 int dm_rift_merc_unlocked(void) { return 0; }
 int dm_rift_merc_slot_empty(int loc) { (void)loc; return 0; }
@@ -80,3 +71,7 @@ void dm_vault_ui_pump(void) {}
 int dm_vault_ui_tap(int x, int y) { (void)x; (void)y; return 0; }
 _Atomic int g_dm_seek_tp;
 int g_dm_seek_tp_x, g_dm_seek_tp_y;
+
+/* ---- 第三批（padmode 编入后）：符文之语界面重建、选项页模式进入（P8b/P8d）---- */
+void dm_runeword_ui_rebuild(void) {}
+void dm_update_mode_enter(void) {}

