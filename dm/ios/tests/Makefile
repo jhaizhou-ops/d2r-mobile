@@ -57,6 +57,7 @@ test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL
 	./t_binding_group
 	./t_native_hud_identity
 	$(call fixture_test,t_native_hud_bridge)
+	python3 test_skill_live.py
 	python3 test_portal_receipt.py
 	python3 test_native_binding_seam.py
 	python3 test_skill_aim_front.py
