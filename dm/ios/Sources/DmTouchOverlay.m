@@ -255,7 +255,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         if(!self.navigationMode && i==DM_TC_MAP && s->map_cancel_active) {icon=nil;showCaption=YES;}
         BOOL emptySkill=skillKey && !icon && (!showCaption || i==DM_TC_MAIN);
         if(skillKey) [self drawButton:b held:held empty:emptySkill primary:i==DM_TC_MAIN];
-        if(emptySkill) continue;   // 空槽保留绑定入口，只画低对比刻印 | Empty slots keep their binding entry and show only a low-contrast engraving
+        if(emptySkill) continue;   // 空槽保留绑定入口，细边框和刻印由背景绘制 | Empty slots keep their binding entry; the background draws their thin rim and engraving
         if(skillKey) {   // 技能美术居中；无图的未知槽保留原标签回退 | Center skill artwork; unknown slots with no image keep the existing label fallback
             BOOL bare=icon!=nil;   // 有图标的技能钮不写字（最大的钮是「主技能 / 交互」、可绑任意技能，钮上只画所绑技能的图标，不写「攻击」）：图标放大并居中。取不到图标时主钮仍落回「攻击」字样 | skill buttons that have an icon carry no text (the largest button is "main skill / interact" and can be bound to any skill, so the button draws only the bound skill's icon and does not say 「攻击」(Attack)): the icon is enlarged and centered. When no icon can be obtained the main button still falls back to the 「攻击」(Attack) text
             BOOL spent=(ssKind&2) && ssCharges<=0;   // 充能用完：钮变灰（灰底上按亮度贴图标 = 去色），按下也不换武器（dm_actions.c） | charges used up: the button turns gray (the icon applied by luminance on a gray base = desaturated), and pressing does not swap weapons either (dm_actions.c)

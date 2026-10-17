@@ -46,8 +46,11 @@ static void dm_button_draw(CGContextRef c, CGRect r, int held, int empty, int pr
     CGContextSetRGBStrokeColor(c,.008,.012,.015,empty?.38:.9);CGContextSetLineWidth(c,side*.025);CGContextStrokeEllipseInRect(c,rim);
     const CGFloat well[]={.021,.021,.021,empty?.08:.94, .050,.050,.050,empty?.16:.94};
     CGContextSaveGState(c);CGContextAddEllipseInRect(c,face);CGContextClip(c);dm_button_gradient(c,face,well,2);CGContextRestoreGState(c);
-    CGContextSetRGBStrokeColor(c,held?.64:.26,held?.64:.29,held?.64:.28,held?.72:(empty?.18:.55));
-    CGContextSetLineWidth(c,side*(held?.018:.009));CGContextStrokeEllipseInRect(c,face);
+    // 空槽用稍亮的银灰细边，在明亮地面上保留绑定入口的轮廓。
+    // A brighter silver-gray hairline keeps empty binding slots visible on bright ground.
+    if(empty) CGContextSetGrayStrokeColor(c,held?.72:.62,held?.80:.60);
+    else CGContextSetRGBStrokeColor(c,held?.64:.26,held?.64:.29,held?.64:.28,held?.72:.55);
+    CGContextSetLineWidth(c,side*(held?.018:(empty?.012:.009)));CGContextStrokeEllipseInRect(c,face);
     if(primary && !empty) {
         CGContextSetRGBStrokeColor(c,.31,.23,.22,.52);CGContextSetLineWidth(c,side*.012);
         CGContextStrokeEllipseInRect(c,CGRectInset(r,side*.035,side*.035));
