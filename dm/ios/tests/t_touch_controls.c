@@ -469,9 +469,20 @@ static void safe_insets(void) {
 }
 static void swap_key(void) {
     dm_tc_layout l;dm_tc_layout_make(&l,956,440);
-    NEAR(l.swap.r,22,.001);CHECK(l.swap.x<l.target[DM_TC_SKILL1].x);
-    CHECK(l.swap.y+l.swap.r<l.target[DM_TC_SKILL2].y-l.target[DM_TC_SKILL2].r);
+    NEAR(l.swap.r,22,.001);CHECK(l.swap.x>l.target[DM_TC_MAIN].x);
+    CHECK(l.swap.y>l.target[DM_TC_MAIN].y);
+    float travel=hypotf(l.swap.x-l.target[DM_TC_MAIN].x,l.swap.y-l.target[DM_TC_MAIN].y);
+    CHECK(travel<=90);CHECK(travel>=l.swap.r+l.target[DM_TC_MAIN].r+24);
     CHECK(dm_tc_hit(&l,l.swap.x,l.swap.y)==DM_TC_SWAP);
+    // 两键间的空隙不属于任何按钮；从攻击键滑入换组键也不会切组。
+    // The gap belongs to neither button; dragging an attack touch onto the switch does not switch sets.
+    dm_tc_target main=l.target[DM_TC_MAIN];
+    float d=main.r+12;
+    CHECK(dm_tc_hit(&l,main.x+(l.swap.x-main.x)*d/travel,main.y+(l.swap.y-main.y)*d/travel)==DM_TC_NONE);
+    dm_tc_state s;dm_tc_init(&s,956,440);press(&s,0,DM_TC_MAIN);
+    dm_tc_move(&s,0,l.swap.x,l.swap.y);CHECK(s.skill_set==0);CHECK(s.finger[0].target==DM_TC_MAIN);
+    dm_tc_end(&s,0);CHECK(s.skill_set==0);
+    dm_tc_begin(&s,0,l.swap.x,l.swap.y);CHECK(s.skill_set==1);dm_tc_end(&s,0);
 }
 /* 实际设备尺寸下检查整个技能区的触控间隔与边界，不依赖绘图预览。
    Check touch gaps and bounds for the complete skill cluster at device sizes, independently of rendered previews. */
@@ -485,7 +496,7 @@ static void skill_cluster_clearance(void) {
         for(int i=0;i<6;i++)group[i]=l.target[i];group[6]=l.swap;
         for(int i=0;i<7;i++) {
             dm_tc_target t=group[i];CHECK(t.x-t.r>=sizes[n][2]);CHECK(t.x+t.r<=w-sizes[n][3]);
-            CHECK(t.y-t.r>=0);CHECK(t.y+t.r<=h-24*k);
+            CHECK(t.y-t.r>=0);CHECK(t.y+t.r<=h-24*k+.001f);
             for(int j=i+1;j<7;j++)CHECK(hypotf(t.x-group[j].x,t.y-group[j].y)>=t.r+group[j].r+12*k-.001f);
             for(int j=DM_TC_BELT1;j<=DM_TC_MENU;j++) {
                 dm_tc_target bar=l.target[j];CHECK(hypotf(t.x-bar.x,t.y-bar.y)>t.r+bar.r+8*k);

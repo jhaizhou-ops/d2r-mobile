@@ -43,9 +43,9 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     float k = scale_for(l);
     // 右拇指技能扇区：主钮在下，四个技能保持原大小并留出独立触控间隔。
     // Right-thumb skill fan: primary below, with original-size skills and separate touch gaps.
-    // 最右侧技能比主钮伸出 20 点；整组距安全区至少 8 点。
-    // The rightmost skill extends 20 points beyond the primary; keep the cluster at least 8 points inside the safe area.
-    float main_x=l->width-g_safe_r-68*k, main_y=l->height-82*k;
+    // 换组键在主钮右下，整组距右侧安全区至少 8 点、底边至少 24 点。
+    // The set switch is below-right of the primary; keep 8 points inside the right safe area and 24 above the bottom edge.
+    float main_x=l->width-g_safe_r-86*k, main_y=l->height-112*k;
     l->target[DM_TC_MAIN]=(dm_tc_target){main_x,main_y,40*k,DM_BTN_A};
     const float dx[4]={-96,-84,-34,34},dy[4]={18,-50,-92,-92};
     const uint64_t skill[4]={DM_BTN_B,DM_BTN_X,DM_BTN_Y,DM_BTN_R};
@@ -68,9 +68,9 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->diff = (dm_tc_target){l->width/2+(1090-1434)*u, 1241.5f*u, 57*u, 0};
     for (int i = 0; i < 8; ++i) l->pick[i] = (dm_tc_target){l->width/2+(1390+(i-3.5f)*120-1434)*u, 1051.5f*u, 57*u, 0};
     l->target[DM_TC_MAP] = (dm_tc_target){l->width-30*k, 30*k, 22*k, DM_BTN_MINUS};
-    // 换组键放在技能扇区左上，与战斗技能、底栏和底边手势区分开。
-    // Keep the set switch above-left of the skill fan, separate from combat skills, the bottom bar and edge gestures.
-    l->swap=(dm_tc_target){main_x-124*k,main_y-114*k,22*k,0};
+    // 换组键靠近主钮，保留约 25 点触控间隔，避免频繁换组时过度伸拇指。
+    // Keep the set switch close to the primary with about 25 points of touch clearance, reducing thumb travel.
+    l->swap=(dm_tc_target){main_x+56*k,main_y+66*k,22*k,0};
     /* 底栏外侧是血 / 蓝球；球不是输入目标。 | Outside the bottom bar are the life / mana orbs; the orbs are not input targets. */
     /* 左摇杆是浮动底盘：左下「起摇杆区」里手指落在哪，底盘圆心就落在哪，松手回静止位。
        静止位：圆心离安全区左界 90（底盘半径 60 + 30）、不小于 120，离屏幕底 115——只是没按时画在哪。
