@@ -127,7 +127,11 @@
   （Android 专属文件，零上游改动；hle_fs.c:719 的调用不用动）——overlay 文件落到
   `d2r-mobile/romfs-view/...` 即生效；目录/状态查询路径同补；
   ④ 移植 `dm_padmode.c`（SHA-1 用迷你实现替换 CommonCrypto）+ 解锁 `hle_oe.c:71-73` 的
-  Android `die`（按 94012 验证）+ 切换事务/输入冻结/重建计数 + 前端"碰屏=触屏模式"（手柄后置）。
+  Android `die`（按 94012 验证）+ 切换事务/输入冻结/重建计数 + 前端"碰屏=触屏模式"（手柄后置）；
+  ⑤ 宿主侧文件（`ctrl_touch` 标记、`touch_strings.tsv`、v4 的 `ui.json`）走
+  `DM_ROMFS_OVERLAY` 读取——Android 侧要在 `app_jni.c` 里把它设为
+  `"<romfs-view>:<宿主文件目录>"`（冒号多层，hle_fs.c:266-281 已支持；避免把宿主小文件
+  混进游戏 rom 根）。
 - **验收**：底栏与技能格上的 a/b/x/y 消失；"按 A 使用"变"双击使用"（25 条逐一抽查）；
   设置页不适用行隐藏；两套布局随触碰/手柄自动切。
 
