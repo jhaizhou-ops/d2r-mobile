@@ -45,6 +45,9 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     // Keep the combat fan anchored inside the side and bottom safe areas.
     float main_x=l->width-g_safe_r-86*k, main_y=l->height-88*k-fmaxf(24*k,g_safe_b+8*k);
     if (g_tall_scale && height<340) main_y=fmaxf(main_y,190*k);
+    // Move the whole fan down-right. Compact tablet windows need the original belt clearance.
+    main_x+=12*k;
+    if (!(g_tall_scale && height<340)) main_y+=28*k;
     l->target[DM_TC_MAIN]=(dm_tc_target){main_x,main_y,40*k,DM_BTN_A};
     const float dx[4]={-96,-84,-34,34},dy[4]={18,-50,-92,-92};
     const uint64_t skill[4]={DM_BTN_B,DM_BTN_X,DM_BTN_Y,DM_BTN_R};
