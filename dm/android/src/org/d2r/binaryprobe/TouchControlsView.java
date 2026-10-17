@@ -27,6 +27,7 @@ public final class TouchControlsView extends View {
     private static native int nativeEvent(int[] ids,float[] xs,float[] ys,boolean cancelled);
     private static native float[] nativeFrame();
     private static native void nativeActivate(int target);
+    static native int nativeFrontend();   // 1 = 局外（前端页面：主菜单/选角/加载）——覆盖层隐藏 | 1 = front-end page: overlay hidden
     // Canonical Android touch-layer tokens, mirrored in DESIGN.md and in the iOS overlay palette.
     static final int INK=0xff16110c, RIM=0xff997845, RIM_DARK=0xff1f170d, TEXT=0xffd9c9a6;
     private static final int KNOB_RING=0xffb08e4e, STAR=0xffc8a460, STAR_CORE=0xffecd696;

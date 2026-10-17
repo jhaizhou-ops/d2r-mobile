@@ -2,6 +2,7 @@
  * No game-version addresses or Apple UI/skill observation hooks are linked. */
 #include "../ios/Sources/dm_touch_controls.h"
 #include "input_backend.h"
+#include "ui_state_android.h"
 #include "../host/dm.h"
 #include <jni.h>
 #include <errno.h>
@@ -29,7 +30,23 @@ static void restrict_layout(void) {
     controls.layout.diff.r=0;
     for(int i=0;i<8;i++)controls.layout.pick[i].r=0;
     controls.belt_rows=1;
-    dm_tc_enable_targets(&controls,((1u<<DM_TC_COUNT)-1)&~(1u<<DM_TC_PORTAL));
+}
+/* UI 状态机（P1）：游戏态掩码 = 全部除回城（地图键暂时保留，等 P2 接了"点小地图开图"再按 iOS 去掉）；
+ * 面板态（对齐 front_ios.m:183-185）：导航态不给五个手柄圆钮（dm_tc_nav_mask(0)=0），只开对话菜单（3）时给底栏十字。 */
+static uint32_t game_mask(void){return ((1u<<DM_TC_COUNT)-1)&~(1u<<DM_TC_PORTAL);}
+static unsigned applied_rev=0xffffffffu;static uint32_t applied_mask;
+static int applied_nav;
+static void apply_ui_locked(void) {
+    unsigned rev=dm_android_ui_rev();
+    if(rev==applied_rev)return;
+    applied_rev=rev;
+    int nm=dm_android_ui_panel_mode();
+    dm_tc_set_navigation_mode(&controls,nm!=0);
+    dm_tc_set_joy_block(&controls,nm==3);
+    applied_nav=nm!=0?1:0;
+    applied_mask=nm?(nm==3?(1u<<DM_TC_MENU):0u):game_mask();
+    dm_tc_enable_targets(&controls,applied_mask);
+    LOG("TOUCH_UI_MODE panel=%d mask=%#x frontend=%d",nm,applied_mask,dm_android_ui_frontend());
 }
 static int publish(void) {
     int32_t axes[4]={controls.lx,controls.ly,controls.rx,controls.ry};
@@ -64,10 +81,10 @@ JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeResize(J
     (void)env;(void)cls;if(!isfinite(w)||!isfinite(h)||w<=0||h<=0)return;
     pthread_mutex_lock(&lock);dm_tc_set_tall_scale(1);dm_tc_set_safe_insets(left,right);
     if(ready){cancel();dm_tc_resize(&controls,w,h);}else{dm_tc_init(&controls,w,h);ready=1;}
-    restrict_layout();pthread_mutex_unlock(&lock);
+    restrict_layout();apply_ui_locked();pthread_mutex_unlock(&lock);
 }
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEnable(JNIEnv *env,jclass cls,jboolean on) {
-    (void)env;(void)cls;pthread_mutex_lock(&lock);cancel();enabled=on!=0;pthread_mutex_unlock(&lock);
+    (void)env;(void)cls;pthread_mutex_lock(&lock);cancel();enabled=on!=0;apply_ui_locked();pthread_mutex_unlock(&lock);
 }
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeCancel(JNIEnv *env,jclass cls) {
     (void)env;(void)cls;pthread_mutex_lock(&lock);cancel();pthread_mutex_unlock(&lock);
@@ -80,7 +97,7 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
     (*env)->GetIntArrayRegion(env,ids,0,n,id);(*env)->GetFloatArrayRegion(env,xs,0,n,x);(*env)->GetFloatArrayRegion(env,ys,0,n,y);
     if((*env)->ExceptionCheck(env))return EINVAL;
     for(int i=0;i<n;i++){if(!isfinite(x[i])||!isfinite(y[i]))return EINVAL;for(int j=0;j<i;j++)if(id[i]==id[j])return EINVAL;}
-    pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&lock);apply_ui_locked();
     if(cancelled){cancel();pthread_mutex_unlock(&lock);return 0;}
     if(!ready||!enabled){pthread_mutex_unlock(&lock);return ENODEV;}
     double now=seconds();
@@ -99,13 +116,14 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
     pthread_mutex_unlock(&lock);return rc;
 }
 JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeFrame(JNIEnv *env,jclass cls) {
-    (void)cls;jfloat data[58]={0};pthread_mutex_lock(&lock);tick();
-    for(int i=0;i<DM_TC_COUNT;i++){dm_tc_target t=controls.layout.target[i];data[i*3]=t.x;data[i*3+1]=t.y;data[i*3+2]=t.r;
+    (void)cls;jfloat data[58]={0};pthread_mutex_lock(&lock);apply_ui_locked();tick();
+    for(int i=0;i<DM_TC_COUNT;i++){dm_tc_target t=controls.layout.target[i];data[i*3]=t.x;data[i*3+1]=t.y;data[i*3+2]=(applied_mask&(1u<<i))?t.r:0;
         for(int j=0;j<16;j++)if(controls.finger[j].active&&controls.finger[j].target==i)data[44+i]=1;}
     data[36]=controls.layout.joy_x;data[37]=controls.layout.joy_y;data[38]=controls.layout.joy_radius;
     data[39]=controls.layout.swap.x;data[40]=controls.layout.swap.y;data[41]=controls.layout.swap.r;
     data[42]=data[36]+controls.lx/32767.f*data[38];data[43]=data[37]-controls.ly/32767.f*data[38];
     data[56]=(float)controls.skill_set;data[57]=controls.joy_slot!=DM_TC_NONE;
+    if(applied_nav){data[38]=0;data[41]=0;}   /* 面板态不画摇杆/换组（对齐 DmTouchOverlay：navigationMode 直接跳过） | no stick / set-switch while a panel is open */
     pthread_mutex_unlock(&lock);jfloatArray out=(*env)->NewFloatArray(env,58);if(out)(*env)->SetFloatArrayRegion(env,out,0,58,data);return out;
 }
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeActivate(JNIEnv *env,jclass cls,jint target) {
@@ -122,4 +140,9 @@ JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeActivate
         }
     }
     pthread_mutex_unlock(&lock);
+}
+
+/* Java 侧轮询：局外（前端页面）返回 1——覆盖层隐藏、触摸直通游戏（对齐 iOS：局外 overlay.hidden=YES）。 */
+JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeFrontend(JNIEnv *env,jclass cls) {
+    (void)env;(void)cls;pthread_mutex_lock(&lock);apply_ui_locked();int fe=dm_android_ui_frontend();pthread_mutex_unlock(&lock);return fe;
 }

@@ -47,6 +47,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private TouchControlsView touchControls;
     private final java.util.ArrayList<View> menuControls=new java.util.ArrayList<>();
     private boolean prepared, configured, surfaceReady, launched, resumed, failed;
+    private boolean combatWanted, overlayOn;   // 战斗模式意图 / 覆盖层当前是否在屏（局外自动隐藏 = iOS 模型） | combat intent / overlay actually shown (auto-hidden on front-end pages)
     private int width,height;
     private long actionButtons;
     @Override public void onCreate(Bundle state) {
@@ -83,9 +84,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         TextView mode=new TextView(this);mode.setText("战斗操控");mode.setTextColor(TouchControlsView.TEXT);mode.setTextSize(16);
         mode.setGravity(Gravity.CENTER);mode.setBackground(buttonBackground());mode.setContentDescription("切换到战斗触摸操控");mode.setClickable(true);mode.setFocusable(true);
         FrameLayout.LayoutParams modeParams=new FrameLayout.LayoutParams(dp(100),dp(48),Gravity.LEFT|Gravity.TOP);modeParams.leftMargin=dp(18);modeParams.topMargin=dp(18);
-        mode.setOnClickListener(v -> {boolean combat=touchControls.getVisibility()!=View.VISIBLE;actionButtons=0;if(inputReady)nativeActions(0,0,0,0,0);
-            touchControls.setActive(combat);for(View control:menuControls)control.setVisibility(combat?View.GONE:View.VISIBLE);
-            mode.setText(combat?"菜单操控":"战斗操控");mode.setContentDescription(combat?"切换到菜单操控":"切换到战斗触摸操控");});
+        mode.setOnClickListener(v -> {combatWanted=!combatWanted;actionButtons=0;if(inputReady)nativeActions(0,0,0,0,0);syncOverlay();
+            mode.setText(combatWanted?"菜单操控":"战斗操控");mode.setContentDescription(combatWanted?"切换到菜单操控":"切换到战斗触摸操控");});
         root.addView(mode,modeParams);
         status=new TextView(this);status.setTextColor(0xffe9d9ba);status.setTextSize(18);
         status.setGravity(Gravity.CENTER);status.setBackgroundColor(0xe60d0d0f);
@@ -97,6 +97,13 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         },"game-files").start();
     }
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
+    /* 覆盖层显隐：战斗模式意图 && 已就绪 && 局内（nativeFrontend()==0）——局外/前端页面自动让开，对齐 iOS。
+     * Overlay visibility: combat intent && input ready && in a run (nativeFrontend()==0); front-end pages hide it, like iOS. */
+    private void syncOverlay(){
+        if(touchControls==null)return;
+        boolean want=combatWanted&&inputReady&&!failed&&TouchControlsView.nativeFrontend()==0;
+        if(want!=overlayOn){overlayOn=want;touchControls.setActive(want);for(View control:menuControls)control.setVisibility(want?View.GONE:View.VISIBLE);}
+    }
     private android.graphics.drawable.Drawable buttonBackground(){
         android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();
         shape.setColor(0xb316100c);shape.setCornerRadius(dp(14));
@@ -174,7 +181,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             if(generation!=surfaceGeneration)return;
             if(rc!=0){final int error=rc;ui.post(() -> {if(!destroyed&&generation==surfaceGeneration)fail("游戏窗口不可用",new Exception("错误 "+error));});return;}
             inputReady=start;
-            ui.post(() -> {if(!destroyed)touchControls.postInvalidateOnAnimation();});
+            ui.post(() -> {if(!destroyed){touchControls.postInvalidateOnAnimation();syncOverlay();}});
             if(start&&!nativeLaunched){rc=nativeStart();
                 if(rc!=0){final int error=rc;ui.post(() -> {if(!destroyed)fail("游戏启动失败",new Exception("错误 "+error));});return;}
                 nativeLaunched=true;ui.post(() -> {if(!destroyed&&!launched){launched=true;ui.post(poll);}});
@@ -189,10 +196,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             String request=nativeKeyboardRequest();if(request!=null&&resumed&&!destroyed){JSONObject k=new JSONObject(request);long id=k.getLong("id");
                 if(keyboardDialog==null||keyboardId!=id){if(keyboardDialog!=null)keyboardDialog.dismiss();keyboardId=id;actionButtons=0;nativeActions(0,0,0,0,0);touchControls.cancel();
                     keyboardDialog=ShellTextInputDialog.show(GameActivity.this,k.getString("title"),k.getString("subtitle"),k.getString("hint"),k.getString("initial"),k.getInt("min"),k.getInt("max"),(ok,text)->{nativeKeyboardResult(id,ok,text);keyboardDialog=null;});}}
-        }catch(Exception e){fail("无法读取游戏状态",e);}ui.postDelayed(this,500);
+        }catch(Exception e){fail("无法读取游戏状态",e);}syncOverlay();ui.postDelayed(this,250);
     }};
     @Override public void onResume(){super.onResume();resumed=true;nativeKeyboardReady(true);configureAndStart();}
-    @Override public void onPause(){nativeKeyboardReady(false);if(keyboardDialog!=null){keyboardDialog.dismiss();keyboardDialog=null;}resumed=false;inputReady=false;actionButtons=0;if(touchControls!=null)touchControls.cancel();if(configured)nativeActions(0,0,0,0,0);if(configured&&surfaceReady)publishSurface();super.onPause();}
+    @Override public void onPause(){nativeKeyboardReady(false);if(keyboardDialog!=null){keyboardDialog.dismiss();keyboardDialog=null;}resumed=false;inputReady=false;actionButtons=0;if(touchControls!=null)touchControls.cancel();if(configured)nativeActions(0,0,0,0,0);if(configured&&surfaceReady)publishSurface();syncOverlay();super.onPause();}
     @Override public void surfaceCreated(SurfaceHolder holder){if(!destroyed)surfaceReady=true;}
     @Override public void surfaceChanged(SurfaceHolder holder,int format,int w,int h){if(destroyed)return;width=w;height=h;surfaceReady=true;configureAndStart();}
     @Override public void surfaceDestroyed(SurfaceHolder holder){if(destroyed)return;surfaceReady=false;if(configured)publishSurface();}
