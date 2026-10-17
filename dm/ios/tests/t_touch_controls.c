@@ -34,7 +34,7 @@ static void layout_at(float w, float h) {
             CHECK(hypotf(a.x-b.x,a.y-b.y)>a.r+b.r);
         }
     }
-    float k = g_tall && h > 440 ? h/440 : 1;   /* 缺省 1；前端开了大画面放大（g_tall）且画面比手机高（iPad 的 16:9 块）时技能钮按画面高度等比放大 | Default 1; when the front end has large-display scale-up on (g_tall) and the display is taller than a phone (the iPad 16:9 block), skill buttons scale up proportionally with display height */
+    float k = g_tall ? 1.15f : 1;   // Tablet boost is bounded independently of display height.
     NEAR(l.target[DM_TC_MAIN].r,40*k,0.001);
     for (int i=DM_TC_SKILL1; i<=DM_TC_SKILL4; ++i) {
         NEAR(l.target[i].r,26*k,0.001);
@@ -482,21 +482,30 @@ static void swap_key(void) {
     dm_tc_state s;dm_tc_init(&s,956,440);press(&s,0,DM_TC_MAIN);
     dm_tc_move(&s,0,l.swap.x,l.swap.y);CHECK(s.skill_set==0);CHECK(s.finger[0].target==DM_TC_MAIN);
     dm_tc_end(&s,0);CHECK(s.skill_set==0);
-    dm_tc_begin(&s,0,l.swap.x,l.swap.y);CHECK(s.skill_set==1);dm_tc_end(&s,0);
+    dm_tc_begin(&s,0,l.swap.x,l.swap.y);CHECK(s.skill_set==0);dm_tc_end(&s,0);CHECK(s.skill_set==1);
+    dm_tc_begin(&s,0,l.swap.x,l.swap.y);dm_tc_move(&s,0,l.swap.x+l.swap.r+1,l.swap.y);
+    dm_tc_move(&s,0,l.swap.x,l.swap.y);dm_tc_end(&s,0);CHECK(s.skill_set==1);
+    dm_tc_begin(&s,0,l.swap.x,l.swap.y);dm_tc_cancel_finger(&s,0);CHECK(s.skill_set==1);
+    dm_tc_begin(&s,0,l.swap.x,l.swap.y);dm_tc_resize(&s,812,375);CHECK(s.skill_set==1);
+    dm_tc_end(&s,0);CHECK(s.skill_set==1);
 }
 /* 实际设备尺寸下检查整个技能区的触控间隔与边界，不依赖绘图预览。
    Check touch gaps and bounds for the complete skill cluster at device sizes, independently of rendered previews. */
 static void skill_cluster_clearance(void) {
-    const float sizes[][4]={{333.5f,187.5f,0,0},{667,375,0,0},{812,375,44,44},{874,402,62,62},
-        {956,440,62,62},{1024,768,0,0},{1366,768,0,0},{1366,768,32,32}};
-    for(int n=0;n<(int)(sizeof(sizes)/sizeof(sizes[0]));n++) {
-        float w=sizes[n][0],h=sizes[n][1];dm_tc_set_tall_scale(h>440);
+    const float sizes[][6]={{333.5f,187.5f,0,0,0,0},{667,375,0,0,0,0},{812,375,44,44,21,0},
+        {874,402,62,62,21,0},{956,440,62,62,34,0},{1024,768,0,0,20,1},{1194,834,0,0,24,1},
+        {1366,1024,0,0,24,1},{1366,768,32,32,24,1},{744,450,0,0,20,1},{507,285,0,0,20,1},{600,337,0,0,24,1},{874,402,62,0,21,0}};
+    for(int above=0;above<2;above++) for(int n=0;n<(int)(sizeof(sizes)/sizeof(sizes[0]));n++) {
+        float w=sizes[n][0],h=sizes[n][1],bottom=sizes[n][4];dm_tc_set_tall_scale((int)sizes[n][5]);
+        dm_tc_set_swap_above(above);dm_tc_set_safe_bottom(bottom);
         dm_tc_set_safe_insets(sizes[n][2],sizes[n][3]);dm_tc_layout l;dm_tc_layout_make(&l,w,h);
         float k=dm_tc_scale_for_size(w,h);dm_tc_target group[7];
+        CHECK(k<=1.15f);CHECK(l.tablet==(int)sizes[n][5]);CHECK(l.swap_above==above);
         for(int i=0;i<6;i++)group[i]=l.target[i];group[6]=l.swap;
         for(int i=0;i<7;i++) {
             dm_tc_target t=group[i];CHECK(t.x-t.r>=sizes[n][2]);CHECK(t.x+t.r<=w-sizes[n][3]);
-            CHECK(t.y-t.r>=0);CHECK(t.y+t.r<=h-24*k+.001f);
+            CHECK(t.y-t.r>=0);CHECK(t.y+t.r<=h-fmaxf(24*k,bottom+8*k)+.001f);
+            if(sizes[n][5] || (w>=667 && h>=375)) CHECK(t.r*2>=44);
             for(int j=i+1;j<7;j++)CHECK(hypotf(t.x-group[j].x,t.y-group[j].y)>=t.r+group[j].r+12*k-.001f);
             for(int j=DM_TC_BELT1;j<=DM_TC_MENU;j++) {
                 dm_tc_target bar=l.target[j];CHECK(hypotf(t.x-bar.x,t.y-bar.y)>t.r+bar.r+8*k);
@@ -504,7 +513,15 @@ static void skill_cluster_clearance(void) {
             CHECK(dm_tc_hit(&l,t.x,t.y)==(i==6?DM_TC_SWAP:i));
         }
     }
-    dm_tc_set_tall_scale(0);dm_tc_set_safe_insets(0,0);
+    dm_tc_set_tall_scale(1);dm_tc_set_safe_insets(0,0);dm_tc_set_safe_bottom(24);dm_tc_set_swap_above(0);
+    dm_tc_state s;dm_tc_init(&s,1194,672);dm_tc_layout before=s.layout;
+    press(&s,0,DM_TC_MAIN);CHECK(s.buttons!=0);dm_tc_set_swap_above(1);dm_tc_resize(&s,1194,834);
+    CHECK(s.buttons==0 && s.joy_slot==DM_TC_NONE);CHECK(s.layout.swap_above==1);
+    // Same tablet width: increasing height must not increase button sizes or edge reach distances.
+    NEAR(s.layout.target[0].r,before.target[0].r,.001);
+    NEAR(s.layout.height-s.layout.target[0].y,before.height-before.target[0].y,.001);
+    for(int i=0;i<5;i++)NEAR(s.layout.target[i].x,before.target[i].x,.001);
+    dm_tc_set_tall_scale(0);dm_tc_set_safe_insets(0,0);dm_tc_set_safe_bottom(0);dm_tc_set_swap_above(0);
 }
 /* 腰带展开手势（956×440，u = 440/1320 = 1/3：腰带第 1 列格心 x = 478 + (1210−1434)/3 = 403.33、y = 1241.5/3 = 413.83）。
    （腰带一律松手后等过双击窗才喝。）只有 1 排：按下不发键、松手过窗 → 一个脉冲。4 排：按下不发键；松手没滑 → 过窗一个脉冲；上滑过 24 点 → 请求 1（展开）且不发键；下滑 → 请求 2。

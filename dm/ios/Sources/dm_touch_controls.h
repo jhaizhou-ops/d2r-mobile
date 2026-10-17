@@ -17,6 +17,7 @@ enum {
 typedef struct { float x, y, r; uint64_t button; } dm_tc_target;
 typedef struct {
     float width, height;
+    int tablet, swap_above;   // Applied layout profile; mirrors drawing and hit testing.
     dm_tc_target target[DM_TC_COUNT];
     float joy_x, joy_y, joy_radius;   /* 没按时底盘的显示位置（静止位）与底盘半径 | where the base is shown while not pressed (rest position), and the base radius */
     float joy_zone_r, joy_zone_t, joy_min_x, joy_max_y;   /* 起摇杆区的右界与上界（左与下到屏幕边）；按下后底盘圆心的夹回界：x 不小于、y 不大于（只为底盘整圈画在屏内：屏幕边 + 半径 + 8） | right and upper bounds of the stick-start zone (left and bottom reach the screen edges); clamp bounds for the base centre once pressed: x not less than, y not greater than (only so that the whole base is drawn on screen: screen edge + radius + 8) */
@@ -148,8 +149,10 @@ void dm_tc_set_edge_bottom(float bottom);   /* 屏幕底边归系统的那一条
 void dm_tc_layout_make(dm_tc_layout *layout, float width, float height);
 int dm_tc_hit(const dm_tc_layout *layout, float x, float y);
 #define DM_TC_POINTER_LIFT_PT 40.0f   // 功能页拖动时物品抬在手指上方的点数（× 控件缩放） | Number of points the item is lifted above the finger while dragging on function pages (× widget scale)
-void dm_tc_set_tall_scale(int on);   // 画面高 > 440 点时按 高/440 放大的开关；缺省关（Mac 宿主触屏用例传的是像素数，不能放大），iOS 前端建视图时开 | Switch for scaling up by height/440 when picture height > 440 points; default off (the Mac host touch test cases pass pixel counts and must not be scaled up); the iOS front end turns it on when creating the view
-float dm_tc_scale_for_size(float width, float height);   // 控件缩放：手机 min(1, 宽/667, 高/375)；画面高 > 440 点（iPad）时按 高/440 等比放大 | Widget scale: phone min(1, width/667, height/375); when picture height > 440 points (iPad), scale up proportionally by height/440
+void dm_tc_set_swap_above(int above);   // 0: near primary, 1: above skill fan; call resize after changing.
+void dm_tc_set_safe_bottom(float bottom);
+void dm_tc_set_tall_scale(int on);   // Tablet scale opt-in, capped at 1.15; off for Mac pixel replay.
+float dm_tc_scale_for_size(float width, float height);   // Point-based control scale; independent of tablet height.
 void dm_tc_init(dm_tc_state *state, float width, float height);
 /* 尺寸变更会取消全部触点，调用者随后推送归零状态。 | A size change cancels all touch points, and the caller then pushes the zeroed state. */
 void dm_tc_resize(dm_tc_state *state, float width, float height);
