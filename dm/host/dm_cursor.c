@@ -505,9 +505,11 @@ void dm_ui_touch(int phase, float nx, float ny) { if (phase != 3 && dm_restart_b
     if (phase != 1) DM_LAT("ui_touch %d", phase);
     nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
     atomic_store(&g_ut_xy, ((uint64_t)(uint32_t)(nx * 65535 + .5f) << 16) | (uint32_t)(ny * 65535 + .5f));
-    // 「选择游戏模式」页只有标准 / 专家两块牌子（布局 y 899–1259 / 2160，覆盖层已挪走天梯行与键位提示）：点牌子那一行以外 = 返回职业选择
-    // The 「选择游戏模式」(Select game modes) page has only the two plaques standard / hardcore (layout y 899–1259 / 2160; the overlay has already moved away the ladder row and the key hints): tapping outside the plaque row = back to class selection
-    if (phase == 2 && atomic_load(&g_ut_phase) == 1 && atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_confirm_open) && (ny < 899 / 2160.0f || ny > 1259 / 2160.0f) && !(ny > BLISS_Y0 / 2160.0f && ny < BLISS_Y1 / 2160.0f)) { atomic_store(&g_ut_phase, 0); atomic_store(&g_fe_back, 1); return; }   // 牌子下面那一行是「极乐世界」勾选项，不算返回 | The row below the plaques is the 「极乐世界」(Elysium) checkbox and does not count as back
+    // 「选择游戏模式」页只有标准 / 专家两块牌子（布局 y 899–1259 / 2160，覆盖层已挪走天梯行与键位提示）：点牌子那一行以外 = 返回职业选择；
+    // 「极乐世界」那一行与底下补的「创建 / 返回」按钮（y 1750 以下）不算返回——那两处是触摸控件，点了要走游戏自己的消息（AcceptCharacterOptions / ToConsoleClassConfirm）
+    // The 「选择游戏模式」(Select game modes) page has only the two plaques standard / hardcore (layout y 899–1259 / 2160; the overlay has already moved away the ladder row and the key hints): tapping outside the plaque row = back to class selection;
+    // the 「极乐世界」(Elysium) row and the added 「创建 / 返回」(Create / Back) buttons below y 1750 do not count as back -- those two spots are touch widgets and a tap must go to the game's own messages (AcceptCharacterOptions / ToConsoleClassConfirm)
+    if (phase == 2 && atomic_load(&g_ut_phase) == 1 && atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_confirm_open) && (ny < 899 / 2160.0f || ny > 1259 / 2160.0f) && !(ny > BLISS_Y0 / 2160.0f && ny < BLISS_Y1 / 2160.0f) && !(ny > 1750 / 2160.0f)) { atomic_store(&g_ut_phase, 0); atomic_store(&g_fe_back, 1); return; }   // 牌子下面那一行是「极乐世界」勾选项，不算返回 | The row below the plaques is the 「极乐世界」(Elysium) checkbox and does not count as back
     if (phase == 2 && atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_confirm_open)) atomic_store(&g_fe_opt_side, nx >= 0.5f);
     if (phase == 2 && (atomic_exchange(&g_del_hold, 0) | atomic_exchange(&g_del_q, 0))) { atomic_store(&g_ut_phase, 0); return; }
     if (phase == 0 && atomic_load(&g_fe_del_open)) atomic_store(&g_del_q, 1);
@@ -1948,6 +1950,15 @@ static void ui_map_pump(module_t *m) {
             LOG("地图切换：玩家的「透视地图尺寸」是全屏档（0）→ 按原版地图键开 / 关（点地图块 = 显示 / 隐藏，不碰档位、不落盘）"); }
     }
     atomic_store(&g_map_full_now, mini == 0 && (cfg == 1 || cfg == 2));   // 只把「我们切出来的全屏」算全屏；玩家自己选全屏档的不算 | Only "the fullscreen we switched to" counts as fullscreen; the fullscreen mode chosen by the player does not
+    /* 进局后地图是关的就替玩家按一次原版地图键（用户口径「进入后看不到地图」）——原版那个「进局自动开」（AutomapAutoOpen）实测不可靠。
+       看 AutoMap 控件的可见位：dm_ui_map_geom 的高 32 位 0 = 没开 / 1 = 微缩 / 2 = 全屏（ui_map_geom_pump 每帧写；它在本函数后面，先声明）。
+       等 2 秒、最多按 3 次（按下去到地图画出来有一两帧延迟）；玩家自己关掉后不再按（tries 到 3 就停）。 */
+    { int dm_ui_map_geom(float *cell); static int tries, wait;
+      if (!dm_uiscreen_ingame()) { tries = 0; wait = 0; }
+      else if (tries < 3 && ++wait > 120) { float cell; int mgeo = dm_ui_map_geom(&cell);
+          if (mgeo == 0) { void dm_ui_key_pulse(uint64_t, int); dm_ui_key_pulse(DM_BTN_MINUS, 4); tries++; wait = 0;
+              LOG("地图：进局后地图是关的 → 替玩家按一次原版地图键（第 %d 次；地图默认显示）", tries); }
+          else { static int lg; if (lg++ < 4) LOG("地图：进局后地图已开（%s），不用替按", mgeo == 1 ? "微缩" : "全屏"); tries = 3; } } }
 }
 /* 玩家「透视地图尺寸」的档位（0 全屏 / 1 微缩放左 / 2 微缩放右）：触屏层用它决定「点地图块」怎么切（见 ui_map_pump）。读不到返回 -1 */
 int dm_ui_automap_mode(void) { module_t *m = main_module(); if (!m) return -1; return *(volatile int32_t *)(m->base + 0x2d479f4); }
@@ -2866,7 +2877,8 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
 //   · 教学提示框 TutorialTooltip（首次启动逐项弹，内容是手柄键位说明）：自动按 B = 跳过全部；
 //   · 主菜单按钮条出现：存档目录里没有角色 → 直接发 FrontEndNavigation:ToCharacterCreate（负载 "1" = 离线，抓「选择游戏模式 → 离线」那一下得到）；
 //     有角色 → 自动按 X 打开选角页；
-//   · 建角的模式页 CharacterOptionsPanel：自动接受缺省；
+//   · 建角的模式页 CharacterOptionsPanel：「创建 / 返回」是布局里补的按钮（消息 AcceptCharacterOptions / ToConsoleClassConfirm，
+//     原版自己的建角消息族）；职业页那两颗在模式页盖着时由宿主藏掉（避免两颗「创建」重叠）；
 //   · 「选择游戏模式」OnlinePlayModeModal 若仍被打开（主菜单点了新角色）：同样直接走离线建角。
 // ---------- Front-end path streamlining (entering the App goes straight to offline; with no saves go straight to new character creation; with saves the character select page is the home page) ----------
 // The UI message observation callback only records "what to do"; the actual actions are done where the game fetches the controller (main thread, outside message dispatch):
@@ -3099,9 +3111,11 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
     static uint64_t next; uint64_t fr = dm_guest_frame(); if (fr < next) return;
     if (atomic_load(&g_cc_open)) {   // 职业选择页的「返回」只在有存档（从选角页进来）时出现；无存档时这页就是首页 | 「返回」(Back) on the class selection page appears only when there are saves (entered from the character select page); with no saves this page is the home page
         module_t *m = main_module(); uint64_t root = 0; if (m) memcpy(&root, m->base + 0x2f05458, 8);
-        uint64_t pn = root ? ui_find(root, "CharacterCreatePanel", 0) : 0, bk = pn ? ui_find(pn, "TouchBack", 0) : 0;
+        uint64_t pn = root ? ui_find(root, "CharacterCreatePanel", 0) : 0, bk = pn ? ui_find(pn, "TouchBack", 0) : 0, nxb = pn ? ui_find(pn, "TouchNext", 0) : 0;
+        int opt = atomic_load(&g_fe_opt_open);   /* 模式页盖着时藏掉职业页那两颗：模式页自己有「创建 / 返回」（AcceptCharacterOptions / ToConsoleClassConfirm），不藏就两颗「创建」重叠、点到的是职业页那颗（又进模式页） */
         if (bk) { const char *sv = getenv("DM_SAVE"); uint8_t want = !sv || has_character(sv, 0);
-            ui_show_ours(bk, want); }
+            ui_show_ours(bk, want && !opt); }
+        if (nxb) ui_show_ours(nxb, !opt);
     }
     { int nk = atomic_exchange(&g_fe_name_key, 0); if (nk) { fe_key(nk == 1 ? DM_BTN_PLUS : DM_BTN_B); next = fr + 8; LOG("前端路径：起名页点了「%s」→ %s", nk == 1 ? "创建" : "返回", nk == 1 ? "＋" : "B"); return; } }
     if (atomic_exchange(&g_fe_name_tap, 0)) { fe_key(DM_BTN_A); next = fr + 8; LOG("前端路径：起名页点了输入框 → 重新弹键盘（A）"); return; }
@@ -3165,25 +3179,9 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
           return; } }
     if (atomic_exchange(&g_fe_skip_tut, 0)) { fe_key(DM_BTN_B); next = fr + 8; LOG("前端路径：教学提示框 → 自动跳过（B）"); return; }
     if (atomic_exchange(&g_fe_back, 0)) { fe_key(DM_BTN_B); next = fr + 8; LOG("前端路径：模式页点了牌子以外 → 返回（B）"); return; }
-    // 模式页自动接受缺省（对齐上面的前端路径清单「建角的模式页 CharacterOptionsPanel：自动接受缺省」）：
-    // 这一页的牌子（标准 / 专家）是手柄版的开关控件，只认手柄焦点 —— 触屏版点不动、也不会发 ToggleCharacterOptions 消息，
-    // 页上唯一能点的就是布局里补的「极乐世界」勾选框（触摸控件，宿主直接读状态）。所以进页后等 90 帧替玩家按 A；
-    // 期间勾选一变（玩家在勾极乐世界）就重新计时，把决定权让给玩家；玩家点了牌子那条路（g_fe_options）由上面处理
-    { static int st; static uint64_t at; static int last_bliss;
-      if (!atomic_load(&g_fe_opt_open) || atomic_load(&g_fe_confirm_open)) st = 0;
-      else if (!st) { st = 1; at = fr + 90; last_bliss = atomic_load(&g_fe_bliss); }
-      else { int b = atomic_load(&g_fe_bliss);
-          if (b != last_bliss) { last_bliss = b; at = fr + 90; }
-          if (fr >= at) {
-              st = 0;
-              /* 直接调游戏自己的「接受」（main+0xc3213c，参数 = 模式页面板）：焦点行 / 替按 A 那条路点在触屏版上不稳
-                 （原版进页时焦点停在挪走的天梯行上，替按十字键下再按 A 实测仍退回了职业页），函数入口是游戏自己的接受逻辑，
-                 勾选专家时会自己弹警告框（走确认框那条路）。 */
-              module_t *m2 = main_module(); uint64_t rt = 0; if (m2) memcpy(&rt, m2->base + 0x2f05458, 8);
-              uint64_t pn2 = rt ? ui_find(rt, "CharacterOptionsPanel", 0) : 0;
-              if (pn2 && m2) { ((void (*)(uint64_t))(m2->base + 0xc3213c))(pn2);
-                  LOG("前端路径：模式页自动接受缺省（调原版接受入口 main+0xc3213c；等 %d 帧让玩家先勾极乐世界，勾选一变化就重计时）", 90); return; }
-              LOG("【红】前端路径：模式页找不到面板，自动接受没做"); return; } } }
+    // 模式页的「接受」不再自动替按：这一页原来只认手柄焦点（牌子点不动），所以进页后自动接受缺省；
+    // 现在模式页布局里补了「创建」按钮（touch_layout.py：ConsoleCharacterCreate:AcceptCharacterOptions，原版自己的消息，和职业页的「创建」同一族），
+    // 由玩家自己点 —— 想选标准 / 专家 / 极乐世界都有时间看完再决定（用户口径「没有弹出让我填写角色名称」的入口在这一步）。
     // 模式页点了牌子 → 替玩家「接受」。原版「接受」（main+0xc3213c）认的是专家牌的勾选状态：[面板+0x211]（这一行在用）且 [[面板+0x1e0]+0xa88]（专家牌控件的勾选字节）非 0 = 专家，弹警告。
     // 牌子是原版的开关按钮：鼠标点专家牌 = 把它的勾翻一下（实跑读数：连点三次专家牌，状态 专家 → 标准 → 专家）；点标准牌不动专家牌的勾。
     // 所以「点专家 → 警告 → 取消 → 再点标准」时专家牌还勾着，替按的 A 又弹专家警告（线上反馈；更早的包同样）；「取消后再点一次专家」则反而进了标准。

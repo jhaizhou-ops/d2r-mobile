@@ -223,11 +223,18 @@ public final class TouchControlsView extends View {
                         v4paint.setAlpha(140);v4dst.set(gx,gy,gx+iw*fit,gy+ih*fit);canvas.drawBitmap(icon,null,v4dst,v4paint);v4paint.setAlpha(255);
                         disc(canvas,x,y,r,0x00000000,90);}
                     else{v4paint.setAlpha((int)(255*(pressed?1:.92f)));v4dst.set(gx,gy,gx+iw*fit,gy+ih*fit);canvas.drawBitmap(icon,null,v4dst,v4paint);v4paint.setAlpha(255);}
-                    int kind=i<5&&icons!=null&&icons.length>=70?(int)icons[i*14+12]:0,chg=i<5&&icons!=null&&icons.length>=70?(int)icons[i*14+13]:0;
+                    int kind=i<5&&icons!=null&&icons.length>=84?(int)icons[i*14+12]:0,chg=i<5&&icons!=null&&icons.length>=84?(int)icons[i*14+13]:0;
                     if((kind&1)!=0)badgeMark(canvas,x+r*.74f,y-r*.74f,"Ⅱ");               // 技能在另一组武器上
                     if((kind&2)!=0&&!spent[0])badgeCount(canvas,x+r*.66f,y+r*.42f,chg);  // 剩余充能（角标字形与腰带件数同一套）
                     continue;   // 有图标不写字
                 }
+                if(i<=5&&icons!=null&&icons.length>=84&&(int)icons[i*14]==1){   // 空技能位：圆底圆环里一个单色十字，不写「技能 N」（对齐 iOS DmTouchOverlay.m:208）；点它进技能绑定（空位点击由触摸层接）
+                    float a=r*.30f,w=Math.max(1.5f,r*.085f);
+                    paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(w);paint.setStrokeCap(Paint.Cap.BUTT);
+                    paint.setColor(RIM);paint.setAlpha(pressed?255:230);
+                    canvas.drawLine(x-a,y,x+a,y,paint);canvas.drawLine(x,y-a,x,y+a,paint);
+                    paint.setStrokeCap(Paint.Cap.ROUND);
+                    continue; }
                 caption(canvas,x,y,Math.max(11,r*(i==0?.30f:.40f)),labels()[i],(int)(255*(pressed?1:.84f)));}
             else if(i>=6&&i<=9){utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y+r*.42f,Math.max(8,r*.40f),Integer.toString(i-5),(int)(255*(pressed?.95f:.68f)));}
             else{utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y,Math.max(8,r*.38f),labels()[i],(int)(255*(pressed?.95f:.68f)));}}

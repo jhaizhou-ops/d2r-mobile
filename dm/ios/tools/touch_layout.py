@@ -180,7 +180,15 @@ _BLISS = ('        { "type": "Widget", "name": "TouchBlissWidget", "children": [
           '                "toggledFrame": 4, "toggledPressedFrame": 5, "toggledHoveredFrame": 6,\n                "onClickMessage": "PanelManager:ClosePanel:TouchBliss",\n            }\n        },\n        ] },\n'
           '        { "type": "TextBoxWidget", "name": "TouchBlissTitle", "fields": { "rect": { "x": -1451, "y": 1332, "width": 690, "height": 60 }, "text": "@dmBlissTitle", "style": "$StyleCharacterModeSelectDescription" } },\n'
           '        { "type": "TextBoxWidget", "name": "TouchBlissDesc", "fields": { "rect": { "x": -1451, "y": 1400, "width": 3000, "height": 120 }, "text": "@dmBlissDesc", "style": "$StyleCharacterModeSelectDescription" } },\n')
-INSERT['controller/console/characteroptionspanelhd.json'] = (r'\{\s*"type"\s*:\s*"ButtonLegendWidget"\s*,\s*"name"\s*:\s*"CharacterOptionsLegend"', _BLISS)
+INSERT['controller/console/characteroptionspanelhd.json'] = (r'\{\s*"type"\s*:\s*"ButtonLegendWidget"\s*,\s*"name"\s*:\s*"CharacterOptionsLegend"',
+    # 模式页也要有路可走：「创建」发原版建角消息族的 AcceptCharacterOptions（进起名页、弹系统键盘），「返回」发 ToConsoleClassConfirm（回职业选择页）；
+    # 位置与职业页那两颗一致（x -235 / -785、y 1900），模式页盖着时宿主把职业页那两颗藏掉，页面上只留这一组（否则两颗「创建」重叠、点到的还是职业页那颗 = 又进模式页，走不通）。
+    # The mode page must also have a way forward: 「创建」(Create) sends AcceptCharacterOptions from the original character-creation message family
+    # (enters the naming page, which pops the system keyboard), 「返回」(Back) sends ToConsoleClassConfirm (back to the class selection page);
+    # same positions as the two on the class page (x -235 / -785, y 1900); while the mode page is on top the host hides the class page's two,
+    # leaving only this pair (otherwise two 「创建」overlap and the tap still hits the class page's one = back into the mode page, a dead end).
+    _BLISS + _btn_big('TouchOptBack', -785, 1900, '@UIBack', 'ConsoleCharacterCreate:ToConsoleClassConfirm')
+          + _btn_big('TouchOptNext', -235, 1900, '@UICreate', 'ConsoleCharacterCreate:AcceptCharacterOptions'))
 def pad_bliss(s):   # 手柄版建角模式页（原版布局原样）+ 「极乐世界」那一行（同触屏版定稿的那一行）+ 勾选框左边一个原版 Y 键帽（Switch 手柄左键）： | Controller-version character-creation mode page (original layout unchanged) + the "Elysium" row (the same row as finalized for the touch version) + an original Y keycap to the left of the checkbox (the left face button on a Switch controller):
     # 这一页原版只有写死的几行、没有自由光标，做不成「移上去按 A」，按 Y 勾 / 取消（dm_cursor.c；做不成可聚焦的一行就用快捷键，哪个键都行）
     # 「天梯 / 非天梯」一行同触屏版一样挪走（单机只支持标准 / 专家）；键位提示条留着（手柄版界面）

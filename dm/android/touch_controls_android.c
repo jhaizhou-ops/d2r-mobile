@@ -5,6 +5,7 @@
 #include "ui_state_android.h"
 #include "../host/dm_cursor.h"
 #include "../host/dm_actions.h"
+#include "../host/dm_input.h"
 #include "../host/dm_hud.h"
 #include "../host/dm_i18n.h"
 #include "../ios/Sources/dm_touch_game_state.h"
@@ -134,6 +135,15 @@ static void resolve_pending(void) {
         }
     }
     if(pend_q&&!item_fed){int ir=dm_ui_item_result(pend_q);dm_tc_pointer_item(&controls,ir<0?0:ir);}
+    /* 加点 / 技能绑定：命中技能图标 / 属性「+」的点按 = 只选中或绑定，不发鼠标点击（对齐 front_ios.m:333-345）——
+       绑定态（等玩家点技能）点技能图标 = 光标到图标 + 按 Y（原版绑定动作，绑上后技能才出现在操作界面上）；平时只选中（光标移过去、出说明）。 */
+    if(controls.navigation_mode&&!ui_drag_on){
+        float bx,by; controls.tap_button=0; controls.tap_move=0;
+        int hk=dm_ui_bind_skill_hit(&bx,&by);
+        if(hk){ controls.tap_x=bx*controls.layout.width; controls.tap_y=by*controls.layout.height;
+            if(hk==1&&dm_ui_bind_active()==2) controls.tap_button=DM_BTN_Y;
+            else if(!dm_ui_bind_active()) controls.tap_move=1; }
+    }
     dm_tc_end_at(&controls,slot,pend_end_at>0?pend_end_at:now);   /* 抬起时刻按真正松手：双击 / 长按判定不受挂起影响 */
     pend_q=0;pend_rel=0;pend_rel_asked=0;pend_up=0;pend_slot=-1;pend_end_at=0;item_fed=0;
 }
@@ -170,8 +180,47 @@ static void cancel(void) {
 }
 int dm_ui_map_is_full(void); void dm_ui_map_full(int);
 unsigned dm_world_tap(float,float); int dm_world_tap_result(unsigned);
+/* 加点 / 技能绑定（对齐 front_ios.m:333-345 / 436-455 / 630-635）：技能树与属性页的点按落点由宿主判类
+ * （dm_ui_bind_skill_hit：1 = 技能图标、2 = 属性「+」）：
+ *   · 绑定态（dm_ui_bind_active()==2 = 等玩家点技能）：点技能图标 = 光标到图标 + 按 Y（resolve_pending 里设 tap_button）
+ *   · 平时：点技能图标 / 属性「+」只选中（光标移过去、出说明；点击当场加点且不可撤销）——同一个再点一下 = 加 1 点
+ *   · 长按技能图标 = 光标到图标 + 按 Y（弹原版「重新绑定技能」框）；长按属性「+」= 连续加点（0.15 秒 1 点）
+ * 光标停靠：说明框跟着手柄光标停的那一格一直出（技能树一开就盖住半个树、关不掉），进绑定态先把光标停到面板左侧空花格，
+ * 选中看完 1 秒停到屏幕左缘（只停在有自由光标的页）。 */
+static unsigned bd_sel_id; static double bd_add_at,bd_park_at,bd_stat_next; static int bd_was;
+static void bind_control(void) {
+    if(!ready||!controls.navigation_mode){ bd_sel_id=0;bd_add_at=0;bd_park_at=0;bd_was=0;return; }
+    double now=seconds();
+    int st=dm_ui_bind_active();
+    if(st==2&&bd_was!=2){ controls.pointer_valid=1;controls.pointer_x=0.155f*controls.layout.width;controls.pointer_y=0.5f*controls.layout.height;bd_park_at=0; }
+    bd_was=st;
+    if(st==2){ bd_sel_id=0; return; }   /* 绑定态不认加点 */
+    for(int i=0;i<DM_TC_MAX_TOUCH;i++){ dm_tc_finger *f=&controls.finger[i];
+        if(!f->active||f->pointer_dragged||f->ui_drag)continue;
+        if(now-f->start_time_s<0.5)continue;
+        if(hypotf(f->x-f->aim_origin_x,f->y-f->aim_origin_y)>10.f*dm_tc_scale_for_size(controls.layout.width,controls.layout.height))continue;
+        float nx=0,ny=0;uint32_t hid=dm_ui_hit_id();int hk=dm_ui_bind_skill_hit(&nx,&ny);
+        if(hk==1&&!f->pointer_long){ f->pointer_long=1; dm_tc_pointer_press(&controls,nx*controls.layout.width,ny*controls.layout.height,DM_BTN_Y);
+            LOG("技能树：长按技能 → 光标到点 + 按 Y（开原版绑定框）"); }
+        else if(hk==2&&hid>=1&&hid<=4){ if(!f->pointer_long){ f->pointer_long=1;bd_stat_next=now;
+                controls.pointer_valid=1;controls.pointer_x=nx*controls.layout.width;controls.pointer_y=ny*controls.layout.height;
+                LOG("属性页：按住「+」→ 连续加点"); }
+            if(now>=bd_stat_next){ bd_stat_next=now+0.15; dm_stat_add((int)hid-1,1); } } }
+    { static unsigned sm; if(controls.tap_move_seq!=sm){ sm=controls.tap_move_seq; unsigned hid=dm_ui_hit_id();
+        if(!hid)bd_sel_id=0;
+        else if(hid==bd_sel_id)bd_add_at=now+0.05;
+        else{ bd_sel_id=hid;bd_park_at=now+1.0;LOG("加点：选中标识 %#x（同一个再点一下 = 加 1 点）",hid); } } }
+    if(bd_add_at>0&&now>=bd_add_at){ bd_add_at=0;
+        if(bd_sel_id>>31){ dm_points_info pi;dm_points_get(&pi);
+            if(pi.tree_open&&pi.sel_skill>=0&&!dm_cursor_pending()){ if(pi.sel_block==0){ dm_skill_add_selected();LOG("加点：同一个再点一下 → 技能加 1 点"); }
+                else LOG("加点：不能加（原因 %d），不发",pi.sel_block); } }
+        else if(bd_sel_id>=1&&bd_sel_id<=4){ dm_stat_add((int)bd_sel_id-1,1);LOG("加点：同一个「+」再点一下 → 属性 %u 加 1",bd_sel_id-1); } }
+    if(bd_park_at>0&&now>=bd_park_at){ bd_park_at=0;
+        if(dm_ui_free_cursor()){ controls.pointer_valid=1;controls.pointer_x=0.02f*controls.layout.width;controls.pointer_y=0.5f*controls.layout.height; } }
+}
 static void tick(void) {
     if(!ready || !enabled)return;
+    bind_control();
     feed_item_kind();resolve_pending();
     double now=seconds();dm_android_input_status input;dm_android_input_status_get(&input);
     if(access_slot>=0 && now>=access_until){dm_tc_end_at(&controls,access_slot,now);access_slot=-1;}
