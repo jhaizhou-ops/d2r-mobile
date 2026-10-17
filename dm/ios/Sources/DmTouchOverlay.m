@@ -347,7 +347,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         @"portal":@{@"valid":@(native.portal.valid),@"slot":@(native.portal.slot),@"raw_skill_id":@(native.portal.raw_skill_id),@"buttons":@(native.portal.buttons)}};
     // capture版本与布局版本分开；期望state由测试输入提供，不用visible反推。
     // The capture version and the layout version are separate; the expected state is supplied by the test input, not inferred back from visible.
-    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
+    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"control_layout":@"thumb_fan_v1",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
         @"layout_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"geometry_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"binding_protocol_sha256":[NSString stringWithUTF8String:dm_ta_binding_sha],
         @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"button_style":@"immortal_reference_v5_neutral",@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
         @"source":TARGET_OS_SIMULATOR?@"uikit_simulator_overlay":@"uikit_device_overlay",
