@@ -48,10 +48,12 @@ uint32_t dm_cur_tick(void);
 // 只管先后，能不能进腰带仍是原版那条判定；不给紫药预留空列（空列红红蓝蓝、缺色才用紫的规则不变）
 // Which bottle to pick up first when several are within reach at the same moment: large purple > small purple > higher-grade red / blue > lower-grade; within the same grade, whichever comes first in the item chain.
 // This only decides the order; whether it can go into the belt is still the original game's check; no empty column is reserved for purple potions (the rule that empty columns fail red blue blue and purple is used only when a color is missing is unchanged)
-static int pot_rank(uint8_t *b, uint64_t it) {
-    uint32_t c = ((uint32_t (*)(uint64_t))(b + 0x570260))(it); const char *k = (const char *)&c;
-    if (k[0] == 'r' && k[1] == 'v') return k[2] == 'l' ? 20 : 19;
-    return (k[0] == 'h' || k[0] == 'm') && k[1] == 'p' && k[2] >= '1' && k[2] <= '5' ? k[2] - '0' : 1;
+// 明确的自动拾取白名单，独立于原版类型继承和掉落显示过滤；未知物品返回 0，不自动拾取。
+// Explicit auto-pickup allowlist, independent of native type inheritance and drop-label filtering; unknown items return 0 and are not auto-picked.
+static int pot_code_rank(uint32_t c) {
+    const unsigned char *k = (const unsigned char *)&c;
+    if (k[0] == 'r' && k[1] == 'v') return k[2] == 'l' ? 20 : k[2] == 's' ? 19 : 0;
+    return (k[0] == 'h' || k[0] == 'm') && k[1] == 'p' && k[2] >= '1' && k[2] <= '5' ? k[2] - '0' : 0;
 }
 static void pick_send(uint8_t *b, uint64_t it, uint32_t id, int x, int y, int px, int py, uint64_t fr) {
     int slot = 0; for (int i = 0; i < 8; i++) { if (g_tried[i] == id) { slot = i; break; } if (g_tried_fr[i] < g_tried_fr[slot]) slot = i; }
@@ -86,13 +88,15 @@ void dm_potpick_step(uint8_t *b) {
         uint64_t ip = *(uint64_t *)(it + 0x38); if (!ip) continue; int x = *(int32_t *)(ip + 0x10), y = *(int32_t *)(ip + 0x14);
         if (abs(x - px) > PICK_R || abs(y - py) > PICK_R) continue;
         { int dm_lootfilter_hidden(uint8_t *, uint64_t); if (dm_lootfilter_hidden(b, it)) continue; }   // 被原版掉落过滤藏着的（屏上没名字）不自动捡 | items hidden by the game's loot filter (no name on screen) are not auto-picked
+        uint32_t code = ((uint32_t (*)(uint64_t))(b + 0x570260))(it);
+        int r = pot_code_rank(code); if (!r) continue;
         int (*is)(uint64_t, int) = (int (*)(uint64_t, int))(b + 0x574bc0);
         if (!(is(it, 77) || is(it, 78)) || !(((int (*)(uint64_t))(b + 0x3c1b28))(it) & 1)) continue;   // 回复 hpot 77（恢复药 rpot 的父类型也是它）/ 法力 mpot 78 | Healing hpot 77 (also the parent type of the rejuvenation potion rpot) / mana mpot 78
         uint32_t id = *(uint32_t *)(it + 8); int seen = 0;
         for (int i = 0; i < 8; i++) if (g_tried[i] == id && fr - g_tried_fr[i] < 120) seen = 1;
         if (seen) continue;
         if (t_burst) { pick_send(b, it, id, x, y, px, py, fr); continue; }
-        int r = pot_rank(b, it); if (r > brank) { brank = r; best = it; bid = id; bx = x; by = y; }
+        if (r > brank) { brank = r; best = it; bid = id; bx = x; by = y; }
     }
     if (best) { pick_send(b, best, bid, bx, by, px, py, fr); next = fr + 10; }
 }
