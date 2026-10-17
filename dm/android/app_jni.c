@@ -136,7 +136,8 @@ static void *game_thread(void *unused) {
         .suspend_and_drain_graphics=suspend_graphics, .pause_audio=pause_audio, .flush_diagnostics=dm_android_diagnostics_flush};
     if ((error=dm_android_platform_bind(&config)) || (error=dm_android_platform_register_services())) die("Android platform bind/register error=%d",error);
     { void dm_android_ui_state_install(void); dm_android_ui_state_install(); }   /* P1：UI 消息门 → 状态机（前端/面板模式） | P1: UI message gate -> state machine */
-    { void dm_android_hud_install(void); dm_android_hud_install(); }             /* P3：服务端拍门 → HUD 抬数（dm_hud） */
+    { void dm_android_hud_install(void); dm_android_hud_install(); }
+    { void dm_android_diag_install(void); dm_android_diag_install(); }   /* P8：秘境拦原版难度提示（事件门 15）+ 请游戏存盘等 */             /* P3：服务端拍门 → HUD 抬数（dm_hud） */
     pthread_mutex_lock(&state_lock); dm_android_window_state w=window_state; pthread_mutex_unlock(&state_lock);
     if ((error=dm_android_platform_update_window(&w))) die("Android initial window state error=%d",error);
     dm_android_service_register(DM_ANDROID_SERVICE_FS,dm_android_fs_initialize,NULL);

@@ -11,32 +11,23 @@
 #include <stdatomic.h>
 
 /* ---- dm_custom.c（P8d：选项→自定义页）---- */
-void dm_custom_on_uimsg(const char *cat, const char *act, const char *arg) { (void)cat; (void)act; (void)arg; }
-void dm_custom_ui_pump(unsigned long long root) { (void)root; }
+
 /* ---- dm_elysium.c（P8c：极乐世界模式）---- */
-void dm_elysium_arm(int on) { (void)on; }
-void dm_elysium_pump(void) {}
+
 /* ---- dm_freetp.c（P8b：免费回城）---- */
-void dm_freetp_client_step(uint8_t *b, uint64_t pl) { (void)b; (void)pl; }
 /* ---- diag.c 的冻结/服务端物品读数（P2 只用到中性值）---- */
 _Atomic int g_dm_frz_want;
 void dm_freeze_frame(int want) { (void)want; }
 uint32_t dm_cur_tick(void) { return (uint32_t)dm_guest_frame(); }   /* 无 diag 的拍读，用出图帧数当单调拍号 | no diag tick read; use the guest frame counter as a monotonic tick */
 uint64_t dm_diag_srv_item(uint32_t id) { (void)id; return 0; }
 /* ---- dm_prof.c 的 IPF 计数器（关）---- */
-int dm_ipf_on(void) { return 0; }
-uint64_t dm_ipf_instr(void) { return 0; }
-void dm_ipf_add(int table, const char *name, uint64_t instr) { (void)table; (void)name; (void)instr; }
+
 /* ---- gfx 截图探针（关）---- */
 void dm_gfx_shot_at(long k, const char *path) { (void)k; (void)path; }
 /* ---- dm_kills.c / dm_rift_ui.c / dm_runeword.c / dm_pouch.c / dm_potpick.c / dm_beltauto.c（P8）---- */
-void dm_kills_ui_pump(void) {}
-void dm_rift_client_pump(uint8_t *main_base) { (void)main_base; }
-void dm_rift_ui_pump(void) {}
-void dm_potpick_step(uint8_t *b) { (void)b; }
+
 void dm_pouch_step(uint8_t *b) { (void)b; }
 int dm_pouch_tip_gate(int x, int y) { (void)x; (void)y; return 0; }
-void dm_beltauto_step(uint8_t *b) { (void)b; }
 int dm_runeword_list_open(void) { return 0; }
 void dm_runeword_list_close(void) {}
 int dm_runeword_long_press(const dm_cursor_item_info *ci) { (void)ci; return 0; }
@@ -55,17 +46,12 @@ int dm_pages_count(void) { return 1; }
 int dm_pages_cur(void) { return 0; }
 void dm_pages_request_flip(int dir) { (void)dir; }
 /* ---- dm_i18n.c 的串表读取（P5 编入真实现；此前把键原样返回，提示语退化为键名）---- */
-const char *dm_str(uint8_t *main_base, const char *key) { (void)main_base; return key ? key : ""; }
 
 /* ---- 第二批（链接器逐轮暴露）：diag 的难度/佣兵读数、原版提示、padmode 的其余接口、秘境读数、探路测试开关 ---- */
-int dm_custom_get(const char *key) { (void)key; return 0; }                     /* 自定义页开关缺省全关（真值在 dm_custom.c，P8d） | custom-page toggles all off by default (real ones in dm_custom.c, P8d) */
+                     /* 自定义页开关缺省全关（真值在 dm_custom.c，P8d） | custom-page toggles all off by default (real ones in dm_custom.c, P8d) */
 int dm_diag_difficulty(void) { return -1; }                                     /* 不在局内的读数；一键重开用（P8b 接 diag 后给真值） */
 int dm_diag_srv_merc(uint32_t id, int *hp, int *mx, int *healing) { (void)id; if (hp) *hp = 0; if (mx) *mx = 0; if (healing) *healing = 0; return 0; }
-void dm_game_notice(uint8_t *main_base, const char *text) { (void)main_base; (void)text; }
-int dm_rift_cleared_any(void) { return 0; }
-int dm_rift_merc_unlocked(void) { return 0; }
-int dm_rift_merc_slot_empty(int loc) { (void)loc; return 0; }
-void dm_rift_merc_locked_hint(void) {}
+
 uint64_t dm_stick_last_ns(void) { uint64_t dm_input_stick_activity(void); return dm_input_stick_activity(); }   /* 真值：input_backend 记的摇杆活动时刻 | real value from input_backend */
 void dm_vault_ui_pump(void) {}
 int dm_vault_ui_tap(int x, int y) { (void)x; (void)y; return 0; }

@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include "../host/dm.h"
 #include "../host/front.h"
 #include "../host/dm_input.h"
@@ -159,6 +160,8 @@ int dm_android_input_publish_actions(uint64_t buttons, int32_t lx, int32_t ly, i
     if (buttons & ~0xffffULL || lx < -32767 || lx > 32767 || ly < -32767 || ly > 32767 || rx < -32767 || rx > 32767 || ry < -32767 || ry > 32767) return EINVAL;
     pthread_mutex_lock(&input_lock);
     if (!ready_locked() || !configuration.logical_npad_style) { pthread_mutex_unlock(&input_lock); return ENODEV; }
+    { extern _Atomic int g_dm_l_presses; uint64_t prev = actions.buttons;
+      if ((buttons & DM_BTN_L) && !(prev & DM_BTN_L)) atomic_fetch_add(&g_dm_l_presses, 1); }   /* 首领掉落读数用（dm_bossrush.c） */
     actions.pressed |= buttons & ~actions.buttons; actions.buttons = buttons;
     actions.lx = lx; actions.ly = ly; actions.rx = rx; actions.ry = ry; status.action_publications++;
     pthread_mutex_unlock(&input_lock); return 0;

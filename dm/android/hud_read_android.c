@@ -86,7 +86,10 @@ static void hud_tick(uint64_t G) {
     { module_t *m = main_mod(); uint32_t qu = 0; if (m && rd((uint64_t)m->base + 0x2d5ff58, &qu, 4)) h.quest_unread = qu; }
     dm_hud_publish(&h);
 }
+static uint64_t g_last_G;
+uint64_t dm_android_hud_last_G(void) { return g_last_G; }   /* 最后一拍的游戏对象（dm_request_save 用） | the game object of the last tick (for dm_request_save) */
 static void tick_obs(const uint64_t *regs) {
+    g_last_G = regs[0];
     hud_tick(regs[0]);
     static unsigned long n;
     if (++n % 120 == 0) { dm_hud_info h; dm_hud_get(&h);

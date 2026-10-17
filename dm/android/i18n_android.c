@@ -5,27 +5,4 @@
  * Android language side (P5): the settings seeding asks the system language (dm_sys_lang);
  * the language switch (the Custom page cell, not ported yet = never tapped -> -1 = touch nothing).
  * Same convention as dm_lang_from_tag: Chinese / Sinitic -> 8 (Simplified Chinese), everything else -> 0 (English). */
-#include "../host/hle.h"
-#include <stdlib.h>
-#include <string.h>
-
-static int tag_lang(const char *t) {
-    if (!t) return 8;
-    /* 只看语言子标签与可能的脚本 / 地区后缀：zh / zh-Hans / zh_CN / zh-Hant … */
-    for (const char *p = t; *p; p++) {
-        if (p[0] != 'z' && p[0] != 'Z') continue;
-        if (p[1] != 'h' && p[1] != 'H') continue;
-        char c = p[2];
-        if (c == '_' || c == '-' || c == 0) return 8;   /* zh / zh-CN / zh-Hant … 一律简中（与 iOS 同口径） */
-    }
-    return 0;
-}
-
-int dm_sys_lang(void) {
-    const char *e = getenv("DM_LANG"); if (e && *e) return tag_lang(e);
-    const char *t = getenv("DM_LOCALE_TAG"); if (t && *t) return tag_lang(t);
-    return 8;
-}
-
-/* 自定义页的语言开关（dm_custom.c lang_en）：安卓还没移植那一页 → 永远「没点过应用」→ 设置文件的语言一个字不动 */
-int dm_custom_lang_explicit(void) { return -1; }
+/* Android 侧只剩语言开关的桩：取串本身编真实现 dm_i18n.c（dm_i18n_tab.h 在仓库里，dm_sys_lang / dm_lang_from_tag / dm_ui / dm_str 全是它）。 */
