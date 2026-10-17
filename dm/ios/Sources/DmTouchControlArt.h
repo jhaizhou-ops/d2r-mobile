@@ -5,7 +5,7 @@
 #include <math.h>
 
 static CGRect dm_button_rect(CGFloat x, CGFloat y, CGFloat radius) {
-    return CGRectMake(x-radius*.94,y-radius*.94,radius*1.88,radius*1.88);
+    return CGRectMake(x-radius,y-radius,radius*2,radius*2);
 }
 static void dm_button_gradient(CGContextRef c, CGRect r, const CGFloat *colors, size_t count) {
     CGColorSpaceRef space=CGColorSpaceCreateDeviceRGB();

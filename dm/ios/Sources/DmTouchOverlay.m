@@ -308,7 +308,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     CGRect base=CGRectMake(o.x-radius,o.y-radius,radius*2,radius*2);
     [self drawJoystickPart:base base:YES active:moving];
     CGFloat dx=s->lx/32767.0*radius,dy=-s->ly/32767.0*radius;
-    CGRect thumb=CGRectMake(o.x+dx-21*k,o.y+dy-21*k,42*k,42*k);
+    CGRect thumb=CGRectMake(o.x+dx-23*k,o.y+dy-23*k,46*k,46*k);
     [self drawJoystickPart:thumb base:NO active:moving];
 
 }
@@ -329,7 +329,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
             BOOL held=button_held(s,i);
             BOOL drawn=!self.navigationMode && [self skillImage:g held:held]!=nil;
             NSString *status=self.navigationMode?@"navigation_label":(g.status==DM_TA_EMPTY?@"empty_slot":(drawn?@"current_skill":@"empty_unknown"));
-            entry[@"currentSkill"]=@{@"schema":@"dm-current-skill-visual-1",@"status":status,@"reason":[NSString stringWithUTF8String:g.reason],@"raw_skill_id":@(g.raw_skill_id),@"slot":@(g.slot),@"effective_slot":@(g.effective_slot),@"atlas":@(g.atlas),@"normal_frame":@(g.normal_frame),@"pressed_frame":@(g.pressed_frame),@"display_frame":@(held?g.pressed_frame:g.normal_frame),@"glyph_drawn":@(drawn),@"icon_diameter_ratio":@(.94*.76),@"visual_rect_pt":@[@(dm_button_rect(t->x,t->y,t->r).origin.x),@(dm_button_rect(t->x,t->y,t->r).origin.y),@(t->r*1.88),@(t->r*1.88)]};
+            entry[@"currentSkill"]=@{@"schema":@"dm-current-skill-visual-1",@"status":status,@"reason":[NSString stringWithUTF8String:g.reason],@"raw_skill_id":@(g.raw_skill_id),@"slot":@(g.slot),@"effective_slot":@(g.effective_slot),@"atlas":@(g.atlas),@"normal_frame":@(g.normal_frame),@"pressed_frame":@(g.pressed_frame),@"display_frame":@(held?g.pressed_frame:g.normal_frame),@"glyph_drawn":@(drawn),@"icon_diameter_ratio":@(.76),@"visual_rect_pt":@[@(dm_button_rect(t->x,t->y,t->r).origin.x),@(dm_button_rect(t->x,t->y,t->r).origin.y),@(t->r*2),@(t->r*2)]};
         }
         [a addObject:entry];
     }
@@ -337,7 +337,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     BOOL moving=s->joy_slot>=0; CGFloat k=s->layout.joy_radius/60;
     CGFloat jx=moving?s->joy_origin_x:s->layout.joy_x,jy=moving?s->joy_origin_y:s->layout.joy_y,r=s->layout.joy_radius;
     CGFloat tx=jx+s->lx/32767.0*r,ty=jy-s->ly/32767.0*r;
-    NSDictionary *joystick=@{@"id":@"joystick",@"active":@(moving),@"base_rect_pt":@[@(jx-r),@(jy-r),@(2*r),@(2*r)],@"thumb_rect_pt":@[@(tx-21*k),@(ty-21*k),@(42*k),@(42*k)]};
+    NSDictionary *joystick=@{@"id":@"joystick",@"active":@(moving),@"base_rect_pt":@[@(jx-r),@(jy-r),@(2*r),@(2*r)],@"thumb_rect_pt":@[@(tx-23*k),@(ty-23*k),@(46*k),@(46*k)]};
     dm_tg_snapshot native=self.nativeMapping;
     NSMutableArray *mapping=[NSMutableArray array],*ids=[NSMutableArray array];
     for(int i=0;i<DM_TG_FACETS;i++) [mapping addObject:@{@"logical":@(native.mapping[i].logical),@"normal":@(native.mapping[i].normal),@"alt":@(native.mapping[i].alt)}];
@@ -347,7 +347,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         @"portal":@{@"valid":@(native.portal.valid),@"slot":@(native.portal.slot),@"raw_skill_id":@(native.portal.raw_skill_id),@"buttons":@(native.portal.buttons)}};
     // capture版本与布局版本分开；期望state由测试输入提供，不用visible反推。
     // The capture version and the layout version are separate; the expected state is supplied by the test input, not inferred back from visible.
-    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"control_layout":@"immortal_compact_v1",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
+    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
         @"layout_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"geometry_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"binding_protocol_sha256":[NSString stringWithUTF8String:dm_ta_binding_sha],
         @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"button_style":@"immortal_reference_v5_neutral",@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
         @"source":TARGET_OS_SIMULATOR?@"uikit_simulator_overlay":@"uikit_device_overlay",

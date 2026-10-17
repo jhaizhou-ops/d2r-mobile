@@ -41,23 +41,21 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->width = isfinite(width) && width > 0 ? width : 0;
     l->height = isfinite(height) && height > 0 ? height : 0;
     float k = scale_for(l);
-    float main_x=l->width-56*k,main_y=l->height-66*k;
-    // 最右侧回城钮比主钮伸出 16 点；整组让开安全区。
-    // The town portal button extends 16 points beyond the primary button; inset the entire cluster for the safe area.
-    { float over=main_x+56*k-(l->width-g_safe_r);if(over>0)main_x-=over; }
-    l->target[DM_TC_MAIN]=(dm_tc_target){main_x,main_y,40*k,DM_BTN_A};
-    // 以手机版参考对齐的紧凑技能簇：主钮左下、左上与上方两侧。
-    // Compact cluster aligned to the mobile reference: lower-left, upper-left and both sides above the primary button.
-    const float dx[4]={-76,-76,-30,30},dy[4]={28,-32,-78,-78};
-    const uint64_t skill[4]={DM_BTN_B,DM_BTN_X,DM_BTN_Y,DM_BTN_R};
-    for(int i=0;i<4;i++)
-        l->target[DM_TC_SKILL1+i]=(dm_tc_target){main_x+dx[i]*k,main_y+dy[i]*k,24*k,skill[i]};
+    float main_x = l->width - 56 * k, main_y = l->height - 82 * k;
+    { float over = main_x + 40*k - (l->width - g_safe_r); if (over > 0) main_x -= over; }   /* 右侧一组里最靠右的是主技能键（半径 40） | The rightmost one in the right-side group is the main skill key (radius 40) */
+    l->target[DM_TC_MAIN] = (dm_tc_target){ main_x, main_y, 40*k, DM_BTN_A };
+    /* 四分之一弧的单位向量：180°、150°、120°、90°。 | Unit vectors of the quarter arc: 180°, 150°, 120°, 90°. */
+    const float dx[4] = {-1, -0.8660254038f, -0.5f, 0};
+    const float dy[4] = {0, -0.5f, -0.8660254038f, -1};
+    const uint64_t skill[4] = {DM_BTN_B, DM_BTN_X, DM_BTN_Y, DM_BTN_R};
+    for (int i = 0; i < 4; ++i)
+        l->target[DM_TC_SKILL1+i] = (dm_tc_target){main_x+112*k*dx[i], main_y+112*k*dy[i], 26*k, skill[i]};
     /* 底栏 = 底部 UI v4 六格（NativeHUD/v4，游戏 HUD 按屏高缩放、以屏幕中线居中，所以按屏高换算）：
        效果图 2868×1320 里格心 x = 1090 + 120×格号、y = 1241.5、格宽 114；第 0 格难度，1–4 腰带四列，5 功能入口（PLUS）。
-       回城不在底栏（离药水太近易误触）：改为技能弧最上面那颗（技能四）正上方的圆钮，半径 26、间距 12，点下由宿主施放原版回城技能（dm_freetp.c），不出按键。
+       回城不在底栏（离药水太近易误触）：改为技能弧最上面那颗（技能四）正上方的圆钮，同半径、间距 12，点下由宿主施放原版回城技能（dm_freetp.c），不出按键。
        Bottom bar = the six cells of bottom UI v4 (NativeHUD/v4; the game HUD scales by screen height and is centered on the screen centerline, so convert by screen height):
               in the 2868×1320 mock, cell center x = 1090 + 120×cell index, y = 1241.5, cell width 114; cell 0 difficulty, 1–4 the four belt columns, 5 the function entry (PLUS).
-              Town portal is not in the bottom bar (too close to the potions, easy to hit by mistake): it is instead a round button directly above the topmost one on the skill arc (skill four), radius 26, gap 12; on tap the host casts the original game's town portal skill (dm_freetp.c), with no key press. */
+              Town portal is not in the bottom bar (too close to the potions, easy to hit by mistake): it is instead a round button directly above the topmost one on the skill arc (skill four), same radius, gap 12; on tap the host casts the original game's town portal skill (dm_freetp.c), with no key press. */
     /* 腰带四列对十字键：左 = 第 1 列、上 = 第 2 列、下 = 第 3 列、右 = 第 4 列（原版实测：按「右」第 4 列减、按「下」第 3 列减；首版把后两个写反了，真机才撞到） | The four belt columns map to the D-pad: left = column 1, up = column 2, down = column 3, right = column 4 (measured in the original game: pressing "right" decrements column 4, pressing "down" decrements column 3; the first version had the last two swapped, which was only hit on a real device) */
     const uint64_t bottom[5] = {DM_BTN_LEFT, DM_BTN_UP, DM_BTN_DOWN, DM_BTN_RIGHT, DM_BTN_PLUS};
     const int cell[5] = {1, 2, 3, 4, 5};
@@ -69,23 +67,28 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->diff = (dm_tc_target){l->width/2+(1090-1434)*u, 1241.5f*u, 57*u, 0};
     for (int i = 0; i < 8; ++i) l->pick[i] = (dm_tc_target){l->width/2+(1390+(i-3.5f)*120-1434)*u, 1051.5f*u, 57*u, 0};
     l->target[DM_TC_MAP] = (dm_tc_target){l->width-30*k, 30*k, 22*k, DM_BTN_MINUS};
-    // 换组入口放在技能簇左上方，不与技能、底栏或系统底边手势区重叠。
-    // Put the set switch above-left of the cluster, clear of skills, the bottom bar and the system bottom-edge gesture area.
-    l->swap=(dm_tc_target){main_x-112*k,main_y-128*k,22*k,0};
+    /* 技能组切换：主技能左下、技能一下方，避开主技能与弧上四键 | Skill set switch: lower-left of the main skill, below skill one, clear of the main skill and the four keys on the arc */
+    /* 位置与大小：技能一正下方，半径 22（直径 44 点 ≈ 7.3 毫米）；上沿离技能一下沿 4 点、下沿离屏幕底 10 点（956×440） | Position and size: directly below skill one, radius 22 (diameter 44 points ≈ 7.3 mm); top edge 4 points from the bottom edge of skill one, bottom edge 10 points from the bottom of the screen (956×440) */
+    /* 比手机窄的画面（16:9：iPad 留边 / 真全屏的游戏视图、667×375）底栏按屏高缩放、右端雕像翼尖（效果图 x 2075）会伸到换组键底下：
+       键向右让到离翼尖 8 点以外，大小不变（量：1366×768 下原位重叠 21 点；956×440 下本来就隔着 28 点，不动）
+       On pictures narrower than the phone's (16:9: iPad letterboxed / true full-screen game view, 667×375) the bottom bar scales by screen height and the right-end statue wing tip (mock x 2075) would extend under the set-switch key:
+              the key moves right to at least 8 points away from the wing tip, size unchanged (measured: at 1366×768 the original position overlaps by 21 points; at 956×440 it is already 28 points apart and is not moved) */
+    { float sx = main_x-112*k, bar_r = l->width/2+(2015-1434)*u+8*k+22*k;   /* 右雕像翼尖：七格时 2075，六格石条右端收进 60 | Right statue wing tip: 2075 with seven cells; with six cells the right end of the stone bar is pulled in by 60 */ if (sx < bar_r) sx = bar_r;
+      l->swap = (dm_tc_target){sx, main_y+52*k, 22*k, 0}; }
     /* 底栏外侧是血 / 蓝球；球不是输入目标。 | Outside the bottom bar are the life / mana orbs; the orbs are not input targets. */
     /* 左摇杆是浮动底盘：左下「起摇杆区」里手指落在哪，底盘圆心就落在哪，松手回静止位。
-       静止位：圆心离安全区左界 50、不小于 90，离屏幕底 70——只是没按时画在哪。
+       静止位：圆心离安全区左界 90（底盘半径 60 + 30）、不小于 120，离屏幕底 115——只是没按时画在哪。
        起摇杆区：屏宽的左 40% × 屏高的下 55%（左与下到屏幕边：拇指压在刘海那一条上也算）；区里我们的圆钮 / 腰带格、原版界面上可点的东西各自优先。
        夹回：只为底盘整圈画在屏内——落点离左沿 / 底沿不到「半径 + 8」时底盘圆心挪回到那条线上；只影响画，轴值仍按手指相对落点算（摇杆头 = 底盘圆心 + 轴值 × 半径）。不让安全区（原先左界取「安全区 + 半径」，刘海机型约 122 点：
        拇指自然落在离左边 60–120 点的人一落指就带明显的向左分量；左下角没有刘海也没有系统横条）。静止位仍让安全区，那只是没按时画在哪
        The left stick is a floating base: wherever the finger lands inside the bottom-left "stick-start zone", the base centre goes there, and it returns to the rest position on release.
-              Rest position: centre 50 from the left edge of the safe area, not less than 90, and 70 from the bottom of the screen - only where it is drawn while not pressed.
+              Rest position: centre 90 from the left edge of the safe area (base radius 60 + 30), not less than 120, and 115 from the bottom of the screen - only where it is drawn while not pressed.
               Stick-start zone: the left 40% of the screen width x the lower 55% of the screen height (reaching the screen edges on the left and bottom: a thumb on the notch strip counts too); inside the zone our round buttons / belt cells and the clickable things of the original UI each take priority.
               Clamping: only so that the whole base is drawn on screen - when the touch point is closer than "radius + 8" to the left / bottom edge the base centre is moved back onto that line; it only affects drawing, and the axes are still computed from the finger relative to the touch point (stick knob = base centre + axes x radius). The safe area is not respected (the left bound used to be "safe area + radius", about 122 points on notched devices:
               a thumb landing naturally 60–120 points from the left edge got a clear leftward component the moment it touched down; the bottom-left corner has neither a notch nor the system bar). The rest position still respects the safe area, which is only where it is drawn while not pressed */
     l->joy_radius = 60*k;
-    l->joy_x = fmaxf(90*k,g_safe_l+50*k);
-    l->joy_y = l->height - 70*k;
+    l->joy_x = fmaxf(90*k, g_safe_l + 60*k) + 30*k;
+    l->joy_y = l->height - 115*k;
     l->joy_zone_r = l->width*0.40f; l->joy_zone_t = l->height*0.45f;
     l->joy_min_x = l->joy_radius + 8*k; l->joy_max_y = l->height - l->joy_radius - 8*k;
 }
