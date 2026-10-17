@@ -53,29 +53,50 @@ static void dm_button_draw(CGContextRef c, CGRect r, int held, int empty, int pr
     CGContextRestoreGState(c);
 }
 static void dm_joystick_base_draw(CGContextRef c, CGRect r, int active) {
-    CGFloat side=r.size.width,cx=CGRectGetMidX(r),cy=CGRectGetMidY(r),radius=side*.42;
+    CGFloat side=r.size.width,cx=CGRectGetMidX(r),cy=CGRectGetMidY(r);
+    CGPoint center=CGPointMake(cx,cy);
     CGContextSaveGState(c);
-    CGRect disc=CGRectInset(r,side*.08,side*.08);
-    const CGFloat shade[]={.018,.024,.028,active?.12:.025, .045,.057,.060,active?.16:.04};
-    CGContextSaveGState(c);CGContextAddEllipseInRect(c,disc);CGContextClip(c);dm_button_gradient(c,disc,shade,2);CGContextRestoreGState(c);
-    CGContextSetRGBStrokeColor(c,.66,.70,.69,active?.22:.09);CGContextSetLineWidth(c,side*.006);CGContextStrokeEllipseInRect(c,disc);
-    CGContextSetRGBStrokeColor(c,.012,.018,.022,active?.18:.06);CGContextSetLineWidth(c,side*.012);CGContextStrokeEllipseInRect(c,CGRectInset(disc,side*.012,side*.012));
-    // 四个轻量方向刻度固定在底盘上，只有手柄头随真实轴值移动。
-    // Four faint direction marks stay on the base; only the thumb follows the actual stick axes.
-    CGContextSetRGBFillColor(c,.66,.71,.70,active?.28:.10);
+    // 底盘向边缘渐隐，避免硬圆框压住地面；细刻纹保留方向感。
+    // Feather the base into the ground instead of a hard circular frame; fine etchings retain orientation.
+    const CGFloat haze[]={.025,.025,.025,active?.10:.045,
+        .025,.025,.025,active?.22:.12, .025,.025,.025,0};
+    const CGFloat stops[]={0,.78,1};
+    CGColorSpaceRef space=CGColorSpaceCreateDeviceRGB();
+    CGGradientRef gradient=CGGradientCreateWithColorComponents(space,haze,stops,3);
+    CGContextDrawRadialGradient(c,gradient,center,0,center,side*.48,0);
+    CGGradientRelease(gradient);CGColorSpaceRelease(space);
+    CGContextSetLineWidth(c,side*.004);CGContextSetLineCap(c,kCGLineCapRound);
+    // 留出四个缺口，让方向刻纹融入底盘，而不是悬浮的实心箭头。
+    // Four gaps integrate the direction etchings into the base instead of floating solid arrows.
     for(int i=0;i<4;i++) {
-        CGFloat a=i*M_PI/2,dx=cos(a),dy=sin(a),x=cx+dx*radius*.87,y=cy+dy*radius*.87,k=side*.024;
-        CGContextMoveToPoint(c,x+dx*k,y+dy*k);CGContextAddLineToPoint(c,x-dx*k-dy*k*.7,y-dy*k+dx*k*.7);
-        CGContextAddLineToPoint(c,x-dx*k+dy*k*.7,y-dy*k-dx*k*.7);CGContextClosePath(c);CGContextFillPath(c);
+        CGFloat angle=i*M_PI/2;
+        CGContextSetGrayStrokeColor(c,.63,active?.12:.055);
+        CGContextAddArc(c,cx,cy,side*.416,angle+.20,angle+M_PI/2-.20,0);CGContextStrokePath(c);
+        CGContextSaveGState(c);CGContextTranslateCTM(c,cx,cy);CGContextRotateCTM(c,angle);
+        CGFloat x=side*.414,k=side*.028;
+        CGContextSetGrayStrokeColor(c,.68,active?.25:.13);
+        CGContextMoveToPoint(c,x+k,0);CGContextAddLineToPoint(c,x-k,-k*.65);
+        CGContextAddLineToPoint(c,x-k*.42,0);CGContextAddLineToPoint(c,x-k,k*.65);
+        CGContextClosePath(c);CGContextStrokePath(c);
+        CGContextMoveToPoint(c,x-k*.42,0);CGContextAddLineToPoint(c,x-k*2.1,0);CGContextStrokePath(c);
+        CGContextRestoreGState(c);
     }
     CGContextRestoreGState(c);
 }
 static void dm_joystick_thumb_draw(CGContextRef c, CGRect r, int active) {
     CGFloat side=r.size.width;CGRect disc=CGRectInset(r,side*.055,side*.055);
     CGContextSaveGState(c);
-    const CGFloat fill[]={.20,.24,.25,active?.58:.16, .065,.085,.095,active?.62:.20};
-    CGContextSaveGState(c);CGContextAddEllipseInRect(c,disc);CGContextClip(c);dm_button_gradient(c,disc,fill,2);CGContextRestoreGState(c);
-    CGContextSetRGBStrokeColor(c,.72,.76,.74,active?.48:.20);CGContextSetLineWidth(c,side*.018);CGContextStrokeEllipseInRect(c,disc);
-    CGContextSetRGBStrokeColor(c,.018,.026,.032,active?.62:.22);CGContextSetLineWidth(c,side*.025);CGContextStrokeEllipseInRect(c,CGRectInset(disc,side*.035,side*.035));
+    // 低反光的黑灰摇杆头：弧形高光与底缘阴影形成轻微厚度。
+    // A matte charcoal thumb with a curved highlight and shaded lower edge for subtle depth.
+    const CGFloat fill[]={.23,.23,.23,active?.78:.46,
+        .14,.14,.14,active?.82:.49, .065,.065,.065,active?.84:.52};
+    CGContextSaveGState(c);CGContextAddEllipseInRect(c,disc);CGContextClip(c);
+    dm_button_gradient(c,disc,fill,3);CGContextRestoreGState(c);
+    CGContextSetGrayStrokeColor(c,.025,active?.65:.32);CGContextSetLineWidth(c,side*.035);
+    CGContextStrokeEllipseInRect(c,disc);
+    CGContextSetGrayStrokeColor(c,.64,active?.40:.22);CGContextSetLineWidth(c,side*.014);
+    CGContextAddArc(c,CGRectGetMidX(r),CGRectGetMidY(r),side*.437,M_PI*1.07,M_PI*1.91,0);CGContextStrokePath(c);
+    CGContextSetGrayStrokeColor(c,.42,active?.20:.10);CGContextSetLineWidth(c,side*.012);
+    CGContextAddArc(c,CGRectGetMidX(r),CGRectGetMidY(r),side*.410,M_PI*1.12,M_PI*1.88,0);CGContextStrokePath(c);
     CGContextRestoreGState(c);
 }
