@@ -1,0 +1,36 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "鸿蒙宿主开发验证"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "原生桥接验证，尚未接入游戏"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "小菠萝2·测试版"
+    },
+    {
+      "name": "widget_display_name",
+      "value": "小菠萝2"
+    },
+    {
+      "name": "widget_desc",
+      "value": "最近游玩的角色"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "小菠萝2 卡片"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "显示最近游玩的角色"
+    },
+    {
+      "name": "sync_reason",
+      "value": "在你登录同一华为账号的设备之间同步游戏存档"
+    }
+  ]
+}

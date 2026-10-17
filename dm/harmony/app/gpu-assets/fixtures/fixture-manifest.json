@@ -1,0 +1,128 @@
+{
+  "scope": "synthetic deterministic probe vectors, not game data or GPU results",
+  "reference": "repos\\xbl-harmony\\sw\\gfx\\tests\\t_builtin.m",
+  "reference_sha256": "3005a692fd2bb6b5fd13577b2041b52f3acc78e0580588a5f2f43ee82f8e3570",
+  "entrypoint": "main",
+  "n": 37,
+  "capacity_u64": 64,
+  "dispatch_groups": [
+    2,
+    1,
+    1
+  ],
+  "local_size": [
+    32,
+    1,
+    1
+  ],
+  "sentinel_first_byte": 296,
+  "descriptors": [
+    {
+      "set": 0,
+      "binding": 0,
+      "type": "UNIFORM_BUFFER",
+      "range": 16
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "type": "STORAGE_BUFFER",
+      "range": 1280
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "type": "STORAGE_BUFFER",
+      "range": 512
+    }
+  ],
+  "kernels": [
+    {
+      "name": "q_val0",
+      "control_key": "d0f769bb916bbba9",
+      "shader_file": "q_val0.spv",
+      "expected_file": "q_val0.expected.bin"
+    },
+    {
+      "name": "q_val8",
+      "control_key": "16479cc6d75c2b28",
+      "shader_file": "q_val8.spv",
+      "expected_file": "q_val8.expected.bin"
+    },
+    {
+      "name": "q_dlt0",
+      "control_key": "0687e2ef95133577",
+      "shader_file": "q_dlt0.spv",
+      "expected_file": "q_dlt0.expected.bin"
+    },
+    {
+      "name": "q_dlt8",
+      "control_key": "4df5909e6dabee05",
+      "shader_file": "q_dlt8.spv",
+      "expected_file": "q_dlt8.expected.bin"
+    }
+  ],
+  "expected_cross_comparison_matrix": [
+    [
+      1,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      1
+    ]
+  ],
+  "files": [
+    {
+      "filename": "count-ubo.bin",
+      "bytes": 16,
+      "sha256": "d2358579ef54d821b4b1ee68177f3e7eed6810708d9ac149213a4fd071b8d1a8"
+    },
+    {
+      "filename": "source-ssbo.bin",
+      "bytes": 1280,
+      "sha256": "40de70708162f2fd24f02e8c9117e89c9cf6b5f25c0d879adffab2b76e12c622"
+    },
+    {
+      "filename": "destination-sentinel.bin",
+      "bytes": 512,
+      "sha256": "799edf40e8115dc980109a64ff0a7ae2c6b62e20313c4a01f9871d0e189aa7c2"
+    },
+    {
+      "filename": "q_val0.expected.bin",
+      "bytes": 512,
+      "sha256": "93cf934e9701f9021820ef06194fa2263cc750d598394650cfe93bee0d510f7a"
+    },
+    {
+      "filename": "q_val8.expected.bin",
+      "bytes": 512,
+      "sha256": "8af5d56df85b2c823ee502d1f1cc340b2749c2fc955469f2e90fc6983223f910"
+    },
+    {
+      "filename": "q_dlt0.expected.bin",
+      "bytes": 512,
+      "sha256": "c0a6678f0cbab1aca408b6b0f45e68dc9d6f9c754b7c9a2be39c198a7976df66"
+    },
+    {
+      "filename": "q_dlt8.expected.bin",
+      "bytes": 512,
+      "sha256": "f71167afce8afe3eb61e1daf66df2a85726db72101fb80e09c7a60bf8378ef96"
+    }
+  ]
+}

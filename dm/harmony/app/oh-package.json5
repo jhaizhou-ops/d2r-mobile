@@ -1,0 +1,6 @@
+{
+  "modelVersion": "26.0.0",
+  "description": "HarmonyOS native host bootstrap",
+  "dependencies": {},
+  "devDependencies": {}
+}

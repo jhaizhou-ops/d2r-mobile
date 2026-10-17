@@ -1,0 +1,4 @@
+XBLR_1 {
+  global: xblr_get_layout; xblr_probe_input; xblr_run;
+  local: *;
+};

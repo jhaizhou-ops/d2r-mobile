@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { ControllerState, SHOULDER_KEYS, FACE_KEYS, NAV_KEYS } from '../entry/src/main/ets/input/ControllerState.ts';
+const original = fs.readFileSync(new URL('../entry/src/main/cpp/touch-core/host/sw_input.h', import.meta.url), 'utf8');
+const names = { A:'A', B:'B', X:'X', Y:'Y', L3:'LS', R3:'RS', L:'L', R:'R', ZL:'ZL', ZR:'ZR', '+':'PLUS', '−':'MINUS', '←':'LEFT', '↑':'UP', '→':'RIGHT', '↓':'DOWN' };
+const keys = [...SHOULDER_KEYS, ...FACE_KEYS, ...NAV_KEYS];
+assert.equal(keys.length, 16);
+for (const key of keys) {
+  const bit = original.match(new RegExp(`SW_BTN_${names[key.label]} = 1u << (\\d+)`));
+  assert.ok(bit, key.label); assert.equal(key.mask, 1 << Number(bit[1]), key.label);
+}
+const model = new ControllerState();
+const zero = {buttons:0,lx:0,ly:0,rx:0,ry:0};
+model.touch('left','down',0,0,64,36); model.touch('right','down',0,1,36,8);
+model.touch('a','down',1,-1,20,20); model.touch('r','down',128,-1,20,20);
+assert.deepEqual(model.frame(), {buttons:129,lx:32767,ly:0,rx:0,ry:32767});
+model.touch('second-left','down',0,0,8,36);
+assert.equal(model.frame().lx,32767, 'second finger must not steal stick');
+model.touch('a','move',1,-1,41,20); assert.equal(model.frame().buttons,128);
+model.touch('a','move',1,-1,20,20); assert.equal(model.frame().buttons,128, 'slide back requires new down');
+model.touch('left','move',0,0,73,36); assert.equal(model.frame().lx,0);
+assert.equal(model.frame().ry,32767, 'left release preserves right stick');
+model.touch('right','up',0,1,36,8); assert.equal(model.frame().ry,0);
+model.press('touch-b',2); model.press('key-b',2); model.release('touch-b'); assert.equal(model.frame().buttons,130);
+model.press('key-b',2); model.release('key-b'); assert.equal(model.frame().buttons,128);
+model.touch('left','down',0,0,37,36); assert.equal(model.frame().lx,0, 'dead zone');
+model.touch('left','move',0,0,64,64); const diagonal=model.frame();
+assert.ok(Math.abs(Math.hypot(diagonal.lx,diagonal.ly)-32767)<2);
+assert.ok(diagonal.ly<0, 'screen down maps guest negative Y');
+model.touch('none','cancel',0,-1,0,0); assert.deepEqual(model.frame(),zero);
+model.touch('none','move',0,0,64,36); assert.deepEqual(model.frame(),zero, 'move cannot start a stick');
+model.touch('bad','down',0,0,NaN,36); assert.deepEqual(model.frame(),zero);
+model.press('x',4); model.startStick('right',1,0,-1); model.reset(); assert.deepEqual(model.frame(),zero);
+console.log('PASS: original 16 button bits, simultaneous dual sticks/actions, ownership, slide-out, no reentry, independent release, dead zone, radial clamp, Y sign, cancellation/background reset');

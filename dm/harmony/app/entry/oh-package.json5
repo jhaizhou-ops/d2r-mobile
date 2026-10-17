@@ -1,0 +1,8 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Native bootstrap entry",
+  "dependencies": {
+    "libxblhost.so": "file:./src/main/cpp/types/libxblhost"
+  }
+}

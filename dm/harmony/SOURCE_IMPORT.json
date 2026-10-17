@@ -1,0 +1,56 @@
+{
+  "base": "17845634d71341cca1debf43ad79ac25c6a3a97a",
+  "game_product": "3.3.94012-r32",
+  "app_version": "0.12.0/61",
+  "graphics_source_head": "334f5569a4b625f0cc7602f2c050c94f8257b9de",
+  "graphics_uncommitted_source_sha256": "da1222b52b67dae0ad6cc28713bb236c27a7ac250f8bfdceb71c9cd64d348555",
+  "runtime_library_historical_sha256": "2cfe57b9b25030b63e4c30f13958e596dc6db3fe8200736a1967676b8a615e39",
+  "runtime_library_included": false,
+  "maintained_hle_count": 17,
+  "handoff_edited_hle": [
+    "audio",
+    "codec",
+    "fs",
+    "oe",
+    "svc",
+    "swkbd",
+    "thread"
+  ],
+  "changes_for_export": [
+    "Isolate r32 NVN layouts and sw ABI",
+    "Parameterize SDK, Opus and repository paths",
+    "Preserve current HLE as services rather than regenerated output",
+    "Remove signing configuration and all keys/certificates",
+    "Replace game icon with neutral SVG",
+    "Generate skill index and experience input outside checkout",
+    "Disable original-logo/real-2D diagnostic probes",
+    "Normalize text to LF"
+  ],
+  "historical_device_evidence_retested": false,
+  "new_validation": [
+    "OHOS ARM64 synthetic runtime build",
+    "OHOS ARM64 complete graphics link-check --no-undefined",
+    "Five Node policy checks",
+    "60 Python source files parsed",
+    "New entry-point help and synthetic experience/overwrite-rejection checks"
+  ],
+  "known_failures": [
+    "Historical screen-awake Node assertion fails identically before import",
+    "Raw upstream literal gate fails on Windows path separators; path-normalized invocation passes"
+  ],
+  "not_verified": [
+    "Full execution-image regeneration and compilation",
+    "Opus service compilation",
+    "Native-art generation from real game inputs",
+    "Maxwell-to-SPIR-V and overlay end-to-end preparation",
+    "NAPI/ArkTS compilation",
+    "HAP/App packaging and signing",
+    "Any device execution of this source layout"
+  ],
+  "contribution_gaps": [
+    "Inherited comments are not fully bilingual",
+    "Inherited Harmony on-screen literals are not registered in upstream i18n table",
+    "No new screenshots of the assembled template",
+    "New interface records still need maintainer discussion"
+  ]
+}

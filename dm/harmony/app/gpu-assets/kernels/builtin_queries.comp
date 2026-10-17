@@ -1,0 +1,39 @@
+#version 450
+// Standalone offline feasibility sample derived from sw/gfx/nvn/nvn_builtin.h.
+// Not wired into any product, not an automatic Maxwell translation, not GPU-tested.
+// MODE 0=q_val0, 1=q_val8, 2=q_dlt0, 3=q_dlt8.
+// All address offsets retain the original 32-bit wrap. uint pairs avoid Int64.
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(std140, set = 0, binding = 0) uniform Count { uint n; } count;
+layout(std430, set = 0, binding = 1) readonly buffer InputWords { uint words[]; } src;
+layout(std430, set = 0, binding = 2) writeonly buffer OutputWords { uint words[]; } dst;
+
+uvec2 load64(uint byteOffset) {
+    uint i = byteOffset >> 2;
+    return uvec2(src.words[i], src.words[i + 1u]);
+}
+
+uvec2 sub64(uvec2 after, uvec2 before) {
+    return uvec2(after.x - before.x, after.y - before.y - uint(after.x < before.x));
+}
+
+void main() {
+    uint id = (gl_WorkGroupID.x << 5) + gl_LocalInvocationID.x;
+    if (id >= count.n) return;
+#if MODE == 0
+    uvec2 value = load64(id << 4);
+#elif MODE == 1
+    uvec2 value = load64((id << 4) + 8u);
+#elif MODE == 2
+    uint base = id << 5;
+    uvec2 value = sub64(load64(base + 16u), load64(base));
+#elif MODE == 3
+    uint base = (id << 5) + 16u;
+    uvec2 value = sub64(load64(base + 8u), load64(base - 8u));
+#else
+#error MODE must be one of 0, 1, 2, 3
+#endif
+    uint outWord = (id << 3) >> 2;
+    dst.words[outWord] = value.x;
+    dst.words[outWord + 1u] = value.y;
+}

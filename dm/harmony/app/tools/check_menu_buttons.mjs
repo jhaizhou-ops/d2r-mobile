@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { MenuButtons } from '../entry/src/main/ets/input/MenuButtons.ts';
+const keys = new MenuButtons();
+keys.press('touch:1', 8192); keys.press('touch:2', 1);
+assert.equal(keys.value(), 8193);
+keys.release('touch:1'); assert.equal(keys.value(), 1);
+keys.press('key:enter', 1); keys.release('touch:2'); assert.equal(keys.value(), 1);
+keys.press('key:enter', 1); assert.equal(keys.value(), 1);
+keys.release('key:enter'); assert.equal(keys.value(), 0);
+keys.press('touch:3', 32768); keys.reset(); assert.equal(keys.value(), 0);
+keys.release('touch:3'); assert.equal(keys.value(), 0);
+console.log('PASS: simultaneous navigation/action, independent release, same-button multiple sources, repeat, cancel/reset');
