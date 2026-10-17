@@ -414,7 +414,13 @@ HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv；确保存�
 // Done before mounting the save and cloning the working directory, so it is what the game reads the first time. On by default on iOS, DM_STASH_SEED=0 turns it off; off by default on the Mac host, DM_STASH_SEED=1 turns it on.
 // Only covers the DLC type (standard + hardcore): SharedStash{Soft,Hard}CoreV2.d2i used by the Lord of Destruction type is not seeded -- the touch character creation page cannot create that kind of character
 // The seed file stash_seed.h holds the bytes of a save the game itself generated, and the public repository does not ship it: without the header nothing is seeded (the game then creates an empty shared stash of its own the first time one is needed, as the original does)
-#ifndef __ANDROID__
+/* 触摸缺省开关：iOS 上缺省开；安卓构建定义 DM_ANDROID_SETTINGS_SEED 后同样缺省开（Mac 宿主缺省关：对拍闸门逐字节比存档目录，多一个文件就红） */
+#if TARGET_OS_IPHONE || defined(DM_ANDROID_SETTINGS_SEED)
+#define DM_TOUCH_DEFAULTS_ON 1
+#else
+#define DM_TOUCH_DEFAULTS_ON 0
+#endif
+#if !defined(__ANDROID__) || defined(DM_ANDROID_SETTINGS_SEED)   /* 安卓构建定义 DM_ANDROID_SETTINGS_SEED：设置缺省 / 大字体兜底 / 语言开关生效 */
 #if __has_include("stash_seed.h")
 #include "stash_seed.h"
 static void stash_seed_one(const char *save_dir, const char *name) {
@@ -428,7 +434,7 @@ static void stash_seed_one(const char *save_dir, const char *name) {
 // 标准级与专家级各一份，各判各的（游戏按角色类型选文件名，main+0x2ce1e8：DLC 类型标准 = ModernSharedStashSoftCoreV2、专家 = ModernSharedStashHardCoreV2；文件格式相同）
 // One copy each for standard and hardcore, each judged on its own (the game picks the file name by character type, main+0x2ce1e8: DLC type standard = ModernSharedStashSoftCoreV2, hardcore = ModernSharedStashHardCoreV2; same file format)
 static void stash_seed(const char *save_dir) {
-    const char *e = getenv("DM_STASH_SEED"); int on = e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE; if (!on) return;   // iOS 上缺省开；Mac 宿主缺省关（对拍 / 存档事务这些闸门逐字节比存档目录，多出一个文件就红），要验时设 DM_STASH_SEED=1 | on by default on iOS; off by default on the Mac host (gate checks such as lockstep comparison / save transaction compare the save directory byte by byte, one extra file turns them red), set DM_STASH_SEED=1 to verify
+    const char *e = getenv("DM_STASH_SEED"); int on = e ? strcmp(e, "0") != 0 : DM_TOUCH_DEFAULTS_ON; if (!on) return;   // iOS 上缺省开；Mac 宿主缺省关（对拍 / 存档事务这些闸门逐字节比存档目录，多出一个文件就红），要验时设 DM_STASH_SEED=1 | on by default on iOS; off by default on the Mac host (gate checks such as lockstep comparison / save transaction compare the save directory byte by byte, one extra file turns them red), set DM_STASH_SEED=1 to verify
     stash_seed_one(save_dir, "ModernSharedStashSoftCoreV2"); stash_seed_one(save_dir, "ModernSharedStashHardCoreV2");
 }
 #else
@@ -439,7 +445,7 @@ static void stash_seed(const char *save_dir) { (void)save_dir; }
 // Fallback for 「大字体」(Large Font) (settings key "Low Vision Mode"): if it is 1 in the settings file, change it back to 0. It switches the UI to the original game's low-vision layout profile, which our touch UI was never built for; it hangs after being turned on in the settings page.
 // This item in the settings page is separately hidden by the UI overlay; this here guarantees that devices where it was already turned on recover on restart. Same switch as settings_seed (on by default on iOS, on the Mac host only with DM_TOUCH_DEFAULTS=1)
 static void low_vision_off(const char *save_dir) {
-    const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE; if (!on) return;
+    const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : DM_TOUCH_DEFAULTS_ON; if (!on) return;
     char path[1200]; snprintf(path, sizeof path, "%s/Settings/Settings.json", save_dir); static char buf[65536]; FILE *f = fopen(path, "rb"); if (!f) return;
     size_t n = fread(buf, 1, sizeof buf - 1, f); fclose(f); if (n == sizeof buf - 1) return; buf[n] = 0;
     char *k = strstr(buf, "\"Low Vision Mode\""); if (!k) return; char *v = strchr(k + 17, ':'); if (!v) return; v++; while (*v == ' ' || *v == '\t') v++;
@@ -448,7 +454,7 @@ static void low_vision_off(const char *save_dir) {
     if (ok && !rename(tmp, path)) LOG("设置兜底：「大字体」（Low Vision Mode）是开着的，已改回关"); else remove(tmp);
 }
 static void settings_seed(const char *save_dir) {
-    const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE; if (!on) return;
+    const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : DM_TOUCH_DEFAULTS_ON; if (!on) return;
     static const char *kv[][2] = {{"\"Item Name Display\"", "1"}, {"\"Item Tooltip Hotkey Appender\"", "0"},
                                   {"\"AutoMapMode\"", "2"}, {"\"AutoMap Open On Load\"", "1"}};
     char dir[1100], path[1200]; snprintf(dir, sizeof dir, "%s/Settings", save_dir); snprintf(path, sizeof path, "%s/Settings.json", dir);
@@ -513,7 +519,7 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv；存档 �
     const char *d = getenv("DM_SAVE");
     if (!d) die("未设 DM_SAVE：请指向一份存档目录的可写副本");
     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;   // 去掉结尾斜杠（.work / .new 拼在同级） | strip trailing slashes (.work / .new are appended at the same level)
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) || defined(DM_ANDROID_SETTINGS_SEED)
     stash_seed(dd);
     low_vision_off(dd);
     settings_seed(dd); settings_lang_apply(dd);
@@ -521,7 +527,7 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv；存档 �
     // iOS 上缺省写；Mac 宿主的对拍闸门（存档要和真机真值逐文件相同）不写
     // Rule files for the loot filter (the game loads them at startup; dm_lootfilter.c registers this hook from a constructor; it is null in unit tests that link only hle_fs.c). Same switch as settings_seed:
     // written by default on iOS; not written under the Mac host's parity gate (saves must match the device ground truth file by file)
-    { const char *e = getenv("DM_TOUCH_DEFAULTS"); if (g_dm_mount_seed_hook && (e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE)) g_dm_mount_seed_hook(dd); }
+    { const char *e = getenv("DM_TOUCH_DEFAULTS"); if (g_dm_mount_seed_hook && (e ? strcmp(e, "0") != 0 : DM_TOUCH_DEFAULTS_ON)) g_dm_mount_seed_hook(dd); }
 #endif
     return mount_ex(name, dd, 0, 1);
 }

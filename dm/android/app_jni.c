@@ -124,6 +124,7 @@ static void *game_thread(void *unused) {
     if (error) die("RomFS image setup errno=%d",errno);
     if (dm_android_fs_ensure_directory(save) || dm_android_fs_ensure_directory(temp) || dm_android_fs_ensure_directory(profile)) die("Android private directories");
     setenv("DM_ROMFS",rom,1); setenv("DM_SAVE",save,1); setenv("DM_TEMP",temp,1);
+    if (locale_tag[0]) setenv("DM_LOCALE_TAG",locale_tag,1);   /* 系统语言：首次建设置文件时写原版 Language（i18n_android.c 的 dm_sys_lang） */
     { char overlay[PATH_MAX]; path(overlay,sizeof overlay,port_root,"diagnostics/overlay");   /* 覆盖层根 = diagnostics/overlay（adb 可写通道；放进去的文件先于镜像生效） */
       setenv("DM_ROMFS_OVERLAY",overlay,1); }
     char private_vulkan[PATH_MAX];path(private_vulkan,sizeof private_vulkan,port_root,"diagnostics/private-vulkan");
