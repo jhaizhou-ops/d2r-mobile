@@ -6,6 +6,7 @@
 #include "../host/dm_cursor.h"
 #include "../host/dm_actions.h"
 #include "../host/dm_hud.h"
+#include "../ios/Sources/dm_touch_native_art.h"
 #include "../host/dm.h"
 #include <jni.h>
 #include <errno.h>
@@ -257,4 +258,30 @@ JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeH
                   (float)h.belt[0],(float)h.belt[1],(float)h.belt[2],(float)h.belt[3],(float)h.players,(float)h.quest_unread,(float)h.points,
                   h.dead?1.f:0.f,(float)h.portal,(float)dm_android_ui_panel_mode(),(float)dm_android_ui_frontend()};
     jfloatArray out=(*env)->NewFloatArray(env,18);if(out)(*env)->SetFloatArrayRegion(env,out,0,18,d);return out;
+}
+
+/* P7 技能钮图标（对齐 iOS shown_glyph + skillImage）：5 个技能钮各 10 个数
+ * {status, atlas, frame_常态, frame_按住, 帧 x, y, w, h, 换武器组位, 剩余充能}；status：0 未知 1 空位 2 有图。
+ * 快照只是旧了（>250ms 没刷新）照取到那一刻画——绑定没变，只是没人刷新（front_ios.m shown_glyph 同一口径）。 */
+JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeSkillIcons(JNIEnv *env,jclass cls) {
+    (void)cls;pthread_mutex_lock(&lock);
+    dm_tg_snapshot snap;memset(&snap,0,sizeof snap);dm_touch_game_snapshot(&snap);
+    uint64_t now=now_ns();jfloat d[70];
+    for(int i=0;i<5;i++){
+        dm_tc_target t=controls.layout.target[i];
+        dm_ta_glyph g=dm_ta_current_set(&snap,t.button,now,controls.skill_set);
+        if(g.status==DM_TA_UNKNOWN&&snap.captured_ns&&now>snap.captured_ns&&now-snap.captured_ns>DM_TG_MAX_AGE_NS)
+            g=dm_ta_current_set(&snap,t.button,snap.captured_ns,controls.skill_set);
+        dm_ta_frame f={0,0,0,0},pf={0,0,0,0};
+        if(g.status==DM_TA_GLYPH){dm_ta_frame_at(g.atlas,g.normal_frame,&f);dm_ta_frame_at(g.atlas,g.pressed_frame,&pf);}
+        int kind=0,charges=0;
+        if(g.status==DM_TA_GLYPH)kind=dm_swapskill_slot(g.slot,&charges);
+        jfloat *o=d+i*14;
+        o[0]=(jfloat)g.status;o[1]=(jfloat)g.atlas;o[2]=(jfloat)g.normal_frame;o[3]=(jfloat)g.pressed_frame;
+        o[4]=(jfloat)f.x;o[5]=(jfloat)f.y;o[6]=(jfloat)f.width;o[7]=(jfloat)f.height;
+        o[8]=(jfloat)pf.x;o[9]=(jfloat)pf.y;o[10]=(jfloat)pf.width;o[11]=(jfloat)pf.height;
+        o[12]=(jfloat)kind;o[13]=(jfloat)charges;
+    }
+    pthread_mutex_unlock(&lock);
+    jfloatArray out=(*env)->NewFloatArray(env,70);if(out)(*env)->SetFloatArrayRegion(env,out,0,70,d);return out;
 }

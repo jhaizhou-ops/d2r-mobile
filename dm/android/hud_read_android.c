@@ -94,25 +94,6 @@ static void tick_obs(const uint64_t *regs) {
             n, h.valid, h.hp, h.hp_max, h.mp, h.mp_max, h.level, h.exp_permille,
             h.belt[0], h.belt[1], h.belt[2], h.belt[3], h.players, h.portal, h.points, h.dead); }
 }
-/* 触屏模式：原版底栏 6 格外层不画（宿主 v4 底栏接管，球/药水从挖空透出）。
- * iOS 那版走绑定桥的完整身份核对（控件 cohort + 身份 + TTL，见 dm/ios/Sources/dm_touch_game_bridge.c），
- * 那是 P7 技能图标桥的一部分；这里先按同一判据的可读面认：同控件类（VT = main+0x208a5f8）、槽号 0..5、alt 层关着、且局内没死。 */
-int dm_touch_game_hide_own_glyph(uint64_t widget) {
-    static unsigned long calls, vt_hit; static int logged;
-    dm_hud_info h; dm_hud_get(&h);
-    if (!h.valid || h.dead || !widget) return 0;
-    module_t *m = main_mod(); if (!m) return 0;
-    uint64_t vt = 0; if (!rd(widget, &vt, 8)) return 0;
-    uint32_t slot = UINT32_MAX; rd(widget + 0xb18, &slot, 4);
-    uint8_t alt = 1; rd(widget + 0xc90, &alt, 1);
-    int match = vt == (uint64_t)m->base + 0x208a5f8 && slot <= 5 && !alt;
-    calls++; if (match) vt_hit++;
-    if (!logged && calls % 500 == 0 && logged < 6) { logged++;
-        LOG("[hud] 渲染门 调 %lu 次｜命中 %lu｜样本 widget=%#llx vt=%#llx（期望 %#llx）slot=%u alt=%u",
-            calls, vt_hit, (unsigned long long)widget, (unsigned long long)vt,
-            (unsigned long long)m->base + 0x208a5f8, slot, alt); }
-    return match;
-}
 void dm_android_hud_install(void) {
     LOG("[hud] 安装服务端拍门：门在=%d", gate_obs_present(OBS_TICK));
     gate_obs_set(OBS_TICK, tick_obs);

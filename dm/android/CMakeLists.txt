@@ -15,6 +15,7 @@ target_compile_definitions(dm_android_gfx PRIVATE _GNU_SOURCE TARGET_OS_IPHONE=0
 set_target_properties(dm_android_gfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(dm_android_gfx PUBLIC vulkan android log dl z m)
 set(DM_HOST ../host)
+set(DM_IOS ../ios/Sources)
 add_library(dm_android_core OBJECT
   ${DM_HOST}/loader.c ${DM_HOST}/hle.c ${DM_HOST}/entry.S
   ${DM_HOST}/thread.c ${DM_HOST}/hle_os.c ${DM_HOST}/hle_thread.c
@@ -29,7 +30,8 @@ add_library(dm_android_core OBJECT
   ${DM_HOST}/hle_swkbd.c keyboard_android.c
   services_fs.c services_fs_probe.c services_platform.c diagnostics.c svc_host_android.c ui_state_android.c feature_stubs_android.c
   ${DM_HOST}/dm_cursor.c ${DM_HOST}/dm_cursor_item.c ${DM_HOST}/dm_actions.c ${DM_HOST}/dm_world.c ${DM_HOST}/dm_hud.c ${DM_HOST}/dm_uiscreen.c
-  ${DM_HOST}/dm_padmode.c commoncrypto_shim.c hud_read_android.c i18n_android.c)
+  ${DM_HOST}/dm_padmode.c commoncrypto_shim.c hud_read_android.c i18n_android.c
+  ${DM_IOS}/dm_touch_game_bridge.c ${DM_IOS}/dm_touch_game_state.c ${DM_IOS}/dm_touch_game_identity.c ${DM_IOS}/dm_touch_native_art.c)
 # 第三方：libdeflate 只编解压相关源（TACT BLTE zlib 块，svc_host_android.c 用）；代码不动，单独放松告警
 # Third party: only the decompression-related sources of libdeflate (TACT BLTE zlib blocks, used by svc_host_android.c); the code is untouched, warnings relaxed in a separate object library
 add_library(dm_libdeflate OBJECT

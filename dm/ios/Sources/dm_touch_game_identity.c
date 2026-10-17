@@ -3,6 +3,10 @@
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <mach/vm_map.h>
+#elif defined(__ANDROID__)
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#include <unistd.h>
 #endif
 int dm_tg_vm_read(uint64_t address,void *out,size_t bytes) {
     if(!out || !bytes || !address || address>UINT64_MAX-bytes)return 0;
@@ -10,6 +14,11 @@ int dm_tg_vm_read(uint64_t address,void *out,size_t bytes) {
     vm_size_t copied=0;
     kern_return_t rc=vm_read_overwrite(mach_task_self(),(vm_address_t)address,(vm_size_t)bytes,(vm_address_t)out,&copied);
     return rc==KERN_SUCCESS && copied==bytes;
+#elif defined(__ANDROID__)
+    /* 安卓：同进程内读客体（process_vm_readv，与 hud_read_android.c / ui_state_android.c 同一读法） */
+    /* Android: read the guest inside our own process (process_vm_readv, same call as hud_read_android.c / ui_state_android.c) */
+    struct iovec local={out,bytes},remote={(void *)(uintptr_t)address,bytes};
+    return syscall(SYS_process_vm_readv,getpid(),&local,1,&remote,1,0)==(ssize_t)bytes;
 #else
     (void)address;return 0;
 #endif

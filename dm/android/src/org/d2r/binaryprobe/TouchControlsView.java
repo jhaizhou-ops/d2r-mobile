@@ -35,7 +35,8 @@ public final class TouchControlsView extends View {
     private static native float[] nativeFrame();
     private static native void nativeActivate(int target);
     static native int nativeFrontend();   // 1 = 局外（前端页面：主菜单/选角/加载）——覆盖层隐藏 | 1 = front-end page: overlay hidden
-    private static native float[] nativeHud();   // P3 底栏 v4 数据：{valid,hp,hp_max,mp,mp_max,level,exp‰,belt0..3,players,quest,points,dead,portal,panel_mode,frontend}
+    private static native float[] nativeHud();
+    private static native float[] nativeSkillIcons();   // P7 技能钮图标：每钮 14 个数 {status,atlas,帧常态,帧按住,常态x,y,w,h,按住x,y,w,h,换武器组位,充能}   // P3 底栏 v4 数据：{valid,hp,hp_max,mp,mp_max,level,exp‰,belt0..3,players,quest,points,dead,portal,panel_mode,frontend}
     // Canonical Android touch-layer tokens, mirrored in DESIGN.md and in the iOS overlay palette.
     static final int INK=0xff16110c, RIM=0xff997845, RIM_DARK=0xff1f170d, TEXT=0xffd9c9a6;
     private static final int KNOB_RING=0xffb08e4e, STAR=0xffc8a460, STAR_CORE=0xffecd696;
@@ -52,7 +53,36 @@ public final class TouchControlsView extends View {
     private final Paint v4paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
     private final RectF v4dst=new RectF();
     private final HashMap<String,Bitmap> v4imgs=new HashMap<>();
-    private JSONObject v4cache;private boolean v4tried;private boolean v4on;   // 底栏 v4 是否在屏（腰带四格 + 十字由底栏画，这几格只留命中区 = iOS 口径）
+    private JSONObject v4cache;private boolean v4tried;private boolean v4on;
+    // ===== P7 技能钮图标：原版图集（剪影优先，iOS skillImage 同一口径）=====
+    private final Bitmap[] skillAtlas=new Bitmap[9],skillSil=new Bitmap[9];
+    private final HashMap<String,Bitmap> cropCache=new HashMap<>();
+    private float[] icons;
+    private Bitmap atlas(int i,boolean sil){
+        Bitmap[] arr=sil?skillSil:skillAtlas;
+        if(arr[i]!=null||cropCache.containsKey((sil?"s":"n")+i))return arr[i];
+        try(InputStream in=getContext().getAssets().open((sil?"hud_v4_ui/sil_":"")+"dm_native_skill_"+i+".png")){arr[i]=BitmapFactory.decodeStream(in);}catch(Exception e){arr[i]=null;}
+        return arr[i];
+    }
+    private Bitmap crop(int atlasIdx,int frame,float x,float y,float w,float h,boolean silver){
+        String key=(silver?"s":"n")+atlasIdx+"_"+frame;
+        Bitmap c=cropCache.get(key);if(c!=null)return c;
+        Bitmap src=atlas(atlasIdx,silver);if(src==null)src=atlas(atlasIdx,!silver);
+        if(src==null||w<=0||h<=0)return null;
+        if(x+w>src.getWidth()||y+h>src.getHeight())return null;
+        c=Bitmap.createBitmap(src,(int)x,(int)y,(int)w,(int)h);cropCache.put(key,c);return c;
+    }
+    /** 技能钮图标：先剪影后原图；充能用完（kind&2 且余量<=0）画成灰色（iOS 用 luminosity 混合，安卓用灰底+半透明近似）。 */
+    private Bitmap skillIcon(int idx,boolean held,boolean[]spentOut){
+        if(icons==null||icons.length<70)return null;
+        int base=idx*14,status=(int)icons[base];if(status!=2)return null;
+        int a=(int)icons[base+1];if(a<0||a>8)return null;
+        float[] r=held?new float[]{icons[base+8],icons[base+9],icons[base+10],icons[base+11]}
+                     :new float[]{icons[base+4],icons[base+5],icons[base+6],icons[base+7]};
+        int kind=(int)icons[base+12],charges=(int)icons[base+13];
+        if(spentOut!=null)spentOut[0]=((kind&2)!=0)&&charges<=0;
+        return crop(a,held?(int)icons[base+3]:(int)icons[base+2],r[0],r[1],r[2],r[3],true);
+    }   // 底栏 v4 是否在屏（腰带四格 + 十字由底栏画，这几格只留命中区 = iOS 口径）
     public TouchControlsView(Context context,BooleanSupplier ready){super(context);this.ready=ready;density=getResources().getDisplayMetrics().density;
         paint.setTypeface(Typeface.SERIF);
         setContentDescription("触摸操控：左侧摇杆移动，右侧技能按钮拖动瞄准，底部药水");setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);setVisibility(GONE);}
@@ -75,6 +105,19 @@ public final class TouchControlsView extends View {
         ring(c,x,y,r-lw/2,lw,RIM,(int)(255*(pressed?1:.90f*f)));
         ring(c,x,y,r-lw*1.3f,lw/2,RIM_DARK,(int)(255*(pressed?.90f:.90f*f)));}
     // Belt / menu / map cells: the game's own HUD already carries their artwork, so draw a fainter ring only.
+    /** 右上角「Ⅱ」标记：技能在另一组武器上，按下先换武器（iOS 同一处） */
+    private void badgeMark(Canvas c,float x,float y,String mark){
+        float br=Math.max(6,getResources().getDisplayMetrics().density*0);br=14;
+        disc(c,x,y,br,0xff1e1814,242);ring(c,x,y,br*.84f,Math.max(1,br*.14f),RIM,255);
+        caption(c,x,y,br*1.15f,mark,255);
+    }
+    /** 右下角剩余次数：字形走底栏 v4 的角标表（ui.json badge） */
+    private void badgeCount(Canvas c,float x,float y,int n){
+        JSONObject ui=v4ui();if(ui==null||n<0)return;
+        try{JSONObject bd=ui.getJSONObject("badge");float u=(getHeight()/density)/1320f;if(u<=0)return;
+            v4text(c,Integer.toString(n),bd.getJSONObject("glyphs"),(x-getWidth()/density)/u+1434,y/u,1,getWidth()/density,u);
+        }catch(Exception ignored){}
+    }
     private void utilityButton(Canvas c,float x,float y,float r,boolean pressed){float lw=Math.max(1.2f,r*.06f);
         disc(c,x,y,r,INK,(int)(255*(pressed?.62f:.30f)));
         ring(c,x,y,r-lw/2,lw,RIM,(int)(255*(pressed?.68f:.34f)));}
@@ -159,9 +202,26 @@ public final class TouchControlsView extends View {
     @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);if(!active)return;frame=nativeFrame();if(frame==null||frame.length!=58)return;
         canvas.save();canvas.scale(density,density);
         drawV4(canvas);   // 底栏 v4：垫在圆钮之下
+        icons=nativeSkillIcons();
         for(int i=0;i<12;i++){if(v4on&&i>=6&&i<=10)continue;   // 腰带1-4 + 十字：底栏 v4 画，这几格只留命中区
             float x=frame[i*3],y=frame[i*3+1],r=frame[i*3+2];if(r<=0)continue;boolean pressed=frame[44+i]>0;
-            if(i<=5){actionButton(canvas,x,y,r,pressed);caption(canvas,x,y,Math.max(11,r*(i==0?.30f:.40f)),LABELS[i],(int)(255*(pressed?1:.84f)));}
+            if(i<=5){
+                actionButton(canvas,x,y,r,pressed);
+                boolean[] spent=new boolean[1];
+                Bitmap icon=i==5?skillIcon(5,pressed,spent):skillIcon(i,pressed,spent);   // 5 = 回城钮（固定回城技能）
+                if(icon!=null){
+                    float size=r*2*.64f,iw=icon.getWidth(),ih=icon.getHeight(),fit=size/Math.max(iw,ih);
+                    float gx=x-iw*fit/2,gy=y-(r*.12f)-ih*fit/2;
+                    if(spent[0]){disc(canvas,x,y,r*.86f,0xff4d4d4d,255);
+                        v4paint.setAlpha(140);v4dst.set(gx,gy,gx+iw*fit,gy+ih*fit);canvas.drawBitmap(icon,null,v4dst,v4paint);v4paint.setAlpha(255);
+                        disc(canvas,x,y,r,0x00000000,90);}
+                    else{v4paint.setAlpha((int)(255*(pressed?1:.92f)));v4dst.set(gx,gy,gx+iw*fit,gy+ih*fit);canvas.drawBitmap(icon,null,v4dst,v4paint);v4paint.setAlpha(255);}
+                    int kind=i<5&&icons!=null&&icons.length>=70?(int)icons[i*14+12]:0,chg=i<5&&icons!=null&&icons.length>=70?(int)icons[i*14+13]:0;
+                    if((kind&1)!=0)badgeMark(canvas,x+r*.74f,y-r*.74f,"Ⅱ");               // 技能在另一组武器上
+                    if((kind&2)!=0&&!spent[0])badgeCount(canvas,x+r*.66f,y+r*.42f,chg);  // 剩余充能（角标字形与腰带件数同一套）
+                    continue;   // 有图标不写字
+                }
+                caption(canvas,x,y,Math.max(11,r*(i==0?.30f:.40f)),LABELS[i],(int)(255*(pressed?1:.84f)));}
             else if(i>=6&&i<=9){utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y+r*.42f,Math.max(8,r*.40f),Integer.toString(i-5),(int)(255*(pressed?.95f:.68f)));}
             else{utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y,Math.max(8,r*.38f),LABELS[i],(int)(255*(pressed?.95f:.68f)));}}
         float sx=frame[39],sy=frame[40],sr=frame[41];

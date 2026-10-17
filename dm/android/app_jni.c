@@ -143,6 +143,10 @@ static void *game_thread(void *unused) {
     phase_set("正在装载游戏");
     const char *names[]={"main","sdk","subsdk0"}; load_modules(modules,names,3); guest_thread_init();
     { void dm_padmode_boot(void); dm_padmode_boot(); }   /* P4：开机改布局前缀为触屏版（覆盖层有 ctrl_touch 标记时）+ 载入字符串旁路表 */
+    { void dm_touch_game_live_check(int); int dm_touch_game_attach(void);       /* P7：技能绑定桥（OBS_BINDING_GETTER 门 + HUD 身份核对） */
+    dm_touch_game_live_check(1);
+    if (!dm_touch_game_attach()) LOG("【红】技能绑定读取没挂上（产物没有观测门 OBS_BINDING_GETTER，或 main 模块不符）：技能键图标 / 回城键绑定不工作"); }
+
     uint32_t handle=svc_thread_main_init();
     phase_set("正在初始化游戏"); call_original("_init_libc0");
     LOG("ANDROID_ORIGINAL_CALL nnosInitialize handle=%u",handle);

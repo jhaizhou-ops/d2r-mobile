@@ -98,6 +98,8 @@ count:;
 
 /* ---- 消息回调（对齐 front_ios.m:795-824 touch_ui_message） ---- */
 static dm_tc_scene g_scene;
+/* 绑定桥要的三个号（front_ios.m:809-815）：进局/出局、手柄↔触屏布局重建各算一次世界换代；面板态变化算场景换代 */
+static uint64_t g_scene_epoch, g_world_epoch;
 static void ui_message(const char *cat, const char *act, const char *arg) {
     int blocked = 0;
     { void dm_ui_on_uimsg(const char *, const char *, const char *); dm_ui_on_uimsg(cat, act, arg); }   /* dm_cursor 自己的面板台账（P2 收敛后接管面板栈） | dm_cursor's own panel bookkeeping (takes over the stack in P2) */
@@ -112,6 +114,14 @@ static void ui_message(const char *cat, const char *act, const char *arg) {
     if (g_scene.game && blocked > 0) nav = 1;                  /* 局内只要还有非常驻面板开着就是面板态 | any non-resident panel open in a run = panel state */
     int nmode = dm_tc_panel_mode(nav, &g_scene, blocked);
     int fe = !g_scene.game;
+    static int prev_game = -1; static uint32_t prev_rb = 0;
+    int game_now = g_scene.game;
+    if (prev_game >= 0 && prev_game != game_now) g_world_epoch++;
+    { uint32_t dm_padmode_rebuilds(void); uint32_t rb = dm_padmode_rebuilds(); if (rb != prev_rb) { prev_rb = rb; g_world_epoch++; } }  /* 布局重建：HUD 控件全换了，技能钮快照重新认 HUD */
+    static int prev_mode = 1;
+    if (nmode != prev_mode) g_scene_epoch++;
+    prev_mode = nmode; prev_game = game_now;
+    { void dm_touch_game_set_scene(int, uint64_t, uint64_t); dm_touch_game_set_scene(game_now, g_scene_epoch, g_world_epoch); }
     int changed = 0;
     if (atomic_exchange(&g_frontend, fe) != fe) { changed = 1; LOG("UI_STATE frontend=%d（%s:%s:%s）", fe, cat, act, arg); }
     if (atomic_exchange(&g_panel_mode, nmode) != nmode) { changed = 1; LOG("UI_STATE panel_mode=%d blocked=%d（%s:%s:%s）", nmode, blocked, cat, act, arg); }
