@@ -514,6 +514,13 @@ static void touch_settings_fix(const char *save_dir) {
     ch |= json_int_set(buf, sizeof buf, "\"Item Tooltip Hotkey Appender\"", 0);
     { char ov[1300]; snprintf(ov, sizeof ov, "%s/../diagnostics/automap_mode.txt", save_dir); FILE *g = fopen(ov, "rb");
       if (g) { char v[8] = {0}; size_t k = fread(v, 1, 7, g); fclose(g); if (k && v[0] >= '0' && v[0] <= '2') { int mode = v[0] - '0'; if (json_int_set(buf, sizeof buf, "\"AutoMapMode\"", mode)) { ch = 1; LOG("触摸设置：按诊断文件把「透视地图尺寸」写成 %d（%s）", mode, mode == 0 ? "全屏" : mode == 1 ? "微缩放左" : "微缩放右"); } } } }
+    { /* 确认用读数：把文件里这几项的现值写到诊断目录（adb 可读），出问题时能一眼看到游戏实际读到什么 */
+      char dp[1300]; snprintf(dp, sizeof dp, "%s/../diagnostics/settings_automap.txt", save_dir); FILE *g = fopen(dp, "wb");
+      if (g) { static const char *keys[] = { "\"AutomapAutoOpen\"", "\"AutoMapMode\"", "\"AutomapFade\"", "\"AutoMap Open On Load\"", "\"Item Name Display\"" };
+          for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) { const char *k = strstr(buf, keys[i]); if (!k) { fprintf(g, "%s 缺（走游戏缺省）\n", keys[i]); continue; }
+              const char *c = strchr(k, ':'); const char *e2 = c ? c + 1 : k; while (*e2 == ' ' || *e2 == '\t') e2++; const char *z = e2; while (*z && *z != ',' && *z != '\n' && *z != '}') z++;
+              fprintf(g, "%s: %.*s\n", keys[i], (int)(z - e2), e2); }
+          fclose(g); } }
     if (!ch) return;
     char tmp[1300]; snprintf(tmp, sizeof tmp, "%s.fix", path); f = fopen(tmp, "wb"); size_t m = strlen(buf);
     if (!f || fwrite(buf, 1, m, f) != m) { if (f) fclose(f); LOG("【红】触摸设置：写 %s 失败", tmp); return; }

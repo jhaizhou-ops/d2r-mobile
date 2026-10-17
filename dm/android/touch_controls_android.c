@@ -54,7 +54,8 @@ static void restrict_layout(void) {
     for(int i=0;i<8;i++)controls.layout.pick[i].r=0;
     controls.belt_rows=1;
 }
-/* UI 状态机（P1）：游戏态掩码 = 全部除回城（地图键暂时保留，等 P2 接了"点小地图开图"再按 iOS 去掉）；
+/* UI 状态机（P1）：游戏态掩码 = 全部除右上「地图键」（对齐 front_ios.m:186：游戏态不要地图键，地图那一块由宿主 in_minimap 认，不进模型）；
+ * 回城钮照 iOS 给（位置由布局给、不出按键，点下由宿主 dm_freetp 开门）。
  * 面板态（对齐 front_ios.m:183-185）：导航态不给五个手柄圆钮（dm_tc_nav_mask(0)=0），只开对话菜单（3）时给底栏十字。 */
 static uint32_t game_mask(void){return ((1u<<DM_TC_COUNT)-1)&~(1u<<DM_TC_MAP);}   /* 游戏态不要右上地图键（对齐 front_ios.m:186）：小地图那一块由宿主认（in_minimap）、这根手指不进模型，不进才不会按 MINUS 把小地图关掉 */
 static unsigned applied_rev=0xffffffffu;static uint32_t applied_mask;
