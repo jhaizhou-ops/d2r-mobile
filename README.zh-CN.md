@@ -11,6 +11,17 @@ English: [README.md](README.md)
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/hero_zh.jpg" width="100%" alt="iPhone 上全面屏铺满的游戏画面：地狱难度的哈洛加斯，红门通往秘境">
 </p>
+
+## 实机宣传片
+
+<p align="center">
+  <a href="https://www.bilibili.com/video/BV1W7pz6CE89/"><img src="https://hubeiqiao.github.io/d2r-mobile/promo/media/cover-zh-v2.jpg" width="100%" alt="点击观看中文实机宣传片"></a>
+</p>
+
+[▶ 在 B 站观看](https://www.bilibili.com/video/BV1W7pz6CE89/) · [YouTube](https://www.youtube.com/watch?v=C2LDoMhCtrw)
+
+<sub>1 分 36 秒 · 实机宣传片。点击封面在 B 站观看，也可以选择 YouTube。</sub>
+
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/touch.jpg" width="49%" alt="触屏战斗，首领血条置顶">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/ipad.jpg" width="49%" alt="iPad 上的真全屏">
