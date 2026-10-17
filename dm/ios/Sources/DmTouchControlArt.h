@@ -27,6 +27,14 @@ static void dm_skill_silver(CGContextRef c, CGRect r) {
     CGContextSaveGState(c);CGContextSetBlendMode(c,kCGBlendModeSaturation);
     CGContextSetGrayFillColor(c,.5,1);CGContextFillRect(c,r);CGContextRestoreGState(c);
 }
+// 按下态只提亮为银灰，与黑灰内槽和铁边一致。
+// Held feedback uses a silver-gray highlight consistent with the charcoal face and iron rim.
+static void dm_button_highlight(CGContextRef c, CGRect r) {
+    CGContextSaveGState(c);CGContextSetGrayStrokeColor(c,.64,.72);
+    CGContextSetLineWidth(c,r.size.width*.015);
+    CGContextStrokeEllipseInRect(c,CGRectInset(r,r.size.width*.052,r.size.width*.052));
+    CGContextRestoreGState(c);
+}
 static void dm_button_draw(CGContextRef c, CGRect r, int held, int empty, int primary) {
     CGFloat side=r.size.width,cx=CGRectGetMidX(r),cy=CGRectGetMidY(r);
     CGRect rim=CGRectInset(r,side*.018,side*.018),face=CGRectInset(r,side*.055,side*.055);
@@ -38,7 +46,7 @@ static void dm_button_draw(CGContextRef c, CGRect r, int held, int empty, int pr
     CGContextSetRGBStrokeColor(c,.008,.012,.015,empty?.38:.9);CGContextSetLineWidth(c,side*.025);CGContextStrokeEllipseInRect(c,rim);
     const CGFloat well[]={.021,.021,.021,empty?.08:.94, .050,.050,.050,empty?.16:.94};
     CGContextSaveGState(c);CGContextAddEllipseInRect(c,face);CGContextClip(c);dm_button_gradient(c,face,well,2);CGContextRestoreGState(c);
-    CGContextSetRGBStrokeColor(c,held?.52:.26,held?.77:.29,held?.73:.28,held?.9:(empty?.18:.55));
+    CGContextSetRGBStrokeColor(c,held?.64:.26,held?.64:.29,held?.64:.28,held?.72:(empty?.18:.55));
     CGContextSetLineWidth(c,side*(held?.018:.009));CGContextStrokeEllipseInRect(c,face);
     if(primary && !empty) {
         CGContextSetRGBStrokeColor(c,.31,.23,.22,.52);CGContextSetLineWidth(c,side*.012);

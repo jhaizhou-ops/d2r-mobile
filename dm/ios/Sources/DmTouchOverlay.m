@@ -116,7 +116,7 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
         CGRect r=(CGRect){CGPointZero,rect.size};
         if(self->_socket && !empty) {
             [self->_socket drawInRect:r];dm_socket_neutralize(c,r);
-            if(held) { CGContextSetRGBStrokeColor(c,.54,.83,.76,.9);CGContextSetLineWidth(c,r.size.width*.015);CGContextStrokeEllipseInRect(c,CGRectInset(r,r.size.width*.052,r.size.width*.052)); }
+            if(held) dm_button_highlight(c,r);
         } else dm_button_draw(c,r,held,empty,primary);
     }];
     [image drawInRect:rect];
