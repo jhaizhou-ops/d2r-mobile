@@ -259,4 +259,4 @@ uint64_t front_game_res(int docked) {
     (void)docked;
     return ((uint64_t)1220 << 32) | 2624;
 }
-uint64_t dm_game_res(int docked) { return front_game_res(docked); }
+/* dm_game_res 由 dm_uiscreen.c 提供（P2 起编入）：先问前端再按真全屏规则处理 | dm_game_res comes from dm_uiscreen.c (compiled since P2) */

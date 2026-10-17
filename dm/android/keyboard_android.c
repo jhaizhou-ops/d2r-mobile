@@ -11,7 +11,7 @@ static uint64_t request_id;
 static char title_text[256],subtitle[512],hint[1024],initial_text[2048],reply[4096];
 static _Thread_local int requested_minimum;
 void dm_android_keyboard_constraints(int min) {requested_minimum=min>0?min:0;}
-void dm_ui_text_entered(const char *text) {LOG("ANDROID_KEYBOARD_TEXT_RETURNED bytes=%zu",text?strlen(text):0);}
+/* dm_ui_text_entered 由 dm_cursor.c 提供（P2 起编入）：起名页输入完成自动接受 | dm_ui_text_entered comes from dm_cursor.c (compiled since P2) */
 int front_text_input(const char *title,const char *sub,const char *guide,const char *initial,int max_chars,char *out,int cap) {
     pthread_mutex_lock(&keyboard_lock);
     if(!ready||pending){pthread_mutex_unlock(&keyboard_lock);return -1;}

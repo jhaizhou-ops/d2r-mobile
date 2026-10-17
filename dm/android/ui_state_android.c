@@ -100,6 +100,7 @@ count:;
 static dm_tc_scene g_scene;
 static void ui_message(const char *cat, const char *act, const char *arg) {
     int blocked = 0;
+    { void dm_ui_on_uimsg(const char *, const char *, const char *); dm_ui_on_uimsg(cat, act, arg); }   /* dm_cursor 自己的面板台账（P2 收敛后接管面板栈） | dm_cursor's own panel bookkeeping (takes over the stack in P2) */
     if (!strcmp(cat, "PanelManager")) {
         blocked = stack_msg(act, arg);
         if ((!strcmp(act, "OpenPanel") || !strcmp(act, "OpenExclusivePanel")) && !strcmp(arg, "YouDiedModal")) atomic_store(&g_dead, 1);
@@ -132,6 +133,9 @@ static void uimsg_obs(const uint64_t *regs) {
     }
     dm_android_uimsg(cat, act, arg);
 }
+
+/* dm_cursor 的合成消息出口（DM:PanelState 等）：直接派发给订阅者 | synthetic messages from dm_cursor (e.g. DM:PanelState): dispatch straight to subscribers */
+void uimsg_emit(const char *cat, const char *act, const char *arg) { dm_android_uimsg(cat, act, arg); }
 
 void dm_android_ui_state_install(void) {
     names_init();
