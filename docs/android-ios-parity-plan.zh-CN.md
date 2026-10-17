@@ -17,7 +17,7 @@
 
 ---
 
-## 0. 三个点名问题的答案
+## 0. 逐条点名问题的答案
 
 | 你点的名 | iOS 是怎么做的 | 根因/落点 |
 |---|---|---|
@@ -58,6 +58,82 @@
 `gen_hud_v4.py`/`touch_layout.py`/`gen_romfs_overlay.py` 产物链、`DmTouchOverlay` 的自绘层。
 （现 Android CMake 是显式清单：`dm/android/CMakeLists.txt:18-30`——以上都不在里面。）
 
+### 1.1 dm_cursor 到底管多少事（P2 的完整职责清单，别以为只是"点击"）
+
+`dm_cursor.c` 的泵清单（dm_cursor.c:2764 那一行长行，逐项）：点击注入（鼠标消息）、命中分类、
+拖放、点世界、说明框停靠、安全区/上提/名牌停靠/珍宝匣页签/小地图/地图几何/地图居中/
+**首领血条百分比**、NPC 对话菜单、佣兵页、技能绑定、成叠格、仓库加宽、面板冻结清单、
+面板树安全阀（ui_panel_heal）、面板状态位发布（DM:PanelState）、一键重开遮罩、
+界面代号 dm_wref（跨帧控件指针安全，dm_cursor.c:96-114）。
+——**一个都不能漏**：只搬"点击"不算复刻。
+
+---
+
+## 1.5 README 逐条对照（「为手指重新设计」+「原版之上的新玩法」）
+
+> 左列是 README 原话要点；"落在哪"指本文档的阶段编号。
+
+### 为手指重新设计
+
+| README 条目 | 实现系统 | 安卓现状 | 落在哪 |
+|---|---|---|---|
+| 摇杆移动、斜推方向精准 | dm_touch_controls（iso_fix 缺省 1） | 已编已工作 | ✅ 已有 |
+| **跑（不是走）** | 改写层 touch-run-v4 三条"忽略精力"补丁 | 无（native 产物） | **P0** |
+| 点 NPC / 点目标物件自动寻路 | dm_world（w_hit：身体框/菱形/选择框/名字标签 → `main+0x4ace20` 由游戏自己走） | 无 | P2 |
+| 点地面走路 | **游戏自己的触摸屏链**（宿主"空地点按=不发令"，鼠标点击落世界才走路；iOS 面板态点面板外故意不发点击，就是为了别让脚跑起来，dm_touch_controls.c:597 注释） | 原始触摸屏已接通（unclaimed→dm_touch_set） | **待实测**：可能已可用；P2 后按代码语义精确对齐 |
+| 门/传送门/洞口整扇可点 | dm_world 的 sprite 选择框兜底（dm_world.c:380-390） | 无 | P2 |
+| 技能按下就放/按住连放 | 手势层（共享）+ 前端 pulse 收回表 | 手势层有；前端 pulse 是简化版 | P2（照 front_ios.m:656-690 补全） |
+| 拖动任意角度瞄准 | svc86 瞄准门（touch 产物）+ 手势层右轴 | 无（native 产物） | **P0**（svc 处理）+ 已有手势层 |
+| 附近有怪自动锁定 | 选怪排名门 OBS 7（hle_target.c） | 门未在模块 | P0 后可选挂（P8b 精修） |
+| 两组技能、副手一键放（自动换手/显示剩余次数） | 手势层 ZL 领先/换手时序（共享）+ 绑定桥（次数/Ⅱ 角标） | 手势层有；次数显示无 | P2（行为）+ P7（显示） |
+| 首领血条置顶+百分比 | overlay 挪 HUDMonsterHealth 到顶 + dm_cursor 的 TouchBossPct 泵 | 无 | P3 |
+| 物品单击/双击/长按/拖放 | dm_cursor 命中分类 + dm_actions（装备/卸下/买卖/取叠）+ 手势层定型的 ui_drag/shop_drag | 无 | P2 |
+| 双击装备穿上/卸下 | dm_actions（dm_item_equip/unequip） | 无 | P2 |
+| 拖到商人任意位置卖 | shop_drag + dm_ui_shop_buy_at | 无 | P2 |
+| 成叠双击取 1 / 长按取 3 | stack_take_seq→dm_stash_take(1)/long→(3) | 无 | P2 |
+| 长按背包空格一键整理 | dm_actions（dm_inv_sort 0/3/4） | 无 | P2 |
+| 系统键盘输入/中文名/留空随机 | hle_swkbd + hle_charname + dm_namegen；Android 专有键盘桥已在 | 桥在；三条规则不在 | P6 |
+| 全面屏铺满、避刘海圆角 | 已做（cutout→dm_tc safe insets） | ✅ 已有 | — |
+| iPad 真全屏、面板居中 | dm_uiscreen + 图形层界面矩形 + 覆盖层 | 无（手机无需；平板后置） | P8e（平板） |
+| 3D 画面加亮 | dm_bright | ✅ 已有 | — |
+| 手柄：自动切手柄布局/面板按键提示/碰屏切回 | dm_padmode + dm_gamepad（iOS GameController 框架） | 无（Android 手柄后端也是 die 桩） | P4（布局与切换）+ P8e（Android 手柄后端） |
+
+### 原版之上的新玩法（这一层全部依赖 P1-P4 的地基，统一放 P8 分段）
+
+| README 条目 | 主要实现文件 | 依赖的门/切点 | 落在哪 |
+|---|---|---|---|
+| 秘境（100 层、随从、+技能点） | dm_rift.c / dm_rift_ui.c / dm_rift_hud.*（任务条） | 门 16/17/22、svc89（rift exit）、0x8c（save act） | P8c |
+| 终局首领连战 / 极乐世界 / 刷怪积分牌 | dm_bossrush.c / dm_elysium.c / dm_kills.c | 门 15（事件消息改写）等 | P8c |
+| 佣兵六个新装备位 | 0x8d/0x8e（merc slot）对应宿主 + dm_* | 已在 touch 产物切点里 | P8c |
+| 编年史仓库 / 储藏箱加宽 / 珍宝匣 / 百宝囊 | dm_vault_ui.c / dm_cursor.c（wide_stash、trove 页签泵）/ dm_pouch.c | 面板状态位 + 覆盖层页签布局 | P8a |
+| 增益技能自动补（含副手自动换手补） | dm_autobuff.c | — | P8b |
+| 自动喝药两档 / 佣兵自动喂药 / 腰带自动捡药 / 双击腰带补满 | dm_actions.c（autopot 段、belt_fill、beltauto 相关） | — | P8b |
+| 掉落过滤（噩梦起） | dm_lootfilter.c（4 份 .fltr 预置）+ 设置开关 | — | P5（文件）+P8b |
+| 自动拾取（符文宝石进百宝囊） | dm_pouch.c | — | P8b |
+| 高价值掉落提醒（光柱/音/震动三档） | dm_dropfilter.c（svc87）/ hle_tact.c（svc88 掉落音）/ dm_drophaptic.c | svc87/88 | P8b |
+| 符文之语助手（长按带孔底材） | dm_runeword.c + 覆盖层 TouchRwBox | — | P8b |
+| 小地图指引（小站/出入口/任务终点/屏幕边名字） | dm_map_goals（dm_world.c）+ 覆盖层 _info 层 | — | P8b |
+| 省掉的琐事：免费鉴定 | dm_cursor 目标泵（dm_ui_identify_hovered） | — | P2 即含 |
+| 省掉的琐事：免费回城 | dm_freetp.c（回城钮在触屏布局位置） | — | P8b（钮已在手势层布局） |
+| 省掉的琐事：进局落小站旁 | svc8a（JOIN_SPAWN，hle_tact.c） | svc8a | P8b |
+| 省掉的琐事：一键重开 | dm_cursor 重开遮罩钩子 + 布局 TouchRestart | 覆盖层按钮 | P8b |
+| 省掉的琐事：商人货架可刷新 | dm_shoprefresh.c | — | P8b |
+| 存档：切后台/划掉/退出立刻存 | diag.c（dm_request_save / dm_save_wait）+ guest_clock_freeze | — | P8e（安卓生命周期补全） |
+| 中英切换（选项→自定义页） | dm_custom.c + 覆盖层自定义页 + settings_lang_apply | — | P5（语言键）+ P8d |
+| 分享诊断日志（暂停菜单） | iOS 壳功能；Android 用 Intent 分享 diagnostics | — | P8d |
+
+> 说明：P8 的每一小段都以"P1-P4 已完成 + 对应功能文件编入 + 覆盖层布局已带（P4 一次性生成
+> 全套）"为前提；单个功能互不阻塞，可按玩家价值排序（建议顺序 a→b→c→e→d）。
+>
+> **明确不在本方案范围的（README 里其余部分）**：
+> - 性能数字（60 帧 / 1 秒进局 / 3.8W / 续航）：iPhone 实测值；Android 有独立性能线
+>   （`docs/android-perf-notes.md`：默认档 2624-075、热包线等），本方案只负责把界面机制换成
+>   iOS 那套，完成后性能线照旧跑。
+> - 安装/签名/游戏文件准备（`docs/GAME_FILES`、做包工具）：Android 是 APK + 外部数据目录
+>   （已就绪）。
+> - iOS 内测包专有的三样（iCloud 同步、App 内下载补充包、新版本提醒）公开版本来就没有 → Android 不需要。
+> - 老机型贴图包（A16 及更早的 BC 贴图）：Android 侧已有 BC 解码（bcdec）——不涉及。
+
 ---
 
 ## 2. 分阶段实施方案（每阶段独立可上机验收）
@@ -70,16 +146,22 @@
     "仅player0 忽略精力门 / 跳 stat10 扣除与耗尽降走"）——**不需要宿主参与，换模块即生效**。
 - **宿主侧必做（本次发现的关键风险）**：Android 的 `svc_host_call` 现在是 **die 桩**
   （`dm/android/diagnostics.c:224`：任何 0x8x 宿主调用直接 `die`）。触屏产物新增的
-  "仅宿主"切点都走 svc 0x80-0x8e（`main.cuts.tsv:8-24/41-42`），必须先补真分发：
-  - **0x80 TACT zlib** → 用 libdeflate 实现（vendor 在 `dm/third_party/libdeflate`，
-    照 `dm/host/hle_tact.c` 编解压相关 5 个源；Android CMake 加一行）；
-  - **0x85/0x86 技能渲染门 / 技能瞄准门** → 照 `hle_tact.c:274+` 移植（aim 参数表随产物
-    给出：`main.aim.tsv`，ORIGINAL_CALLEE=0x2b4ef8、SVC=0x86）；
-  - **其余（0x81/82/83/84/87/88/89/8a/8b…）→ "原样代调"**（每条要代的 original 目标就写在
-    `main.cuts.tsv` 描述里，宿主以原参数调用它并回填返回）+ 审计日志；
-    后续要哪项功能（掉落光/掉落提示音/进局落小站/秘境退出重定向）再逐个把变换接上。
-- **验收**：① 跑步出现（精力槽不再扣、耗尽不降走）；② 日志里 svc 0x8x 无 die、行为与
-  现在一致（对拍截图）；③ 旧模块保留备份（现有 `modules.bak-r40-20261016` 同款做法）。
+  "仅宿主"切点都走 svc 0x80-0x8e（`main.cuts.tsv:8-24/41-42`），必须先补真分发。
+  逐号策略（"入口被换"=必须完整实现；"调用被换"=可以先原样代调）：
+  | svc | 用途 | 形态 | P0 做法 |
+  |---|---|---|---|
+  | 0x80 | TACT BLTE 块 zlib 解码 | **入口被换**（原指令没了） | **必须实现**：照 `hle_tact.c` 的 `tact_decode_zlib` + libdeflate（编 5 个源） |
+  | 0x86 | 技能瞄准门（拖技能定方向） | 调用被换（保底 original 0x2b4ef8） | 整段移植 `svc_private_skill_aim` + 内嵌 `main.aim.tsv` 参数 |
+  | 0x85 | 技能渲染门（不画原版技能格图标） | 分支门（w8 决定走 4460/4440） | 移植；padmode 未接前 `dm_padmode_current()` 桩=手柄态 → w8=0 照画（安全） |
+  | 0x81/0x82 | C2S 投递（测试回放） | 调用被换（orig 0x632510 / 0x6310b0） | 原样代调 + 审计日志（回放开关缺省关） |
+  | 0x83/0x84 | Granny 逐块解码 | 调用被换（orig 0x11f4af0） | 原样代调 + 回填 w0 |
+  | 0x87/0x88 | 掉落光柱 / 掉落提示音 | 调用被换（orig 0xa14dc4 / 0x470c20） | 原样代调（功能变换等 P8b） |
+  | 0x89/0x8a/0x8b/0x8c | 秘境出口 / 进局出生点 / 尸体落点 / 存档幕 | 调用被换 | 原样代调（0x8a 的"落小站旁"等 P8b） |
+  | 0x8d/0x8e | 佣兵装备位 | 调用被换 | 原样代调（P8c） |
+  日志要求：每个代调打一行审计（只打前 N 次），方便上机看游戏在走哪条路。
+- **验收**：① 跑步出现（精力槽不再扣、耗尽不降走）；② 拖技能钮能任意角度瞄准；
+  ③ 日志里 svc 0x8x 无 die、画面与现模块一致（对拍截图）；④ 旧模块保留备份
+  （现有 `modules.bak-r40-20261016` 同款做法）。
 - **部署步骤**：重出模块 → 替换 `dodola-data/modules/` → 重打 APK（module-manifest 的
   尺寸/SHA 会变，游戏首启自动换新模块）→ 装机验收。
 
@@ -88,25 +170,40 @@
   （`gate_obs_set(OBS_UIMSG, …)` + 解析 `{类型哈希, 动作哈希, 面板名}` + `uimsg_subscribe/emit`）；
   ② 移植 `dm_cursor.c` 的面板栈（`hud_stack_update` 8 个动作、常驻层 21 名单）→ `dm_hud_stack_msg`；
   ③ 直调共享的 `dm_tc_navigation`（scene）与 `dm_tc_panel_mode`；④ 面板状态位 pump 精简版
-  （DM_PS_BANK/VENDOR/…）。
+  （DM_PS_BANK/VENDOR/…，对照 `dm_cursor.c:2598-2633`）。
+  > 收敛说明：这里先做**最小独立版**；P2 把真 `dm_cursor.c` 编进来后，面板栈/状态位/`dm_ui_on_uimsg`
+  > 用它的原版实现替换掉最小版（两套别长期并存）。
 - **接线**：局外（scene.game=假）→ 覆盖层隐藏、触摸全部直通游戏；导航态 → 目标禁用规则 +
   `dm_tc_set_joy_block`（讲话框/对话菜单）+ 死亡态；skills 快照 epoch（world/scene/rebuild）。
 - **Java**：删掉"菜单操控/战斗操控"与方向/确认/返回/开始按钮；`TouchControlsView` 增加
   `setFrontend/setNavigation`；改动全在 dm/android/ 新文件与既有 Java（新建文件优先，隔离规矩）。
 - **验收**：主菜单/选角页无覆盖层、进局自动出现；开背包自动进面板态（摇杆不画、目标禁用）；
-  底栏（游戏自带那份）在面板态让开的行为对齐。
+  底栏（游戏自带那份）在面板态让开的行为对齐；日志里 UIMSG 消息序列与 iOS 同构。
 
 ### P2 · dm_cursor 鼠标/面板操作层（核心大件）
-- **动作**：把 `dm_cursor.c / dm_cursor_item.c / dm_actions.c / dm_world.c / dm_hud.c` 编进 Android；
-  `hle_hid.c` 的 Android 分支接三个泵：`dm_ui_frontend_pump / dm_ui_mouse_pump / dm_cursor_apply`；
-  帧泵挂 `dm_android_front_presented`（app_jni.c:97）；前端触点接 `dm_ui_touch / item_query /
-  drag_* / world_tap / drop_query …`（对照 front_ios.m:556-655 的 finishTouches 全表）。
-- **已有事实**（子线程核对）：鼠标注入=直接调游戏自己的键鼠消息处理入口
-  （`root=main+0x2f05458`，虚表 +0x28；`LeftMouseButtonDown` 等消息哈希），**不需要新门**；
-  控件观察=按名字/虚表运行期找（无地址表），命中用控件自己的命中函数探边。
+- **动作**：把 `dm_cursor.c / dm_cursor_item.c / dm_actions.c / dm_world.c / dm_hud.c /
+  dm_uiscreen.c` 编进 Android；**钩子点**：Android 的"游戏取手柄处" =
+  `input_backend.c` 的 `dm_android_input_read_npad`——接 `dm_ui_frontend_pump（替按键/发消息）/
+  dm_ui_mouse_pump（每出图帧一条）/ dm_cursor_apply（改写本采样键与摇杆）`（对照
+  `hle_hid.c:428-477`）；出图帧泵挂 `dm_android_front_presented`（app_jni.c:97）。
+- **前端接线（照 front_ios.m 全表，别只接一半）**：
+  - 触点：`dm_ui_touch(0/1/2/3)`、`dm_ui_item_query/result`、`dm_ui_drop_query`、
+    `dm_ui_drag_begin/move/end/lift`、`dm_ui_world_tap`、`dm_ui_use_item/long_press/item_tap/
+    tab_go/identify_hovered`、`dm_ui_bind_*`、`dm_ui_key_pulse*`；
+  - 每帧：`dm_tc_tick` → `dm_ui_hand_idle` → 说明框停靠（front_ios.m:456-466）→ 补推 →
+    每帧 `dm_cursor_set_screen/clear`（front_ios.m:416-476 全清单）；
+  - 脉冲收回表：照 front_ios.m:656-690（120Hz 重排、"游戏已取"判据、`dm_cursor_pending`、
+    `dm_tc_pulse_resume`）——现在 `touch_controls_android.c:48-62` 是简化版，要对齐；
+  - 结束手势的完整分流：照 front_ios.m:570-655（含 shop_drag、pointer_dragged、
+    挂起抬起 0.25s、序号差分、双击/长按/鉴定/使用/页签）。
+- **已有事实**（前期核对）：鼠标注入=直接调游戏自己的键鼠消息处理入口（`root=main+0x2f05458`，
+  虚表 +0x28）；命中分类=运行期按名字/虚表找控件 + 控件自己的命中函数（无地址表）；
+  面板栈安全阀 `ui_panel_heal`、界面代号 `dm_wref`（dm_cursor.c:96-114）随文件带上；
+  空地点按语义=宿主"不发令"（`dm_world.c` w_tap_step 无目标即返回），点地面走路走的是
+  游戏自己的触摸屏链（实测项，见 §4）。
 - **验收**（对照 README"为手指重新设计"）：主菜单点"进入游戏"、选角双击、面板单击/双击/长按/
-  拖放、页签、点地面寻路、点 NPC、说明框停靠、商店买卖拖放。
-- **风险**：编译依赖（CommonCrypto/CoreGraphics 等头在 Android 的替换）、跨线程纪律
+  拖放、页签、点 NPC/门寻路、说明框停靠、商店买卖拖放、成叠取 1/取 3、背包空格一键整理。
+- **风险**：编译依赖（CommonCrypto/CoreGraphics 等在 Android 的替换）、跨线程纪律
   （前端只写原子量，碰游戏内存只在游戏主线程）。
 
 ### P3 · 底栏 v4 + 血条 + 首领血条（用户点名）
@@ -114,7 +211,9 @@
   难度/死亡，地址同 94012）；② 素材：跑 `gen_assets.py + gen_hud_v4.py`（需要一次 RomFS 提取，
   hactool 本机已有）→ `base_full.png / ui.json / 字形 / lvl 十字 / diff_N / sil 图集 / lbl_*`；
   ③ 自绘层：`TouchControlsView` 重写为完整 overlay（照 `DmTouchOverlay.m:105-278`）：
-  底栏 v4（经验条/Lv/生命法力字/角标/难度/金色十字红点）+ 技能钮图标（先剪影）+ 摇杆。
+  底栏 v4（经验条含 20 等分刻度/Lv·%/生命法力字形文本（键取 `dmHudLife/dmHudMana`，见 P5
+  i18n）/腰带角标/难度数字与 1–8 选择条/金色十字的两态与"有点可加"红光）+ 技能钮图标
+  （剪影优先、充能用完置灰）+ 摇杆 + 调换帧钟（只在变化时重绘）。
 - **首领血条**：overlay 布局把 `HUDMonsterHealth` 挪到顶部 + `TouchBossPct`（P2 的 pump 里带上）。
 - **验收**：同场景与 iOS 截图对拍（数字、位置、颜色）；掉血/升级/喝药/难度切换跟手。
 
@@ -138,7 +237,9 @@
 ### P5 · 游戏设置预置与语言
 - **动作**：`settings_seed / low_vision_off / settings_lang_apply / stash_seed` 的 Android 解锁
   （逻辑是通用文件操作；`dm_sys_lang()` 给 Android 实现——读系统 locale）；`dm_lootfilter.c` 的
-  4 个 `.fltr`；**"Always Run" 键**纳入缺省表（P0 已从补丁层保证跑步，这算双保险+可关）。
+  4 个 `.fltr`；**"Always Run" 键**纳入缺省表（P0 已从补丁层保证跑步，这算双保险+可关）；
+  **编入 i18n 层**：`dm_i18n.c` + `dm/i18n/ui_text.tsv`（v4 的生命/法力字形标签键
+  `dmHudLife/dmHudMana`、键盘框文案、自定义页标题都取自它；P3 依赖）。
 - **验收**：删档重进 → 选项页各项符合触屏缺省；语言跟随系统；共享仓库有预置。
 
 ### P6 · 文本输入收尾
@@ -150,30 +251,64 @@
 ### P7 · 技能图标与绑定桥
 - **动作**：`dm_touch_game_bridge.c/state/identity` 编入（门 6 已在 P0 的 touch 产物里）；
   `dm_touch_native_art` 读图标（sil 图集来自 P4）；技能钮画图标 + 右上「Ⅱ」+ 右下次数角标 +
-  空位十字（照 DmTouchOverlay.m:196-235）。
-- **验收**：换武器组/换技能后图标跟着变；副手技能显示"按一下先换武器"逻辑与 iOS 一致。
+  空位十字（照 DmTouchOverlay.m:196-235）；`svc85` 渲染门接上（P0 的桩换成真判：触屏模式才藏
+  原版图标）。
+- **验收**：换武器组/换技能后图标跟着变；副手技能显示"按一下先换武器"与次数与 iOS 一致。
+
+### P8 · 原版之上的玩法层（地基完成后按价值分批）
+> 前置：P1–P4 完成；每段以"对应功能文件编入 dm/android/ + 需要的门/切点已挂"为条件，
+> 互不阻塞。建议顺序 a→b→c→e→d（对照 README「原版之上的新玩法」逐条）。
+- **P8a 仓库三件套**：`dm_vault_ui.c`（编年史仓库）、`dm_pouch.c`（百宝囊）、dm_actions 的
+  仓库/取叠段、dm_cursor 的 wide_stash 与 trove 页签泵、个人仓库页码（dm_pages/PgPage 文本）；
+  overlay 的 wide_stash/trove/vault 布局（P4 一套生成里已含）；面板状态位 DM_PS_VAULT 接 P2。
+- **P8b 省心刷宝**：`dm_autobuff` 自动补增益；自动喝药两档 + 佣兵喂药 + 腰带自动捡药 + 双击补满
+  （dm_actions；beltauto）；`dm_lootfilter`（4 份 .fltr，P5 已预置文件）；`dm_dropfilter`
+  （svc87 光柱变换）；svc88 掉落音变换；`dm_drophaptic` 三档震动（Android 输出侧 Vibrator，
+  判定共享）；`dm_runeword` 符文之语助手；`dm_map_goals` + 覆盖层 _info 名牌层（小地图指引）；
+  `dm_freetp` 免费回城（触屏布局钮已在）；svc8a 进局落小站旁；`dm_shoprefresh` 货架刷新；
+  一键重开（重开遮罩 + TouchRestart 钮）。顺手项：怪物血条名字后标抗性（diag.c 既有实现）。
+- **P8c 秘境与终局**：`dm_rift / dm_rift_ui / dm_rift_hud`；`dm_bossrush` 首领连战；
+  `dm_elysium` 极乐世界；`dm_kills` 积分牌；佣兵六装备位（svc8d/0x8e 从"代调"换真变换）；
+  门 16/17/22、svc89/0x8c 从"代调"换真变换。
+- **P8d 自定义页与分享**：`dm_custom`（开关收集、语言开关落地）+ overlay 自定义页
+  （"选项 → 自定义"）；分享诊断日志（Android 用 Intent 分享 diagnostics 打包）。
+- **P8e 手柄 / 平板 / 生命周期收尾**：Android 手柄后端（Java KeyEvent/onGenericMotion → npad；
+  现在 `dm_pad_set` 是 die 桩）+ padmode 手柄侧 + 底部按键提示条（legend_pump）+ 碰屏切回触屏；
+  平板真全屏与面板居中（dm_uiscreen_set_panel + 图形层界面矩形）；存档生命周期
+  （dm_request_save/dm_save_wait 移植 + guest_clock_freeze 前后台序列，照 front_ios.m:1163-1179；
+  Android 现在只有基础 pause/resume）。
 
 ---
 
 ## 3. 顺序与依赖（一张图）
 
 ```
-P0 模块 touch 产物 ──→ 跑步立刻修；门 6-22 就位
-P1 UIMSG 状态机 ──→ 局外/面板态自动 ──→ P2 鼠标层（局外直点/面板手势）
-P4 overlay 管线 ──→ 触屏布局/文案/素材 ──→ P4 padmode ──→ A/B 消失
-P3 底栏 v4 ──→ 血条/经验/Lv/首领血条（素材依赖 P4 的生成链，可先用手工提取）
-P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插）
+P0 模块 touch 产物 ──→ 跑步立刻修；门 6-22 就位；svc_host_call 真分发
+P1 UIMSG 状态机 ──→ 局外/面板态自动 ──→ P2 鼠标层（局外直点/面板手势）──→ P8 玩法层（a→b→c→e→d）
+P4 overlay 管线 ──→ 触屏布局/文案/素材/v4 底图 ──→ P4 padmode ──→ A/B 消失、双套切换
+P3 底栏 v4 + 血条 + 首领血条（素材出自 P4 生成链，可先手工提取）
+P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插；P7 依赖 P0 的门 6 与 P4 的图集）
 ```
 
 > 每阶段收尾跑 `dm/android/tools/sync_surface_audit.sh`（动上游文件数 35 只许降）。
 > 新代码优先新建文件进 `dm/android/`；动上游只在既有 Android 分支上加小钩子。
 
-## 4. 待上机核实清单（P0 之后第一轮）
-1. 跑步：重出模块后同场景对比（精力条不再掉/不再降走）。
-2. 摇杆轴值：拖动满偏时 `ANDROID_NPAD_RETURN` 的 axes（预期 ±32767）。
-3. UI 消息流：挂 UIMSG 回调后打日志，核对消息序列与 iOS 的 `[touch-receipt]` 同构。
-4. 磁盘优先补丁后：`romfs-view` 放一个假文件，游戏读到的是盘上那份。
-5. settings 缺省落盘后：`Settings.json` 里 4+1 键与 iOS 文档一致。
+## 4. 待上机核实清单（按阶段）
+1. **P0 后**：跑步（精力槽不再掉、不降走）；拖技能钮任意角度瞄准；svc 0x8x 日志无 die；
+   同场景截图对拍与旧模块一致。
+2. **P0 后**：摇杆满偏轴值（`ANDROID_NPAD_RETURN` axes，预期 ±32767）。
+3. **P1 后**：UI 消息流日志与 iOS `[touch-receipt]` 同构；主菜单/选角无覆盖层；开背包进面板态。
+4. **P2 后**：点 NPC/门/物件寻路；**点地面走路**（README 说自动寻路，代码里宿主"不发令"——
+   实测游戏自己触摸屏链的行为，以实测为准）；面板单击/双击/长按/拖放逐页跑一遍（背包/箱子/
+   商人/方块/技能树）；说明框停靠；成叠取 1/长按取 3；长按空格整理。
+5. **P3 后**：底栏 v4 数值/位置/颜色与 iOS 截图对拍；首领血条置顶 + 百分比。
+6. **P4 后**：A/B 提示图标消失；"按 A 使用"→"双击使用"（25 条抽查）；设置页不适用的行隐藏；
+   磁盘优先补丁（romfs-view 放一个假文件，游戏读到盘上那份）。
+7. **P5 后**：删档重进 → Settings.json 四键 + 语言键落盘正确；共享仓库存档存在。
+8. **P6 后**：中文名、2–15 字节、`-`/`_` 至多一个、留空随机名、金币数量框数字键盘。
+9. **P7 后**：技能图标随换装/换组变；副手角标与次数。
+10. **P8 各段后**：掉落过滤开关、自动喝药阈值、符文之语助手、百宝囊自动拾取、一键重开、
+    秘境入口与随从、积分牌、自定义页开关与语言、分享诊断。
 
 ## 5. 风险与回滚
 - **P0 风险**：touch 规则带来其它行为差（瞄准/技能渲染）→ 旧模块备份，随时回滚；逐条对日志。
