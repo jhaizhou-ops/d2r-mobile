@@ -33,12 +33,10 @@ void dm_gfx_shot_at(long k, const char *path) { (void)k; (void)path; }
 
 /* ---- 第二批（链接器逐轮暴露）：diag 的难度/佣兵读数、原版提示、padmode 的其余接口、秘境读数、探路测试开关 ---- */
                      /* 自定义页开关缺省全关（真值在 dm_custom.c，P8d） | custom-page toggles all off by default (real ones in dm_custom.c, P8d) */
-int dm_diag_difficulty(void) { return -1; }                                     /* 不在局内的读数；一键重开用（P8b 接 diag 后给真值） */
-int dm_diag_srv_merc(uint32_t id, int *hp, int *mx, int *healing) { (void)id; if (hp) *hp = 0; if (mx) *mx = 0; if (healing) *healing = 0; return 0; }
+                                     /* 不在局内的读数；一键重开用（P8b 接 diag 后给真值） */
 
 uint64_t dm_stick_last_ns(void) { uint64_t dm_input_stick_activity(void); return dm_input_stick_activity(); }   /* 真值：input_backend 记的摇杆活动时刻 | real value from input_backend */
 _Atomic int g_dm_seek_tp;
 int g_dm_seek_tp_x, g_dm_seek_tp_y;
 
 /* ---- 第三批（padmode 编入后）：符文之语界面重建、选项页模式进入（P8b/P8d）---- */
-void dm_update_mode_enter(void) {}

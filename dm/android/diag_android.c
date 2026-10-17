@@ -26,6 +26,53 @@ static void event_msg_obs(const uint64_t *regs) {
     pkt[1] = 0xff;   /* 表外值 → 原版走默认分支不显示；人数在服务端照常生效 */
 }
 
+static int g_in_game(void) { uint64_t dm_android_hud_last_G(void); return dm_android_hud_last_G() != 0; }
+
+/* 当前局难度（G+0x104：0 普通 1 噩梦 2 地狱），不在局内 -1；一键重开用（dm_cursor.c） */
+int dm_diag_difficulty(void) {
+    uint64_t dm_android_hud_last_G(void); uint64_t G = dm_android_hud_last_G();
+    uint8_t d = 0; struct iovec l = { &d, 1 }, r = { (void *)(uintptr_t)(G + 0x104), 1 };
+    if (!g_in_game() || syscall(SYS_process_vm_readv, getpid(), &l, 1, &r, 1, 0) != 1 || d >= 3) return -1;
+    return d;
+}
+/* 佣兵自动喂药用（dm_actions.c）：服务端那只佣兵的生命真值与「生命药药效还在」（状态 100）。
+   不读客户端那只：客户端怪物的生命只是服务端发来的 1/128 比例（diag.c:1216 同一说明与读法） */
+int dm_diag_srv_merc(uint32_t id, int *hp, int *mx, int *healing) {
+    uint64_t dm_android_hud_last_G(void); uint64_t G = dm_android_hud_last_G();
+    module_t *m = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) m = &g_mod[i];
+    if (!g_in_game() || !m) return 0;
+    uint64_t u = 0;
+    struct iovec l = { &u, 8 }, r = { (void *)(uintptr_t)(G + 0x2630 + 8 * (id & 0x7f)), 8 };
+    if (syscall(SYS_process_vm_readv, getpid(), &l, 1, &r, 1, 0) != 8) return 0;
+    for (int k = 0; u && k < 4096; k++) {
+        uint32_t ty = 0, uid = 0, mode = 0;
+        struct iovec a = { &ty, 4 }, b = { &uid, 4 }, c = { &mode, 4 };
+        if (syscall(SYS_process_vm_readv, getpid(), &a, 1, &(struct iovec){ (void *)(uintptr_t)u, 4 }, 1, 0) != 4) return 0;
+        if (syscall(SYS_process_vm_readv, getpid(), &b, 1, &(struct iovec){ (void *)(uintptr_t)(u + 8), 4 }, 1, 0) != 4) return 0;
+        if (syscall(SYS_process_vm_readv, getpid(), &c, 1, &(struct iovec){ (void *)(uintptr_t)(u + 0xc), 4 }, 1, 0) != 4) return 0;
+        if (ty == 1 && uid == id) {
+            if (mode == 0 || mode == 12) return 0;
+            int (*get)(uint64_t, int, int) = (int (*)(uint64_t, int, int))(m->base + 0x5b9290);
+            if (hp) *hp = get(u, 6, 0) >> 8;
+            if (mx) *mx = get(u, 7, 0) >> 8;
+            uint64_t sl = 0; uint32_t fl = 0, w = 0;
+            struct iovec s1 = { &sl, 8 }, s2 = { (void *)(uintptr_t)(u + 0x88), 8 };
+            if (healing) {
+                int ok = syscall(SYS_process_vm_readv, getpid(), &s1, 1, &s2, 1, 0) == 8 && sl;
+                if (ok) { struct iovec s3 = { &fl, 4 }, s4 = { (void *)(uintptr_t)(sl + 0x1c), 4 };
+                         ok = syscall(SYS_process_vm_readv, getpid(), &s3, 1, &s4, 1, 0) == 4 && (fl >> 31); }
+                if (ok) { struct iovec s5 = { &w, 4 }, s6 = { (void *)(uintptr_t)(sl + 0xb30 + 4 * (100 >> 5)), 4 };
+                         ok = syscall(SYS_process_vm_readv, getpid(), &s5, 1, &s6, 1, 0) == 4 && ((w >> (100 & 31)) & 1); }
+                *healing = ok;
+            }
+            return 1;
+        }
+        struct iovec nx = { &u, 8 }, at = { (void *)(uintptr_t)(u + 0x158), 8 };
+        if (syscall(SYS_process_vm_readv, getpid(), &nx, 1, &at, 1, 0) != 8) return 0;
+    }
+    return 0;
+}
+
 int dm_request_save(void) {
     uint64_t dm_android_hud_last_G(void);
     uint64_t G = dm_android_hud_last_G();

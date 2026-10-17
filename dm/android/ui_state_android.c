@@ -102,7 +102,8 @@ static dm_tc_scene g_scene;
 static uint64_t g_scene_epoch, g_world_epoch;
 static void ui_message(const char *cat, const char *act, const char *arg) {
     int blocked = 0;
-    { void dm_ui_on_uimsg(const char *, const char *, const char *); dm_ui_on_uimsg(cat, act, arg); }   /* dm_cursor 自己的面板台账（P2 收敛后接管面板栈） | dm_cursor's own panel bookkeeping (takes over the stack in P2) */
+    { void dm_ui_on_uimsg(const char *, const char *, const char *); dm_ui_on_uimsg(cat, act, arg); }
+    { void dm_update_on_uimsg(const char *, const char *, const char *); dm_update_on_uimsg(cat, act, arg); }   /* dm_cursor 自己的面板台账（P2 收敛后接管面板栈） | dm_cursor's own panel bookkeeping (takes over the stack in P2) */
     if (!strcmp(cat, "PanelManager")) {
         blocked = stack_msg(act, arg);
         if ((!strcmp(act, "OpenPanel") || !strcmp(act, "OpenExclusivePanel")) && !strcmp(arg, "YouDiedModal")) atomic_store(&g_dead, 1);

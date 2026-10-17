@@ -173,6 +173,7 @@ int dm_android_input_read_npad(dm_android_npad_state *out, uint32_t id, uint32_t
     /* 每次取手柄：先跑每拍泵（界面/商人/世界点按/鼠标），再取本拍值，最后改键（副手换手过滤 → 光标改写）
      * （顺序对照 hle_hid.c fill()：frontend → actions → world → mouse_pump → … → swapskill_filter → cursor_apply → aim_cone）。 */
     dm_ui_frontend_pump(); dm_actions_pump(); dm_world_pump(); dm_ui_mouse_pump();
+    { void dm_update_pump(void); dm_update_pump(); }   /* P8d：主菜单构建号 / 新版本提示（没 init 时不出声）*/
     pthread_mutex_lock(&input_lock);
     if (!status.npad_initialized) { pthread_mutex_unlock(&input_lock); return ENODEV; }
     memset(out, 0, sizeof *out); out->sampling = (int64_t)++status.npad_samples;

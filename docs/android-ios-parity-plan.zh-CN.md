@@ -356,6 +356,43 @@ P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插；P7 依赖 P
 - 构建/打包/部署工具全部收入仓库：`dm/android/tools/{build_modules,build_apk,deploy_apk,
   gen_romfs_samples,gen_module_manifest}.py/sh`。
 
-**下一步（P2 尾 + P3/P4）**：双击使用/装备、长按、拖放、面板外点按关面板（需要把分类结果
-在松手前喂回模型——完整"挂起"）；底栏 v4+血条（P3）；overlay 生成+padmode（P4：A/B 消失、
-选角页换触屏版、首屏对齐）。
+### 同日续（下午）：P2 尾 / P3 / P4 / P5 / P7 / P8 两批
+
+- **P2 尾完成并验收**：完整"挂起抬起"——落下问分类、答案一回来就喂模型（front_ios.m:426）、
+  松手挂起到答案回（或 0.25 s 兜底）再喂 `dm_tc_pointer_item` 并按真正松手时刻结束；拖放落点按松手
+  位置重问（`dm_ui_drop_query`）+ `dm_tc_pointer_release[_at]`；面板滚动/滑块接 `dm_ui_drag_*`；
+  面板内非物品区点按补上鼠标点击（`mouse_click_mode=1` + `mouse_click_seq` 派发——这条漏了会让
+  暂停菜单按钮只认鼠标、点不动）。实测：单击=光标+说明框不点、双击=使用（药水喝掉）、长按=补充到
+  腰带、拖放=腰带↔背包、面板外点=关面板、Options→Save and Exit 能退出到选角页。
+- **P3 完成并验收**：HUD 抬数（`hud_read_android.c` 移植 diag.c hud_tick 的必需面，OBS_TICK 门）
+  → dm_hud；`TouchControlsView` 按 iOS `drawV4` 一比一画底栏（底图直贴、十字两态+点金光晕、
+  经验条 20 刻度、生命/法力/Lv 字形拼、角标、难度数字）；腰带四格+十字由底栏接管（不再画圆钮标签）。
+  `dm_touch_game_hide_own_glyph` 强实现（触屏模式藏原版底栏那层）。**菜单模式整个删掉**（无模式钮、
+  无方向/确认/返回钮，局内恒战斗覆盖层、局外自动隐藏）。
+- **P4 完成并验收**：RomFS 全树解包（hactool 裸镜像模式）+ `gen_assets` / `gen_romfs_overlay`
+  跑通（CASC 原生覆盖 4 文件 6.7 MB）；`dm_padmode` 编入（CommonCrypto SHA-1/MD5 垫片）开机切
+  触屏版布局 + 25 条"双击使用"文案替换；覆盖层根改 `diagnostics/overlay`（adb 可写通道，
+  hle_fs 的 overlay 解析零改动可用）；资源探针覆盖层感知。实测：第一屏换触屏版、**A/B 键图标消失**。
+- **P5 完成并验收**：`hle_fs.c` 的设置缺省/大字体兜底/语言开关在安卓生效（`DM_ANDROID_SETTINGS_SEED`
+  守卫）；`i18n_android.c` 给系统语言；首次挂档补 4 个键（显示物品=开关式 / 说明条热键=关 /
+  小地图放右+进局自动开）。
+- **P7 完成并验收**：绑定桥（`dm_touch_game_bridge/state/identity/native_art`）编入；
+  `dm_tg_vm_read` 补安卓读法；桥挂在 `load_modules` 之后；`ui_state` 维护场景/世界代号喂桥；
+  原生 HUD 6 格外层改由桥的 `hide_own_glyph` 判定；JNI 报每钮 14 个数，Java 画原版剪影图集
+  （有图标不写字、充能用完画灰、Ⅱ 标记与角标余量）。实测：绑定诊断成功 3954 次，主技能钮出图标。
+- **P8 两批**：i18n 层编真实现；便利与玩法模块成批编入——免费回城 / 药水自动拾取 / 腰带自动补充 /
+  自动增益 / 掉落过滤 / 自定义页 / 刷怪积分牌 / 极乐世界 / 秘境（+UI）/ 首领连战 / 个人仓库多页 /
+  编年史仓库 / 符文之语清单 / 百宝囊 / 文字框颜色码 / 新版本提示。中和桩从 59 个降到 5 个
+  （只剩测试量具与一个 `dm_stick_last_ns` 转发）。新增 `tools/gen_headers.sh`（经验表 / 编年史表）
+  与 `apple_time_android.h`、`diag_android.c`。实测：设置页 Audio/Gameplay/Settings/Custom 四页与
+  Apply/Default/Discard 正常，确认框能开能关，无 FATAL。
+
+**遗留（下一轮）**：
+1. **确认框点不到**：模态框（ConfirmationModal）在面板里时，分类命中"设置页盖着的暂停菜单按钮"
+   （类 6 = 不点），需要查 dm_cursor 的面板树命中顺序（模态层要压在最上）。
+2. **前端建角入口**：选角页（有一个存档时）看不到"创建新角色"入口——布局与 iOS 同源，需要确认
+   iOS 侧的入口位置（PC 布局里那个按钮在右侧存档列表面板内，可能要展开列表）。
+3. **P8 各页逐个上机验收**：个人仓库多页 / 编年史 / 百宝囊 / 符文之语 / 秘境 / 首领连战 逐个走一遍
+   （现在只是编进去了、能跑，没有逐页点过）。
+4. 面板滚动拖（`ui_drag` → `dm_ui_drag_*`）接上了但没有实测过的页面（需要一个长列表页）。
+5. 面板栈仍是 P1 精简版（读画面撤下时没有按面板树核对），`dm_cursor` 的面板树接管待收敛。
