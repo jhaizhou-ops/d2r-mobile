@@ -12,4 +12,7 @@ for m in main sdk subsdk0; do
     echo "== $m（DM_RULESET=${DM_RULESET:-touch-run-v4} DM_TARGET=${DM_TARGET:-android}）"
     env DM_RULESET=${DM_RULESET:-touch-run-v4} DM_TARGET=${DM_TARGET:-android} "$PY" "$SRC/dm/tools/patch_nso.py" "$NSO/$m" "$OUT" "$m" 2>&1 | tail -2
 done
+# 宿主的两张查表（经验门槛 / 编年史仓库物品表）——编译期依赖，缺了编不过
+# The host's two lookup tables (experience thresholds / Chronicle vault items): build-time compile dependencies
+bash "$SRC/dm/android/tools/gen_headers.sh" "$SRC/dm/android/build/generated" | tail -2
 ls -la "$OUT"

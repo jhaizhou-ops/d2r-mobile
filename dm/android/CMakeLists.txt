@@ -30,7 +30,7 @@ add_library(dm_android_core OBJECT
   ${DM_HOST}/hle_swkbd.c keyboard_android.c
   services_fs.c services_fs_probe.c services_platform.c diagnostics.c svc_host_android.c ui_state_android.c feature_stubs_android.c
   ${DM_HOST}/dm_cursor.c ${DM_HOST}/dm_cursor_item.c ${DM_HOST}/dm_actions.c ${DM_HOST}/dm_world.c ${DM_HOST}/dm_hud.c ${DM_HOST}/dm_uiscreen.c
-  ${DM_HOST}/dm_padmode.c ${DM_HOST}/dm_i18n.c ${DM_HOST}/dm_freetp.c ${DM_HOST}/dm_potpick.c ${DM_HOST}/dm_beltauto.c ${DM_HOST}/dm_autobuff.c ${DM_HOST}/dm_lootfilter.c ${DM_HOST}/dm_custom.c ${DM_HOST}/dm_kills.c ${DM_HOST}/dm_elysium.c ${DM_HOST}/dm_rift.c ${DM_HOST}/dm_bossrush.c ${DM_HOST}/dm_rift_ui.c commoncrypto_shim.c hud_read_android.c diag_android.c i18n_android.c
+  ${DM_HOST}/dm_padmode.c ${DM_HOST}/dm_i18n.c ${DM_HOST}/dm_freetp.c ${DM_HOST}/dm_potpick.c ${DM_HOST}/dm_beltauto.c ${DM_HOST}/dm_autobuff.c ${DM_HOST}/dm_lootfilter.c ${DM_HOST}/dm_custom.c ${DM_HOST}/dm_kills.c ${DM_HOST}/dm_elysium.c ${DM_HOST}/dm_rift.c ${DM_HOST}/dm_bossrush.c ${DM_HOST}/dm_pages.c ${DM_HOST}/dm_vault.c ${DM_HOST}/dm_vault_ui.c ${DM_HOST}/dm_runeword.c ${DM_HOST}/dm_pouch.c ${DM_HOST}/dm_textbox.c ${DM_HOST}/dm_textbox_core.c ${DM_HOST}/dm_rwlv_core.c ${DM_HOST}/dm_rift_ui.c commoncrypto_shim.c hud_read_android.c diag_android.c i18n_android.c
   ${DM_IOS}/dm_touch_game_bridge.c ${DM_IOS}/dm_touch_game_state.c ${DM_IOS}/dm_touch_game_identity.c ${DM_IOS}/dm_touch_native_art.c)
 # 第三方：libdeflate 只编解压相关源（TACT BLTE zlib 块，svc_host_android.c 用）；代码不动，单独放松告警
 # Third party: only the decompression-related sources of libdeflate (TACT BLTE zlib blocks, used by svc_host_android.c); the code is untouched, warnings relaxed in a separate object library
@@ -45,7 +45,7 @@ target_compile_features(dm_android_core PUBLIC c_std_11)
 # Upstream's Darwin uint64 format specifiers have the same 64-bit ABI on Bionic.
 # Keep that source difference separate from actual width/ABI validation.
 target_compile_definitions(dm_android_core PRIVATE DM_ANDROID_SETTINGS_SEED=1)   # 设置缺省 / 语言开关在安卓同样生效（hle_fs.c 的守卫）
-target_compile_options(dm_android_core PRIVATE -Wall -Wextra -Wno-format -Wno-unused-function -Wno-missing-field-initializers -Wno-unused-but-set-variable -Werror -ffixed-x18)
+target_compile_options(dm_android_core PRIVATE -Wall -Wextra -Wno-format -Wno-unused-function -Wno-missing-field-initializers -Wno-unused-but-set-variable -Wno-unused-parameter -Werror -ffixed-x18)
 # Apple 专有写法（clock_gettime_nsec_np / st_mtimespec）在安卓的等价垫片，强制编进宿主 .c
 # Apple-only spellings (clock_gettime_nsec_np / st_mtimespec): the Android equivalent shim, force-included into the host sources
 target_compile_options(dm_android_core PRIVATE $<$<COMPILE_LANGUAGE:C>:-include;${CMAKE_CURRENT_SOURCE_DIR}/apple_time_android.h>)   # 只对 C 生效（汇编不能带 -include）

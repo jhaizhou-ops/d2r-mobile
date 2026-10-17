@@ -26,25 +26,9 @@ uint64_t dm_diag_srv_item(uint32_t id) { (void)id; return 0; }
 void dm_gfx_shot_at(long k, const char *path) { (void)k; (void)path; }
 /* ---- dm_kills.c / dm_rift_ui.c / dm_runeword.c / dm_pouch.c / dm_potpick.c / dm_beltauto.c（P8）---- */
 
-void dm_pouch_step(uint8_t *b) { (void)b; }
-int dm_pouch_tip_gate(int x, int y) { (void)x; (void)y; return 0; }
-int dm_runeword_list_open(void) { return 0; }
-void dm_runeword_list_close(void) {}
-int dm_runeword_long_press(const dm_cursor_item_info *ci) { (void)ci; return 0; }
-void dm_runeword_button(const char *name) { (void)name; }
-void dm_runeword_pump(void) {}
 /* ---- dm_vault_ui.c（P8a：编年史仓库）---- */
-void dm_vault_request_deposit(uint32_t item_id) { (void)item_id; }
-int dm_vault_ui_blocks(int x, int y) { (void)x; (void)y; return 0; }
-int dm_vault_ui_drag(int phase, int x, int y) { (void)phase; (void)x; (void)y; return 0; }
-uint32_t dm_vault_ui_held(void) { return 0; }
-int dm_vault_ui_over(int x, int y) { (void)x; (void)y; return 0; }
-int dm_vault_ui_tip_gate(int x, int y) { (void)x; (void)y; return 0; }
 /* ---- dm_padmode.c（P4：手柄↔触屏；此处恒"触屏且不忙"）---- */
 /* ---- dm_pages.c（P8a：个人仓库多页）---- */
-int dm_pages_count(void) { return 1; }
-int dm_pages_cur(void) { return 0; }
-void dm_pages_request_flip(int dir) { (void)dir; }
 /* ---- dm_i18n.c 的串表读取（P5 编入真实现；此前把键原样返回，提示语退化为键名）---- */
 
 /* ---- 第二批（链接器逐轮暴露）：diag 的难度/佣兵读数、原版提示、padmode 的其余接口、秘境读数、探路测试开关 ---- */
@@ -53,11 +37,8 @@ int dm_diag_difficulty(void) { return -1; }                                     
 int dm_diag_srv_merc(uint32_t id, int *hp, int *mx, int *healing) { (void)id; if (hp) *hp = 0; if (mx) *mx = 0; if (healing) *healing = 0; return 0; }
 
 uint64_t dm_stick_last_ns(void) { uint64_t dm_input_stick_activity(void); return dm_input_stick_activity(); }   /* 真值：input_backend 记的摇杆活动时刻 | real value from input_backend */
-void dm_vault_ui_pump(void) {}
-int dm_vault_ui_tap(int x, int y) { (void)x; (void)y; return 0; }
 _Atomic int g_dm_seek_tp;
 int g_dm_seek_tp_x, g_dm_seek_tp_y;
 
 /* ---- 第三批（padmode 编入后）：符文之语界面重建、选项页模式进入（P8b/P8d）---- */
-void dm_runeword_ui_rebuild(void) {}
 void dm_update_mode_enter(void) {}
