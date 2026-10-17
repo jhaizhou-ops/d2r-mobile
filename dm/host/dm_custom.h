@@ -8,6 +8,7 @@
 // Effective value 0 / 1: changes only after the player taps 「应用」(Apply) on the options page, unchanged by 「放弃」(Discard), 「默认」(Default) = each key's default (power-saving mode off, the rest on). Returns 1 for an unrecognized key.
 // Callable from any thread: the first call reads the file once, and after that it is just an atomic read + a few string comparisons, lock-free. On iOS it can be read already during startup (before the save is mounted).
 // Keys: auto_mana auto-drink potions (both red and blue; the key name is kept) / drop_light light beam on high-value drops / map_mark minimap markers for entrances and exits, waypoints and quest goals / item_notes item notes and old translated names / icloud iCloud save sync (cloud_ios.m, read at startup) / pot_pick potion auto-pickup (dm_potpick.c) / drop_haptic haptics on high-value drops (dm_drophaptic.c) / gem_pick auto-pickup of runes and gems into the advanced stash (pouch) / store_btn the inventory 「存放」(Deposit) button (dm_pouch.c) / eco_fps power-saving mode 30 fps (nvn_mtl.m, off by default)
+// touch_swap_above：0 = 传送门左侧（默认），1 = 技能区上方；点「应用」后生效。
 // touch_swap_above: 0 = left of portal (default), 1 = above skill fan; applies after Apply.
 int dm_custom_get(const char *key);
 int dm_custom_lang_explicit(void);   // 语言开关（键 lang_en）在设置文件里写着的值：-1 没写过（不动原版设置）/ 0 简中 / 1 英文；hle_fs.c 挂存档时读 | Value of the language switch (key lang_en) as written in the settings file: -1 never written (original settings left alone) / 0 Simplified Chinese / 1 English; read by hle_fs.c at save mount

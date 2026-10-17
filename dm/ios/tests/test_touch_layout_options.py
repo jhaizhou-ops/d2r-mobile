@@ -1,4 +1,4 @@
-"""Cross-language contract for the two-position switch in the existing Custom page."""
+"""现有自定义页中两位置换组开关的跨语言契约。 | Cross-language contract for the two-position switch in the existing Custom page."""
 import json
 from pathlib import Path
 import re

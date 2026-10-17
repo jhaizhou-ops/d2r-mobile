@@ -632,6 +632,7 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
             BOOL wasPtr=_controls.pointer_slot==i; unsigned tm=_controls.tap_move_seq;
             // 按下 / 移动 / 抬起都取事件这一刻的时间（同 tick 的时钟）：面板开着时显示节拍降到 2 次 / 秒，原先取「上一拍的时刻」，0.12 秒的点按会被量成 0.5 秒、不算点按（点页签不切）
             // Press / move / lift all take the time of the event itself (same clock as tick): with a panel open the display link drops to 2 per second, and previously "the time of the previous display-link tick" was used, so a 0.12-second tap was measured as 0.5 seconds and not counted as a tap (tapping a tab did not switch)
+            // 即使没有最后一次移动事件，抬起位置也可能变化；换组键滑出后仍要取消。
             // A lift can have a new location even without a final move event; enforce swap slide-out cancellation.
             if(_controls.finger[i].target==DM_TC_SWAP) { CGPoint ep=[t locationInView:self];dm_tc_move_at(&_controls,i,ep.x,ep.y,CACurrentMediaTime()); }
             if(_pendFire) dm_tc_end_at(&_controls,i,_pendEndTime); else dm_tc_end_at(&_controls,i,CACurrentMediaTime()); _slot[i]=nil; slot=i;
@@ -898,7 +899,7 @@ static CGRect letterbox_rect(CGRect f) {
 UIView *front_ios_view(CGRect frame) {
     front_game_res(1);   // 「真全屏」开没开（g_full）是它第一次被调时按屏幕比例定的；下面摆视图要用，不能指望别处碰巧先调过 | whether "true fullscreen" is on (g_full) is decided from the screen aspect ratio the first time this is called; the view layout below needs it and cannot count on something else happening to have called it first
     CGRect full = frame; frame = letterbox_rect(frame);
-    dm_tc_set_tall_scale(UIDevice.currentDevice.userInterfaceIdiom==UIUserInterfaceIdiomPad);   // UIKit points: enable the bounded tablet profile only on iPad.
+    dm_tc_set_tall_scale(UIDevice.currentDevice.userInterfaceIdiom==UIUserInterfaceIdiomPad);   // UIKit 点数：仅 iPad 开启有上限的平板缩放 | UIKit points: enable the bounded tablet profile only on iPad.
     DmMetalView *v = [[DmMetalView alloc] initWithFrame:frame];
     g_rate_link = [CADisplayLink displayLinkWithTarget:[DmRateHint new] selector:@selector(tick:)];
     g_rate_link.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);

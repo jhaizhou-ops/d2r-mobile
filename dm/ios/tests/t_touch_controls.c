@@ -34,7 +34,7 @@ static void layout_at(float w, float h) {
             CHECK(hypotf(a.x-b.x,a.y-b.y)>a.r+b.r);
         }
     }
-    float k = g_tall ? 1.15f : 1;   // Tablet boost is bounded independently of display height.
+    float k = g_tall ? 1.15f : 1;   // 平板放大有固定上限，不随屏幕高度增长 | Tablet boost is bounded independently of display height.
     NEAR(l.target[DM_TC_MAIN].r,40*k,0.001);
     for (int i=DM_TC_SKILL1; i<=DM_TC_SKILL4; ++i) {
         NEAR(l.target[i].r,26*k,0.001);
@@ -523,6 +523,7 @@ static void skill_cluster_clearance(void) {
     dm_tc_state s;dm_tc_init(&s,1194,672);dm_tc_layout before=s.layout;
     press(&s,0,DM_TC_MAIN);CHECK(s.buttons!=0);dm_tc_set_swap_above(1);dm_tc_resize(&s,1194,834);
     CHECK(s.buttons==0 && s.joy_slot==DM_TC_NONE);CHECK(s.layout.swap_above==1);
+    // 平板宽度相同时，增加高度不应扩大按钮或增加到屏幕边缘的距离。
     // Same tablet width: increasing height must not increase button sizes or edge reach distances.
     NEAR(s.layout.target[0].r,before.target[0].r,.001);
     NEAR(s.layout.height-s.layout.target[0].y,before.height-before.target[0].y,.001);

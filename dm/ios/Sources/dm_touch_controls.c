@@ -8,7 +8,10 @@
 #define DM_TC_POINTER_HOLD_S 0.5
 #define DM_TC_POINTER_TAP_S 0.35
 
-/* UIKit uses points: phone controls keep their normal size, tablet controls grow at most 15%.
+/* UIKit 使用点数：手机保持常规大小，平板最多放大 15%。
+   锚点间距使用相同的有界比例，不随屏幕高度增长。
+   Mac 的像素坐标回放默认不开平板缩放。
+   UIKit uses points: phone controls keep their normal size, tablet controls grow at most 15%.
    Anchor distances use the same bounded scale, rather than growing with tablet screen height.
    The existing opt-in remains off for the Mac pixel-coordinate replay path. */
 static int g_tall_scale, g_swap_above;
@@ -42,9 +45,11 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->tablet=g_tall_scale; l->swap_above=g_swap_above;
     // 右拇指技能扇区：主钮在下，四个技能保持原大小并留出独立触控间隔。
     // Right-thumb skill fan: primary below, with original-size skills and separate touch gaps.
+    // 技能扇区锚点避开侧边与底部安全区。
     // Keep the combat fan anchored inside the side and bottom safe areas.
     float main_x=l->width-g_safe_r-86*k, main_y=l->height-88*k-fmaxf(24*k,g_safe_b+8*k);
     if (g_tall_scale && height<340) main_y=fmaxf(main_y,190*k);
+    // 整组向右下移动；小尺寸平板窗口保留原有底栏间隔。
     // Move the whole fan down-right. Compact tablet windows need the original belt clearance.
     main_x+=12*k;
     if (!(g_tall_scale && height<340)) main_y+=28*k;
@@ -66,6 +71,7 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     for (int i = 0; i < 5; ++i)
         l->target[DM_TC_BELT1+i] = (dm_tc_target){l->width/2+(1090+120*cell[i]-1434)*u, 1241.5f*u, 57*u, bottom[i]};
     { const dm_tc_target *s4 = &l->target[DM_TC_SKILL4]; l->target[DM_TC_PORTAL] = (dm_tc_target){s4->x, s4->y-s4->r-12*k-26*k, 26*k, 0}; }
+    // 小尺寸平板窗口：传送门放在技能三上方，避开右上角地图按钮。
     // Small tablet windows: put the portal above skill 3, clear of the top-right map control.
     if (g_tall_scale && height<340)
         l->target[DM_TC_PORTAL]=(dm_tc_target){main_x-34*k,main_y-156*k,26*k,0};
@@ -73,6 +79,7 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->diff = (dm_tc_target){l->width/2+(1090-1434)*u, 1241.5f*u, 57*u, 0};
     for (int i = 0; i < 8; ++i) l->pick[i] = (dm_tc_target){l->width/2+(1390+(i-3.5f)*120-1434)*u, 1051.5f*u, 57*u, 0};
     l->target[DM_TC_MAP] = (dm_tc_target){l->width-30*k, 30*k, 22*k, DM_BTN_MINUS};
+    // 默认换组键沿传送门外弧向左排布，保持到主技能的半径不变。
     // Default: continue the portal's outer arc to its left, preserving the radius around the primary.
     const dm_tc_target *portal=&l->target[DM_TC_PORTAL];
     float px=portal->x-main_x,py=portal->y-main_y,cs=cosf(.46f),sn=sinf(.46f);
