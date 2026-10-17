@@ -42,6 +42,7 @@ run: \
 	$(B)/t_target_rank \
 	$(B)/t_textbox \
 	$(B)/t_thread_leak \
+	$(B)/t_tooltip_anchor \
 	$(B)/t_touch \
 	$(B)/t_touch_mac \
 	$(B)/t_unit_level \
@@ -62,6 +63,8 @@ run: \
 	$(B)/t_rift_wave
 	$(B)/t_textbox
 	$(B)/t_rwlv
+	$(B)/t_tooltip_anchor
+	$(B)/t_tooltip_anchor legacy
 	$(B)/t_touch
 	$(B)/t_hid_script 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
@@ -181,3 +184,5 @@ $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+$(B)/t_tooltip_anchor: t_tooltip_anchor.c ../dm_cursor.c ../dm_cursor.h ../dm_cursor_item.h | $(B)
+	clang -O1 -Wno-unused-function -Wl,-dead_strip -I.. -o $@ t_tooltip_anchor.c

@@ -2659,8 +2659,8 @@ static void ui_panel_state_pump(uint64_t root) {   // 游戏主线程，每帧 |
 // 物品说明框停靠（观测门 OBS_TOOLTIP，挂在说明框面板的「提交一条说明」函数入口 main+0xb0d560(面板, 文字, 目标矩形左上 x2, 目标矩形宽高 x3, 样式, 文字 2)）。
 // 说明框是即时式的：悬停着的控件每帧重新提交、画完就清，宿主在自己的时机读面板里的记录数一直是 0，所以只能在提交那一刻改输入。
 // 原版把框摆在目标矩形（被点的那一格）正下 / 正上方：长说明（暗金、符文之语，十几行）盖住腰带、戒指、背包中间几列和「存放」钮，要点被盖住的格子得先点别处。
-// 触屏、只开着物品栏一个面板、光标下是物品时：把目标矩形换成对侧那块暗格空板（物品栏外框里、中间区域左右各一块）顶上的一个点——
-// 物品在面板右半停左空板、在左半停右空板，框从上往下排；量字、摆放、推回屏内仍是游戏自己做（离屏幕边的距离走布局里的 screenEdgePadding）。
+// 触屏、只开着物品栏一个面板、光标下是物品时：把横向目标换成物品同侧暗格空板的中线，保留原生纵向目标及高度——
+// 物品在面板右半停右空板、在左半停左空板，纵向跟随物品；量字、摆放、推回屏内仍是游戏自己做（离屏幕边的距离走布局里的 screenEdgePadding）。
 // 空板位置按屏高定（面板按屏高缩放）：空板中线离屏幕中线 0.617 × 屏高、顶边 0.117 × 屏高（iPhone 15 Pro 档 2556×1179 截图量：
 // 667 点宽视图里空板 108–180 / 487–558、屏高 307；拿 16:9 截图验算中线 102 落在那张图的空板 60–145 里）。
 // 原先按「屏幕边到面板内框的带子正中」算，只在 16:9 碰巧落在空板里，2.17:1 的 iPhone 上落到面板外框外、贴着屏幕边（iPhone 15 Pro 视频）。
@@ -2676,8 +2676,8 @@ static void ui_panel_state_pump(uint64_t root) {   // 游戏主线程，每帧 |
 // Item description box docking (observation gate OBS_TOOLTIP, on the entry of the description panel's "submit one description" function main+0xb0d560(panel, text, target rect top-left x2, target rect size x3, style, text 2)).
 // The description box is immediate-mode: the hovered widget resubmits it every frame and it is cleared after drawing, so when the host reads the panel at its own time the record count is always 0; the input can only be changed at the moment of submission.
 // The original places the box directly below / above the target rect (the slot that was tapped): long descriptions (uniques, runewords, a dozen lines) cover the belt, rings, the middle columns of the inventory and the Stash button, and you have to tap elsewhere before you can tap a covered slot.
-// On touch, with only the inventory panel open and an item under the cursor: replace the target rect with a point at the top of the dark empty side panel on the opposite side (inside the inventory frame, one on each side of the middle area):
-// an item in the right half of the panel docks on the left panel and vice versa, and the box is laid out downward; measuring the text, placing it and pushing it back on screen are still done by the game (the distance from the screen edge uses screenEdgePadding from the layout).
+// On touch, with only the inventory panel open and an item under the cursor: replace the horizontal target with the center of the dark empty panel on the same side, retaining the native vertical target and height:
+// an item in the right half docks on the right panel and vice versa, with vertical placement following the item; measuring the text, placing it and pushing it back on screen are still done by the game (the distance from the screen edge uses screenEdgePadding from the layout).
 // The side panels are positioned by screen height (the panel scales with screen height): panel center line 0.617 x screen height from the screen center line, top edge 0.117 x screen height (measured on an iPhone 15 Pro 2556x1179 screenshot:
 // in a 667-point-wide view the panels span 108–180 / 487–558 with screen height 307; cross-checked on a 16:9 screenshot, center line 102 falls inside that image's panel at 60–145).
 // This used to be computed as "the middle of the band between the screen edge and the panel's inner frame", which only happened to land in the side panel on 16:9; on 2.17:1 iPhones it landed outside the panel frame against the screen edge (iPhone 15 Pro video).
@@ -2709,10 +2709,10 @@ static void tip_dock(const uint64_t *regs) {
     dm_cursor_item_info ci; if (!dm_cursor_item(&ci)) return;
     int W = *(int32_t *)(m->base + 0x211da38), H = *(int32_t *)(m->base + 0x211da3c); if (W <= 0 || H <= 0) return;
     int tx = (int32_t)regs[2], tw = (int32_t)regs[3], off = (int)lroundf(0.617f * H); if (W / 2 - off < H / 10) return;   // 空板贴到屏幕边（比 16:9 还窄的屏）就不挪 | If the side panel would touch the screen edge (screens narrower than 16:9), do not move the box
-    int left = tx + tw / 2 >= W / 2, cx = left ? W / 2 - off : W / 2 + off, y = (int)(0.117f * H);
+    int left = tx + tw / 2 < W / 2, cx = left ? W / 2 - off : W / 2 + off, y = (int32_t)(regs[2] >> 32);
     uint64_t *r = (uint64_t *)(uintptr_t)regs;   // 门只回写 x0–x8：改 x2 / x3 | the gate writes back only x0-x8: change x2 / x3
-    r[2] = (uint64_t)(uint32_t)cx | (uint64_t)(uint32_t)y << 32; r[3] = 0;
-    static int lg; static int ll = -1; if (ll != left && lg < 40) { ll = left; lg++; LOG("说明框停靠：物品 %s 在面板%s半 → 说明框停到%s侧空板（中线 x %d，顶 y %d；画面 %dx%d）", ci.code, left ? "右" : "左", left ? "左" : "右", cx, y, W, H); }
+    r[2] = (uint64_t)(uint32_t)cx | (uint64_t)(uint32_t)y << 32; r[3] &= 0xffffffff00000000ull;
+    static int lg; static int ll = -1; if (ll != left && lg < 40) { ll = left; lg++; LOG("说明框停靠：物品 %s 在面板%s半 → 说明框停到%s侧空板（中线 x %d，顶 y %d；画面 %dx%d）", ci.code, left ? "左" : "右", left ? "左" : "右", cx, y, W, H); }
 }
 static int ui_touch_mode(void) { int dm_padmode_current(void), dm_padmode_busy(void); return !dm_padmode_current() && !dm_padmode_busy(); }
 // Mac App：界面是手柄版（上面答「不是触屏模式」），但真鼠标走的是触屏那套物品手势（touch_mac.c 把鼠标事件喂给触屏状态机）。
