@@ -85,6 +85,23 @@ static void hud_tick(uint64_t G) {
     { uint64_t obj = players_obj(); uint32_t pl = 0; if (obj && rd(obj + 0xc, &pl, 4)) h.players = (int)pl; }
     { module_t *m = main_mod(); uint32_t qu = 0; if (m && rd((uint64_t)m->base + 0x2d5ff58, &qu, 4)) h.quest_unread = qu; }
     dm_hud_publish(&h);
+    /* ---- 服务端拍里 P8 各模块的入口（对照 diag.c hud_tick 尾部；diag.c 在安卓不编，这些模块的每拍动作得有人调）---- */
+    module_t *mm = main_mod(); uint8_t *b = mm ? (uint8_t *)mm->base : NULL;
+    if (b) {
+        void dm_freetp_server_step(uint8_t *, uint64_t, uint64_t); if (player) dm_freetp_server_step(b, G, player);
+        void dm_elysium_stash_step(uint64_t, uint64_t, uint8_t *); if (player) dm_elysium_stash_step(G, player, b);
+        void dm_townwp_tick(uint64_t, uint64_t, uint8_t *); if (player) dm_townwp_tick(G, player, b);
+        void dm_bossrush_tick(uint64_t, uint64_t, uint8_t *); if (player) dm_bossrush_tick(G, player, b);
+        void dm_rift_tick(uint64_t, uint64_t, uint8_t *); if (player) dm_rift_tick(G, player, b);
+        void dm_pages_tick(uint64_t, uint64_t, uint8_t *); dm_pages_tick(G, player, b);   /* 个人仓库 2–5 页：翻页请求在这里消费 */
+        void dm_vault_tick(uint64_t, uint64_t, uint8_t *); dm_vault_tick(G, player, b);
+        void dm_autobuff_srv_tick(uint8_t *, uint64_t, uint64_t); if (player) dm_autobuff_srv_tick(b, G, player);
+        void dm_pouch_srv_tick(uint8_t *, uint64_t, uint64_t); dm_pouch_srv_tick(b, G, player);
+        /* 当前武器组（换组角标 Ⅱ 用）：玩家 +0x10 → 装备根 +0xf0 → +0x5a0 */
+        void dm_swapskill_srv_wset(int);
+        { uint64_t pd = 0, q = 0; uint8_t w = 0;
+          if (player && rd(player + 0x10, &pd, 8) && pd && rd(pd + 0xf0, &q, 8) && q && rd(q + 0x5a0, &w, 1)) dm_swapskill_srv_wset(w); }
+    }
 }
 static uint64_t g_last_G;
 uint64_t dm_android_hud_last_G(void) { return g_last_G; }   /* 最后一拍的游戏对象（dm_request_save 用） | the game object of the last tick (for dm_request_save) */
