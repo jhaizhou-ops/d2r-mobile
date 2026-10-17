@@ -42,9 +42,9 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->tablet=g_tall_scale; l->swap_above=g_swap_above;
     // 右拇指技能扇区：主钮在下，四个技能保持原大小并留出独立触控间隔。
     // Right-thumb skill fan: primary below, with original-size skills and separate touch gaps.
-    // 换组键在主钮右下，整组距右侧安全区至少 8 点、底边至少 24 点。
-    // The set switch is below-right of the primary; keep 8 points inside the right safe area and 24 above the bottom edge.
+    // Keep the combat fan anchored inside the side and bottom safe areas.
     float main_x=l->width-g_safe_r-86*k, main_y=l->height-88*k-fmaxf(24*k,g_safe_b+8*k);
+    if (g_tall_scale && height<340) main_y=fmaxf(main_y,190*k);
     l->target[DM_TC_MAIN]=(dm_tc_target){main_x,main_y,40*k,DM_BTN_A};
     const float dx[4]={-96,-84,-34,34},dy[4]={18,-50,-92,-92};
     const uint64_t skill[4]={DM_BTN_B,DM_BTN_X,DM_BTN_Y,DM_BTN_R};
@@ -63,16 +63,18 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     for (int i = 0; i < 5; ++i)
         l->target[DM_TC_BELT1+i] = (dm_tc_target){l->width/2+(1090+120*cell[i]-1434)*u, 1241.5f*u, 57*u, bottom[i]};
     { const dm_tc_target *s4 = &l->target[DM_TC_SKILL4]; l->target[DM_TC_PORTAL] = (dm_tc_target){s4->x, s4->y-s4->r-12*k-26*k, 26*k, 0}; }
-    // In a small iPad window, move the infrequent portal outside the fan instead of shrinking touch targets.
+    // Small tablet windows: put the portal above skill 3, clear of the top-right map control.
     if (g_tall_scale && height<340)
-        l->target[DM_TC_PORTAL]=(dm_tc_target){main_x-160*k,main_y-32*k,26*k,0};
+        l->target[DM_TC_PORTAL]=(dm_tc_target){main_x-34*k,main_y-156*k,26*k,0};
     /* 第 0 格难度与选择条：选择条 8 格同格宽、格距 120，中线对齐两球中线（效果图 1390），格心 y = 1051.5（七格之上、避开数值文字） | Cell 0 difficulty and the selector bar: the selector bar has 8 cells of the same cell width, cell pitch 120, centerline aligned with the centerline between the two orbs (mock 1390), cell center y = 1051.5 (above the seven cells, clear of the value text) */
     l->diff = (dm_tc_target){l->width/2+(1090-1434)*u, 1241.5f*u, 57*u, 0};
     for (int i = 0; i < 8; ++i) l->pick[i] = (dm_tc_target){l->width/2+(1390+(i-3.5f)*120-1434)*u, 1051.5f*u, 57*u, 0};
     l->target[DM_TC_MAP] = (dm_tc_target){l->width-30*k, 30*k, 22*k, DM_BTN_MINUS};
-    // 换组键靠近主钮，保留约 25 点触控间隔，避免频繁换组时过度伸拇指。
-    // Keep the set switch close to the primary with about 25 points of touch clearance, reducing thumb travel.
-    l->swap=(dm_tc_target){main_x+(g_swap_above?-124:56)*k,main_y+(g_swap_above?-114:66)*k,22*k,0};
+    // Default: continue the portal's outer arc to its left, preserving the radius around the primary.
+    const dm_tc_target *portal=&l->target[DM_TC_PORTAL];
+    float px=portal->x-main_x,py=portal->y-main_y,cs=cosf(.46f),sn=sinf(.46f);
+    l->swap=(dm_tc_target){main_x+px*cs+py*sn,main_y-px*sn+py*cs,22*k,0};
+    if (g_swap_above) l->swap=(dm_tc_target){main_x-124*k,main_y-114*k,22*k,0};
     /* 底栏外侧是血 / 蓝球；球不是输入目标。 | Outside the bottom bar are the life / mana orbs; the orbs are not input targets. */
     /* 左摇杆是浮动底盘：左下「起摇杆区」里手指落在哪，底盘圆心就落在哪，松手回静止位。
        静止位：圆心离安全区左界 90（底盘半径 60 + 30）、不小于 120，离屏幕底 115——只是没按时画在哪。

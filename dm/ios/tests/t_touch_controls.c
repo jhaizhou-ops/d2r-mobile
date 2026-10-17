@@ -469,10 +469,9 @@ static void safe_insets(void) {
 }
 static void swap_key(void) {
     dm_tc_layout l;dm_tc_layout_make(&l,956,440);
-    NEAR(l.swap.r,22,.001);CHECK(l.swap.x>l.target[DM_TC_MAIN].x);
-    CHECK(l.swap.y>l.target[DM_TC_MAIN].y);
+    NEAR(l.swap.r,22,.001);CHECK(l.swap.x<l.target[DM_TC_PORTAL].x);
     float travel=hypotf(l.swap.x-l.target[DM_TC_MAIN].x,l.swap.y-l.target[DM_TC_MAIN].y);
-    CHECK(travel<=90);CHECK(travel>=l.swap.r+l.target[DM_TC_MAIN].r+24);
+    NEAR(travel,hypotf(l.target[DM_TC_PORTAL].x-l.target[DM_TC_MAIN].x,l.target[DM_TC_PORTAL].y-l.target[DM_TC_MAIN].y),.001);
     CHECK(dm_tc_hit(&l,l.swap.x,l.swap.y)==DM_TC_SWAP);
     // 两键间的空隙不属于任何按钮；从攻击键滑入换组键也不会切组。
     // The gap belongs to neither button; dragging an attack touch onto the switch does not switch sets.
@@ -501,6 +500,11 @@ static void skill_cluster_clearance(void) {
         dm_tc_set_safe_insets(sizes[n][2],sizes[n][3]);dm_tc_layout l;dm_tc_layout_make(&l,w,h);
         float k=dm_tc_scale_for_size(w,h);dm_tc_target group[7];
         CHECK(k<=1.15f);CHECK(l.tablet==(int)sizes[n][5]);CHECK(l.swap_above==above);
+        if (!above) {
+            CHECK(l.swap.x<l.target[DM_TC_PORTAL].x);
+            dm_tc_target main=l.target[0],portal=l.target[DM_TC_PORTAL];
+            NEAR(hypotf(l.swap.x-main.x,l.swap.y-main.y),hypotf(portal.x-main.x,portal.y-main.y),.001);
+        }
         for(int i=0;i<6;i++)group[i]=l.target[i];group[6]=l.swap;
         for(int i=0;i<7;i++) {
             dm_tc_target t=group[i];CHECK(t.x-t.r>=sizes[n][2]);CHECK(t.x+t.r<=w-sizes[n][3]);
@@ -510,6 +514,8 @@ static void skill_cluster_clearance(void) {
             for(int j=DM_TC_BELT1;j<=DM_TC_MENU;j++) {
                 dm_tc_target bar=l.target[j];CHECK(hypotf(t.x-bar.x,t.y-bar.y)>t.r+bar.r+8*k);
             }
+            dm_tc_target map=l.target[DM_TC_MAP];
+            CHECK(hypotf(t.x-map.x,t.y-map.y)>=t.r+map.r+12*k-.001f);
             CHECK(dm_tc_hit(&l,t.x,t.y)==(i==6?DM_TC_SWAP:i));
         }
     }

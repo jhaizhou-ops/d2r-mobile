@@ -149,7 +149,7 @@ void dm_tc_set_edge_bottom(float bottom);   /* 屏幕底边归系统的那一条
 void dm_tc_layout_make(dm_tc_layout *layout, float width, float height);
 int dm_tc_hit(const dm_tc_layout *layout, float x, float y);
 #define DM_TC_POINTER_LIFT_PT 40.0f   // 功能页拖动时物品抬在手指上方的点数（× 控件缩放） | Number of points the item is lifted above the finger while dragging on function pages (× widget scale)
-void dm_tc_set_swap_above(int above);   // 0: near primary, 1: above skill fan; call resize after changing.
+void dm_tc_set_swap_above(int above);   // 0: left of portal on outer arc, 1: above skill fan; call resize after changing.
 void dm_tc_set_safe_bottom(float bottom);
 void dm_tc_set_tall_scale(int on);   // Tablet scale opt-in, capped at 1.15; off for Mac pixel replay.
 float dm_tc_scale_for_size(float width, float height);   // Point-based control scale; independent of tablet height.

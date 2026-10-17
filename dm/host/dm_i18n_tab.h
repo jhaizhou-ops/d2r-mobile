@@ -373,8 +373,8 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmTcNavBind", "绑定", "Bind" },
     { "dmTcNavNext", "下一页", "Next Page" },
     { "dmCustomTouchSwapAbove", "换组键位置", "Skill-set switch position" },
-    { "dmCustomTouchSwapNear", "换组键：攻击键附近", "Skill-set switch: near attack" },
-    { "dmCustomTouchSwapNearHint", "位于主攻击键右下，松手后切换", "Below-right of attack; release to switch" },
+    { "dmCustomTouchSwapNear", "换组键：传送门左侧", "Skill-set switch: left of portal" },
+    { "dmCustomTouchSwapNearHint", "沿传送门外侧弧线排布，松手后切换", "On the portal arc; release to switch" },
     { "dmCustomTouchSwapFar", "换组键：技能区上方", "Skill-set switch: above skills" },
     { "dmCustomTouchSwapFarHint", "位于技能区左上，松手后切换", "Above-left of skills; release to switch" },
 };
