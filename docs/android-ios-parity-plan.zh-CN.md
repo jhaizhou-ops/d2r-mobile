@@ -62,18 +62,26 @@
 
 ## 2. 分阶段实施方案（每阶段独立可上机验收）
 
-### P0 · 模块换成 touch 产物（立刻可做，一晚量级）
-- **动作**：用本树改写器按 `touch` 档重出模块：
-  `env DM_RULESET=touch-run-v4 python3 dm/tools/patch_nso.py <ExeFS>/main <out> main`（sdk/subsdk0 同）。
-  产物类别三选一见 `dm/tools/product.sh`：`keypage=原生`、`rules=触屏规则不带私有门`、
-  `touch=触屏规则+私有门`——**我们要的是 `touch`**。
-- **内容**：三条跑步补丁 + 触屏瞄准门 svc86 + 私有观测门 6–22（技能绑定读取、选怪排名、
-  真全屏投影、提示框/说明框、世界冻结、文本控件等，patch_nso.py:738-755）。
-- **宿主侧先核对**（不做接线也能安全跑："宿主未挂回调时门块进出一次即返回"）：
-  svc85/86 的宿主分发在 Android 构建里存在且行为对（hle.h SVC_HOST_* ↔ hle_svc.c 逐项）。
-- **验收**：旧模块备份保持可回滚；启动/进局/画面与现在一致（截图对拍）；**跑步出现**；
-  精力耗尽不再降走；瞄门打开的日志无红行。
-- **风险**：touch 规则里还有其它行为差（瞄准方式改变、技能渲染门）——逐条看日志、按需关。
+### P0 · 模块换成 touch 产物 + 宿主 svc_host_call（**已在本机实际试通**）
+- **本地实测（2026-10-17）**：用本树改写器 `DM_RULESET=touch-run-v4` 重出 main/sdk/subsdk0 **成功**：
+  - main：**48 条切点 / 21 个观测门**（现在设备模块：13 条 / 5 个）；sdk/subsdk0：0 切点（与现有一致）；
+  - 产物已存 `/home/vick/dm-work/build/modules-touch-r44/`（r44 = `dm/PRODUCT` 当前号）；
+  - **跑步补丁是纯指令切点**（`main.cuts.tsv:32-47`：RunOn/RunOff 分支与编码位改写、
+    "仅player0 忽略精力门 / 跳 stat10 扣除与耗尽降走"）——**不需要宿主参与，换模块即生效**。
+- **宿主侧必做（本次发现的关键风险）**：Android 的 `svc_host_call` 现在是 **die 桩**
+  （`dm/android/diagnostics.c:224`：任何 0x8x 宿主调用直接 `die`）。触屏产物新增的
+  "仅宿主"切点都走 svc 0x80-0x8e（`main.cuts.tsv:8-24/41-42`），必须先补真分发：
+  - **0x80 TACT zlib** → 用 libdeflate 实现（vendor 在 `dm/third_party/libdeflate`，
+    照 `dm/host/hle_tact.c` 编解压相关 5 个源；Android CMake 加一行）；
+  - **0x85/0x86 技能渲染门 / 技能瞄准门** → 照 `hle_tact.c:274+` 移植（aim 参数表随产物
+    给出：`main.aim.tsv`，ORIGINAL_CALLEE=0x2b4ef8、SVC=0x86）；
+  - **其余（0x81/82/83/84/87/88/89/8a/8b…）→ "原样代调"**（每条要代的 original 目标就写在
+    `main.cuts.tsv` 描述里，宿主以原参数调用它并回填返回）+ 审计日志；
+    后续要哪项功能（掉落光/掉落提示音/进局落小站/秘境退出重定向）再逐个把变换接上。
+- **验收**：① 跑步出现（精力槽不再扣、耗尽不降走）；② 日志里 svc 0x8x 无 die、行为与
+  现在一致（对拍截图）；③ 旧模块保留备份（现有 `modules.bak-r40-20261016` 同款做法）。
+- **部署步骤**：重出模块 → 替换 `dodola-data/modules/` → 重打 APK（module-manifest 的
+  尺寸/SHA 会变，游戏首启自动换新模块）→ 装机验收。
 
 ### P1 · UI 消息总线 + 状态机（对应"删除菜单模式"的自动态）
 - **动作**：新文件 `dm/android/ui_state_android.c`：① 移植 `diag.c` 的 UIMSG 部分
