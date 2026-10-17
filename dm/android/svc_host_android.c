@@ -71,8 +71,8 @@ static uint32_t tact_decode_zlib(uint64_t *r) {
 
 // ---- 0x85：私有渲染门（触屏模式不画原版技能格图标）。弱符号：绑定桥（后续阶段）提供强实现后自动覆盖 ----
 // 0x85: private render gate (hide the game's own skill-slot glyphs in touch mode). Weak: the binding bridge (later phase) overrides.
-__attribute__((weak)) int dm_touch_game_hide_own_glyph(uint64_t widget) { (void)widget; return 0; }
 __attribute__((weak)) int dm_padmode_current(void) { return 0; }   // 0 = 触屏模式（P4 接真 padmode 前恒触屏）：启用 dm_cursor 的触屏泵（世界点按/长按/使用/拖放/绑定）；渲染门仍安全（hide_own_glyph 弱实现=0 → 照画原图标）
+int dm_touch_game_hide_own_glyph(uint64_t widget);   /* 真实现在 hud_read_android.c */
 static uint64_t svc_private_skill_render(uint64_t *regs) {
     regs[8] = !dm_padmode_current() && dm_touch_game_hide_own_glyph(regs[19]) ? 1 : 0;
     return 1;

@@ -29,7 +29,7 @@ add_library(dm_android_core OBJECT
   ${DM_HOST}/hle_swkbd.c keyboard_android.c
   services_fs.c services_fs_probe.c services_platform.c diagnostics.c svc_host_android.c ui_state_android.c feature_stubs_android.c
   ${DM_HOST}/dm_cursor.c ${DM_HOST}/dm_cursor_item.c ${DM_HOST}/dm_actions.c ${DM_HOST}/dm_world.c ${DM_HOST}/dm_hud.c ${DM_HOST}/dm_uiscreen.c
-  ${DM_HOST}/dm_padmode.c commoncrypto_shim.c)
+  ${DM_HOST}/dm_padmode.c commoncrypto_shim.c hud_read_android.c)
 # 第三方：libdeflate 只编解压相关源（TACT BLTE zlib 块，svc_host_android.c 用）；代码不动，单独放松告警
 # Third party: only the decompression-related sources of libdeflate (TACT BLTE zlib blocks, used by svc_host_android.c); the code is untouched, warnings relaxed in a separate object library
 add_library(dm_libdeflate OBJECT
@@ -38,7 +38,7 @@ add_library(dm_libdeflate OBJECT
 target_compile_options(dm_libdeflate PRIVATE -w)
 target_compile_definitions(dm_libdeflate PRIVATE _GNU_SOURCE)
 set_target_properties(dm_libdeflate PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(dm_android_core PUBLIC ${DM_HOST} .)
+target_include_directories(dm_android_core PUBLIC ${DM_HOST} . PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_compile_features(dm_android_core PUBLIC c_std_11)
 # Upstream's Darwin uint64 format specifiers have the same 64-bit ABI on Bionic.
 # Keep that source difference separate from actual width/ABI validation.

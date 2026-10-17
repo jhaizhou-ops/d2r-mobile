@@ -1,6 +1,8 @@
 package org.d2r.binaryprobe;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -14,7 +16,12 @@ import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.accessibility.AccessibilityEvent;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.util.HashMap;
 import java.util.function.BooleanSupplier;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /** Android rendering/events only; hit testing and gestures belong to upstream C.
  *  The visual language mirrors the iOS overlay (dm/ios/Sources/DmTouchOverlay.m):
@@ -28,6 +35,7 @@ public final class TouchControlsView extends View {
     private static native float[] nativeFrame();
     private static native void nativeActivate(int target);
     static native int nativeFrontend();   // 1 = 局外（前端页面：主菜单/选角/加载）——覆盖层隐藏 | 1 = front-end page: overlay hidden
+    private static native float[] nativeHud();   // P3 底栏 v4 数据：{valid,hp,hp_max,mp,mp_max,level,exp‰,belt0..3,players,quest,points,dead,portal,panel_mode,frontend}
     // Canonical Android touch-layer tokens, mirrored in DESIGN.md and in the iOS overlay palette.
     static final int INK=0xff16110c, RIM=0xff997845, RIM_DARK=0xff1f170d, TEXT=0xffd9c9a6;
     private static final int KNOB_RING=0xffb08e4e, STAR=0xffc8a460, STAR_CORE=0xffecd696;
@@ -40,6 +48,11 @@ public final class TouchControlsView extends View {
     private boolean active;
     private int accessibilityFocus=View.NO_ID;
     private final float density;
+    // ===== P3 底栏 v4（一比一照 iOS DmTouchOverlay.m drawV4：底图原生分辨率直贴、腰带格挖空透游戏药水、球心挖空透球液）=====
+    private final Paint v4paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
+    private final RectF v4dst=new RectF();
+    private final HashMap<String,Bitmap> v4imgs=new HashMap<>();
+    private JSONObject v4cache;private boolean v4tried;private boolean v4on;   // 底栏 v4 是否在屏（腰带四格 + 十字由底栏画，这几格只留命中区 = iOS 口径）
     public TouchControlsView(Context context,BooleanSupplier ready){super(context);this.ready=ready;density=getResources().getDisplayMetrics().density;
         paint.setTypeface(Typeface.SERIF);
         setContentDescription("触摸操控：左侧摇杆移动，右侧技能按钮拖动瞄准，底部药水");setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);setVisibility(GONE);}
@@ -65,9 +78,89 @@ public final class TouchControlsView extends View {
     private void utilityButton(Canvas c,float x,float y,float r,boolean pressed){float lw=Math.max(1.2f,r*.06f);
         disc(c,x,y,r,INK,(int)(255*(pressed?.62f:.30f)));
         ring(c,x,y,r-lw/2,lw,RIM,(int)(255*(pressed?.68f:.34f)));}
+    private float X(float px,float W,float u){return (px-1434)*u+W/2;}
+    private JSONObject v4ui(){if(v4tried)return v4cache;v4tried=true;
+        try(InputStream in=getContext().getAssets().open("hud_v4_ui/ui.json")){
+            ByteArrayOutputStream bo=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;
+            while((n=in.read(b))>0)bo.write(b,0,n);
+            v4cache=new JSONObject(new String(bo.toByteArray(),"UTF-8"));}
+        catch(Exception e){v4cache=null;android.util.Log.w("dm_v4","ui.json 读不到",e);}   // 没有素材就整块不画（不崩、不挡画面）
+        return v4cache;}
+    private Bitmap v4img(String name){if(v4imgs.containsKey(name))return v4imgs.get(name);
+        Bitmap b=null;
+        try(InputStream in=getContext().getAssets().open("hud_v4_ui/"+name)){b=BitmapFactory.decodeStream(in);}catch(Exception e){b=null;}
+        v4imgs.put(name,b);return b;}
+    private static int rgb(JSONArray a)throws org.json.JSONException{return 0xff000000|((int)a.getDouble(0)<<16)|((int)a.getDouble(1)<<8)|(int)a.getDouble(2);}
+    // 预渲染字形拼字（iOS v4text 同口径：adv 累加排布、缺字跳过不占宽、align 0=居中 1=右对齐）
+    private void v4text(Canvas c,String s,JSONObject glyphs,float x,float baseline,int align,float W,float u){
+        float adv=0;for(int i=0;i<s.length();i++){JSONObject g=glyphs.optJSONObject(s.substring(i,i+1));if(g!=null)adv+=(float)g.optDouble("adv",0);}
+        float pen=align==1?x-adv:x-adv/2;
+        for(int i=0;i<s.length();i++){JSONObject g=glyphs.optJSONObject(s.substring(i,i+1));if(g==null)continue;
+            Bitmap b=v4img(g.optString("file"));
+            if(b!=null){float gx=(pen+(float)g.optDouble("dx",0)-1434)*u+W/2,gy=(baseline+(float)g.optDouble("dy",0))*u;
+                v4dst.set(gx,gy,gx+b.getWidth()*u,gy+b.getHeight()*u);v4paint.setAlpha(255);c.drawBitmap(b,null,v4dst,v4paint);}
+            pen+=(float)g.optDouble("adv",0);}}
+    private void drawV4(Canvas c){
+        JSONObject ui=v4ui();if(ui==null)return;
+        float[] hud=nativeHud();if(hud==null||hud.length<18)return;
+        boolean valid=hud[0]>0,dead=hud[14]>0,panel=hud[16]>0,front=hud[17]>0;
+        if(!valid||dead||panel||front){v4on=false;return;}   // 只在局内常态显示（面板/死亡/前端让开）
+        v4on=true;
+        float W=getWidth()/density;if(W<=0)return;
+        float u=(getHeight()/density)/1320f;if(u<=0)return;
+        try{
+            JSONObject bo=ui.getJSONObject("base");Bitmap full=v4img("base_full.png");
+            if(full!=null){float bx=X((float)bo.getDouble("x"),W,u),by=(float)bo.getDouble("y")*u;
+                v4dst.set(bx,by,bx+full.getWidth()*u,by+full.getHeight()*u);v4paint.setAlpha(255);c.drawBitmap(full,null,v4dst,v4paint);}
+            JSONArray slots=ui.getJSONArray("slots"),s6=slots.getJSONArray(5);
+            boolean held=frame!=null&&frame[44+10]>0;
+            boolean alert=hud[13]>0||hud[12]>0;
+            Bitmap btn=v4img(alert?(held?"lvl_1.png":"lvl_0.png"):(held?"lvl_d1.png":"lvl_d0.png"));
+            float x5=(float)s6.getDouble(0),y5=(float)s6.getDouble(1);
+            float w5=((float)s6.getDouble(2)-x5)*u,h5=((float)s6.getDouble(3)-y5)*u;
+            float cx5=X(x5,W,u),cy5=y5*u;
+            JSONArray in5=ui.getJSONArray("inner");   // 十字格内区先压不透明底（lvl_*.png 自身半透明，会让游戏层那行标签透上来；iOS 那边是靠藏控件）
+            paint.setStyle(Paint.Style.FILL);paint.setColor(0xff2d261a);paint.setAlpha(255);
+            c.drawRect(cx5+(float)in5.getDouble(0)*u,cy5+(float)in5.getDouble(1)*u,
+                cx5+(float)in5.getDouble(2)*u,cy5+(float)in5.getDouble(3)*u,paint);
+            if(btn!=null){if(hud[13]>0){paint.setStyle(Paint.Style.STROKE);paint.setColor(0xffffd15a);   // 有点可加：金色外闪光（iOS shadow 10u 的近似）
+                    for(int k=3;k>=1;k--){paint.setStrokeWidth(2.6f*u*k);paint.setAlpha(16+10*(3-k));c.drawRoundRect(cx5-2*u,cy5-2*u,cx5+w5+2*u,cy5+h5+2*u,8*u,8*u,paint);}}
+                v4dst.set(cx5,cy5,cx5+w5,cy5+h5);v4paint.setAlpha(255);c.drawBitmap(btn,null,v4dst,v4paint);}
+            JSONObject e=ui.getJSONObject("exp");
+            float x0=(float)e.getDouble("x0"),x1=(float)e.getDouble("x1"),ey0=(float)e.getDouble("y"),eh=(float)e.getDouble("h");
+            int track=rgb(e.getJSONArray("track")),edge=rgb(e.getJSONArray("edge")),fill=rgb(e.getJSONArray("fill"));
+            paint.setStyle(Paint.Style.FILL);paint.setColor(track);paint.setAlpha(255);
+            c.drawRect(X(x0,W,u),ey0*u,X(x1,W,u),(ey0+eh)*u,paint);
+            paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(u);paint.setColor(edge);
+            c.drawRect(X(x0,W,u)+u/2,ey0*u+u/2,X(x1,W,u)-u/2,(ey0+eh)*u-u/2,paint);
+            paint.setStyle(Paint.Style.FILL);paint.setColor(fill);
+            float perm=Math.max(0,Math.min(1000,hud[6]));
+            c.drawRect(X(x0+1,W,u),(ey0+1)*u,X(x0+1,W,u)+(x1-x0-2)*u*perm/1000f,(ey0+eh-1)*u,paint);
+            int ticks=(int)e.optDouble("ticks",20);paint.setColor(track);
+            for(int t=1;t<ticks;t++){float tx=X(x0+Math.round((x1-x0)*t/(double)ticks),W,u);c.drawRect(tx,(ey0+1)*u,tx+u,(ey0+eh-1)*u,paint);}
+            JSONObject vt=ui.getJSONObject("vital"),vg=vt.getJSONObject("glyphs");
+            v4text(c,String.format(java.util.Locale.ROOT,"生命: %d / %d",(int)hud[1],(int)hud[2]),vg,(float)vt.getDouble("left_x"),(float)vt.getDouble("baseline"),0,W,u);
+            v4text(c,String.format(java.util.Locale.ROOT,"法力: %d / %d",(int)hud[3],(int)hud[4]),vg,(float)vt.getDouble("right_x"),(float)vt.getDouble("baseline"),0,W,u);
+            JSONObject lv=ui.getJSONObject("lv");
+            v4text(c,String.format(java.util.Locale.ROOT,"Lv %d · %d%%",(int)hud[5],(int)(hud[6]/10)),lv.getJSONObject("glyphs"),(float)lv.getDouble("x"),(float)lv.getDouble("baseline"),0,W,u);
+            JSONObject bd=ui.getJSONObject("badge");JSONArray in=ui.getJSONArray("inner");
+            float inx=(float)in.getDouble(2),iny=(float)in.getDouble(3);
+            for(int i=1;i<=4;i++){int n=(int)hud[6+i];if(n<=0)continue;
+                float bx=(float)slots.getJSONArray(i).getDouble(0)+inx+(float)bd.getDouble("dx");
+                float by=(float)slots.getJSONArray(i).getDouble(1)+iny+(float)bd.getDouble("dy");
+                v4text(c,Integer.toString(n),bd.getJSONObject("glyphs"),bx,by,1,W,u);}
+            int players=(int)hud[11];
+            if(players>=1&&players<=8){Bitmap d=v4img("diff_"+players+".png");
+                float icx=((float)in.getDouble(0)+inx+1)/2,icy=((float)in.getDouble(1)+iny+1)/2;
+                float dcx=(float)slots.getJSONArray(0).getDouble(0)+icx,dcy=(float)slots.getJSONArray(0).getDouble(1)+icy;
+                if(d!=null){float dx=X(dcx,W,u),dy=dcy*u;v4dst.set(dx-d.getWidth()*u/2,dy-d.getHeight()*u/2,dx+d.getWidth()*u/2,dy+d.getHeight()*u/2);v4paint.setAlpha(255);c.drawBitmap(d,null,v4dst,v4paint);}}
+        }catch(Exception ignored){}
+    }
     @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);if(!active)return;frame=nativeFrame();if(frame==null||frame.length!=58)return;
         canvas.save();canvas.scale(density,density);
-        for(int i=0;i<12;i++){float x=frame[i*3],y=frame[i*3+1],r=frame[i*3+2];if(r<=0)continue;boolean pressed=frame[44+i]>0;
+        drawV4(canvas);   // 底栏 v4：垫在圆钮之下
+        for(int i=0;i<12;i++){if(v4on&&i>=6&&i<=10)continue;   // 腰带1-4 + 十字：底栏 v4 画，这几格只留命中区
+            float x=frame[i*3],y=frame[i*3+1],r=frame[i*3+2];if(r<=0)continue;boolean pressed=frame[44+i]>0;
             if(i<=5){actionButton(canvas,x,y,r,pressed);caption(canvas,x,y,Math.max(11,r*(i==0?.30f:.40f)),LABELS[i],(int)(255*(pressed?1:.84f)));}
             else if(i>=6&&i<=9){utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y+r*.42f,Math.max(8,r*.40f),Integer.toString(i-5),(int)(255*(pressed?.95f:.68f)));}
             else{utilityButton(canvas,x,y,r,pressed);caption(canvas,x,y,Math.max(8,r*.38f),LABELS[i],(int)(255*(pressed?.95f:.68f)));}}

@@ -18,8 +18,10 @@ AAPT2="$BT/aapt2"; D8="$BT/d8"; ZIPALIGN="$BT/zipalign"; APKSIGNER="$BT/apksigne
 
 rm -rf "$OUT"; mkdir -p "$OUT"/{classes,dex,gen,assets/modules,stage/lib/arm64-v8a}
 
-# 1) assets: 模块 + 清单
+# 1) assets: 模块 + 清单 + 底栏 v4 素材（gen_assets 产物）
 python3 "$SRC/dm/android/tools/gen_module_manifest.py" "$MODULES" "$OUT/assets"
+V4=${DM_HUD_V4_DIR:-$SRC/dm/ios/Gen/assets/NativeHUD/v4/hud_v4_ui}
+[ -d "$V4" ] && { mkdir -p "$OUT/assets/hud_v4_ui"; cp "$V4"/* "$OUT/assets/hud_v4_ui/"; echo "hud_v4_ui: $(ls "$OUT/assets/hud_v4_ui" | wc -l) 个文件"; } || echo "警告：没有 hud_v4_ui 素材，底栏 v4 不画"
 
 # 2) 清单 + 资源链接
 "$AAPT2" link -o "$OUT/base.apk" -I "$PLATFORM_JAR" \

@@ -4,6 +4,7 @@
 #include "input_backend.h"
 #include "ui_state_android.h"
 #include "../host/dm_cursor.h"
+#include "../host/dm_hud.h"
 #include "../host/dm.h"
 #include <jni.h>
 #include <errno.h>
@@ -191,4 +192,13 @@ JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeActivate
 /* Java 侧轮询：局外（前端页面）返回 1——覆盖层隐藏、触摸直通游戏（对齐 iOS：局外 overlay.hidden=YES）。 */
 JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeFrontend(JNIEnv *env,jclass cls) {
     (void)env;(void)cls;pthread_mutex_lock(&lock);apply_ui_locked();int fe=dm_android_ui_frontend();pthread_mutex_unlock(&lock);return fe;
+}
+
+/* P3：底栏 v4 数据（Java 每帧拿）：{valid,hp,hp_max,mp,mp_max,level,exp‰,belt0..3,players,quest,points,dead,portal,panel_mode,frontend} */
+JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeHud(JNIEnv *env,jclass cls) {
+    (void)cls;dm_hud_info h;dm_hud_get(&h);
+    jfloat d[18]={h.valid?1.f:0.f,(float)h.hp,(float)h.hp_max,(float)h.mp,(float)h.mp_max,(float)h.level,(float)h.exp_permille,
+                  (float)h.belt[0],(float)h.belt[1],(float)h.belt[2],(float)h.belt[3],(float)h.players,(float)h.quest_unread,(float)h.points,
+                  h.dead?1.f:0.f,(float)h.portal,(float)dm_android_ui_panel_mode(),(float)dm_android_ui_frontend()};
+    jfloatArray out=(*env)->NewFloatArray(env,18);if(out)(*env)->SetFloatArrayRegion(env,out,0,18,d);return out;
 }

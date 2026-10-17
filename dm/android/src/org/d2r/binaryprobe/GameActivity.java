@@ -27,13 +27,13 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     static { System.loadLibrary("d2r_mobile_android"); }
     private static native int nativeConfigure(String files, String locale,boolean touchRoute);
     private static native int nativeTouch(int[] ids,float[] xs,float[] ys,boolean cancelled);
-    private static native int nativeActions(long buttons,int lx,int ly,int rx,int ry);
     private static native int nativeSurface(Surface surface,int width,int height,float density,float hz,int focus);
     private static native int nativeStart();
     private static native String nativeStatus();
     private static native String nativeKeyboardRequest();
     private static native void nativeKeyboardResult(long id,boolean accepted,String text);
     private static native void nativeKeyboardReady(boolean ready);
+    private static native int nativeActions(long buttons,int lx,int ly,int rx,int ry);   // 释放所有按住的键（开文本框/退到后台时清手）| release every held key (when the text keyboard opens / the app goes to background)
     private android.app.AlertDialog keyboardDialog;
     private long keyboardId;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -45,11 +45,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private SurfaceView game;
     private TextView status;
     private TouchControlsView touchControls;
-    private final java.util.ArrayList<View> menuControls=new java.util.ArrayList<>();
     private boolean prepared, configured, surfaceReady, launched, resumed, failed;
-    private boolean combatWanted, overlayOn;   // 战斗模式意图 / 覆盖层当前是否在屏（局外自动隐藏 = iOS 模型） | combat intent / overlay actually shown (auto-hidden on front-end pages)
+    private boolean overlayOn;   // 覆盖层当前是否在屏：局内一直在，局外/前端页面自动隐藏 = iOS 模型（不再有「菜单模式」这层） | overlay on screen: always in a run, auto-hidden on front-end pages = the iOS model (no separate "menu mode" any more)
     private int width,height;
-    private long actionButtons;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         surfaceThread.start();surfaceWorker=new Handler(surfaceThread.getLooper());
@@ -72,21 +70,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             if(rc!=0)fail("触摸输入不可用",new Exception("错误 "+rc));return true;
         });
         root.addView(game,new FrameLayout.LayoutParams(-1,-1));
-        addAction(root,"确认",1,Gravity.RIGHT|Gravity.BOTTOM,18,18);
-        addAction(root,"返回",2,Gravity.RIGHT|Gravity.BOTTOM,104,18);
-        addAction(root,"开始",1L<<10,Gravity.RIGHT|Gravity.TOP,18,18);
-        addAction(root,"↑",1L<<13,Gravity.LEFT|Gravity.BOTTOM,92,92);
-        addAction(root,"↓",1L<<15,Gravity.LEFT|Gravity.BOTTOM,92,18);
-        addAction(root,"←",1L<<12,Gravity.LEFT|Gravity.BOTTOM,18,55);
-        addAction(root,"→",1L<<14,Gravity.LEFT|Gravity.BOTTOM,166,55);
         touchControls=new TouchControlsView(this,() -> inputReady&&resumed&&!failed);
         root.addView(touchControls,new FrameLayout.LayoutParams(-1,-1));
-        TextView mode=new TextView(this);mode.setText("战斗操控");mode.setTextColor(TouchControlsView.TEXT);mode.setTextSize(16);
-        mode.setGravity(Gravity.CENTER);mode.setBackground(buttonBackground());mode.setContentDescription("切换到战斗触摸操控");mode.setClickable(true);mode.setFocusable(true);
-        FrameLayout.LayoutParams modeParams=new FrameLayout.LayoutParams(dp(100),dp(48),Gravity.LEFT|Gravity.TOP);modeParams.leftMargin=dp(18);modeParams.topMargin=dp(18);
-        mode.setOnClickListener(v -> {combatWanted=!combatWanted;actionButtons=0;if(inputReady)nativeActions(0,0,0,0,0);syncOverlay();
-            mode.setText(combatWanted?"菜单操控":"战斗操控");mode.setContentDescription(combatWanted?"切换到菜单操控":"切换到战斗触摸操控");});
-        root.addView(mode,modeParams);
         status=new TextView(this);status.setTextColor(0xffe9d9ba);status.setTextSize(18);
         status.setGravity(Gravity.CENTER);status.setBackgroundColor(0xe60d0d0f);
         status.setPadding(dp(28),dp(18),dp(28),dp(18));status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -97,31 +82,12 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         },"game-files").start();
     }
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
-    /* 覆盖层显隐：战斗模式意图 && 已就绪 && 局内（nativeFrontend()==0）——局外/前端页面自动让开，对齐 iOS。
-     * Overlay visibility: combat intent && input ready && in a run (nativeFrontend()==0); front-end pages hide it, like iOS. */
+    /* 覆盖层显隐：已就绪 && 局内（nativeFrontend()==0）——局外/前端页面自动让开，对齐 iOS（iOS 无模式切换，屏上也没有那组方向/确认/返回钮）。
+     * Overlay visibility: input ready && in a run (nativeFrontend()==0); front-end pages hide it, like iOS (iOS has no mode switch and none of those arrow / confirm / back buttons). */
     private void syncOverlay(){
         if(touchControls==null)return;
-        boolean want=combatWanted&&inputReady&&!failed&&TouchControlsView.nativeFrontend()==0;
-        if(want!=overlayOn){overlayOn=want;touchControls.setActive(want);for(View control:menuControls)control.setVisibility(want?View.GONE:View.VISIBLE);}
-    }
-    private android.graphics.drawable.Drawable buttonBackground(){
-        android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();
-        shape.setColor(0xb316100c);shape.setCornerRadius(dp(14));
-        shape.setStroke(Math.max(1,(int)getResources().getDisplayMetrics().density),0x80997845);
-        return shape;
-    }
-    private void addAction(FrameLayout root,String label,long mask,int gravity,int horizontal,int vertical){
-        TextView button=new TextView(this);button.setText(label);button.setContentDescription(label);button.setTextColor(TouchControlsView.TEXT);
-        button.setGravity(Gravity.CENTER);button.setTextSize(17);button.setBackground(buttonBackground());
-        FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(68),dp(58),gravity);
-        if((gravity&Gravity.RIGHT)==Gravity.RIGHT)p.rightMargin=dp(horizontal);else p.leftMargin=dp(horizontal);
-        if((gravity&Gravity.BOTTOM)==Gravity.BOTTOM)p.bottomMargin=dp(vertical);else p.topMargin=dp(vertical);
-        button.setOnTouchListener((v,e)->{if(!configured||!surfaceReady||!inputReady)return true;
-            int a=e.getActionMasked();if(a==MotionEvent.ACTION_DOWN)actionButtons|=mask;
-            else if(a==MotionEvent.ACTION_UP||a==MotionEvent.ACTION_CANCEL)actionButtons&=~mask;
-            int rc=nativeActions(actionButtons,0,0,0,0);if(rc!=0)fail("操作输入不可用",new Exception("错误 "+rc));return true;});
-        root.addView(button,p);
-        menuControls.add(button);
+        boolean want=inputReady&&!failed&&TouchControlsView.nativeFrontend()==0;
+        if(want!=overlayOn){overlayOn=want;touchControls.setActive(want);}
     }
     private static String digest(File file)throws Exception {
         MessageDigest md=MessageDigest.getInstance("SHA-256");byte[] bytes=new byte[65536];
@@ -194,12 +160,12 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         try{String raw=nativeStatus();JSONObject s=new JSONObject(raw);
             if(s.getLong("presented_frames")>0)status.setVisibility(View.GONE);else status.setText(s.getString("phase"));
             String request=nativeKeyboardRequest();if(request!=null&&resumed&&!destroyed){JSONObject k=new JSONObject(request);long id=k.getLong("id");
-                if(keyboardDialog==null||keyboardId!=id){if(keyboardDialog!=null)keyboardDialog.dismiss();keyboardId=id;actionButtons=0;nativeActions(0,0,0,0,0);touchControls.cancel();
+                if(keyboardDialog==null||keyboardId!=id){if(keyboardDialog!=null)keyboardDialog.dismiss();keyboardId=id;nativeActions(0,0,0,0,0);touchControls.cancel();
                     keyboardDialog=ShellTextInputDialog.show(GameActivity.this,k.getString("title"),k.getString("subtitle"),k.getString("hint"),k.getString("initial"),k.getInt("min"),k.getInt("max"),(ok,text)->{nativeKeyboardResult(id,ok,text);keyboardDialog=null;});}}
         }catch(Exception e){fail("无法读取游戏状态",e);}syncOverlay();ui.postDelayed(this,250);
     }};
     @Override public void onResume(){super.onResume();resumed=true;nativeKeyboardReady(true);configureAndStart();}
-    @Override public void onPause(){nativeKeyboardReady(false);if(keyboardDialog!=null){keyboardDialog.dismiss();keyboardDialog=null;}resumed=false;inputReady=false;actionButtons=0;if(touchControls!=null)touchControls.cancel();if(configured)nativeActions(0,0,0,0,0);if(configured&&surfaceReady)publishSurface();syncOverlay();super.onPause();}
+    @Override public void onPause(){nativeKeyboardReady(false);if(keyboardDialog!=null){keyboardDialog.dismiss();keyboardDialog=null;}resumed=false;inputReady=false;if(touchControls!=null)touchControls.cancel();if(configured)nativeActions(0,0,0,0,0);if(configured&&surfaceReady)publishSurface();syncOverlay();super.onPause();}
     @Override public void surfaceCreated(SurfaceHolder holder){if(!destroyed)surfaceReady=true;}
     @Override public void surfaceChanged(SurfaceHolder holder,int format,int w,int h){if(destroyed)return;width=w;height=h;surfaceReady=true;configureAndStart();}
     @Override public void surfaceDestroyed(SurfaceHolder holder){if(destroyed)return;surfaceReady=false;if(configured)publishSurface();}
