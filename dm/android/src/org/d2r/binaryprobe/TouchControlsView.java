@@ -31,7 +31,7 @@ public final class TouchControlsView extends View {
     private static native void nativeResize(float width,float height,float left,float right);
     private static native void nativeEnable(boolean active);
     private static native void nativeCancel();
-    private static native int nativeEvent(int[] ids,float[] xs,float[] ys,boolean cancelled);
+    private static native int nativeEvent(int[] ids,float[] xs,float[] ys,boolean cancelled,float liftNx,float liftNy);   // 抬起点：抬起那根手指的位置（拖放落点按松手这一刻问，前端面板页同 iOS）
     private static native float[] nativeFrame();
     private static native void nativeActivate(int target);
     static native int nativeFrontend();   // 1 = 局外（前端页面：主菜单/选角/加载）——覆盖层隐藏 | 1 = front-end page: overlay hidden
@@ -185,11 +185,13 @@ public final class TouchControlsView extends View {
         if(ready.getAsBoolean())postInvalidateOnAnimation();}
     @Override public boolean onTouchEvent(MotionEvent event){if(!active||!ready.getAsBoolean())return true;
         int action=event.getActionMasked(),skip=action==MotionEvent.ACTION_POINTER_UP?event.getActionIndex():-1;
+        int liftIndex=action==MotionEvent.ACTION_UP?event.getPointerCount()-1:skip;
+        float liftNx=liftIndex>=0?event.getX(liftIndex)/getWidth():-1f, liftNy=liftIndex>=0?event.getY(liftIndex)/getHeight():-1f;
         int count=(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)?0:event.getPointerCount()-(skip>=0?1:0);
         if(count>16){nativeCancel();return true;}
         int[] ids=new int[count];float[] xs=new float[count],ys=new float[count];int k=0;
         for(int i=0;i<event.getPointerCount()&&k<count;i++)if(i!=skip){ids[k]=event.getPointerId(i);xs[k]=Math.max(0,Math.min(.999999f,event.getX(i)/getWidth()));ys[k]=Math.max(0,Math.min(.999999f,event.getY(i)/getHeight()));k++;}
-        nativeEvent(ids,xs,ys,action==MotionEvent.ACTION_CANCEL);postInvalidateOnAnimation();return true;}
+        nativeEvent(ids,xs,ys,action==MotionEvent.ACTION_CANCEL,liftNx,liftNy);postInvalidateOnAnimation();return true;}
     @Override public AccessibilityNodeProvider getAccessibilityNodeProvider(){return new AccessibilityNodeProvider(){
         @Override public AccessibilityNodeInfo createAccessibilityNodeInfo(int id){AccessibilityNodeInfo node=AccessibilityNodeInfo.obtain();node.setPackageName(getContext().getPackageName());node.setSource(TouchControlsView.this,id);
             if(id==View.NO_ID){onInitializeAccessibilityNodeInfo(node);if(frame!=null){for(int i=0;i<12;i++)if(frame[i*3+2]>0)node.addChild(TouchControlsView.this,i);node.addChild(TouchControlsView.this,12);for(int i=20;i<24;i++)node.addChild(TouchControlsView.this,i);}return node;}

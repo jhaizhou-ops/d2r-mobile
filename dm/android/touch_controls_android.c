@@ -4,6 +4,7 @@
 #include "input_backend.h"
 #include "ui_state_android.h"
 #include "../host/dm_cursor.h"
+#include "../host/dm_actions.h"
 #include "../host/dm_hud.h"
 #include "../host/dm.h"
 #include <jni.h>
@@ -58,8 +59,56 @@ static void dispatch_seqs(void) {
       if(diff&&dbg++<64)LOG("TOUCH_SEQ 派发 diff=%#x item=%u use=%u long=%u ident=%u tab=%u world=%u stack=%u click=%u",diff,cur[0],cur[1],cur[2],cur[3],cur[4],cur[5],cur[6],cur[7]); }
     memcpy(last_seq,cur,sizeof cur);
 }
-/* 面板态"挂起抬起"：落下时问分类（这是不是物品区），答案到了收尾——物品/页签发作废（不点），其余收尾成一次点击（对齐 front_ios 的挂起抬起） */
-static unsigned pend_q; static int pend_slot=-1; static int pend_up; static double pend_at;
+/* 面板态"挂起抬起"（对齐 front_ios.m:518-520 / 601-650）：
+ *   落下：指针手指问宿主「这是不是物品区」（主线程下一帧作答）。
+ *   移动：起手定型出滚动/滑块 → dm_ui_drag_begin/move（游戏自己的滚轮 / 滑块）；拖放中按"物品抬在手指上方"问落点。
+ *   松手：答案没回来就先挂起这一根（0.25 秒兜底），回来后把分类喂回模型（dm_tc_pointer_item），
+ *         拖放的按松手这一刻的位置重问落点 → dm_tc_pointer_release[_at]。
+ * 喂回模型之后，双击（使用 / 装备 / 免费鉴定 / 取一件）、长按（补充到腰带）、单击（鉴定态鉴定）、页签、点面板外关面板
+ * 全都由模型自己判出来，序号派发（dispatch_seqs）照旧把它们发成 dm_ui_*。 */
+static unsigned pend_q; static int pend_slot=-1; static int pend_up; static double pend_at,pend_end_at;
+static unsigned pend_rel; static int pend_rel_asked; static int ui_drag_on; static float lift_x, lift_y; static int item_fed;
+/* 命中答案一回来就告诉手势层（只有物品区驱动手柄光标、才算拖放）——对齐 front_ios.m:426 */
+static void feed_item_kind(void) {
+    if(!pend_q||item_fed)return;
+    int ir=dm_ui_item_result(pend_q);
+    if(ir>=0){dm_tc_pointer_item(&controls,ir);item_fed=1;}
+}
+static void resolve_pending(void) {
+    if(pend_slot<0||!pend_up)return;
+    int slot=pend_slot; double now=seconds();
+    float w=controls.layout.width>0?controls.layout.width:1.f, h=controls.layout.height>0?controls.layout.height:1.f;
+    dm_tc_finger *pf=&controls.finger[slot];
+    if(ui_drag_on){ui_drag_on=0;dm_ui_drag_end();}
+    int wait=0;
+    if(pend_q&&dm_ui_item_result(pend_q)<0)wait=1;
+    else if(!pend_rel_asked&&pf->pointer_dragged){   /* 抬起点可能比最后一次移动更远：按松手这一刻的位置再问一次 */
+        float ex=lift_x>=0?lift_x*w:pf->x, ey=lift_y>=0?lift_y*h:pf->y;
+        pend_rel=dm_ui_drop_query(ex/w,(ey-DM_TC_POINTER_LIFT_PT*dm_tc_scale_for_size(w,h))/h,ey/h);
+        pend_rel_asked=1;wait=1;
+    }
+    if(wait&&now-pend_end_at<0.25)return;
+    if(pend_rel_asked){
+        int rr=dm_ui_item_result(pend_rel); if(rr<0)rr=dm_ui_drop_last(); if(rr<0)rr=0;
+        if(pf->shop_drag){   /* 从货架起的拖：落在背包类物品区 = 买光标选中的那件；别处松手不买 */
+            if(rr==5&&!dm_ui_drop_bag())LOG("TOUCH_P2 货架拖出松在背包格以外 → 不买");
+            else if(rr==5||rr==11){
+                float ox=pf->aim_origin_x/w, oy=pf->aim_origin_y/h;
+                if(rr==11){dm_ui_stack_cube_at(ox,oy);LOG("TOUCH_P2 一叠拖到魔盒格 → 1 件进魔盒");}
+                else if(rr==5){controls.pointer_x=pf->aim_origin_x;controls.pointer_y=pf->aim_origin_y;   /* 光标目标也改回那件货 */
+                LOG("TOUCH_P2 货架的货拖到背包松手 → 买");dm_ui_shop_buy_at(ox,oy);}
+            }
+        }else if(pf->pointer_dragged){
+            float dx=0,dy=0;
+            if((rr==5&&dm_ui_drop_point(&dx,&dy))||(rr==0&&dm_ui_origin_point(&dx,&dy)))
+                dm_tc_pointer_release_at(&controls,dx*w,dy*h);
+            else { if(rr==7){dm_shop_sell_cursor();rr=0;} dm_tc_pointer_release(&controls,rr); }
+        }
+    }
+    if(pend_q&&!item_fed){int ir=dm_ui_item_result(pend_q);dm_tc_pointer_item(&controls,ir<0?0:ir);}
+    dm_tc_end_at(&controls,slot,pend_end_at>0?pend_end_at:now);   /* 抬起时刻按真正松手：双击 / 长按判定不受挂起影响 */
+    pend_q=0;pend_rel=0;pend_rel_asked=0;pend_up=0;pend_slot=-1;pend_end_at=0;item_fed=0;
+}
 static void apply_ui_locked(void) {
     unsigned rev=dm_android_ui_rev();
     if(rev==applied_rev)return;
@@ -87,11 +136,12 @@ static int publish(void) {
 static void cancel(void) {
     if(ready)dm_tc_cancel_all(&controls);
     memset(slots,0,sizeof slots);pulse_epoch=0;published=0;
-    access_slot=-1;
+    access_slot=-1;pend_slot=-1;pend_up=0;pend_q=0;pend_rel=0;pend_rel_asked=0;ui_drag_on=0;item_fed=0;
     dm_android_input_cancel();
 }
 static void tick(void) {
     if(!ready || !enabled)return;
+    feed_item_kind();resolve_pending();
     double now=seconds();dm_android_input_status input;dm_android_input_status_get(&input);
     if(access_slot>=0 && now>=access_until){dm_tc_end_at(&controls,access_slot,now);access_slot=-1;}
     dm_tc_tick(&controls,now);
@@ -124,7 +174,7 @@ JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEnable(J
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeCancel(JNIEnv *env,jclass cls) {
     (void)env;(void)cls;pthread_mutex_lock(&lock);cancel();pthread_mutex_unlock(&lock);
 }
-JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JNIEnv *env,jclass cls,jintArray ids,jfloatArray xs,jfloatArray ys,jboolean cancelled) {
+JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JNIEnv *env,jclass cls,jintArray ids,jfloatArray xs,jfloatArray ys,jboolean cancelled,jfloat lift_nx,jfloat lift_ny) {
     (void)cls;if(!ids||!xs||!ys)return EINVAL;
     int n=(*env)->GetArrayLength(env,ids);
     if(n>16||(*env)->GetArrayLength(env,xs)!=n||(*env)->GetArrayLength(env,ys)!=n)return EINVAL;
@@ -132,21 +182,37 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
     (*env)->GetIntArrayRegion(env,ids,0,n,id);(*env)->GetFloatArrayRegion(env,xs,0,n,x);(*env)->GetFloatArrayRegion(env,ys,0,n,y);
     if((*env)->ExceptionCheck(env))return EINVAL;
     for(int i=0;i<n;i++){if(!isfinite(x[i])||!isfinite(y[i]))return EINVAL;for(int j=0;j<i;j++)if(id[i]==id[j])return EINVAL;}
-    pthread_mutex_lock(&lock);apply_ui_locked();
+    pthread_mutex_lock(&lock);apply_ui_locked();feed_item_kind();resolve_pending();
+    lift_x=lift_nx;lift_y=lift_ny;
     if(cancelled){cancel();pthread_mutex_unlock(&lock);return 0;}
     if(!ready||!enabled){pthread_mutex_unlock(&lock);return ENODEV;}
     double now=seconds();
     for(int slot=0;slot<16;slot++)if(slots[slot].active){int seen=0;for(int i=0;i<n;i++)seen|=slots[slot].id==id[i];
-        if(!seen){dm_tc_end_at(&controls,slot,now);slots[slot].active=0;if(slot==pend_slot)pend_up=1;}}
+        if(!seen){slots[slot].active=0;
+            if(slot==pend_slot){pend_up=1;pend_end_at=now;}   /* 指针手指挂起：等宿主的分类 / 落点答案 */
+            else dm_tc_end_at(&controls,slot,now);}}
     dm_android_pointer raw[16];int nr=0;
     for(int i=0;i<n;i++) {
         int slot=0;while(slot<16&&(!slots[slot].active||slots[slot].id!=id[i]))slot++;
         float px=x[i]*controls.layout.width,py=y[i]*controls.layout.height;
         if(slot==16){slot=0;while(slot<16&&(slots[slot].active||controls.finger[slot].active))slot++;if(slot==16){pthread_mutex_unlock(&lock);return EOVERFLOW;}
             slots[slot].active=1;slots[slot].id=id[i];dm_tc_begin_at(&controls,slot,px,py,now);
-            if(!controls.navigation_mode&&!dm_android_ui_panel_mode()){}else if(controls.navigation_mode){
-                pend_q=dm_ui_item_query(x[i],y[i]);pend_slot=slot;pend_up=0;pend_at=now;}
-        }else dm_tc_move_at(&controls,slot,px,py,now);
+            if(controls.navigation_mode&&controls.pointer_slot==slot){   /* 功能页里的指针手指：问宿主这是不是物品区 */
+                pend_q=dm_ui_item_query(x[i],y[i]);pend_slot=slot;pend_up=0;pend_at=now;pend_end_at=0;pend_rel=0;pend_rel_asked=0;item_fed=0;}
+        }else{
+            dm_tc_move_at(&controls,slot,px,py,now);
+            dm_tc_finger *pf=&controls.finger[slot];
+            float w=controls.layout.width>0?controls.layout.width:1.f, h=controls.layout.height>0?controls.layout.height:1.f;
+            if(controls.navigation_mode&&controls.pointer_slot==slot){
+                if(pf->ui_drag){   /* 界面连续手势：上下拖 = 滚动、横向 = 滑块；定型后交给宿主按游戏自己的命中去做 */
+                    if(!ui_drag_on){ui_drag_on=1;dm_ui_drag_lift(DM_TC_POINTER_LIFT_PT*dm_tc_scale_for_size(w,h)/h);
+                        dm_ui_drag_begin(pf->ui_drag,pf->aim_origin_x/w,pf->aim_origin_y/h,44.f/h);}
+                    dm_ui_drag_move(x[i],y[i]);}
+                if(pf->pointer_dragged){   /* 拖放中：问落点（物品抬在手指上方），松手用最近一次的回答 */
+                    pend_rel=dm_ui_drop_query(x[i],(py-DM_TC_POINTER_LIFT_PT*dm_tc_scale_for_size(w,h))/h,y[i]);
+                    pend_rel_asked=1;}
+            }
+        }
         if(controls.finger[slot].target==DM_TC_NONE)raw[nr++]=(dm_android_pointer){.id=(uint32_t)id[i],.x=x[i],.y=y[i]};
     }
     tick();int rc=dm_android_input_publish_touch(raw,(size_t)nr);if(!rc)rc=publish();
@@ -154,16 +220,6 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
 }
 JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeFrame(JNIEnv *env,jclass cls) {
     (void)cls;jfloat data[58]={0};pthread_mutex_lock(&lock);apply_ui_locked();tick();
-    if(pend_up&&pend_slot>=0&&controls.navigation_mode){
-        int r=dm_ui_item_result(pend_q);double now=seconds();
-        if(r>=0||now-pend_at>0.25){
-            void dm_android_input_ui_up(int);
-            if(r==1){dm_android_input_ui_up(1);}                     /* 物品区：不发点击（光标盖住它，说明自己出） */
-            else if(r==2){dm_android_input_ui_up(1);void dm_ui_tab_go(void);dm_ui_tab_go();}   /* 页签：不打鼠标，直接切页 */
-            else {dm_android_input_ui_up(0);}                        /* 其它（面板内控件）：收尾成一次点击 */
-            pend_up=0;pend_slot=-1;
-        }
-    }
     for(int i=0;i<DM_TC_COUNT;i++){dm_tc_target t=controls.layout.target[i];data[i*3]=t.x;data[i*3+1]=t.y;data[i*3+2]=(applied_mask&(1u<<i))?t.r:0;
         for(int j=0;j<16;j++)if(controls.finger[j].active&&controls.finger[j].target==i)data[44+i]=1;}
     data[36]=controls.layout.joy_x;data[37]=controls.layout.joy_y;data[38]=controls.layout.joy_radius;
