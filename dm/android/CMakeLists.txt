@@ -27,7 +27,15 @@ add_library(dm_android_core OBJECT
   ${DM_HOST}/dm_bright.c
   ${DM_HOST}/hle_lifecycle.c ${DM_HOST}/hle_friends.c ${DM_HOST}/hle_misc.c
   ${DM_HOST}/hle_swkbd.c keyboard_android.c
-  services_fs.c services_fs_probe.c services_platform.c diagnostics.c)
+  services_fs.c services_fs_probe.c services_platform.c diagnostics.c svc_host_android.c)
+# 第三方：libdeflate 只编解压相关源（TACT BLTE zlib 块，svc_host_android.c 用）；代码不动，单独放松告警
+# Third party: only the decompression-related sources of libdeflate (TACT BLTE zlib blocks, used by svc_host_android.c); the code is untouched, warnings relaxed in a separate object library
+add_library(dm_libdeflate OBJECT
+  ../third_party/libdeflate/lib/deflate_decompress.c ../third_party/libdeflate/lib/zlib_decompress.c
+  ../third_party/libdeflate/lib/adler32.c ../third_party/libdeflate/lib/utils.c ../third_party/libdeflate/lib/arm/cpu_features.c)
+target_compile_options(dm_libdeflate PRIVATE -w)
+target_compile_definitions(dm_libdeflate PRIVATE _GNU_SOURCE)
+set_target_properties(dm_libdeflate PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(dm_android_core PUBLIC ${DM_HOST} .)
 target_compile_features(dm_android_core PUBLIC c_std_11)
 # Upstream's Darwin uint64 format specifiers have the same 64-bit ABI on Bionic.
@@ -39,11 +47,11 @@ target_link_libraries(dm_android_core PUBLIC android log dl m aaudio)
 target_link_options(dm_android_core INTERFACE -Wl,-z,nostart-stop-gc)
 add_executable(dm_android_host_probe host_probe.c gate_check.S)
 target_compile_options(dm_android_host_probe PRIVATE -Wall -Wextra -Werror -ffixed-x18)
-target_link_libraries(dm_android_host_probe PRIVATE dm_android_core)
+target_link_libraries(dm_android_host_probe PRIVATE dm_android_core dm_libdeflate)
 target_link_options(dm_android_host_probe PRIVATE -Wl,-z,max-page-size=16384)
 add_executable(dm_android_input_probe input_probe.c)
 target_compile_options(dm_android_input_probe PRIVATE -Wall -Wextra -Werror -ffixed-x18)
-target_link_libraries(dm_android_input_probe PRIVATE dm_android_core)
+target_link_libraries(dm_android_input_probe PRIVATE dm_android_core dm_libdeflate)
 target_link_options(dm_android_input_probe PRIVATE -Wl,-z,max-page-size=16384)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_probe.c")
   add_executable(dm_android_vulkan_probe vulkan_probe.c)
@@ -57,6 +65,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/romfs_image.c")
   target_include_directories(d2r_mobile_android PRIVATE "${CMAKE_BINARY_DIR}/generated")
   target_compile_options(d2r_mobile_android PRIVATE -Wall -Wextra -Werror -Wno-format -ffixed-x18)
   target_compile_definitions(d2r_mobile_android PRIVATE _GNU_SOURCE TARGET_OS_IPHONE=0)
-  target_link_libraries(d2r_mobile_android PRIVATE dm_android_core dm_android_gfx)
+  target_link_libraries(d2r_mobile_android PRIVATE dm_android_core dm_android_gfx dm_libdeflate)
   target_link_options(d2r_mobile_android PRIVATE -Wl,-z,max-page-size=16384)
 endif()

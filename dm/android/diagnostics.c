@@ -221,9 +221,7 @@ void *hlecount_wrap(const char *kind, const char *name, void *fn) {
 void hlecount_seal(void) {}
 void hlecount_svc(int n) { if (n >= 0 && n < 256) atomic_fetch_add(&svc_calls[n], 1); }
 uint64_t dm_android_svc_count(int n) { return n >= 0 && n < 256 ? atomic_load(&svc_calls[n]) : 0; }
-uint64_t svc_host_call(int n, uint64_t *regs) {
-    (void)regs; die("Android build-specific host call %#x requires verified version mapping", n);
-}
+/* svc_host_call 的实现移到了 svc_host_android.c（0x80 起的宿主调用分发：zlib/瞄准门/渲染门/原样代调）。 */
 void dm_backtrace(uint64_t fp) {
     /* dm_thread_enter switches to an SDK-owned alias stack, outside Bionic's
      * pthread stack bounds. Self process_vm_readv validates each read in the
