@@ -13,13 +13,19 @@ static void dm_button_gradient(CGContextRef c, CGRect r, const CGFloat *colors, 
     CGContextDrawLinearGradient(c,g,CGPointMake(CGRectGetMidX(r),CGRectGetMinY(r)),CGPointMake(CGRectGetMidX(r),CGRectGetMaxY(r)),0);
     CGGradientRelease(g);CGColorSpaceRelease(space);
 }
-// 职业色只给原图轻微染色，保留原本的明暗纹理与透明度。
-// Class tones lightly tint the original image while preserving its shading and alpha.
-static void dm_skill_tint(CGContextRef c, CGRect r, int atlas) {
-    static const CGFloat tones[][3]={{.82,.64,.22},{.24,.64,.90},{.08,.73,.50},{.90,.67,.23},{.86,.31,.15},{.53,.72,.22},{.64,.36,.83},{.21,.69,.66},{.74,.78,.68}};
-    const CGFloat *rgb=tones[atlas>=0 && atlas<9?atlas:8];
-    CGContextSaveGState(c);CGContextSetBlendMode(c,kCGBlendModeSourceAtop);
-    CGContextSetRGBFillColor(c,rgb[0],rgb[1],rgb[2],.68);CGContextFillRect(c,r);CGContextRestoreGState(c);
+// 只中和内槽的色相；裁切区域避开已验收的金属外圈。
+// Neutralize only the socket interior; the clip excludes the accepted metal rim.
+static void dm_socket_neutralize(CGContextRef c, CGRect r) {
+    CGContextSaveGState(c);CGFloat inset=r.size.width*.08;
+    CGContextAddEllipseInRect(c,CGRectInset(r,inset,inset));CGContextClip(c);
+    CGContextSetBlendMode(c,kCGBlendModeSaturation);CGContextSetGrayFillColor(c,.5,1);CGContextFillRect(c,r);
+    CGContextRestoreGState(c);
+}
+// 银灰处理保留原图明暗；调用方随后用原图的 alpha 恢复透明边缘。
+// Silver treatment preserves source shading; callers then restore transparent edges with the original alpha.
+static void dm_skill_silver(CGContextRef c, CGRect r) {
+    CGContextSaveGState(c);CGContextSetBlendMode(c,kCGBlendModeSaturation);
+    CGContextSetGrayFillColor(c,.5,1);CGContextFillRect(c,r);CGContextRestoreGState(c);
 }
 static void dm_button_draw(CGContextRef c, CGRect r, int held, int empty, int primary) {
     CGFloat side=r.size.width,cx=CGRectGetMidX(r),cy=CGRectGetMidY(r);
@@ -30,7 +36,7 @@ static void dm_button_draw(CGContextRef c, CGRect r, int held, int empty, int pr
     const CGFloat metal[]={.26,.28,.28,empty?.22:.9, .055,.065,.07,empty?.22:.95, .16,.11,.10,empty?.16:.7};
     CGContextSaveGState(c);CGContextAddEllipseInRect(c,rim);CGContextClip(c);dm_button_gradient(c,rim,metal,3);CGContextRestoreGState(c);
     CGContextSetRGBStrokeColor(c,.008,.012,.015,empty?.38:.9);CGContextSetLineWidth(c,side*.025);CGContextStrokeEllipseInRect(c,rim);
-    const CGFloat well[]={.012,.022,.027,empty?.08:.94, .034,.055,.060,empty?.16:.94};
+    const CGFloat well[]={.021,.021,.021,empty?.08:.94, .050,.050,.050,empty?.16:.94};
     CGContextSaveGState(c);CGContextAddEllipseInRect(c,face);CGContextClip(c);dm_button_gradient(c,face,well,2);CGContextRestoreGState(c);
     CGContextSetRGBStrokeColor(c,held?.52:.26,held?.77:.29,held?.73:.28,held?.9:(empty?.18:.55));
     CGContextSetLineWidth(c,side*(held?.018:.009));CGContextStrokeEllipseInRect(c,face);

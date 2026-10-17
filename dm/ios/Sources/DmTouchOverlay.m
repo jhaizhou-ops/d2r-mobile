@@ -85,13 +85,13 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     CGFloat trim=sil?0:round(f.width*.08);
     UIImage *glyph=[self frameImage:atlas key:[NSString stringWithFormat:@"socket:%d:%d",g.atlas,frame] rect:CGRectInset(CGRectMake(f.x,f.y,f.width,f.height),trim,trim)];
     if(!sil || !glyph) return glyph;
-    // 保留原版技能轮廓，用低饱和职业色衬托；这只是外观，不表示冷却、法力或可施放状态。
-    // Preserve original skill silhouettes with muted class tones; purely visual, never a cooldown, mana or castability signal.
-    NSString *key=[NSString stringWithFormat:@"tinted:%d:%d",g.atlas,frame];UIImage *image=_glyphFrames[key];
+    // 保留原版技能的明暗纹理，统一为银灰，不再做职业染色。
+    // Preserve the original skill shading in silver gray, without class tinting.
+    NSString *key=[NSString stringWithFormat:@"silver:%d:%d",g.atlas,frame];UIImage *image=_glyphFrames[key];
     if(!image) {
         UIGraphicsImageRendererFormat *format=[UIGraphicsImageRendererFormat preferredFormat];format.opaque=NO;format.scale=glyph.scale;
         image=[[[UIGraphicsImageRenderer alloc] initWithSize:glyph.size format:format] imageWithActions:^(UIGraphicsImageRendererContext *ctx){
-            CGRect r=(CGRect){CGPointZero,glyph.size};[glyph drawInRect:r];dm_skill_tint(ctx.CGContext,r,g.atlas);
+            CGRect r=(CGRect){CGPointZero,glyph.size};[glyph drawInRect:r];dm_skill_silver(ctx.CGContext,r);[glyph drawInRect:r blendMode:kCGBlendModeDestinationIn alpha:1];
         }];_glyphFrames[key]=image;
     }
     return image;
@@ -115,7 +115,7 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     UIImage *image=[self controlArt:key size:rect.size draw:^(CGContextRef c){
         CGRect r=(CGRect){CGPointZero,rect.size};
         if(self->_socket && !empty) {
-            [self->_socket drawInRect:r];
+            [self->_socket drawInRect:r];dm_socket_neutralize(c,r);
             if(held) { CGContextSetRGBStrokeColor(c,.54,.83,.76,.9);CGContextSetLineWidth(c,r.size.width*.015);CGContextStrokeEllipseInRect(c,CGRectInset(r,r.size.width*.052,r.size.width*.052)); }
         } else dm_button_draw(c,r,held,empty,primary);
     }];
@@ -265,7 +265,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
                 if(spent) { CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:.30 alpha:1].CGColor); CGContextFillEllipseInRect(c,CGRectInset(b,b.size.width*.08,b.size.height*.08));
                     [icon drawInRect:ir blendMode:kCGBlendModeLuminosity alpha:.55];
                     CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:0 alpha:.35].CGColor); CGContextFillEllipseInRect(c,CGRectInset(b,b.size.width*.06,b.size.height*.06)); }
-                else { CGContextSetShadowWithColor(c,CGSizeZero,held?t->r*.10:t->r*.055,[UIColor colorWithRed:.43 green:.64 blue:.58 alpha:.32].CGColor); [icon drawInRect:ir blendMode:kCGBlendModeNormal alpha:held?1:.94]; } CGContextRestoreGState(c); }   // 图标保持清晰，只有空槽框淡出 | Keep icons clear; only empty slot frames fade
+                else { CGContextSetShadowWithColor(c,CGSizeZero,held?t->r*.10:t->r*.055,[UIColor colorWithWhite:.65 alpha:.32].CGColor); [icon drawInRect:ir blendMode:kCGBlendModeNormal alpha:held?1:.94]; } CGContextRestoreGState(c); }   // 图标保持清晰，只有空槽框淡出 | Keep icons clear; only empty slot frames fade
             // 副手组技能角标：右上「Ⅱ」= 技能在另一组武器上，按下先换武器；右下剩余次数 = 充能技能，字用腰带药水件数那套（ui.json badge）
             // Secondary weapon set skill badges: top right "Ⅱ" = the skill is on the other weapon set, pressing swaps weapons first; bottom right remaining count = charged skill, the text uses the same style as the belt potion count (ui.json badge)
             if(ssKind&1) { CGFloat br=t->r*.30, bx=t->x+t->r*.74, by=t->y-t->r*.74; CGRect bb=CGRectMake(bx-br,by-br,br*2,br*2), lw2=CGRectInset(bb,MAX(1,br*.08),MAX(1,br*.08));
@@ -349,7 +349,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     // The capture version and the layout version are separate; the expected state is supplied by the test input, not inferred back from visible.
     return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"control_layout":@"immortal_compact_v1",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
         @"layout_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"geometry_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"binding_protocol_sha256":[NSString stringWithUTF8String:dm_ta_binding_sha],
-        @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"button_style":@"immortal_reference_v4",@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
+        @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"button_style":@"immortal_reference_v5_neutral",@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
         @"source":TARGET_OS_SIMULATOR?@"uikit_simulator_overlay":@"uikit_device_overlay",
         @"right_aim":@{@"rx":@(s->rx),@"ry":@(s->ry),@"owner_slot":@(s->aim_slot),@"map_cancel_active":@(s->map_cancel_active),@"navigation_suppressed":@(s->navigation_mode),@"mapping":@"UIKit dx/r, -dy/r; independent clamped SDK axes"},
         @"state":self.navigationMode?@"navigation":@"game",@"joystick":joystick,@"coordinate_space":@"UIKit points",@"view_size_pt":@[@(s->layout.width),@(s->layout.height)],@"navigation":@(self.navigationMode),@"controls":a,@"portal_request":@{@"gesture_epoch":@(s->gesture_epoch),@"binding_identity":@(s->portal_binding_identity),@"scene_epoch":@(s->portal_scene_epoch),@"phase":@(s->portal_phase),@"pending":@(s->portal_pending)},@"portal_binding_verified":@NO,@"game_hud_relayout_verified":@NO};
