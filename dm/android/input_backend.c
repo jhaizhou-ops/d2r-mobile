@@ -19,6 +19,11 @@ static struct { int active; uint32_t id; } pointer_slots[16];
 /* 面板态"挂起抬起"用：驱动界面点击的那根手指 | for the deferred lift in panel state: the finger driving the UI click */
 static int32_t ui_id = -1; static float ui_x, ui_y;
 static struct { uint64_t buttons, pressed; int32_t lx, ly, rx, ry; } actions;
+/* 无锁快照：取手柄那条路（dm_android_input_read_npad 已持 input_lock）里的瞄准泵会读右摇杆采样值，
+ * 若这里再拿一次 input_lock 就是同一线程二次加锁（非递归互斥量）→ 自锁死（真机 ANR：read_npad → dm_aim_cone_pump → dm_input_sampled_right → futex）。
+ * 采样值只给瞄准方向用，允许比结构体副本晚一拍读到；写入点与 sampled_rx/ry 同一处。 */
+static _Atomic int32_t sampled_rx_lockfree, sampled_ry_lockfree;
+
 static int32_t sampled_rx, sampled_ry;
 static uint64_t last_stick_activity;
 int touch_fill(void *out, uint64_t time_ns);
@@ -178,9 +183,15 @@ int dm_android_input_read_npad(dm_android_npad_state *out, uint32_t id, uint32_t
     if (!status.npad_initialized) { pthread_mutex_unlock(&input_lock); return ENODEV; }
     memset(out, 0, sizeof *out); out->sampling = (int64_t)++status.npad_samples;
     if (style_locked(id) & style) {
-        out->buttons = actions.buttons | actions.pressed; actions.pressed = 0;
+        { uint64_t dm_ui_auto_buttons(void), dm_ui_auto_release(void);
+          /* 宿主替玩家按的键（设置页 X 后按返回、对话菜单确认、快捷键脉冲…）与宿主收回的键：iOS 在 hle_hid.c fill() 里每读一次手柄并/减一次，
+             安卓分支没有那一段，在这里照同一口径补（不然 dm_ui_key_pulse 发的返回键永远到不了游戏：设置页关不掉、确认框按不动）。
+             Keys the host presses on the player's behalf and keys the host releases: on iOS hle_hid.c's fill() ORs/ANDs them on every controller read;
+             the Android branch has no such step, so do the same here. */
+          out->buttons = ((actions.buttons | actions.pressed) & ~dm_ui_auto_release()) | dm_ui_auto_buttons(); actions.pressed = 0; }
         out->lx = actions.lx; out->ly = actions.ly; out->rx = actions.rx; out->ry = actions.ry;
         out->attributes = 1; sampled_rx = out->rx; sampled_ry = out->ry;
+        atomic_store(&sampled_rx_lockfree, out->rx); atomic_store(&sampled_ry_lockfree, out->ry);
         if (out->lx || out->ly) last_stick_activity = now_ns();
         out->buttons = dm_swapskill_filter(out->buttons);
         dm_cursor_apply(&out->buttons, &out->lx, &out->ly);
@@ -209,6 +220,15 @@ int dm_android_input_read_touch(void *out, int capacity) {
     touch_fill(out, guest_ns()); status.touch_samples++;
     pthread_mutex_unlock(&input_lock); return 1;
 }
+/* 无锁快照：取手柄那条路（dm_android_input_read_npad 已持 input_lock）里的瞄准泵会读右摇杆采样值，
+ * 若这里再拿一次 input_lock 就是同一线程二次加锁（非递归互斥量）→ 自锁死（真机 ANR，栈：read_npad → dm_aim_cone_pump → dm_input_sampled_right → futex）。
+ * 采样值只给瞄准方向用，允许比结构体副本晚一拍读到；写入点与 sampled_rx/ry 同一处。 */
+/* Lock-free snapshot: the aim pump inside the controller-read path (which already holds input_lock) reads the sampled right stick,
+ * and taking input_lock again there is the same thread locking twice (non-recursive mutex) -> self deadlock
+ * (real-device ANR: read_npad -> dm_aim_cone_pump -> dm_input_sampled_right -> futex).
+ * The sampled values are only used for the aim direction and may lag the struct copy by one sample; written where sampled_rx/ry are written. */
+static _Atomic int32_t sampled_rx_lockfree, sampled_ry_lockfree;
+
 void dm_android_input_status_get(dm_android_input_status *out) {
     if (!out) return;
     pthread_mutex_lock(&input_lock); *out = status; pthread_mutex_unlock(&input_lock);
@@ -225,7 +245,7 @@ uint64_t dm_input_samples(void) {
     pthread_mutex_lock(&input_lock); uint64_t samples = status.npad_samples; pthread_mutex_unlock(&input_lock); return samples;
 }
 void dm_input_sampled_right(int32_t *rx, int32_t *ry) {
-    pthread_mutex_lock(&input_lock); *rx = sampled_rx; *ry = sampled_ry; pthread_mutex_unlock(&input_lock);
+    if (rx) *rx = atomic_load(&sampled_rx_lockfree); if (ry) *ry = atomic_load(&sampled_ry_lockfree);   /* 不取 input_lock：调用方（瞄准泵）可能已持有它 */
 }
 uint64_t dm_input_stick_activity(void) {
     pthread_mutex_lock(&input_lock); uint64_t time = last_stick_activity; pthread_mutex_unlock(&input_lock); return time;

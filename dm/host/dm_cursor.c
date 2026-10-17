@@ -1062,12 +1062,11 @@ static int ui_classify(module_t *m, uint64_t root, int x, int y, char *hit, size
     // 原先设置页开着时把暂停菜单整层设成不可见、关了写回——那是写原版控件，违反不写原版控件的规则，改成这里只在命中时挡
     // The settings page covers the pause menu, yet the pause menu's buttons still receive clicks (the game's dispatch does not look at who is on top): on a pause menu button and not on a clickable widget of the settings page = covered, do not click (same as "on a button covered by an upper panel").
     // Previously, while the settings page was open the whole pause menu layer was set invisible and written back on close - that is writing to the original game's widgets, violating the no-writes-to-original-widgets rule; changed to blocking here only on a hit
-    { uint64_t st = ui_panel(root, "SettingsPanel"), xy = (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32);
-      uint64_t cp = ui_panel(root, "VideoOptionsPanel");   // 自定义页（借的视频页）与设置页并列、不是它的子控件：这一页上的勾选框也算「设置页自己可点的控件」（语言行的「中文」那格正落在暂停菜单按钮的位置上） | The Custom page (the borrowed video page) sits beside the settings page and is not its child: checkboxes on this page also count as "controls of the settings page itself that can be tapped" (the 「中文」 box of the language row lands exactly where the pause menu button is)
-      if (st && *(uint8_t *)(st + 0x50) && !click_walk(st, xy, 1, (uint64_t)m->base) && !(cp && *(uint8_t *)(cp + 0x50) && click_walk(cp, xy, 1, (uint64_t)m->base))) {   // 设置页自己可点的控件照常；点在它的底板 / 列表空处时，游戏会把这一下交给底下的暂停菜单按钮 | The settings page's own clickable widgets work as usual; when the tap is on its backing / empty list space, the game would hand this tap to the pause menu button underneath
-          static const char *const pl[] = { "PauseLayoutGarden", "PauseLayout" };
-          for (int i = 0; i < 2; i++) { uint64_t pw = ui_panel(root, pl[i]); if (pw && *(uint8_t *)(pw + 0x50) && click_walk(pw, xy, 1, (uint64_t)m->base)) { snprintf(hit, hn, "设置页盖着的暂停菜单按钮（不点，可滚）"); return 11; }   /* 11：这一下不点下去，但从这里起手上下拖照常滚设置页的列表（自定义页各行的文字不是可点控件，玩家多半就在文字上滑） | 11: this tap is not pressed down, but a vertical drag starting here still scrolls the settings page list as usual (the text of the rows on the Custom page is not a clickable widget, and players mostly swipe right on the text) */ } } }
-    const char *mn = ""; uint64_t mp = modal_top(m, root, &mn);
+    // 模态框（确认框等）先判：它开着时输入归它，下面「设置页盖着的暂停菜单按钮（不点）」那一段不能再拦——
+    // 确认框的「应用 / 放弃」按钮正好落在暂停菜单按钮的位置上，先判盖着会把这两颗键按成「不点」（真机：点 Apply / Discard 没反应）
+    // The modal box (confirmation box etc.) is judged first: while it is open the input belongs to it, and the later "pause menu button under the settings page (do not click)" block must not intercept it --
+    // the confirmation box's 「应用 / 放弃」(Apply / Discard) buttons sit exactly where the pause menu buttons are, and judging the covered layer first turned those two into "do not click" (real device: tapping Apply / Discard did nothing)
+    const char *mn = ""; int modal_in = 0; uint64_t mp = modal_top(m, root, &mn);
     if (mp) { uint64_t xy = (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32), fn = *(uint64_t *)(*(uint64_t *)mp + 0x48);
         // 「在框里」：框自己有边界且点在里面，或点中它的某个可见叶子 / 可点控件（确认框的「应用 / 放弃」按钮只有后一种认得到——
         // 只用叶子判时点「应用」被当成框外，确认框按不动）
@@ -1075,7 +1074,13 @@ static int ui_classify(module_t *m, uint64_t root, int x, int y, char *hit, size
         // judging by leaves alone, a tap on 「应用」(Apply) was treated as outside the box and the confirmation box could not be pressed)
         int in = ((((int (*)(uint64_t, uint64_t))fn)(mp, xy) & 1) && !(((int (*)(uint64_t, uint64_t))fn)(mp, (uint64_t)3 | ((uint64_t)3 << 32)) & 1))
               || inside_walk(mp, xy, 1, (uint64_t)m->base + 0x20c1328) || click_walk(mp, xy, 1, (uint64_t)m->base);
-        if (!in) { snprintf(hit, hn, "模态框外 %s", mn); g_modal_name = mn; return 9; } }
+        if (!in) { snprintf(hit, hn, "模态框外 %s", mn); g_modal_name = mn; return 9; } modal_in = 1; }
+    if (!modal_in) { uint64_t st = ui_panel(root, "SettingsPanel"), xy = (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32);
+      uint64_t cp = ui_panel(root, "VideoOptionsPanel");   // 自定义页（借的视频页）与设置页并列、不是它的子控件：这一页上的勾选框也算「设置页自己可点的控件」（语言行的「中文」那格正落在暂停菜单按钮的位置上） | The Custom page (the borrowed video page) sits beside the settings page and is not its child: checkboxes on this page also count as "controls of the settings page itself that can be tapped" (the 「中文」 box of the language row lands exactly where the pause menu button is)
+      if (st && *(uint8_t *)(st + 0x50) && !click_walk(st, xy, 1, (uint64_t)m->base) && !(cp && *(uint8_t *)(cp + 0x50) && click_walk(cp, xy, 1, (uint64_t)m->base))) {   // 设置页自己可点的控件照常；点在它的底板 / 列表空处时，游戏会把这一下交给底下的暂停菜单按钮 | The settings page's own clickable widgets work as usual; when the tap is on its backing / empty list space, the game would hand this tap to the pause menu button underneath
+          static const char *const pl[] = { "PauseLayoutGarden", "PauseLayout" };
+          for (int i = 0; i < 2; i++) { uint64_t pw = ui_panel(root, pl[i]); if (pw && *(uint8_t *)(pw + 0x50) && click_walk(pw, xy, 1, (uint64_t)m->base)) { snprintf(hit, hn, "设置页盖着的暂停菜单按钮（不点，可滚）"); return 11; }   /* 11：这一下不点下去，但从这里起手上下拖照常滚设置页的列表（自定义页各行的文字不是可点控件，玩家多半就在文字上滑） | 11: this tap is not pressed down, but a vertical drag starting here still scrolls the settings page list as usual (the text of the rows on the Custom page is not a clickable widget, and players mostly swipe right on the text) */ } } }
+
     // 单件任务槽面板（灌魔 / 打孔 / 个性化 / 古墓底座）的关闭钮画在外框右上角凹槽里，但它属于最先打开的 ImbueItemsPanel，凹槽那块被后开的背包面板与外框盖在上层：
     // 按层级它不算可点控件，游戏自己的鼠标分发也到不了它（点了有鼠标按下抬起、没有关面板消息）。点中它 = 走「点面板外 = 关面板」那条现成的路（原版的返回键）
     // The close button of the single-item quest slot panel (imbue / socketing / personalize / tomb pedestal) is drawn in the notch at the top right of the outer frame, but it belongs to the ImbueItemsPanel opened first, and that notch area is covered on upper layers by the later-opened inventory panel and the outer frame:
