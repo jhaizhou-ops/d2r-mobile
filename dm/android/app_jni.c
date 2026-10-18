@@ -144,6 +144,7 @@ static void *game_thread(void *unused) {
     phase_set("正在装载游戏");
     const char *names[]={"main","sdk","subsdk0"}; load_modules(modules,names,3); guest_thread_init();
     { void dm_padmode_boot(void); dm_padmode_boot(); }   /* P4：开机改布局前缀为触屏版（覆盖层有 ctrl_touch 标记时）+ 载入字符串旁路表 */
+    { void target_rank_install(void); target_rank_install(); }   /* 触屏点按自动选怪：Boss > 精英 > 普通（hle_target.c）。iOS 入口 main.c 有这一句，Android 入口原先没有 */
     { void dm_touch_game_live_check(int); int dm_touch_game_attach(void);       /* P7：技能绑定桥（OBS_BINDING_GETTER 门 + HUD 身份核对） */
     dm_touch_game_live_check(1);
     if (!dm_touch_game_attach()) LOG("【红】技能绑定读取没挂上（产物没有观测门 OBS_BINDING_GETTER，或 main 模块不符）：技能键图标 / 回城键绑定不工作"); }
@@ -181,6 +182,15 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     if ((rc=configure_render_scale())) { LOG("ANDROID_3D_SCALE_CONFIG_FAILED errno=%d expected finite 0.70..1.0",rc); return rc; }
     char driver_option[PATH_MAX];path(driver_option,sizeof driver_option,port_root,"diagnostics/private-vulkan");
     if(access(driver_option,F_OK)==0)setenv("DM_PRIVATE_VULKAN","turnip",1);
+    /* 诊断通道（同上面那几个标记文件）：放一个空文件 diagnostics/target-log 就把自动选怪的候选记录打开。
+       Android 不透传任意环境变量，而这个开关要靠真机读数才验得了（宿主注册成功只说明门挂上了，看不到分数有没有被抬高）。
+       touch_log 用的是 <port_root> 下的路径，写在那儿 adb 就能 pull 走。
+       Diagnostic channel (same marker-file pattern as above): dropping an empty diagnostics/target-log file turns on the auto-targeting candidate log.
+       Android does not pass arbitrary environment variables through, and this switch can only be verified by readings on a real device (a successful
+       host registration only shows the gate is attached, not that scores are being raised). touch_log writes under <port_root>, where adb can pull it. */
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/target-log");
+    if(access(driver_option,F_OK)==0){ path(driver_option,sizeof driver_option,port_root,"diagnostics/target-log.tsv");
+        setenv("DM_TARGET_LOG",driver_option,1); LOG("ANDROID_TARGET_LOG %s",driver_option); }
     path(driver_option,sizeof driver_option,port_root,"diagnostics/private-vulkan-sysmem");
     if(access(driver_option,F_OK)==0){setenv("DM_PRIVATE_VULKAN","turnip",1);setenv("TU_DEBUG","sysmem",1);}
     path(driver_option,sizeof driver_option,port_root,"diagnostics/vulkan-validation");

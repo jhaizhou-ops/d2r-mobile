@@ -11,9 +11,30 @@
 // within a tier the original scores still decide, across tiers the higher tier wins; the eligibility checks are not touched at all (a rejected high-tier monster is still rejected).
 // Tiers: Boss = classes with boss=1 in monstats.txt (3.3 data, see BOSS_CLASS); elite = monster data TypeFlag includes super unique/champion/unique.
 #include "dm.h"
+#include <math.h>
+// 读客体内存：iOS 那边走 vm_read_overwrite（宿主进程里不能随便解引用客体的地址），Android 那边客体就是本进程内的原生执行，
+// 直接转指针读即可——本树 Android 侧读法都是这样（dm_beltauto.c / dm_potpick.c）。
+// Reading guest memory: on iOS it goes through vm_read_overwrite (the host process must not just dereference guest addresses); on Android the guest
+// runs natively inside this process, so a plain pointer read is enough -- that is how all the Android-side host code here reads it (dm_beltauto.c /
+// dm_potpick.c).
+#ifdef __ANDROID__
+#include <string.h>
+static int read_live(uint64_t a, void *out, size_t n) {
+    return a >= 0x1000 && a <= UINT64_MAX - n && memcpy(out, (const void *)(uintptr_t)a, n);
+}
+#define DM_TOUCH_RULES_REQUIRED 1   // Android 出包同样是触屏规则域，缺门一样是出错包 | The Android package is in the touch rule domain too; a missing gate is a broken package there as well
+#else
 #include <TargetConditionals.h>
 #include <mach/mach.h>
-#include <math.h>
+static int read_live(uint64_t a, void *out, size_t n) {
+    vm_size_t got = 0;
+    return a >= 0x1000 && a <= UINT64_MAX - n &&
+           vm_read_overwrite(mach_task_self(), a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n;
+}
+#if TARGET_OS_IPHONE
+#define DM_TOUCH_RULES_REQUIRED 1
+#endif
+#endif
 
 enum { UNIT_MONSTER = 1, TF_SUPERUNIQUE = 0x02, TF_CHAMPION = 0x04, TF_UNIQUE = 0x08 };
 // 档位加分须远大于原版分数的量级：真机读数见 DM_TARGET_LOG（分数是 0 附近的小浮点）
@@ -23,12 +44,6 @@ static const float RANK_BONUS[3] = {0, 1000, 2000};
 // *hcIdx of the rows with boss=1 in data/global/excel/monstats.txt (3.3)
 static const uint16_t BOSS_CLASS[] = {156, 211, 229, 242, 243, 250, 256, 267, 333, 365, 526, 544, 546, 547, 548, 549, 550,
                                       559, 570, 704, 705, 706, 707, 708, 709, 745, 746, 747};
-
-static int read_live(uint64_t a, void *out, size_t n) {
-    vm_size_t got = 0;
-    return a >= 0x1000 && a <= UINT64_MAX - n &&
-           vm_read_overwrite(mach_task_self(), a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n;
-}
 
 // 返回 0 普通 / 1 精英 / 2 Boss；读不到或不是怪物 = -1（不动分数）
 // Returns 0 normal / 1 elite / 2 Boss; unreadable or not a monster = -1 (score left alone)
@@ -62,8 +77,8 @@ static void target_rank_obs(const uint64_t *regs) {
 
 void target_rank_install(void) {
     if (!gate_obs_present(OBS_TARGET_RANK)) {          // native 规则域（Mac 对原版真值的闸门）没有这个门：原版选目标不变 | The native rule domain (the Mac gate check against the original game's ground truth) does not have this gate: the original target selection is unchanged
-#if TARGET_OS_IPHONE
-        LOG("【红】产物没有观测门 OBS_TARGET_RANK：自动选怪（Boss > 精英 > 普通）不工作，退回原版选目标");   // iOS 包一定是 touch 规则域，缺门 = 出错包，不许静默 | An iOS app is always in the touch rule domain; a missing gate = a broken package, must not be silent
+#if DM_TOUCH_RULES_REQUIRED
+        LOG("【红】产物没有观测门 OBS_TARGET_RANK：自动选怪（Boss > 精英 > 普通）不工作，退回原版选目标");   // 出包一定是 touch 规则域，缺门 = 出错包，不许静默 | The package is in the touch rule domain; a missing gate = a broken package, must not be silent
 #endif
         return;
     }

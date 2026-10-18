@@ -47,9 +47,7 @@ set(DM_HLE_SKIP
   hle_movie        # 过场/背景视频空播：Android 侧 movie_start.c 已经接管 movie::* 的 HLE
   hle_private_aim  # 私有技能朝向适配：Android 侧 svc_host_android.c 里有等价实现（SVC_HOST_PRIVATE_SKILL_*）
   hle_table        # libc 直通表靠 iOS 出包的 swhle 段挂载，CMake 这条链上没有那个段，编进来也不会生效
-  hle_tact         # TACT 的 BLTE 解压走 libdeflate：Android 侧 svc_host_android.c 里有等价实现（SVC_HOST_TACT_ZLIB）
-  hle_target)      # 触屏点按自动选怪（Boss > 精英 > 普通）：用到 mach/mach.h 编不过，且只被 iOS 入口 main.c 调。
-                    # 这是 Android 侧的功能缺口（见下），不是单纯的编译问题——补的时候连入口调用一起补
+  hle_tact)        # TACT 的 BLTE 解压走 libdeflate：Android 侧 svc_host_android.c 里有等价实现（SVC_HOST_TACT_ZLIB）
 foreach(_s IN LISTS DM_HLE_SKIP)
   list(REMOVE_ITEM DM_HLE_ALL ${DM_HOST_ABS}/${_s}.c)   # 把表里那些从通配结果里摘掉 | drop the listed ones from the glob result
 endforeach()
