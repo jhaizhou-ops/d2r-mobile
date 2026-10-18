@@ -68,6 +68,8 @@ static unsigned g_att_passes;
 /* draw 规模分布（诊断）：按每次绘制的顶点/索引数分桶，回答"是不是大量小物件"。 */
 /* Draw-size histogram (diagnostic): bucket every draw by its vertex/index count, answering "is this many tiny objects". */
 static uint64_t g_draw_hist[6], g_draw_idx_total, g_draw_n;
+/* 每帧写回区间数（pool 上传的 O(n*m) 扫描规模）。 | Writes per frame (scale of the O(n*m) scan in pool upload). */
+static uint64_t g_writes_sum, g_writes_max, g_writes_n;
 /* 按"渲染目标类别"分组的 draw 统计：0 全屏(UI/合成) / 1 世界(3D) / 2 阴影(1024^2) / 3 其它。
    "类别"用第一个颜色附件的宽高判定；只有深度附件的按阴影/世界分。 */
 /* Draw stats grouped by render-target class: 0 full-res (UI/composite) / 1 world (3D) / 2 shadow (1024^2) / 3 other.
@@ -689,6 +691,8 @@ static int cached_snapshot(Range range,VBuffer **buffer) {
     int i=S.nread_snapshots++;S.read_snapshots[i]=(ReadSnapshot){.range=range};return i;
 }
 static void pool_upload_guest_span(VPool *p,uint64_t base,uint64_t base_off,uint64_t addr,uint64_t len) {
+    { static uint64_t fr; if(fr!=G.present_count){fr=G.present_count;g_writes_sum=0;g_writes_max=0;g_writes_n=0;}
+      g_writes_sum+=(uint64_t)S.nwrites; if((uint64_t)S.nwrites>g_writes_max)g_writes_max=(uint64_t)S.nwrites; g_writes_n++; }
     G.profile_pool_uploaded_bytes+=nvn_vk_pool_copy_guest_span(p->v.map,base,base_off,addr,len,S.writes,S.nwrites);
 }
 static VPool *pool_read_resolved(VPool *p,uint64_t addr,uint64_t len,uint64_t *off) {
@@ -750,10 +754,16 @@ static VPool *pool_read(uint64_t addr,uint64_t len,uint64_t *off) {
  * 这里开一层 8 槽直接映射表，跳过 pool_find 扫描与上传桶查找；**保留脏检查**（内容新鲜语义不变：
  * 命中条件含 dirty_since，任何 CPU 写入都会落回 pool_read 走上传）。 */
 typedef struct { uint64_t addr,size,serial,stamp; VPool *p; uint64_t off; } ReadMemo;
-static _Thread_local ReadMemo g_read_memo[8];
+/* 256 槽直接映射（原来 8 槽、addr>>6 分桶，相邻地址互相挤掉）：UI/世界每 draw 用不同的顶点/常量
+   地址，8 槽命中率只有 14%。哈希混入高位，256 槽把工作集装下。 */
+/* 256-slot direct map (was 8 slots keyed by addr>>6, so neighbours evicted each other): UI and world
+   draws use a different vertex/constant address every draw and the 8-slot table hit only 14%. The hash
+   mixes in high bits and 256 slots hold the working set. */
+#define READ_MEMO_SLOTS 1024
+static _Thread_local ReadMemo g_read_memo[READ_MEMO_SLOTS];
 static VPool *pool_read_memo(uint64_t addr,uint64_t size,uint64_t *offset) {
     if(!G.read_memo_enabled)return pool_read(addr,size,offset);
-    ReadMemo *m=&g_read_memo[(addr>>6)&7];
+    ReadMemo *m=&g_read_memo[((addr>>4)^(addr>>13)^(addr>>22))&(READ_MEMO_SLOTS-1)];
     uint64_t stamp=nvn_dirty_now();
     if(m->addr==addr&&m->size==size&&m->p&&m->p->serial==m->serial&&
        !nvn_dirty_since((const void *)(uintptr_t)addr,size,m->stamp)){
@@ -3618,6 +3628,8 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
               (g_att_load_bytes+g_att_store_bytes+g_att_clear_bytes)/1048576.0/fr, g_att_passes/fr);
           g_att_load_bytes=g_att_store_bytes=g_att_clear_bytes=g_att_skip_bytes=0; g_att_passes=0; }
         { double fr=G.profile_frames? (double)G.profile_frames:1.0;
+          if(g_writes_n)fprintf(stderr,"[nvn-vulkan] RENDER_WRITES frame=%llu uplifts=%.0f avg_writes=%.1f max_writes=%llu\n",
+              (unsigned long long)G.present_count+1,(double)g_writes_n/fr,(double)g_writes_sum/(double)g_writes_n, (unsigned long long)g_writes_max);
           fprintf(stderr,"[nvn-vulkan] RENDER_DRAW_HIST frame=%llu draws=%.0f verts=%.0f avg=%.1f b16=%.1f b64=%.1f b256=%.1f b1k=%.1f b4k=%.1f bbig=%.1f\n",
               (unsigned long long)G.present_count+1, g_draw_n/fr, g_draw_idx_total/fr, g_draw_n? (double)g_draw_idx_total/(double)g_draw_n:0.0,
               g_draw_hist[0]/fr,g_draw_hist[1]/fr,g_draw_hist[2]/fr,g_draw_hist[3]/fr,g_draw_hist[4]/fr,g_draw_hist[5]/fr);
