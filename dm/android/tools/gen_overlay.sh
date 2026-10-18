@@ -31,12 +31,23 @@ export DM_TOUCH_TWO_CARDS=1
 # variable (the iOS package does not set it; its default stays dm/ios/Gen/assets). gen_overlay.sh and build_apk.sh must agree on this root --
 # the former generates, the latter reads hud_v4_ui, and a mismatch means it is not found.
 export DM_GEN_ASSETS=${DM_GEN_ASSETS:-$SRC/dm/android/build/gen-assets}
-# 技能图集（TouchArt PNG）同样不写 iOS 源码树；那个 .c 索引仍在原位（两边都编、用相对 include，挪走要改两边编译设置）。
-# The skill atlas (TouchArt PNGs) also stops writing into the iOS source tree; the .c index stays where it is (both builds compile it and it
-# includes relatively, so moving it would mean changing both build configurations).
+# 技能图集（TouchArt PNG）与技能索引那份 .c 同样不写 iOS 源码树：两个落点都由生成器按环境变量认，
+# 缺省都是原位（iOS 出包不设这两个变量，行为逐字不变）。
+# The skill atlas (TouchArt PNGs) and the .c skill index likewise stop writing into the iOS source tree: the generator honours both
+# locations through environment variables, both defaulting to the original places (the iOS package sets neither, behaviour unchanged).
 export DM_NATIVE_ART_DIR=${DM_NATIVE_ART_DIR:-$DM_GEN_ASSETS/native_art}
+export DM_NATIVE_ART_C=$DM_GEN_ASSETS/native_art/dm_touch_native_art.c
+# 那份 .c 里的相对 include（../../host/dm_input.h，按 Sources/ 的深度写的）由生成器换成走 include 路径的写法——
+# dm/host 在两边都在 include 路径里，逐字同义，Android 那份因此能独立编译。
+# The .c's relative include (../../host/dm_input.h, written for the depth of Sources/) is rewritten by the generator to go through the include
+# path -- dm/host is in the include path on both sides, so it is exactly equivalent and Android's copy compiles on its own.
+# 两个头文件在仓库里、是同目录引用，一并复制过来，CMake 就不必再去 iOS 树里找（dm_touch_game_state.h 只含系统头，自包含）。
+# Both headers are in the repository and are same-directory includes, so copy them along and CMake need not look into the iOS tree for them
+# (dm_touch_game_state.h has system headers only, self-contained).
+NAT=$DM_GEN_ASSETS/native_art; mkdir -p "$NAT"
+cp "$SRC/dm/ios/Sources/dm_touch_native_art.h" "$SRC/dm/ios/Sources/dm_touch_game_state.h" "$NAT/"
 echo "原版衍生资源落点：$DM_GEN_ASSETS（不写 iOS 源码树）"
-echo "技能图集落点：$DM_NATIVE_ART_DIR"
+echo "技能图集 / 索引：$DM_NATIVE_ART_DIR"
 
 # 部分工具按 clang 这个名字调编译器，而实际只有 gcc：临时目录里放个垫片（clang → gcc）。
 # /tmp 会被清掉，所以每次现建，不留进仓库。
@@ -47,6 +58,8 @@ printf '#!/bin/sh\nexec gcc "$@"\n' > "$SHIM/clang"; chmod +x "$SHIM/clang"
 export PATH="$SHIM:$PATH"
 
 "$PY" "$SRC/dm/ios/tools/gen_romfs_overlay.py" "$ROMFS" "$OUT"
+
+[ -f "$DM_NATIVE_ART_C" ] || { echo "技能索引 .c 没生成：$DM_NATIVE_ART_C" >&2; exit 1; }
 
 # 生成器要求每套 overlay 都有这份配置（run.sh:69-72 同款自检）
 [ -f "$OUT/data/.build.config" ] || { echo "缺 $OUT/data/.build.config" >&2; exit 1; }

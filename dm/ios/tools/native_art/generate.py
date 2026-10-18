@@ -59,15 +59,24 @@ def main(romfs):
     assert len({r[0] for r in rows}) == len(rows)
     if sha(canonical(rows)) != man['descriptor_index_sha256']: raise SystemExit('native_art：技能索引和冻结的不一致')
     gpath = IOS / 'docs/native_art_v1_geometry.json'; binding = IOS / 'docs/touch_layout_spec_native_binding_v5.json'
-    out = ['/* Generated from frozen official Skills/Skilldesc; do not hand-edit rows. */', '#include "dm_touch_native_art.h"', '#include "../../host/dm_input.h"', '#include <stddef.h>',
+    # .c 索引的落点：环境变量 DM_NATIVE_ART_C，缺省仍是 Sources/ 原位（iOS 出包不设，行为不变）。
+    # Android 出包设它，产物落在它自己的构建树里，iOS 源码树一个字都不动。写去别处时那个相对 include
+    # （../../host/dm_input.h，按 Sources/ 的深度写的）换成走 include 路径的写法——dm/host 在两边都在 include 路径里，结果逐字同义。
+    # Output path of the .c index: environment variable DM_NATIVE_ART_C, still in place under Sources/ by default (the iOS package does not set
+    # it, behaviour unchanged). The Android package sets it, so the product lands in its own build tree and the iOS source tree is not touched at
+    # all. When written elsewhere, the relative include (../../host/dm_input.h, written for the depth of Sources/) is rewritten to the form that
+    # goes through the include path -- dm/host is in the include path on both sides, so the result is exactly equivalent.
+    c_env = os.environ.get('DM_NATIVE_ART_C'); cpath = pathlib.Path(c_env) if c_env else IOS / 'Sources/dm_touch_native_art.c'
+    inc = '"dm_input.h"' if c_env else '"../../host/dm_input.h"'
+    out = ['/* Generated from frozen official Skills/Skilldesc; do not hand-edit rows. */', '#include "dm_touch_native_art.h"', '#include ' + inc, '#include <stddef.h>',
            'const dm_ta_atlas dm_ta_atlases[DM_TA_ATLASES]={']
     for a in atl: out.append(' {"%s",%d,%d,%d,%d,%d},' % (a['asset'][:-4], *a['atlas_px'], a['frame_width'], a['frame_pitch'], a['frame_count']))
     out += ['};', f'const char dm_ta_manifest_sha[]="{sha(mpath.read_bytes())}";', f'const char dm_ta_geometry_sha[]="{sha(gpath.read_bytes())}";',
             f'const char dm_ta_binding_sha[]="{sha(binding.read_bytes())}";', 'static const struct { uint32_t id; int atlas,frame; } rows[]={']
     out += [' {%d,%d,%d},' % tuple(row) for row in rows]; out += ['};']
     out += [(HERE / 'implementation.c.inc').read_text()]
-    (IOS / 'Sources/dm_touch_native_art.c').write_text('\n'.join(out) + '\n')
-    print(f'native_art：{len(rows)} 条技能索引、{len(atlases)} 张 PNG（原件 SHA256 + MD5、PNG SHA256 都核过）→ {art}')
+    (cpath.parent / cpath.name).write_text('\n'.join(out) + '\n')
+    print(f'native_art：{len(rows)} 条技能索引、{len(atlases)} 张 PNG（原件 SHA256 + MD5、PNG SHA256 都核过）→ {art}；索引 .c → {cpath}')
 
 
 if __name__ == '__main__':

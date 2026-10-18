@@ -40,6 +40,14 @@ def ensure(R):
     """产物齐、指纹没变就直接返回；否则拿锁生成。返回 True = 这次重出了。 | If the build output is complete and the fingerprint unchanged, return directly; otherwise take the lock and generate. Returns True = regenerated this time."""
     root = gen_paths.gen_dir(); st = os.path.join(root, '.stamp'); lock = os.path.join(root, '.gen_lock')
     outs = [os.path.join(root, 'NativeHUD', 'v4', 'base.png'), os.path.join(HERE, '..', 'Sources', 'TouchArt', 'dm_native_skill_0.png'), os.path.join(HERE, '..', 'Sources', 'dm_touch_native_art.c')]
+    # Android 出包把产物放到自己的树里（DM_GEN_ASSETS / DM_NATIVE_ART_DIR / DM_NATIVE_ART_C），指纹校验要跟着走同一个落点，
+    # 否则每次都判"产物缺失"而重跑。缺省三个变量都不设，指的还是 iOS 的原位，与之前逐字一样。
+    # The Android package puts the products in its own tree (DM_GEN_ASSETS / DM_NATIVE_ART_DIR / DM_NATIVE_ART_C); the fingerprint check has to
+    # follow the same locations, otherwise it judges the products missing and regenerates every time. With all three unset the paths are the
+    # iOS ones, word for word as before.
+    outs = [os.path.join(root, 'NativeHUD', 'v4', 'base.png'),
+            os.path.join(os.environ.get('DM_NATIVE_ART_DIR') or os.path.join(HERE, '..', 'Sources', 'TouchArt'), 'dm_native_skill_0.png'),
+            os.environ.get('DM_NATIVE_ART_C') or os.path.join(HERE, '..', 'Sources', 'dm_touch_native_art.c')]
     want = stamp(R); fresh = lambda: all(map(os.path.isfile, outs)) and os.path.isfile(st) and open(st).read() == want
     if fresh(): return False
     t0 = time.time()
