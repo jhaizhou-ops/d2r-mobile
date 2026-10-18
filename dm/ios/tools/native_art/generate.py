@@ -9,7 +9,7 @@ Sources and fingerprints are frozen in Sources/TouchArt/native_art_manifest.json
 after decoding verify the SHA-256 of the PNGs (decoding only decodes blocks, it does not redraw pixels); on a mismatch report an error (wrong game version).
 Usage: generate.py <original game RomFS (Update)>   The build output is generated in place and git-ignored (dm/ios/.gitignore): Sources/TouchArt/dm_native_*.png, Sources/dm_touch_native_art.c
 (the .c has a relative include written against Sources/, and the PNGs are referenced by DmTouchOverlay.m / the project / the tests via Sources/TouchArt, so the directory is not moved)"""
-import csv, hashlib, io, json, sys
+import csv, hashlib, io, json, os, pathlib, sys
 from pathlib import Path
 HERE = Path(__file__).resolve().parent; IOS = HERE.parent.parent
 sys.path.insert(0, str(HERE.parent))
@@ -29,7 +29,14 @@ def main(romfs):
         raw = romfs_art.read(romfs, 'global/excel/' + t['file'])
         if sha(raw) != t['sha256']: raise SystemExit('native_art：游戏文件里的 %s 和冻结的不一样（游戏版本不对？要 3.3.94012）' % t['file'])
         tables[t['file']] = list(csv.DictReader(io.StringIO(raw.decode('utf-8')), delimiter='\t'))
-    art = IOS / 'Sources/TouchArt'; atlases = {}
+    # PNG 落点：环境变量 DM_NATIVE_ART_DIR，缺省仍在 iOS 源码树原位（iOS 出包不设，行为不变）。
+    # Android 出包设它，PNG 落到 dm/android/build/gen-assets/native_art/，不再写 iOS 源码树。
+    # 那个 .c 索引仍写原位：它用相对 include（../../host/dm_input.h）且 iOS 与 Android 都编它，挪走要改两边的编译设置。
+    # PNG output directory: environment variable DM_NATIVE_ART_DIR, still in place in the iOS source tree by default (the iOS package does not
+    # set it, behaviour unchanged). The Android package sets it, and the PNGs land in dm/android/build/gen-assets/native_art/, no longer
+    # writing into the iOS source tree. The .c index stays where it is: it includes relatively (../../host/dm_input.h) and both iOS and Android
+    # compile it, so moving it would mean changing both build configurations.
+    art = pathlib.Path(os.environ.get('DM_NATIVE_ART_DIR') or (IOS / 'Sources/TouchArt')); art.mkdir(parents=True, exist_ok=True); atlases = {}
     for a in man['assets']:
         raw = romfs_art.read(romfs, a['official_path'].split('data:data/', 1)[-1])
         if sha(raw) != a['official_sprite_sha256'] or hashlib.md5(raw).hexdigest() != a['official_sprite_md5']:

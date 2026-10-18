@@ -20,8 +20,16 @@ rm -rf "$OUT"; mkdir -p "$OUT"/{classes,dex,gen,assets/modules,stage/lib/arm64-v
 
 # 1) assets: 模块 + 清单 + 底栏 v4 素材（gen_assets 产物）
 python3 "$SRC/dm/android/tools/gen_module_manifest.py" "$MODULES" "$OUT/assets"
-V4=${DM_HUD_V4_DIR:-$SRC/dm/ios/Gen/assets/NativeHUD/v4/hud_v4_ui}
-TA=${DM_TOUCH_ART_DIR:-$SRC/dm/ios/Sources/TouchArt}
+# 原版衍生资源的根，与 gen_overlay.sh 里同一个（那边生成、这边读）。缺省落在 dm/android/build/gen-assets，不碰 iOS 源码树；
+# 老 setups 若已生成在 dm/ios/Gen/assets，显式给 DM_GEN_ASSETS 指过去即可（不改仓库也能接着用）。
+# Root of the assets derived from the original game -- the same one gen_overlay.sh uses (it generates, this reads). Defaults to
+# dm/android/build/gen-assets and never touches the iOS source tree; a setup that already generated them under dm/ios/Gen/assets can just point
+# DM_GEN_ASSETS there (works without any repository change).
+GEN_ROOT=${DM_GEN_ASSETS:-$BUILD/gen-assets}
+V4=${DM_HUD_V4_DIR:-$GEN_ROOT/NativeHUD/v4/hud_v4_ui}
+# 技能图集（TouchArt PNG）——与 gen_overlay.sh 里同一个落点。那份 .c 索引仍在 iOS 源码树原位（两边都编、相对 include）。
+# The skill atlas (TouchArt PNGs) -- same location as in gen_overlay.sh. The .c index stays in the iOS source tree (both builds compile it, relative include).
+TA=${DM_TOUCH_ART_DIR:-${DM_NATIVE_ART_DIR:-$GEN_ROOT/native_art}}
 [ -d "$TA" ] && { mkdir -p "$OUT/assets"; cp "$TA"/*.png "$OUT/assets/"; echo "技能图集: $(ls "$TA"/*.png | wc -l) 张"; } || echo "警告：没有技能图集（TouchArt），技能钮只有文字"
 [ -d "$V4" ] && { mkdir -p "$OUT/assets/hud_v4_ui"; cp "$V4"/* "$OUT/assets/hud_v4_ui/"; echo "hud_v4_ui: $(ls "$OUT/assets/hud_v4_ui" | wc -l) 个文件"; } || echo "警告：没有 hud_v4_ui 素材，底栏 v4 不画"
 
