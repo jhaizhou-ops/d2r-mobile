@@ -59,6 +59,7 @@ dmBrDiablo	迪亚波罗	Diablo	首领连战首领名
 dmBrBaal	巴尔	Baal	首领连战首领名
 dmBrDiabloClone	暗黑迪亚波罗	Diablo Clone	首领连战第 11 关（怪物 333）
 dmBrUbers	超级墨菲斯托、超级迪亚波罗、超级巴尔	Uber Mephisto, Uber Diablo, Uber Baal	首领连战第 12 关
+dmPickClassFirst	先选择一位职业	Select a character class first	建角页还没选职业就点「创建」时的系统提示（dm_cursor.c）
 dmBlissTitle	极乐世界	Elysium	建角页「极乐世界」勾选标题（touch_layout.py）
 dmBlissDesc	暗金 ×5、套装 ×3、符文 ×5；Boss 永远按首次击败掉落。	Unique ×5, Set ×3, Runes ×5; bosses always drop as on first kill.	建角页「极乐世界」说明
 dmRwHint	先移到个人仓库或背包	Move out of shared stash first	符文之语清单：底材在共享仓库时的灰字

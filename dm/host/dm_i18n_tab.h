@@ -61,6 +61,7 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmBrBaal", "巴尔", "Baal" },
     { "dmBrDiabloClone", "暗黑迪亚波罗", "Diablo Clone" },
     { "dmBrUbers", "超级墨菲斯托、超级迪亚波罗、超级巴尔", "Uber Mephisto, Uber Diablo, Uber Baal" },
+    { "dmPickClassFirst", "先选择一位职业", "Select a character class first" },
     { "dmBlissTitle", "极乐世界", "Elysium" },
     { "dmBlissDesc", "暗金 ×5、套装 ×3、符文 ×5；Boss 永远按首次击败掉落。", "Unique ×5, Set ×3, Runes ×5; bosses always drop as on first kill." },
     { "dmRwHint", "先移到个人仓库或背包", "Move out of shared stash first" },

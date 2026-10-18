@@ -27,7 +27,12 @@ add_library(dm_android_core OBJECT
   ${DM_HOST}/hle_oe.c ${DM_HOST}/hle_account.c ${DM_HOST}/hle_net.c
   ${DM_HOST}/dm_bright.c
   ${DM_HOST}/hle_lifecycle.c ${DM_HOST}/hle_friends.c ${DM_HOST}/hle_misc.c
-  ${DM_HOST}/hle_swkbd.c keyboard_android.c
+  # hle_charname.c：离线角色名放行中文（接管角色名三处校验里的 isalpha + 键盘返回串的 ASCII 过滤）。
+  # 少了它中文名一律进不去（Android 侧真机：输入中文后名字框里什么也不剩）——它此前只在文档里列着，任何构建都没编。
+  # hle_charname.c: allow Chinese in offline character names (takes over isalpha in the three character-name checks and clears the ASCII typing
+  # filter on the string returned by the keyboard). Without it no Chinese name gets through (real device: type a Chinese name and nothing is left in
+  # the name box) -- it was only listed in the docs until now and was never compiled anywhere.
+  ${DM_HOST}/hle_swkbd.c ${DM_HOST}/hle_charname.c keyboard_android.c
   services_fs.c services_fs_probe.c services_platform.c diagnostics.c svc_host_android.c ui_state_android.c feature_stubs_android.c
   ${DM_HOST}/dm_cursor.c ${DM_HOST}/dm_cursor_item.c ${DM_HOST}/dm_actions.c ${DM_HOST}/dm_world.c ${DM_HOST}/dm_hud.c ${DM_HOST}/dm_uiscreen.c
   ${DM_HOST}/dm_padmode.c ${DM_HOST}/dm_i18n.c ${DM_HOST}/dm_freetp.c ${DM_HOST}/dm_potpick.c ${DM_HOST}/dm_beltauto.c ${DM_HOST}/dm_autobuff.c ${DM_HOST}/dm_lootfilter.c ${DM_HOST}/dm_custom.c ${DM_HOST}/dm_kills.c ${DM_HOST}/dm_elysium.c ${DM_HOST}/dm_rift.c ${DM_HOST}/dm_bossrush.c ${DM_HOST}/dm_pages.c ${DM_HOST}/dm_vault.c ${DM_HOST}/dm_vault_ui.c ${DM_HOST}/dm_runeword.c ${DM_HOST}/dm_pouch.c ${DM_HOST}/dm_textbox.c ${DM_HOST}/dm_update.c ${DM_HOST}/dm_townwp.c ${DM_HOST}/dm_textbox_core.c ${DM_HOST}/dm_rwlv_core.c ${DM_HOST}/dm_rift_ui.c commoncrypto_shim.c hud_read_android.c diag_android.c i18n_android.c

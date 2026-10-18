@@ -124,7 +124,15 @@ def offscreen(s, types=('ButtonLegendWidget', 'ButtonLegendScrollWidget'), names
 # Front end and common popups (step ②): all button prompt widgets are moved away; the semi-transparent backing strip (LegendBackground) at the bottom of the character select page / cutscene list is moved away as well
 # The character select page (main menu / save list / left sidebar) is not handled here: it is replaced entirely with the keyboard-and-mouse UI, see PCFRONT
 FRONTEND = [('controller/charactercreatepanelhd.json', ()), ('controller/console/charactercreatepanelhd.json', ('GameType', 'GameTypeBackground')),   # 标题下的「离线」字样与底条 | The 「离线」(Offline) label under the title and its backing strip
-            ('controller/console/charactercreatenamepanelhd.json', ('EnterNameLabel',)), ('controller/console/characteroptionspanelhd.json', ('LadderFlag', 'LadderToggle', 'NonLadderToggle', 'LadderCenter')),   # 模式页只留标准 / 专家一行（单机只支持这两种） | The mode page keeps only the standard / hardcore row (single player supports only these two)
+            ('controller/console/charactercreatenamepanelhd.json', ('EnterNameLabel',)),
+            # 模式页只留标准 / 专家两块方块（单机只支持这两种；玩家口径：这一页就这两块，加一个极乐世界的 ☑）。
+            # 天梯那一行与「资料片 / 经典版」那一行（旗子、两块牌子、中间那颗）统统挪走——后者是原版 Classic / Expansion 的入口，
+            # 这一页不再出现。原版接受逻辑读的是模式页自己的勾选状态（[面板+0x211] 与专家牌控件的勾选字节），与挪走的这些控件无关。
+            # The mode page keeps only the two Standard / Hardcore cards (single player supports only these two; per the player: just these two cards plus an Elysium ☑).
+            # The ladder row and the 「Expansion / Classic」 row (flags, both cards, the centre piece) are all moved away -- the latter is the original
+            # Classic / Expansion entry, which no longer appears on this page. The original accept logic reads the mode page's own checked state
+            # ([panel+0x211] and the Hardcore card widget's checked byte), unrelated to the widgets moved away here.
+            ('controller/console/characteroptionspanelhd.json', ('LadderFlag', 'LadderToggle', 'NonLadderToggle', 'LadderCenter', 'ClassicFlag', 'ExpansionToggle', 'ClassicToggle', 'ExpansionCenter')),
            
             ('controller/cinematicsmodalhd.json', ('LegendBackground',)), ('controller/console/cinematicsmodalhd.json', ('LegendBackground',)),
             ('controller/creditsmodalhd.json', ()), ('controller/eulamodalhd.json', ()),

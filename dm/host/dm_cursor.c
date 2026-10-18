@@ -2736,6 +2736,21 @@ static void tip_dock(const uint64_t *regs) {
     static int lg; static int ll = -1; if (ll != left && lg < 40) { ll = left; lg++; LOG("说明框停靠：物品 %s 在面板%s半 → 说明框停到%s侧空板（中线 x %d，顶 y %d；画面 %dx%d）", ci.code, left ? "右" : "左", left ? "左" : "右", cx, y, W, H); }
 }
 static int ui_touch_mode(void) { int dm_padmode_current(void), dm_padmode_busy(void); return !dm_padmode_current() && !dm_padmode_busy(); }
+// 控件自己的矩形命中：+0x70/0x74 = x/y、+0x78/0x7c = 宽高、+0x80 缩放。只按矩形判，不调控件虚表 +0x48 的命中函数——
+// 早先调过，真机直接把游戏打崩（main+0x20b7b48），那套只对 SkillButton / TextTab 验过。
+// 控件矩形是布局单位（原点在屏幕水平中线、2160 = 界面高），触点是画面像素，换算用 dm_ui_rect（这一层 main+0x211da3c 读不到画面尺寸，是 0）。
+// Hit test by the widget's own rectangle: +0x70/0x74 = x/y, +0x78/0x7c = width/height, +0x80 = scale. Rectangle only -- calling the widget vtable's
+// +0x48 hit function crashed the game on a real device (main+0x20b7b48); that path is verified only for SkillButton / TextTab.
+// Widget rectangles are in layout units (origin at the horizontal centre of the screen, 2160 = UI height) while the touch point is in picture
+// pixels, so convert with dm_ui_rect (main+0x211da3c does not read the picture size at this layer and is 0).
+static int ui_hit_rect(module_t *m, uint64_t root, const char *name, int x, int y) {
+    uint64_t w = ui_find(root, name, 0); if (!w || !*(uint8_t *)(w + 0x50)) return 0;
+    int32_t bx = *(int32_t *)(w + 0x70), by = *(int32_t *)(w + 0x74), bw = *(int32_t *)(w + 0x78), bh = *(int32_t *)(w + 0x7c);
+    float sc = *(float *)(w + 0x80); if (sc <= 0) sc = 1;
+    int ux, uy, uw, uh; dm_ui_rect(&ux, &uy, &uw, &uh); if (uh <= 0 || uw <= 0) return 0;
+    float u = uh / 2160.0f;
+    return (float)x >= uw / 2 + bx * u && (float)x <= uw / 2 + (bx + bw * sc) * u && (float)y >= uy + by * u && (float)y <= uy + (by + bh * sc) * u;
+}
 // Mac App：界面是手柄版（上面答「不是触屏模式」），但真鼠标走的是触屏那套物品手势（touch_mac.c 把鼠标事件喂给触屏状态机）。
 // 只把物品手势的四个执行泵（长按 / 双击使用 / 买 / 拖放）在真鼠标模式下补跑一遍；绑定框、技能页签对调、佣兵页这些改触屏布局的泵不跑。没有请求时这四个什么都不做，手柄玩家不受影响
 // Mac App: the interface is the gamepad layout (the answer above is "not touch mode"), but the real mouse uses the touch layout's item gestures (touch_mac.c feeds mouse events to the touch state machine).
@@ -2810,6 +2825,21 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
     if (width <= 0 || height <= 0 || !root) return;
     uint64_t r = atomic_load(&g_ut_xy);
     int x = (int)(((r >> 16) & 0xffff) / 65535.0 * width), y = (int)((r & 0xffff) / 65535.0 * height); if (x >= width) x = width - 1; if (y >= height) y = height - 1;
+    // 职业页的「创建」：还没选出列的职业时点了不算——原版接受的前提是有职业已出列（职业控件状态字 +0x13f4 == 2），
+    // 没有当前职业时模式页虽然开得起来，AcceptCharacterOptions 会被游戏挡下（真机：模式页关掉、起名页不开；先点过别的职业再回来就能过）。
+    // 按钮照样摆在那里、看得见入口，只是这一下不点，等玩家先选职业（同一颗按钮，选出职业后一点就通）。
+    // 「创建」(Create) on the class page: with no class stepped forward yet, this tap does nothing -- the original accept requires a class that has
+    // stepped forward (widget state word +0x13f4 == 2); without a current class the mode page does open but AcceptCharacterOptions is blocked by
+    // the game (real device: the mode page closes and the naming page never opens; going back after tapping another class works). The button stays
+    // visible so the entry is there, but this tap does not go through -- once a class is stepped forward the very same button works.
+    if (ph == 2 && atomic_load(&g_cc_open) && !atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_name_open) && !atomic_load(&g_fe_confirm_open)) {
+        uint64_t pn = ui_find(root, "CharacterCreatePanel", 0); int sel = 0;
+        for (int i = 0; pn && i < 8 && !sel; i++) { uint64_t w = ui_find(pn, k_cc_class[i], 0); if (w && *(int32_t *)(w + 0x13f4) == 2) sel = 1; }
+        if (!sel && ui_hit_rect(m, root, "TouchNext", x, y)) { static int lg; static uint64_t lt; uint64_t now = dm_guest_frame();
+            atomic_store(&g_ut_phase, 0);
+            if (!lt || now - lt > 150) { lt = now; void dm_game_notice(uint8_t *, const char *); const char *dm_str(uint8_t *, const char *);
+                dm_game_notice((uint8_t *)m->base, dm_str((uint8_t *)m->base, "dmPickClassFirst")); }
+            if (lg++ < 6) LOG("前端路径：职业页还没选职业，「创建」这一下不点（提示玩家先选一位职业）"); return; } }
     if (atomic_load(&g_fe_opt_open)) { uint64_t bw = ui_find(root, "TouchBliss", 0);
         // 模式页那颗「返回」（我们插的 TouchOptBack）：原版这一页只认手柄键（B = 退回职业页），布局里的 onClickMessage 那条
         // ConsoleCharacterCreate:ToConsoleClassConfirm 实测点了没反应（点击发出去了、面板不动）。和「极乐世界」勾选框同法：
@@ -3147,6 +3177,13 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
         int opt = atomic_load(&g_fe_opt_open);   /* 模式页盖着时藏掉职业页那两颗：模式页自己有「创建 / 返回」（AcceptCharacterOptions / ToConsoleClassConfirm），不藏就两颗「创建」重叠、点到的是职业页那颗（又进模式页） */
         if (bk) { const char *sv = getenv("DM_SAVE"); uint8_t want = !sv || has_character(sv, 0);
             ui_show_ours(bk, want && !opt); }
+        /* 「创建」一直在，看得见入口。没选职业时点了不算——那一门在触点这一层（dm_ui_touch 之前那段，见 ui_hit_rect 那处）：
+           原版接受要「当前职业」（职业控件状态字 +0x13f4 == 2），没有它 AcceptCharacterOptions 会被游戏挡下（真机：模式页关掉、
+           起名页不开；先点过别的职业再回来就能过）。所以按钮不藏，只是不点。
+           「创建」stays visible: the entry is there. With no class stepped forward the tap is refused at the touch layer (see the ui_hit_rect gate):
+           the original accept needs a "current class" (widget state word +0x13f4 == 2) and without one the game blocks AcceptCharacterOptions
+           (real device: the mode page closes, the naming page never opens; going back after tapping another class works). So the button is not
+           hidden, it just does not go through; the refused tap gives the original-game system notification 「先选择一位职业」(dmPickClassFirst, i18n table). */
         if (nxb) ui_show_ours(nxb, !opt);
     }
     { int nk = atomic_exchange(&g_fe_name_key, 0); if (nk) { fe_key(nk == 1 ? DM_BTN_PLUS : DM_BTN_B); next = fr + 8; LOG("前端路径：起名页点了「%s」→ %s", nk == 1 ? "创建" : "返回", nk == 1 ? "＋" : "B"); return; } }
@@ -3240,6 +3277,11 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
               if (ck == 2) ui_send_mouse(mm, root, ui_hash("LeftMouseButtonDown"), x, y); else if (ck == 3) ui_send_mouse(mm, root, ui_hash("LeftMouseButtonUp"), x, y);
               if (++ck > 3) { ck = 0; at = fr + 4; } }
           else { int want = atomic_load(&g_fe_opt_side), cur = *(uint8_t *)(pn + 0x211) && hw && *(uint8_t *)(hw + 0xa88);
+              /* 还没有「当前职业」这一位：原版接受的前提是有一位已出列（职业控件状态字 +0x13f4 == 2，见职业页那段读码），
+                 没点过职业时 AcceptCharacterOptions 会被游戏挡下（真机：模式页关掉、起名页不开）。
+                 这种情况由职业页的入口挡住，不在这里兜（见下）。 */
+              /* 没选职业就不接受：原版接受的前提是有职业已出列（职业控件状态字 +0x13f4 == 2）。这种时候模式页本来就开不起来——
+                   职业页那颗「创建」在没有任何职业出列时就不显示（见职业页按钮显隐那段），玩家看不到可点的入口。 */
               if (cur == want) { st = 0; next = fr + 8;
                   /* 接受走原版自己的界面消息（和布局里那颗「创建」按钮同一条：ConsoleCharacterCreate:AcceptCharacterOptions →
                      ConfirmedCharacterOptions → ToConsoleNameInputPanel → 起名页弹系统键盘）。原先这里替按 A，回退到了职业页（真机）。 */
