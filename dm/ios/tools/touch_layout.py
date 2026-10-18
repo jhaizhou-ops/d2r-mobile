@@ -123,16 +123,24 @@ def offscreen(s, types=('ButtonLegendWidget', 'ButtonLegendScrollWidget'), names
 # 选角页（主菜单 / 存档列表 / 左侧栏）不在这里：整份换成键鼠版界面，见 PCFRONT
 # Front end and common popups (step ②): all button prompt widgets are moved away; the semi-transparent backing strip (LegendBackground) at the bottom of the character select page / cutscene list is moved away as well
 # The character select page (main menu / save list / left sidebar) is not handled here: it is replaced entirely with the keyboard-and-mouse UI, see PCFRONT
+# 模式页要不要连「资料片 / 经典版」那一行也挪走：这一页只留标准 / 专家两块方块 + 极乐世界那个 ☑（玩家口径）。
+# 缺省 = iOS 现行布局不动（Classic / Expansion 那行照旧在页面上）；Android 打包时传 DM_TOUCH_TWO_CARDS=1 走这条。
+# 上游 iOS 出包不带这个变量，所以那份行为逐字不变——这是共享文件上加法式的一处平台开关（方案文档 §3.2 第 2 条）。
+# Whether the 「Expansion / Classic」 row is moved off the mode page as well, leaving only the two Standard / Hardcore cards plus the Elysium ☑
+# (per the player). Default = the current iOS layout is untouched (the Classic / Expansion row stays on the page); the Android packaging passes
+# DM_TOUCH_TWO_CARDS=1 to take this. The upstream iOS package does not set that variable, so its behaviour is unchanged word for word -- an additive
+# platform switch in a shared file (plan document §3.2 rule 2).
+_OPTS_TWO_CARDS = ('ClassicFlag', 'ExpansionToggle', 'ClassicToggle', 'ExpansionCenter') if os.environ.get('DM_TOUCH_TWO_CARDS') else ()
 FRONTEND = [('controller/charactercreatepanelhd.json', ()), ('controller/console/charactercreatepanelhd.json', ('GameType', 'GameTypeBackground')),   # 标题下的「离线」字样与底条 | The 「离线」(Offline) label under the title and its backing strip
             ('controller/console/charactercreatenamepanelhd.json', ('EnterNameLabel',)),
-            # 模式页只留标准 / 专家两块方块（单机只支持这两种；玩家口径：这一页就这两块，加一个极乐世界的 ☑）。
-            # 天梯那一行与「资料片 / 经典版」那一行（旗子、两块牌子、中间那颗）统统挪走——后者是原版 Classic / Expansion 的入口，
-            # 这一页不再出现。原版接受逻辑读的是模式页自己的勾选状态（[面板+0x211] 与专家牌控件的勾选字节），与挪走的这些控件无关。
-            # The mode page keeps only the two Standard / Hardcore cards (single player supports only these two; per the player: just these two cards plus an Elysium ☑).
-            # The ladder row and the 「Expansion / Classic」 row (flags, both cards, the centre piece) are all moved away -- the latter is the original
-            # Classic / Expansion entry, which no longer appears on this page. The original accept logic reads the mode page's own checked state
-            # ([panel+0x211] and the Hardcore card widget's checked byte), unrelated to the widgets moved away here.
-            ('controller/console/characteroptionspanelhd.json', ('LadderFlag', 'LadderToggle', 'NonLadderToggle', 'LadderCenter', 'ClassicFlag', 'ExpansionToggle', 'ClassicToggle', 'ExpansionCenter')),
+            # 模式页：单机只有标准 / 专家两种。天梯那一行照旧挪走；「资料片 / 经典版」那一行（旗子、两块牌子、中间那颗）
+            # 只在 DM_TOUCH_TWO_CARDS=1 时挪走（Android）。原版接受逻辑读的是模式页自己的勾选状态（[面板+0x211] 与
+            # 专家牌控件的勾选字节），与挪走的这些控件无关，两种模式都不受影响。
+            # Mode page: single player only has Standard / Hardcore. The ladder row is moved away as always; the 「Expansion / Classic」 row
+            # (flags, both cards, the centre piece) is moved away only under DM_TOUCH_TWO_CARDS=1 (Android). The original accept logic reads the
+            # mode page's own checked state ([panel+0x211] and the Hardcore card widget's checked byte), unrelated to the widgets moved away here,
+            # so both modes are unaffected.
+            ('controller/console/characteroptionspanelhd.json', ('LadderFlag', 'LadderToggle', 'NonLadderToggle', 'LadderCenter') + _OPTS_TWO_CARDS),
            
             ('controller/cinematicsmodalhd.json', ('LegendBackground',)), ('controller/console/cinematicsmodalhd.json', ('LegendBackground',)),
             ('controller/creditsmodalhd.json', ()), ('controller/eulamodalhd.json', ()),

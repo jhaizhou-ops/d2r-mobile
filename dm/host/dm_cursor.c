@@ -2736,6 +2736,9 @@ static void tip_dock(const uint64_t *regs) {
     static int lg; static int ll = -1; if (ll != left && lg < 40) { ll = left; lg++; LOG("说明框停靠：物品 %s 在面板%s半 → 说明框停到%s侧空板（中线 x %d，顶 y %d；画面 %dx%d）", ci.code, left ? "右" : "左", left ? "左" : "右", cx, y, W, H); }
 }
 static int ui_touch_mode(void) { int dm_padmode_current(void), dm_padmode_busy(void); return !dm_padmode_current() && !dm_padmode_busy(); }
+#ifdef __ANDROID__
+// 只编进 Android：目前只有职业页「创建」那一处用（iOS 那边不编，免得留下没人调的静态函数）。
+// Compiled into Android only: for now only the class page 「创建」(Create) gate uses it (not compiled on iOS, to avoid a static function nobody calls).
 // 控件自己的矩形命中：+0x70/0x74 = x/y、+0x78/0x7c = 宽高、+0x80 缩放。只按矩形判，不调控件虚表 +0x48 的命中函数——
 // 早先调过，真机直接把游戏打崩（main+0x20b7b48），那套只对 SkillButton / TextTab 验过。
 // 控件矩形是布局单位（原点在屏幕水平中线、2160 = 界面高），触点是画面像素，换算用 dm_ui_rect（这一层 main+0x211da3c 读不到画面尺寸，是 0）。
@@ -2751,6 +2754,7 @@ static int ui_hit_rect(module_t *m, uint64_t root, const char *name, int x, int 
     float u = uh / 2160.0f;
     return (float)x >= uw / 2 + bx * u && (float)x <= uw / 2 + (bx + bw * sc) * u && (float)y >= uy + by * u && (float)y <= uy + (by + bh * sc) * u;
 }
+#endif
 // Mac App：界面是手柄版（上面答「不是触屏模式」），但真鼠标走的是触屏那套物品手势（touch_mac.c 把鼠标事件喂给触屏状态机）。
 // 只把物品手势的四个执行泵（长按 / 双击使用 / 买 / 拖放）在真鼠标模式下补跑一遍；绑定框、技能页签对调、佣兵页这些改触屏布局的泵不跑。没有请求时这四个什么都不做，手柄玩家不受影响
 // Mac App: the interface is the gamepad layout (the answer above is "not touch mode"), but the real mouse uses the touch layout's item gestures (touch_mac.c feeds mouse events to the touch state machine).
@@ -2825,13 +2829,18 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
     if (width <= 0 || height <= 0 || !root) return;
     uint64_t r = atomic_load(&g_ut_xy);
     int x = (int)(((r >> 16) & 0xffff) / 65535.0 * width), y = (int)((r & 0xffff) / 65535.0 * height); if (x >= width) x = width - 1; if (y >= height) y = height - 1;
+    #ifdef __ANDROID__
     // 职业页的「创建」：还没选出列的职业时点了不算——原版接受的前提是有职业已出列（职业控件状态字 +0x13f4 == 2），
     // 没有当前职业时模式页虽然开得起来，AcceptCharacterOptions 会被游戏挡下（真机：模式页关掉、起名页不开；先点过别的职业再回来就能过）。
     // 按钮照样摆在那里、看得见入口，只是这一下不点，等玩家先选职业（同一颗按钮，选出职业后一点就通）。
+    // 只编进 Android（__ANDROID__）：iOS 那边维持原样——那边验不到，这一处就不去动它的行为（共享文件上加法式的一处平台开关，
+    // 同 touch_layout.py 的 DM_TOUCH_TWO_CARDS，方案文档 §3.2 第 2 条）。
     // 「创建」(Create) on the class page: with no class stepped forward yet, this tap does nothing -- the original accept requires a class that has
     // stepped forward (widget state word +0x13f4 == 2); without a current class the mode page does open but AcceptCharacterOptions is blocked by
     // the game (real device: the mode page closes and the naming page never opens; going back after tapping another class works). The button stays
     // visible so the entry is there, but this tap does not go through -- once a class is stepped forward the very same button works.
+    // Compiled into Android only (__ANDROID__): iOS keeps its current behaviour -- that side cannot be verified here, so its behaviour is left
+    // alone (an additive platform switch in a shared file, same as touch_layout.py's DM_TOUCH_TWO_CARDS, plan document §3.2 rule 2).
     if (ph == 2 && atomic_load(&g_cc_open) && !atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_name_open) && !atomic_load(&g_fe_confirm_open)) {
         uint64_t pn = ui_find(root, "CharacterCreatePanel", 0); int sel = 0;
         for (int i = 0; pn && i < 8 && !sel; i++) { uint64_t w = ui_find(pn, k_cc_class[i], 0); if (w && *(int32_t *)(w + 0x13f4) == 2) sel = 1; }
@@ -2840,6 +2849,7 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
             if (!lt || now - lt > 150) { lt = now; void dm_game_notice(uint8_t *, const char *); const char *dm_str(uint8_t *, const char *);
                 dm_game_notice((uint8_t *)m->base, dm_str((uint8_t *)m->base, "dmPickClassFirst")); }
             if (lg++ < 6) LOG("前端路径：职业页还没选职业，「创建」这一下不点（提示玩家先选一位职业）"); return; } }
+#endif
     if (atomic_load(&g_fe_opt_open)) { uint64_t bw = ui_find(root, "TouchBliss", 0);
         // 模式页那颗「返回」（我们插的 TouchOptBack）：原版这一页只认手柄键（B = 退回职业页），布局里的 onClickMessage 那条
         // ConsoleCharacterCreate:ToConsoleClassConfirm 实测点了没反应（点击发出去了、面板不动）。和「极乐世界」勾选框同法：
@@ -3177,13 +3187,14 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
         int opt = atomic_load(&g_fe_opt_open);   /* 模式页盖着时藏掉职业页那两颗：模式页自己有「创建 / 返回」（AcceptCharacterOptions / ToConsoleClassConfirm），不藏就两颗「创建」重叠、点到的是职业页那颗（又进模式页） */
         if (bk) { const char *sv = getenv("DM_SAVE"); uint8_t want = !sv || has_character(sv, 0);
             ui_show_ours(bk, want && !opt); }
-        /* 「创建」一直在，看得见入口。没选职业时点了不算——那一门在触点这一层（dm_ui_touch 之前那段，见 ui_hit_rect 那处）：
+        /* 「创建」一直显示（iOS / Android 同）：入口看得见。差别在 Android 那边多一层——没选出列的职业时这一下不点，
+           并弹原版系统提示「先选择一位职业」（那一门在触点层，见上面 ui_hit_rect 那处，只编进 Android）。
            原版接受要「当前职业」（职业控件状态字 +0x13f4 == 2），没有它 AcceptCharacterOptions 会被游戏挡下（真机：模式页关掉、
-           起名页不开；先点过别的职业再回来就能过）。所以按钮不藏，只是不点。
-           「创建」stays visible: the entry is there. With no class stepped forward the tap is refused at the touch layer (see the ui_hit_rect gate):
-           the original accept needs a "current class" (widget state word +0x13f4 == 2) and without one the game blocks AcceptCharacterOptions
-           (real device: the mode page closes, the naming page never opens; going back after tapping another class works). So the button is not
-           hidden, it just does not go through; the refused tap gives the original-game system notification 「先选择一位职业」(dmPickClassFirst, i18n table). */
+           起名页不开；先点过别的职业再回来就能过）。
+           「创建」is always shown (iOS and Android alike): the entry is visible. Android adds one thing on top -- with no class stepped forward the
+           tap is refused and the original-game system notification 「先选择一位职业」is given (that gate is in the touch layer, see the ui_hit_rect
+           above, compiled into Android only). The original accept needs a "current class" (widget state word +0x13f4 == 2) and without one the game
+           blocks AcceptCharacterOptions (real device: the mode page closes, the naming page never opens; going back after tapping another class works). */
         if (nxb) ui_show_ours(nxb, !opt);
     }
     { int nk = atomic_exchange(&g_fe_name_key, 0); if (nk) { fe_key(nk == 1 ? DM_BTN_PLUS : DM_BTN_B); next = fr + 8; LOG("前端路径：起名页点了「%s」→ %s", nk == 1 ? "创建" : "返回", nk == 1 ? "＋" : "B"); return; } }
