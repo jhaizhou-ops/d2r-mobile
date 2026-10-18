@@ -1913,13 +1913,6 @@ static void ui_bind_pump(uint64_t root, uint64_t fr) {
 static _Atomic int g_map_req = -1, g_map_full_now;
 void dm_ui_map_full(int on) { atomic_store(&g_map_req, on != 0); }
 int dm_ui_map_is_full(void) { return atomic_load(&g_map_full_now); }
-// 「点地图块」= 原版地图键（−）：显示 / 隐藏切换（玩家口径「点地名那个地方能把地图关了」）。开没开由游戏自己那一位说了算，
-// 点一下就翻过来——不再走「先看底下有没有世界目标」那一趟往返（真机口径「点右上角半天才会反应」：那一下要等宿主把落点分类回来）。
-// 「Tapping the map block」= the original map key (−): show / hide toggle (player: "tapping the area name place should close the map").
-// Whether it is open is the game's own bit and one tap flips it -- no more round trip through "first see whether there is a world target under it"
-// (device: "tapping the top right takes ages to react": that step waited for the host to classify the landing point).
-static _Atomic int g_map_key_want;
-void dm_ui_map_key(void) { atomic_store(&g_map_key_want, 1); }
 // 真全屏局内，全屏地图的线条要盖在世界上：游戏把地图中心放在「屏幕高的一半」（它读到的是我们写的 16:9 界面高），画出来在 界面矩形 y + 界面高 ÷ 2；
 // 世界的中心在真实画面高的一半，两者差 界面矩形 y −（真实高 − 界面高）÷ 2（贴底时 = 留边高度的一半，地图标记比人低约 128 点）。
 // 地图有一对卷动量 [main+0x2d5e910 / 914]（单位 = 地图格；中心 = 玩家所在格 + 卷动量，main+0x413354 / 0x4133d8；游戏只在切档等处清零，触摸 / 手柄下没有别的写入方），
@@ -1940,48 +1933,32 @@ static void ui_map_center(module_t *m, uint64_t root, int mini) {
 }
 static void ui_map_pump(module_t *m) {
     int cfg = *(volatile int32_t *)(m->base + 0x2d479f4), mini = *(volatile int32_t *)(m->base + 0x2d5c748);
-    // 触屏界面的小地图（右上角地名、点它切全屏、任务终点标记）建立在微缩档上；原版选项页「透视地图尺寸」是三档循环（全屏 → 微缩地图放左 → 微缩地图放右）。
-    // 档位只由玩家决定：以前触屏模式在局里读到「全屏」(0) 就强行改回微缩（2），用户真机口径「改成 iOS 那个迷你样式之前，我感觉还可以」——已去掉，三档全部尊重玩家设置。
-    // 「点地图块」按档位走（触屏层 dm_ui_automap_mode）：
-    //   微缩档（1/2）：微缩 ↔ 全屏（调原版变更回调，配置值不动、不落盘）；全屏档（0）：按原版地图键（MINUS）开 / 关。
+    // 触屏界面的小地图（右上角地名、点它切全屏、任务终点标记）都建立在微缩档上；原版选项页「透视地图尺寸」是三档循环（全屏 → 微缩地图放左 → 微缩地图放右），
+    // 玩家把它转到「全屏」（0）之后小地图整块没了，点那一块也切不回来（线上：进选项页按了一下右箭头，「小地图消失了」）。
+    // 触屏模式在局里读到 0 就改回缺省「微缩地图放右」（2）并调原版的变更回调重排——想看全屏地图点一下小地图即可。手柄模式是原版界面，三档照原版不动。
     // 测试开关 DM_TEST_AUTOMAP=<帧>:<档>：到帧把配置改成这一档并调回调（当作玩家在选项页选了它）
-    // The touch UI's minimap (area name at the top right, tap it to switch to full screen, quest goal markers) is all built on the minimap setting;
-    // the original game's "automap size" option on the options page cycles through three settings (full screen -> minimap on the left -> minimap on the right).
-    // The setting itself is up to the player: touch mode used to force it back to the minimap (2) whenever it read "full screen" (0), and the device
-    // verdict was "before you changed it to that iOS mini style it was fine" -- that forcing is gone; all three settings respect the player.
-    // "Tapping the map block" follows the setting (touch layer dm_ui_automap_mode):
-    //   mini settings (1/2): mini <-> full screen (calls the original change callback, config value untouched, nothing persisted); full screen (0): presses the original map key (MINUS) to open / close.
+    // The touch UI's minimap (area name at the top right, tap it to switch to full screen, quest goal markers) is all built on the minimap
+    // setting; the original game's "automap size" option on the options page cycles through three settings (full screen -> minimap on the
+    // left -> minimap on the right).
+    // Once the player turns it to "full screen" (0), the whole minimap is gone and tapping that area cannot switch it back (in released builds:
+    // entered the options page and pressed the right arrow once, "the minimap disappeared").
+    // In touch mode, reading 0 while in game changes it back to the default "minimap on the right" (2) and calls the original game's change
+    // callback to lay things out again; to see the full-screen map, just tap the minimap. Controller mode uses the original UI, so the
+    // three settings are left as in the original game.
     // Test switch DM_TEST_AUTOMAP=<frame>:<setting>: at that frame, change the config to this setting and call the callback (as if the
     // player had picked it on the options page).
     { static long at = -1; static int tv; uint64_t fr = dm_guest_frame(); if (at < 0) { const char *e = getenv("DM_TEST_AUTOMAP"); at = e ? atol(e) : 0; const char *c = e ? strchr(e, ':') : NULL; tv = c ? atoi(c + 1) : 0; }
-      if (at > 0 && fr >= (uint64_t)at) { at = 0; *(volatile int32_t *)(m->base + 0x2d479f4) = tv; ((void (*)(int))(m->base + 0x40f780))(tv); cfg = tv; LOG("测试 DM_TEST_AUTOMAP：帧 %llu 把「透视地图尺寸」改成 %d", (unsigned long long)fr, tv); } }
-    /* 玩家自己那一档照玩家说的来：不再把「全屏」(0) 强行改回微缩档。
-       用户真机口径：把地图固定成 iOS 那种右上角迷你图之后「明显没有之前清楚」——迷你档的线条本来就淡（参考图 en_map.jpg 也一样淡），
-       全屏档由游戏自己把画面压暗，线条才清楚。所以档位只由玩家的设置页决定（触屏 / 手柄一致）；地图能不能点开、点开是哪种，见下面的 g_map_req。 */
-    if (atomic_exchange(&g_map_key_want, 0)) { void dm_ui_key_pulse(uint64_t, int); dm_ui_key_pulse(DM_BTN_MINUS, 4);
-        LOG("地图块：按原版地图键（−）→ %s（玩家点右上角那块）", mini ? "显示 / 隐藏切换" : "显示 / 隐藏切换"); }
+      if (at > 0 && fr >= (uint64_t)at) { at = 0; *(volatile int32_t *)(m->base + 0x2d479f4) = tv; ((void (*)(int))(m->base + 0x40f780))(tv); cfg = tv; LOG("测试 DM_TEST_AUTOMAP：帧 %llu 把「透视地图尺寸」改成 %d", (unsigned long long)fr, tv); }
+      int dm_padmode_current(void); dm_hud_info hi; dm_hud_get(&hi);
+      if (cfg == 0 && hi.valid && !dm_padmode_current()) { *(volatile int32_t *)(m->base + 0x2d479f4) = 2; ((void (*)(int))(m->base + 0x40f780))(2); cfg = 2; mini = *(volatile int32_t *)(m->base + 0x2d5c748);
+          LOG("地图：触屏模式读到「透视地图尺寸」是全屏（0）→ 改回微缩地图放右（2），小地图恢复"); } }
     int r = atomic_exchange(&g_map_req, -1);
     if (r >= 0) {
-        if (cfg == 1 || cfg == 2) { if ((mini == 0) != r) { ((void (*)(int))(m->base + 0x40f780))(r ? 0 : cfg); mini = *(volatile int32_t *)(m->base + 0x2d5c748); LOG("地图切换：→ %s（配置值 %d 不动，不落盘）", r ? "全屏" : cfg == 1 ? "微缩放左" : "微缩放右", cfg); } }
-        else { void dm_ui_key_pulse(uint64_t, int); dm_ui_key_pulse(DM_BTN_MINUS, 4);
-            LOG("地图切换：玩家的「透视地图尺寸」是全屏档（0）→ 按原版地图键开 / 关（点地图块 = 显示 / 隐藏，不碰档位、不落盘）"); }
+        if (cfg != 1 && cfg != 2) { static int n; if (n++ < 4) LOG("地图切换：玩家的「透视地图尺寸」是 %d（不是微缩档），不切", cfg); }
+        else if ((mini == 0) != r) { ((void (*)(int))(m->base + 0x40f780))(r ? 0 : cfg); mini = *(volatile int32_t *)(m->base + 0x2d5c748); LOG("地图切换：→ %s（配置值 %d 不动，不落盘）", r ? "全屏" : cfg == 1 ? "微缩放左" : "微缩放右", cfg); }
     }
     atomic_store(&g_map_full_now, mini == 0 && (cfg == 1 || cfg == 2));   // 只把「我们切出来的全屏」算全屏；玩家自己选全屏档的不算 | Only "the fullscreen we switched to" counts as fullscreen; the fullscreen mode chosen by the player does not
-    // 进局后不再替玩家按地图键（原先「进局看不到地图就替按一次」那套已删）：地图开没开是跟着角色存档记住的——
-    // 新角色默认开着，之后玩家自己开关，游戏把最后一次的状态存进存档，下一次进这个角色还是那个样子。替按一次等于每次进局都
-    // 推翻玩家的选择（真机口径：「我打开地图、保存、再进，还是关的」——那一下正是替按把它按回去的）；按的时机稍早还会跟游戏
-    // 正要画的那一帧抢（面板还没建起来时读到的永远是「关着」），真机表现是「进局没地图、点右上角半天才反应、地图线画出小地图框」。
-    // 所以这一页只留「点地图块 = 原版地图键」一条，状态完全交给玩家与存档。
-    // No more auto-pressing the map key after entering a run (the old "if the map is closed on entry, press it once for the player" is gone):
-    // whether the map is open is remembered with the character save -- a new character starts with it open, the player toggles it as they like,
-    // the game stores the last state in the save, and the next entry into that character looks the same. Auto-pressing overrode the player's
-    // choice on every entry (device: "I opened the map, saved, and it was closed again on entry" -- that press put it back), and pressing a
-    // moment too early raced the frame the game was about to draw (while the panel is not created yet it always reads "closed"), which showed up
-    // as "no map on entry, tapping the top right takes ages, map lines drawn outside the minimap box". So this page keeps one rule: tapping the
-    // map block is the original map key, and the state belongs to the player and the save.
 }
-/* 玩家「透视地图尺寸」的档位（0 全屏 / 1 微缩放左 / 2 微缩放右）：触屏层用它决定「点地图块」怎么切（见 ui_map_pump）。读不到返回 -1 */
-int dm_ui_automap_mode(void) { module_t *m = main_module(); if (!m) return -1; return *(volatile int32_t *)(m->base + 0x2d479f4); }
 // ---------- 右上角小地图的位置：触摸层把它当点击区（点一下 = 地图开关键），矩形取游戏自己的 AutoMap 面板，不写死 ----------
 // AutoMap 控件（虚表 main+0x20c58a0）：+0x70 / +0x74 = x / y、+0x78 / +0x7c = 宽 / 高（布局单位，2160 = 画面高；微缩地图放右时 x = −宽，即贴着画面右边），+0x80 缩放。
 // 微缩地图放右 = (−1279, 78, 1279, 720)，即画面右侧宽 0.59 个屏高、从上往下 3.6% – 36.9% 的那一块。面板关着 / 没加载时沿用最近一次读到的。
@@ -1990,6 +1967,24 @@ int dm_ui_automap_mode(void) { module_t *m = main_module(); if (!m) return -1; r
 // Mini map on the right = (−1279, 78, 1279, 720), i.e. the block on the right side of the screen 0.59 screen heights wide, from 3.6% to 36.9% down from the top. When the panel is closed / not loaded, the last value read is reused.
 static _Atomic uint64_t g_mm_rect; static _Atomic int g_mm_have;
 int dm_ui_minimap_rect(float r[4]) { if (!atomic_load(&g_mm_have)) return 0; uint64_t v = atomic_load(&g_mm_rect); for (int i = 0; i < 4; i++) r[i] = (float)(int16_t)(uint16_t)(v >> (16 * (3 - i))) / 8192.0f; return 1; }
+// 小地图的点击区（**两端共用这一条**，前端只管把触点归一化后交给它）：地图框顶部那一条「场景名」（整宽 × 框高的 1/4），不是整块。
+// 为什么不是整块：整块占屏宽 1/3 × 屏高 1/3，玩家朝右上方点地面正好落在里面（一份诊断日志里 24 次落在框里的点击，20 次在中间主体、
+// 0 次在顶部那条），把点地面当成点地图，小地图就「消失」了。iOS 那边（front_ios.m 的 minimapRect / inMinimap）就是这一条规则，
+// 这里把它提到共用代码里，安卓照同一份判，两端不再是各写一份。
+// 归一化坐标（0..1，按画面宽高）。返回：-1 = 小地图矩形还不知道（面板刚建 / 地图关着）；0 = 不在那一条上；1 = 在。
+// The minimap's tap area (**one shared rule for both ends**; the front end only normalizes the touch point and hands it over): the 「area name」
+// strip at the top of the map frame (full width x 1/4 of the frame height), not the whole block.
+// Why not the whole block: it takes 1/3 of the screen width x 1/3 of its height, which is exactly where the player taps the ground towards the upper
+// right (in one diagnostic log, of 24 taps inside the frame 20 were in the middle body and 0 on the top strip); treating a ground tap as a map tap made
+// the minimap "disappear". That is already the rule on iOS (front_ios.m's minimapRect / inMinimap); it is hoisted into shared code here so Android
+// judges by the same copy instead of each side keeping its own.
+// Normalized coordinates (0..1 of the picture). Returns: -1 = the minimap rect is not known yet (panel just built / map closed); 0 = not on the strip; 1 = on it.
+int dm_ui_minimap_tap_hit(float nx, float ny) {
+    float r[4]; if (!dm_ui_minimap_rect(r)) return -1;
+    if (nx < r[0] || nx > r[2]) return 0;
+    float band = (r[3] - r[1]) * 0.25f;
+    return ny >= r[1] && ny <= r[1] + band ? 1 : 0;
+}
 // 贴界面矩形顶边的面板回真实画面顶部（iPad 真全屏贴底 / 居中：界面矩形在画面里下移了 y0，见 dm_uiscreen.c）：面板矩形 y（+0x74，布局单位 2160 = 界面高）减去 y0 换成的单位数，
 // 画到界面坐标的负 y 上（图形层的界面下移是投影偏移，视口顶边仍在画面顶，负 y 画得出来）。
 // 认法（一条规则，没有名单）：局内（dm_uiscreen_ingame）PanelManager 的直接子面板里，层号（+0x84，int）≤ -100 且纵向锚点（+0x4c，float）= 0 的。
