@@ -1,25 +1,32 @@
-// 实体手柄面键映射（dm_padmap.h）：各类型 × 四个面键 → 游戏键。期望值按规则手写：印什么字母就是游戏的什么键；任天堂键帽 右 A 下 B 上 X 左 Y，Xbox 键帽 下 A 右 B 左 X 上 Y；别的按 Xbox 排。
-// Physical controller face button mapping (dm_padmap.h): each type x four face buttons -> game keys. Expected values are hand-written from
-// the rule: whatever letter is printed is that game key; Nintendo glyphs are right A, bottom B, top X, left Y, Xbox glyphs are bottom A,
-// right B, left X, top Y; everything else is laid out as Xbox.
+// 实体手柄面键映射（dm_padmap.h）：真实手柄 × 四颗面键，从「按了哪颗物理键」走到「游戏收到哪个键」。
+// 每行三列都按事实手写，不跑被测代码：
+//   系统给哪个（buttonA/B/X/Y）：任天堂手柄按键帽字母给（日志；SDL 苹果手柄实现把任天堂的 buttonA 当右键），Xbox 字母与位置一致，PS 按菱形位置（下 = buttonA）；
+//   期望游戏键：印字母的 = 印的那个字母（Switch 原版同名键，右 A 确认）；没字母的 = Xbox 同位置的字母（下方键确认）。
+// 旧映射（认出任天堂后把 buttonA 当下方键、换成 B）在任天堂各行会红，Xbox / PS 行新旧一样。
+// Physical controller face-button mapping (dm_padmap.h): real controllers × four face buttons, from "which physical button was pressed" to "which button the game receives".
+// Each row's three columns are written by hand from facts, without running the code under test:
+//   which one the system reports (buttonA/B/X/Y): Nintendo controllers by keycap letter (logs; SDL's Apple controller code treats Nintendo's buttonA as the right button), Xbox letters match positions, PS by diamond position (bottom = buttonA);
+//   expected game button: printed letter = that letter (same-named Switch button, right A confirms); no letter = the Xbox letter at the same position (bottom button confirms).
+// The old mapping (after recognizing Nintendo, treat buttonA as the bottom button and swap to B) fails on every Nintendo row; Xbox / PS rows are the same old and new.
 #include <stdio.h>
 #include "../dm_padmap.h"
 static int checks, fails;
 #define CHECK(c, ...) do { checks++; if (c) printf("  ✓ "); else { fails++; printf("  ✗ "); } printf(__VA_ARGS__); printf("\n"); } while (0)
+enum { GA, GB, GX, GY };   // 系统给的 buttonA / B / X / Y | The system's buttonA / B / X / Y
 int main(void) {
-    struct { const char *cat, *ven; int kind; } id[] = {
-        { "Switch Pro Controller", "Pro Controller", DM_PADKIND_NINTENDO }, { "Nintendo Switch Joy-Con (L/R)", "Joy-Con (L/R)", DM_PADKIND_NINTENDO },
-        { "Nintendo Switch Joy-Con (L)", "Joy-Con (L)", DM_PADKIND_NINTENDO }, { "MFi", "NINTENDO compatible pad", DM_PADKIND_NINTENDO },
-        { "Xbox One", "Xbox Wireless Controller", DM_PADKIND_XBOX }, { "DualSense", "DualSense Wireless Controller", DM_PADKIND_XBOX },
-        { "DualShock 4", "DUALSHOCK 4 Wireless Controller", DM_PADKIND_XBOX }, { "MFi", "SteelSeries Nimbus", DM_PADKIND_XBOX }, { NULL, NULL, DM_PADKIND_XBOX }, { "", "", DM_PADKIND_XBOX } };
-    for (unsigned i = 0; i < sizeof id / sizeof *id; i++) CHECK(dm_padmap_kind(id[i].cat, id[i].ven) == id[i].kind, "类别「%s」厂商名「%s」→ %s 排法", id[i].cat ? id[i].cat : "(空)", id[i].ven ? id[i].ven : "(空)", id[i].kind ? "任天堂" : "Xbox");
-    // 下 右 左 上
-    // bottom right left top
-    CHECK(dm_padmap_face(DM_PADKIND_NINTENDO, 1, 0, 0, 0) == DM_BTN_B, "任天堂：下 = B"); CHECK(dm_padmap_face(DM_PADKIND_NINTENDO, 0, 1, 0, 0) == DM_BTN_A, "任天堂：右 = A");
-    CHECK(dm_padmap_face(DM_PADKIND_NINTENDO, 0, 0, 1, 0) == DM_BTN_Y, "任天堂：左 = Y"); CHECK(dm_padmap_face(DM_PADKIND_NINTENDO, 0, 0, 0, 1) == DM_BTN_X, "任天堂：上 = X");
-    CHECK(dm_padmap_face(DM_PADKIND_XBOX, 1, 0, 0, 0) == DM_BTN_A, "Xbox：下 = A"); CHECK(dm_padmap_face(DM_PADKIND_XBOX, 0, 1, 0, 0) == DM_BTN_B, "Xbox：右 = B");
-    CHECK(dm_padmap_face(DM_PADKIND_XBOX, 0, 0, 1, 0) == DM_BTN_X, "Xbox：左 = X"); CHECK(dm_padmap_face(DM_PADKIND_XBOX, 0, 0, 0, 1) == DM_BTN_Y, "Xbox：上 = Y");
-    CHECK(dm_padmap_face(DM_PADKIND_XBOX, 1, 1, 0, 0) == (DM_BTN_A | DM_BTN_B), "两颗同时按：各算各的"); CHECK(dm_padmap_face(DM_PADKIND_NINTENDO, 0, 0, 0, 0) == 0, "都没按 = 0");
+    static const struct { const char *cat, *ven, *pos, *cap; int sys; uint64_t want; } r[] = {
+        { "Switch Pro Controller", "Pro Controller", "右", "A", GA, DM_BTN_A }, { "Switch Pro Controller", "Pro Controller", "下", "B", GB, DM_BTN_B },
+        { "Switch Pro Controller", "Pro Controller", "上", "X", GX, DM_BTN_X }, { "Switch Pro Controller", "Pro Controller", "左", "Y", GY, DM_BTN_Y },
+        { "Nintendo Switch Joy-Con (L/R)", "Joy-Con (L/R)", "右", "A", GA, DM_BTN_A }, { "Nintendo Switch Joy-Con (L/R)", "Joy-Con (L/R)", "下", "B", GB, DM_BTN_B },
+        { "Nintendo Switch Joy-Con (L/R)", "Joy-Con (L/R)", "上", "X", GX, DM_BTN_X }, { "Nintendo Switch Joy-Con (L/R)", "Joy-Con (L/R)", "左", "Y", GY, DM_BTN_Y },
+        { "Xbox One", "Xbox Wireless Controller", "下", "A", GA, DM_BTN_A }, { "Xbox One", "Xbox Wireless Controller", "右", "B", GB, DM_BTN_B },
+        { "Xbox One", "Xbox Wireless Controller", "左", "X", GX, DM_BTN_X }, { "Xbox One", "Xbox Wireless Controller", "上", "Y", GY, DM_BTN_Y },
+        { "DualSense", "DualSense Wireless Controller", "下", "×", GA, DM_BTN_A }, { "DualSense", "DualSense Wireless Controller", "右", "○", GB, DM_BTN_B },
+        { "DualSense", "DualSense Wireless Controller", "左", "□", GX, DM_BTN_X }, { "DualSense", "DualSense Wireless Controller", "上", "△", GY, DM_BTN_Y } };
+    static const char *const nm[] = { "A", "B", "X", "Y" };
+    for (unsigned i = 0; i < sizeof r / sizeof *r; i++)
+        CHECK(dm_padmap_face(r[i].sys == GA, r[i].sys == GB, r[i].sys == GX, r[i].sys == GY) == r[i].want, "%s：按%s键（印 %s，系统给 button%s）→ 游戏 %s", r[i].cat, r[i].pos, r[i].cap, nm[r[i].sys], nm[__builtin_ctzll(r[i].want)]);
+    CHECK(dm_padmap_face(1, 1, 0, 0) == (DM_BTN_A | DM_BTN_B), "两颗同时按：各算各的"); CHECK(dm_padmap_face(0, 0, 0, 0) == 0, "都没按 = 0");
     printf("== %d 项，失败 %d ==\n", checks, fails);
     return fails != 0;
 }

@@ -14,6 +14,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include "nvn_mtl.h"
+#include "nvn_copy_pitch.h"
 // 编译期开关 DM_NVN_M3=1：图形后端走老接口（普通命令队列 / 命令缓冲 / 渲染与计算与拷贝编码器，逐槽绑定缓冲，对参数块引用的资源逐个声明），
 // 目标 macOS 15 / iOS 18。缺省 0 = Metal 4（macOS 26 / iOS 26）。两支共用同一份回放逻辑，分叉处都在 #if DM_NVN_M3 里
 // Compile-time switch DM_NVN_M3=1: the graphics backend uses the older API (ordinary command queue / command buffers / render, compute and copy encoders, buffers bound per slot, each resource referenced by an argument block declared individually),
@@ -106,6 +107,8 @@ static id<MTL4ArgumentTable> g_vt, g_ft, g_ct, g_up_ct;
 static id<MTL4ArgumentTable> g_present_args;
 #endif
 static id<MTLBuffer> g_present_uv[3];
+#define MP_SLOTS 9
+static id<MTLBuffer> g_mp_buf[3];   // 紫闪探针：每个出图槽一份，5 个画面点 + 4 格调色表 | Magenta probe: one per present slot, 5 picture points + 4 color-table cells
 int g_bloom_q = -1;   // 泛光 1/4 起点（非 static：真机同进程交替直接改 0 / 1） | Bloom 1/4 starting point (non-static: real-device same-process alternation sets it to 0 / 1 directly)
 #if !DM_NVN_M3
 static id<MTL4ArgumentTable> g_bloomq_args;
@@ -391,6 +394,9 @@ void mtl_init(void) {
         g_bloomq_const[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
         if (!g_bloomq_const[i]) MDIE("建立泛光 1/4 常量缓冲[%d] 失败", i);
         res_add(g_bloomq_const[i]);
+        g_mp_buf[i] = [g_dev newBufferWithLength:MP_SLOTS * 256 options:MTLResourceStorageModeShared];   // 紫闪探针（见 mp_encode） | Magenta probe (see mp_encode)
+        if (!g_mp_buf[i]) MDIE("建立紫闪探针缓冲[%d] 失败", i);
+        res_add(g_mp_buf[i]);
     }
     g_ev = [g_dev newSharedEvent];
     g_keep = [NSMutableArray array];
@@ -2598,7 +2604,7 @@ static struct {
     uint64_t tex[6][128], samp[6][128], img[6][32];
     uint32_t st_vmask[2], st_wmask[2], st_ref[2];
     p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp;
-    float blend_color[4]; int64_t copy_stride;
+    float blend_color[4]; int64_t copy_stride, copy_image_stride;
 } S;
 static void udc_note_draw(NvProg *pr) {
     // 同一目标、全零集合代号没变：上次已把它删掉，不必再扫一遍集合（集合最长 4096 项，每次绘制每个颜色附件扫一次）
@@ -3429,6 +3435,7 @@ static int state_op(uint32_t op, const void *a) {
         case OP_DEPTH_RANGE: { const p_depth_range *b = a; S.dr[0] = b->n; S.dr[1] = b->f; break; }
         case OP_BLEND_COLOR: memcpy(S.blend_color, ((const p_blend_color *)a)->rgba, 16); break;
         case OP_COPY_STRIDE: S.copy_stride = ((const p_copy_stride *)a)->stride; break;
+        case OP_COPY_IMAGE_STRIDE: S.copy_image_stride = ((const p_copy_stride *)a)->stride; break;
         default: return 0;
     }
     return 1;
@@ -4913,6 +4920,69 @@ static void warm_claim(void) {
         }
     }
 }
+// ---------- 紫闪探针 ----------
+// A16 视频：重负载下 3D 画面整块变品红 (255,0,254)、界面照常画在上面，0.35 秒一阵。缺省开（DM_MAGENTA_PROBE_OFF=1 关），只在内测包里看日志：
+// 每次出图在上屏命令缓冲末尾把游戏最终画面的 5 个点（中心与四个四分之一点）和调色表 4 格拷进共享缓冲，命令缓冲完成时在回调里判，不等 GPU、不占帧。
+// 画面 5 点里 ≥3 点是品红（R≥200、G≤60、B≥200）记【红】并带上调色表读数、加亮系数、显示节拍停回调段数；调色表格子是非数 / 无穷 / 品红单独记【红】；每 3600 次出图记一行汇总（射程）。
+// 调色表 = 色调映射查的 32³ 表（见下面 3D 画面加亮），由派发 552f45c348a61b86 那里记下。只走 Metal 4 出图路径（iOS / Mac 正式包）
+// ---------- Magenta probe ----------
+// A user video on an A16 device: under heavy load the whole 3D picture turns magenta (255,0,254) while the UI still draws on top, in bursts of about 0.35 s. On by default (DM_MAGENTA_PROBE_OFF=1 turns it off); read the logs from test builds:
+// for each present, at the end of the present command buffer, copy 5 points of the game's final picture (the center and the four quarter points) and 4 cells of the color table into a shared buffer, and judge them in the completion callback — no GPU wait, no frame cost.
+// If ≥3 of the 5 picture points are magenta (R≥200, G≤60, B≥200), log a red line with the color-table readings, the brightening factor and the number of display-link callback stalls; a color-table cell that is NaN / infinite / magenta gets its own red line; log a summary every 3600 presents (coverage).
+// Color table = the 32³ table looked up by tone mapping (see the 3D brightening section below), recorded at dispatch 552f45c348a61b86. Only on the Metal 4 present path (iOS / Mac release builds)
+static os_unfair_lock g_mp_lk = OS_UNFAIR_LOCK_INIT; static id<MTLTexture> g_mp_lut;
+static MTLPixelFormat g_mp_fmt[3]; static int g_mp_haslut[3];
+static _Atomic uint64_t g_mp_n, g_mp_mag, g_mp_lutbad;
+static uint64_t g_stall_t0, g_stall_n;   // 定义在显示节拍那段 | Defined in the display-link section
+float dm_bright_k(void);   // 定义在下面 3D 画面加亮（弱定义，宿主 dm_bright.c 给强定义） | Defined below in the 3D brightening section (weak definition; the host dm_bright.c provides the strong one)
+static int mp_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_MAGENTA_PROBE_OFF"); v = !(e && *e && strcmp(e, "0")); } return v; }
+static int mp_fmt_ok(MTLPixelFormat f) { return f == MTLPixelFormatRGBA8Unorm || f == MTLPixelFormatRGBA8Unorm_sRGB || f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGB10A2Unorm || f == MTLPixelFormatRGBA16Float; }
+static void mp_encode(CBUF cb, id<MTLTexture> src, int i) {
+#if !DM_NVN_M3
+    uint64_t t_start = bp_now();   // 成本测量：CPU 耗时起点 | Cost measurement: CPU time start
+    g_mp_fmt[i] = 0; g_mp_haslut[i] = 0;
+    if (!mp_on() || !g_mp_buf[i] || !src || src.textureType != MTLTextureType2D || !mp_fmt_ok(src.pixelFormat)) return;
+    os_unfair_lock_lock(&g_mp_lk); id<MTLTexture> lut = g_mp_lut; os_unfair_lock_unlock(&g_mp_lk);
+    if (lut && (lut.pixelFormat != MTLPixelFormatRGBA16Float || lut.width < 2 || lut.height < 2 || lut.depth < 2)) lut = nil;
+    NSUInteger w = src.width, h = src.height, bpp = src.pixelFormat == MTLPixelFormatRGBA16Float ? 8 : 4;
+    const NSUInteger px[5][2] = {{w / 2, h / 2}, {w / 4, h / 4}, {w * 3 / 4, h / 4}, {w / 4, h * 3 / 4}, {w * 3 / 4, h * 3 / 4}};
+    CENC e = [cb computeCommandEncoder];
+    [e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
+    for (int k = 0; k < 5; k++) enc_b_copy_texture_buffer(e, src, 0, 0, MTLOriginMake(px[k][0], px[k][1], 0), MTLSizeMake(1, 1, 1), g_mp_buf[i], k * 256, bpp, bpp);
+    if (lut) { NSUInteger lw = lut.width - 1, lh = lut.height - 1, ld = lut.depth - 1; const NSUInteger q[4][3] = {{0, 0, 0}, {lw / 2, lh / 2, ld / 2}, {lw, lh, ld}, {lw / 2, lh / 4, ld * 3 / 4}};
+        for (int k = 0; k < 4; k++) enc_b_copy_texture_buffer(e, lut, 0, 0, MTLOriginMake(q[k][0], q[k][1], q[k][2]), MTLSizeMake(1, 1, 1), g_mp_buf[i], (5 + k) * 256, 8, 8);
+        g_mp_haslut[i] = 1; }
+    m4_end(e);
+    g_mp_fmt[i] = src.pixelFormat;
+    // 成本测量：每次调用记 CPU 耗时（ns），每 600 次汇总
+    // Cost measurement: record CPU time (ns) per call, summarize every 600 calls
+    static uint64_t cost_sum, cost_n, cost_max; uint64_t cost_ns = bp_now() - t_start;
+    cost_sum += cost_ns; cost_n++; if (cost_ns > cost_max) cost_max = cost_ns;
+    if (cost_n % 600 == 0) { MLOG("紫闪探针 CPU 成本：前 %llu 次，平均 %.3f μs / 峰值 %.3f μs", (unsigned long long)cost_n, cost_sum / (double)cost_n / 1000, cost_max / 1000.0); }
+#else
+    (void)cb; (void)src; (void)i;
+#endif
+}
+static void mp_px(MTLPixelFormat f, const uint8_t *p, int *r, int *g, int *b) {
+    if (f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB) { *r = p[2]; *g = p[1]; *b = p[0]; }
+    else if (f == MTLPixelFormatRGB10A2Unorm) { uint32_t v; memcpy(&v, p, 4); *r = (v & 1023) >> 2; *g = ((v >> 10) & 1023) >> 2; *b = ((v >> 20) & 1023) >> 2; }
+    else if (f == MTLPixelFormatRGBA16Float) { __fp16 hv[4]; memcpy(hv, p, 8); float c[3] = {hv[0], hv[1], hv[2]}; int *o[3] = {r, g, b};
+        for (int k = 0; k < 3; k++) { float x = c[k] != c[k] ? 0 : c[k] < 0 ? 0 : c[k] > 1 ? 1 : c[k]; *o[k] = (int)(x * 255 + 0.5f); } }
+    else { *r = p[0]; *g = p[1]; *b = p[2]; }
+}
+static void mp_check(int i, uint64_t ticket) {
+    MTLPixelFormat f = g_mp_fmt[i]; if (!f) return;
+    const uint8_t *m = g_mp_buf[i].contents; char pt[96] = "", lt[160] = "无"; int o = 0, mag = 0, lutbad = 0;
+    for (int k = 0; k < 5; k++) { int r, g, b; mp_px(f, m + k * 256, &r, &g, &b); mag += r >= 200 && g <= 60 && b >= 200; o += snprintf(pt + o, sizeof pt - o, " %02x%02x%02x", r, g, b); }
+    if (g_mp_haslut[i]) { o = 0; for (int k = 0; k < 4; k++) { __fp16 hv[4]; memcpy(hv, m + (5 + k) * 256, 8); float c[3] = {hv[0], hv[1], hv[2]};
+        int bad = 0; for (int j = 0; j < 3; j++) bad |= c[j] != c[j] || isinf(c[j]); bad |= c[0] > 0.8f && c[1] < 0.2f && c[2] > 0.8f; lutbad |= bad;
+        o += snprintf(lt + o, sizeof lt - o, "%s(%.3f,%.3f,%.3f)", k ? " " : "", c[0], c[1], c[2]); } }
+    uint64_t n = atomic_fetch_add(&g_mp_n, 1) + 1, nm = mag >= 3 ? atomic_fetch_add(&g_mp_mag, 1) + 1 : atomic_load(&g_mp_mag), nl = lutbad ? atomic_fetch_add(&g_mp_lutbad, 1) + 1 : atomic_load(&g_mp_lutbad);
+    if (mag >= 3 && (nm <= 30 || nm % 50 == 0)) MLOG("【红】紫闪探针：出图 %llu 画面品红（5 点%s，%d 点品红）；调色表 4 格 %s；加亮 k=%.2f；显示节拍停回调累计 %llu 段，此刻%s停顿中；累计品红 %llu 次",
+        (unsigned long long)ticket, pt, mag, lt, dm_bright_k(), (unsigned long long)g_stall_n, g_stall_t0 ? "在" : "不在", (unsigned long long)nm);
+    if (lutbad && (nl <= 30 || nl % 50 == 0)) MLOG("【红】紫闪探针：出图 %llu 调色表格子异常（非数 / 无穷 / 品红）%s；画面 5 点%s；累计 %llu 次", (unsigned long long)ticket, lt, pt, (unsigned long long)nl);
+    if (n % 3600 == 0 || n == 600) MLOG("紫闪探针 至出图 %llu：取样 %llu 次，画面品红 %llu 次，调色表异常 %llu 次（本次 5 点%s，调色表 %s）", (unsigned long long)ticket, (unsigned long long)n, (unsigned long long)nm, (unsigned long long)nl, pt, lt);
+}
 // ---------- 3D 画面加亮 ----------
 // 色调映射（片元 a1b1aab66933fa8f）= 把合成后的 HDR ×0.008 做 PQ 编码、再查 32³ 调色表（每帧由计算着色器 552f45c348a61b86 按区域重算，只被色调映射读）。
 // HDR 先乘曝光 k 等价于把表换成 L'(u) = L(PQ(k · PQ⁻¹(u)))：游戏算完表的那次派发之后，拷一份再按此原地重写（32³ 一次小派发）；表每帧重算，不会越乘越亮。
@@ -4942,10 +5012,11 @@ static void bright_lut(NvShader *cs) {
     static id<MTL4ArgumentTable> at;
 #endif
     if (failed || strncmp(cs->key, "552f45c348a61b86", 16)) return;
-    float k = dm_bright_k(); if (!(k > 1.005f)) return;   // k ≈ 1（局外 / 正午）：表保持原版 | k ~= 1 (out of game / noon): the table stays as in the original game
-    if (k > 4.0f) k = 4.0f;
     int tid = 0; for (int i = 0; i < cs->rf.nb && !tid; i++) if (cs->rf.b[i].kind == NVN_RB_IMG && cs->rf.b[i].reg < 32) tid = (int)(S.img[5][cs->rf.b[i].reg] & 0xfffff);
     pthread_mutex_lock(&g_rmu); id<MTLTexture> lut = tid ? tex_by_id(tid) : nil; pthread_mutex_unlock(&g_rmu);
+    if (lut && lut.textureType == MTLTextureType3D) { os_unfair_lock_lock(&g_mp_lk); g_mp_lut = lut; os_unfair_lock_unlock(&g_mp_lk); }   // 紫闪探针在出图时取这张表的几格 | The magenta probe samples a few cells of this table at present time
+    float k = dm_bright_k(); if (!(k > 1.005f)) return;   // k ≈ 1（局外 / 正午）：表保持原版 | k ~= 1 (out of game / noon): the table stays as in the original game
+    if (k > 4.0f) k = 4.0f;
     if (!lut || lut.textureType != MTLTextureType3D || !(lut.usage & MTLTextureUsageShaderWrite)) { static int n; if (!n++) MLOG("【红】3D 画面加亮：调色表认不出（贴图号 %d），不加亮", tid); return; }
     if (!ps) { NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(k_lut_msl) options:nil error:&e]; id<MTLFunction> f = lib ? [lib newFunctionWithName:@"lutk"] : nil;
         ps = f ? [g_dev newComputePipelineStateWithFunction:f error:&e] : nil;
@@ -5019,11 +5090,14 @@ static void copy_t2b(const p_copy_b2t *c) {
     if (!t) return;
     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
-    size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
-    size_t rows = (c->r.height + bh - 1) / bh, img = row * rows;
+    size_t row, img, extent;
+    if (!nvn_copy_pitch(c->r.width, c->r.height, c->r.depth, bw, bh, bpb,
+                        S.copy_stride, S.copy_image_stride, &row, &img, &extent)) {
+        MLOG("Invalid texture copy pitch"); return;
+    }
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
     void *mb; uint64_t mo;
-    if (!mtl_addr(c->src, img * nz, &mb, &mo)) { RED_ONCE(31, "贴图→缓冲拷贝的目标不在内存池里"); return; }
+    if (!mtl_addr(c->src, extent, &mb, &mo)) { RED_ONCE(31, "贴图→缓冲拷贝的目标不在内存池里"); return; }
     BENC b = blit();
     if (is3d)
         enc_b_copy_texture_buffer(b, t, 0, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, c->r.zoffset), MTLSizeMake(c->r.width, c->r.height, nz), (__bridge id<MTLBuffer>)mb, mo, row, img);
@@ -5071,11 +5145,14 @@ static void copy_b2t(const p_copy_b2t *c) {
     if (!t) return;
     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
-    size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
-    size_t rows = (c->r.height + bh - 1) / bh, img = row * rows;
+    size_t row, img, extent;
+    if (!nvn_copy_pitch(c->r.width, c->r.height, c->r.depth, bw, bh, bpb,
+                        S.copy_stride, S.copy_image_stride, &row, &img, &extent)) {
+        MLOG("Invalid texture copy pitch"); return;
+    }
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
     void *mb; uint64_t mo;
-    if (!mtl_addr(c->src, img * nz, &mb, &mo)) { RED_ONCE(23, "缓冲→贴图拷贝的源不在内存池里"); return; }
+    if (!mtl_addr(c->src, extent, &mb, &mo)) { RED_ONCE(23, "缓冲→贴图拷贝的源不在内存池里"); return; }
     uint32_t upf; int ubpp;
     if (bc_unpack(c->tex->d.format, &upf, &ubpp)) {   // 无 BC：源里的压缩块在 CPU 上解压进临时缓冲，再按像素拷进解压格式的贴图 | No BC: the compressed blocks in the source are decompressed on the CPU into a temporary buffer, then copied pixel-wise into the decompressed-format texture
         const uint8_t *src = [(__bridge id<MTLBuffer>)mb contents];
@@ -5531,7 +5608,7 @@ void mtl_exec(const uint8_t *p) {
             // Do not mark dirty if the state did not change (the game often re-sends the same program / state block / vertex format before each draw; the dirty flag only decides whether to re-fetch the pipeline / depth-stencil object, and equal values mean the same object)
             case OP_SCISSOR: case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF:
             case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_STENCIL:
-            case OP_POLY_OFFSET: case OP_VIEWPORTS: case OP_DEPTH_RANGE: case OP_BLEND_COLOR: case OP_COPY_STRIDE:
+            case OP_POLY_OFFSET: case OP_VIEWPORTS: case OP_DEPTH_RANGE: case OP_BLEND_COLOR: case OP_COPY_STRIDE: case OP_COPY_IMAGE_STRIDE:
                 state_op(h.op, a); break;
             case OP_COPY_B2T: copy_b2t(a); break;
             case OP_COPY_T2B: copy_t2b(a); break;
@@ -5993,6 +6070,33 @@ static int present_encode_m4(CBUF cb, id<MTLTexture> src0, id<MTLTexture> dst, c
     m4_end(en);
     return 1;
 }
+// 测试 DM_TEST_PRESENT_RGB=<N>（只测试用，查「冷启动整屏品红一两帧」）：进程前 N 次上屏，每次等这一帧画完、交给系统之前，回读 drawable 上 5 个点
+// （中心与四个四分之一点）的颜色；颜色组合变了才记一行，任一点是品红（R≥200、G≤60、B≥200）就记「品红」行，第 N 次记汇总。
+// 射程：只看我们交出去的那张 drawable；系统合成层之后加上的颜色看不到。每次上屏都同步等 GPU，开着会掉帧
+// Test DM_TEST_PRESENT_RGB=<N> (test only, for "one or two full-screen magenta frames at cold start"): for the process's first N presents, wait for each frame to finish and, before handing it to the system, read back the colors of 5 points on the drawable
+// (the center and the four quarter points); log a line only when the color combination changes, log a "magenta" line if any point is magenta (R≥200, G≤60, B≥200), and log a summary at the Nth present.
+// Coverage: only the drawable we hand over; colors added after the system compositor are not visible. Each present waits for the GPU synchronously, so enabling it drops frames
+static long present_rgb_n(void) { static long n = -1; if (n < 0) { const char *e = getenv("DM_TEST_PRESENT_RGB"); n = e ? atol(e) : 0; if (n) MLOG("DM_TEST_PRESENT_RGB：前 %ld 次上屏回读 drawable 取色", n); } return n; }
+static void present_rgb(id<MTLTexture> dt, uint64_t ticket) {
+    static long k, magenta; static uint32_t last[5]; static uint64_t t0;
+    if (k >= present_rgb_n()) return;
+    pthread_mutex_lock(&g_pq_mu); while (g_pq_done < ticket) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);
+    NSUInteger w = dt.width, h = dt.height; const NSUInteger px[5][2] = {{w / 2, h / 2}, {w / 4, h / 4}, {w * 3 / 4, h / 4}, {w / 4, h * 3 / 4}, {w * 3 / 4, h * 3 / 4}};
+    id<MTLBuffer> buf = [g_dev newBufferWithLength:5 * 256 options:MTLResourceStorageModeShared]; id<MTLCommandBuffer> c2 = q_cb(); id<MTLBlitCommandEncoder> b = [c2 blitCommandEncoder];
+    for (int i = 0; i < 5; i++) [b copyFromTexture:dt sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(px[i][0], px[i][1], 0) sourceSize:MTLSizeMake(1, 1, 1) toBuffer:buf destinationOffset:i * 256 destinationBytesPerRow:4 destinationBytesPerImage:4];
+    [b endEncoding]; [c2 commit]; [c2 waitUntilCompleted];
+    uint64_t now = now_ns(); if (!t0) t0 = now; k++;
+    uint32_t c[5]; int mag = 0, chg = 0; char txt[160]; int o = 0;
+    for (int i = 0; i < 5; i++) { const uint8_t *q = (const uint8_t *)buf.contents + i * 256;   // BGRA8
+        int r = q[2], g = q[1], bl = q[0]; c[i] = (uint32_t)(r << 16 | g << 8 | bl); chg |= c[i] != last[i]; mag |= r >= 200 && g <= 60 && bl >= 200;
+        o += snprintf(txt + o, sizeof txt - o, " %02x%02x%02x", r, g, bl); }
+    if (dt.pixelFormat != MTLPixelFormatBGRA8Unorm && k == 1) MLOG("DM_TEST_PRESENT_RGB：drawable 格式 %lu 不是 BGRA8，取色按 BGRA 读可能不准", (unsigned long)dt.pixelFormat);
+    if (mag) magenta++;
+    if (mag) MLOG("上屏取色 第 %ld 次（%.3f s）品红：%s", k, (now - t0) / 1e9, txt);
+    else if (chg || k == 1) MLOG("上屏取色 第 %ld 次（%.3f s）变为：%s", k, (now - t0) / 1e9, txt);
+    memcpy(last, c, sizeof c);
+    if (k == present_rgb_n()) MLOG("上屏取色 汇总：前 %ld 次上屏，品红 %ld 次（drawable %lux%lu）", k, magenta, (unsigned long)w, (unsigned long)h);
+}
 static double g_link_it_tin;   // 节拍回调正在上屏的那一帧的入队时刻（只在节拍线程读写） | Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
@@ -6054,6 +6158,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 #if TARGET_OS_OSX
     if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // 窗口模式按显示器垂直同步，防撕裂 | Windowed mode follows the display's vsync to prevent tearing
 #endif
+    if (present_rgb_n() && layer.framebufferOnly) layer.framebufferOnly = NO;   // 测试取色要回读 drawable | Sampling colors for the test requires reading back the drawable
     present_pipeline(layer.pixelFormat);   // 和原路径一样，首帧编管线在取drawable之前 | Same as the original path: the first frame compiles the pipeline before taking the drawable
     if (g_grab_cb) grab_present(src, crop, layer.drawableSize);   // 整窗截图要的游戏画面（不加锁先看一眼，真取在函数里加锁） | Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
     uint64_t dt0 = now_ns();
@@ -6075,6 +6180,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     CBUF cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
     if (!present_encode_m4(cb, src, dr.texture, crop, alloc_i)) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
+    mp_encode(cb, src, alloc_i);
     [cb endCommandBuffer];
 #endif
 #if !DM_NVN_M3
@@ -6082,6 +6188,9 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 #endif
     [FB_ON(o, cb) FB_SEL:^(FB_ARG f) {
         if (f.error) MLOG("【红】上屏命令缓冲错误：%s", f.error.description.UTF8String);
+#if !DM_NVN_M3
+        else mp_check(alloc_i, ticket);
+#endif
         pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
     }];
 #if !DM_NVN_M3
@@ -6107,6 +6216,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
         }
     }
 #if !DM_NVN_M3
+    if (present_rgb_n()) present_rgb(dr.texture, ticket);
     [g_q4 signalDrawable:dr];
 #endif
     g_present_alloc_fence[alloc_i] = ticket;

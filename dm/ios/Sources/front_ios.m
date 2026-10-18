@@ -155,8 +155,8 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     [super layoutSubviews];
     CAMetalLayer *l=(CAMetalLayer *)self.layer;
     if(l==g_layer) l.drawableSize=CGSizeMake(self.bounds.size.width*l.contentsScale,self.bounds.size.height*l.contentsScale);   // 真全屏（iPad）时出图层挂在外层容器上，不是这一层 | In true fullscreen (iPad) the present layer hangs on the outer container, not this layer
-    UIEdgeInsets si=self.safeAreaInsets; static CGFloat sl=-1,sr=-1; BOOL safeChanged=(si.left!=sl || si.right!=sr);   // 安全区变了（首次布局 / 转屏）也要重排控件 | A safe area change (first layout / rotation) also requires re-laying out the widgets
-    if (safeChanged) { sl=si.left; sr=si.right; dm_tc_set_safe_insets((float)si.left,(float)si.right); }
+    UIEdgeInsets si=self.safeAreaInsets; static CGFloat sl=-1,sr=-1,sb=-1; BOOL safeChanged=(si.left!=sl || si.right!=sr || si.bottom!=sb);   // 安全区变了（首次布局 / 转屏）也要重排控件 | A safe area change (first layout / rotation) also requires re-laying out the widgets
+    if (safeChanged) { sl=si.left; sr=si.right; sb=si.bottom; dm_tc_set_safe_bottom((float)si.bottom); dm_tc_set_safe_insets((float)si.left,(float)si.right); }
     // 只对 iPad：底部安全区那一条不起摇杆（见 dm_tc_set_edge_bottom）。视图不贴屏幕底（留边档）时这个值自然是 0。DM_TEST_EDGE_B：Mac 上没有底部安全区，测试用
     // iPad only: the bottom safe area strip does not start the stick (see dm_tc_set_edge_bottom). When the view does not touch the bottom of the screen (margin mode) this value is naturally 0. DM_TEST_EDGE_B: Mac has no bottom safe area, for testing
     { const char *tb=getenv("DM_TEST_EDGE_B"); dm_tc_set_edge_bottom(tb ? (float)atof(tb) : UIDevice.currentDevice.userInterfaceIdiom==UIUserInterfaceIdiomPad ? (float)si.bottom : 0); }
@@ -303,11 +303,17 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
 }
 - (BOOL)inMinimap:(CGPoint)p {
     CGRect tap; if(_navigation || ![self minimapRect:NULL tap:&tap]) return NO;
-    if(dm_tc_hit(&_controls.layout,(float)p.x,(float)p.y)>=0) return NO;   // 落在控件命中圆上的点归控件（回城钮挪到技能弧上方后在营地里被小地图矩形盖住） | Points landing on a widget's hit circle belong to the widget (after the town portal button moved above the skill arc it is covered by the minimap rectangle in camp)
+    int control=dm_tc_hit(&_controls.layout,(float)p.x,(float)p.y);
+    if(control>=0 || control==DM_TC_SWAP) return NO;   // 落在控件命中圆上的点归控件（回城钮挪到技能弧上方后在营地里被小地图矩形盖住） | Points landing on a widget's hit circle belong to the widget (after the town portal button moved above the skill arc it is covered by the minimap rectangle in camp)
     return CGRectContainsPoint(tap,p);
 }
 - (void)cancelControls { [self cancelControlsFrom:"focus_cancel"]; }
 - (void)refreshPortalBinding {
+    int dm_custom_get(const char *key);int above=dm_custom_get("touch_swap_above")!=0;
+    if (_controls.layout.swap_above!=above) {
+        [self cancelControlsFrom:"layout"];dm_tc_set_swap_above(above);
+        dm_tc_resize(&_controls,self.bounds.size.width,self.bounds.size.height);[_overlay setNeedsDisplay];
+    }
     hud_stack_watch();
     { dm_hud_info h, o=_overlay.hud; dm_hud_get(&h); h.x=h.y=0; if (memcmp(&h,&o,sizeof h)) { _overlay.hud=h; [_overlay setNeedsDisplay]; } }   // 覆盖层不画玩家坐标：不清掉的话走路时每个逻辑拍都判「变了」、整层全屏重画一遍 | The overlay does not draw player coordinates: without clearing them, every logic tick while walking would be judged "changed" and redraw the whole layer fullscreen
     dm_tg_snapshot snapshot={0};
@@ -625,7 +631,9 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
             if(_uiDragOn && _controls.pointer_slot==i) { _uiDragOn=NO; dm_ui_drag_end(); }
             BOOL wasPtr=_controls.pointer_slot==i; unsigned tm=_controls.tap_move_seq;
             // 按下 / 移动 / 抬起都取事件这一刻的时间（同 tick 的时钟）：面板开着时显示节拍降到 2 次 / 秒，原先取「上一拍的时刻」，0.12 秒的点按会被量成 0.5 秒、不算点按（点页签不切）
+            // 即使没有最后一次移动事件，抬起位置也可能变化；换组键滑出后仍要取消。
             // Press / move / lift all take the time of the event itself (same clock as tick): with a panel open the display link drops to 2 per second, and previously "the time of the previous display-link tick" was used, so a 0.12-second tap was measured as 0.5 seconds and not counted as a tap (tapping a tab did not switch)
+            if(_controls.finger[i].target==DM_TC_SWAP) { CGPoint ep=[t locationInView:self];dm_tc_move_at(&_controls,i,ep.x,ep.y,CACurrentMediaTime()); }
             if(_pendFire) dm_tc_end_at(&_controls,i,_pendEndTime); else dm_tc_end_at(&_controls,i,CACurrentMediaTime()); _slot[i]=nil; slot=i;
             // 加点用手势不用按钮：第一下点技能图标 / 属性「+」= 选中（光标过去、出说明），同一个再点一下 = 加 1 点；换目标重新从选中开始
             // Spend points with a gesture, not a button: the first tap on a skill icon / stat "+" = select (cursor moves there, tooltip appears); tapping the same one again = add 1 point; changing target starts over from select
@@ -890,7 +898,7 @@ static CGRect letterbox_rect(CGRect f) {
 UIView *front_ios_view(CGRect frame) {
     front_game_res(1);   // 「真全屏」开没开（g_full）是它第一次被调时按屏幕比例定的；下面摆视图要用，不能指望别处碰巧先调过 | whether "true fullscreen" is on (g_full) is decided from the screen aspect ratio the first time this is called; the view layout below needs it and cannot count on something else happening to have called it first
     CGRect full = frame; frame = letterbox_rect(frame);
-    dm_tc_set_tall_scale(1);   // 真 UIKit 点数：比手机高的画面（iPad）控件等比放大 | Real UIKit points: on pictures taller than a phone's (iPad) widgets scale up proportionally
+    dm_tc_set_tall_scale(UIDevice.currentDevice.userInterfaceIdiom==UIUserInterfaceIdiomPad);   // UIKit 点数：仅 iPad 开启有上限的平板缩放 | UIKit points: enable the bounded tablet profile only on iPad.
     DmMetalView *v = [[DmMetalView alloc] initWithFrame:frame];
     g_rate_link = [CADisplayLink displayLinkWithTarget:[DmRateHint new] selector:@selector(tick:)];
     g_rate_link.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);
@@ -1408,7 +1416,12 @@ void front_ios_lifecycle_install(void) {
     if (NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious) thermal_apply();   // 启动时已经热 | Already hot at launch
 
     AVAudioSession *as = AVAudioSession.sharedInstance; NSError *e = nil;
-    if (![as setCategory:AVAudioSessionCategoryPlayback error:&e] || ![as setActive:YES error:&e]) LOG("前端：音频会话设置失败 %s", e.localizedDescription.UTF8String);
+    // 类别 Playback：静音开关开着也出声。带 MixWithOthers：Playback 缺省是独占的，激活会话会打断别的 App 的声音——
+    // #77：游戏在前台时 ChatGPT 实时语音 / 屏幕共享、后台音乐都被打断，切走就恢复，游戏音量调到 0 也一样（打断发生在激活会话那一下，与音量无关）
+    // Category Playback: sound plays with the silent switch on. With MixWithOthers: Playback is non-mixable by default, and activating the session interrupts other apps' audio —
+    // #77: with the game in the foreground, ChatGPT live voice / screen sharing and background music were interrupted and came back when switching away, even with the in-game volume at 0 (the interruption happens when the session is activated, regardless of volume)
+    if (![as setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&e] || ![as setActive:YES error:&e]) LOG("前端：音频会话设置失败 %s", e.localizedDescription.UTF8String);
+    LOG("前端：音频会话 类别 %s 选项 %#lx（MixWithOthers %s）、别的 App 正在出声 %d", as.category.UTF8String, (unsigned long)as.categoryOptions, (as.categoryOptions & AVAudioSessionCategoryOptionMixWithOthers) ? "开" : "关", as.isOtherAudioPlaying);
     [nc addObserverForName:AVAudioSessionInterruptionNotification object:as queue:mq usingBlock:^(NSNotification *n) {
         AVAudioSessionInterruptionType t = [n.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
         if (t == AVAudioSessionInterruptionTypeBegan) { LOG("前端：音频被打断"); g_audio_intr = 1; audio_apply(); return; }
@@ -1422,7 +1435,7 @@ void front_ios_lifecycle_install(void) {
     [nc addObserverForName:AVAudioSessionRouteChangeNotification object:as queue:mq usingBlock:^(NSNotification *n) {
         double mtl_link_tick_age_ms(void);
         LOG("前端：音频路由变化 原因 %lu（显示节拍上次回调 %.0f ms 前）", (unsigned long)[n.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue], mtl_link_tick_age_ms()); }];
-    LOG("前端：生命周期 / 过热 / 音频会话已接（类别 Playback）");
+    LOG("前端：生命周期 / 过热 / 音频会话已接（类别 Playback，与别的 App 混音）");
     // 测试开关 DM_TEST_AUDIO_INTERRUPT=起始秒,时长秒：按时向本进程投递音频会话打断开始 / 结束（带 ShouldResume），模拟来电 / 闹钟；
     // 结束后 2 s 打出声卡回调增量（真出声 DM_AUDIO=1 时应 > 0）
     // 测试开关 DM_TEST_BG=起始秒,时长秒[;起始秒,时长秒…]：应用内模拟「进后台 → 回前台」（可排几组）——先暂停显示节拍（模仿系统停回调），再走与真实场景事件同一个处理函数。

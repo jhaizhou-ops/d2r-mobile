@@ -10,7 +10,7 @@ static int push(dm_tc_state *s, float w, float h, float d) {   /* 在静止位�
     dm_tc_move(s, 0, cx + d, cy); return s->lx;
 }
 int main(void) {
-    dm_tc_state s; dm_tc_set_tall_scale(1);   /* 前端的口径：比手机高的画面控件按 高 / 440 放大（1366×768 → 1.745 倍） | The front end's convention: on displays taller than a phone, widgets are scaled up by height / 440 (1366×768 → 1.745×) */
+    dm_tc_state s; dm_tc_set_tall_scale(1);   /* 前端的口径：平板控件最多放大 15% | Front-end convention: tablet controls grow at most 15% */
     static const float size[][2] = {{956, 440}, {1194, 672}, {1366, 768}};   /* 手机、11 寸 iPad 的 16:9 视图、12.9 寸 iPad 的 16:9 视图 | Phone, the 16:9 view on the 11-inch iPad, the 16:9 view on the 12.9-inch iPad */
     for (int i = 0; i < 3; ++i) {
         float w = size[i][0], h = size[i][1];
@@ -21,7 +21,7 @@ int main(void) {
         CHECK(push(&s, w, h, 105) == DM_STICK_MAX);
         CHECK(abs(push(&s, w, h, -20) + 8495) <= 1);
     }
-    dm_tc_init(&s, 1366, 768); CHECK(s.layout.joy_radius > 104 && s.layout.joy_radius < 105);   /* 画出来的底盘仍按视觉倍数：60 × 1.745 | The drawn base still follows the visual multiplier: 60 × 1.745 */
+    dm_tc_init(&s, 1366, 768); CHECK(s.layout.joy_radius > 68 && s.layout.joy_radius < 70);   /* 画出来的底盘仍按视觉倍数：60 × 1.15 | The drawn base still uses the visual scale: 60 × 1.15 */
 
     /* 底边那一条：手机（没设）照旧能在最底起摇杆 | Bottom-edge strip: a phone (not set) can still start the stick at the very bottom as before */
     dm_tc_init(&s, 956, 440); dm_tc_begin(&s, 0, 90, 425); CHECK(s.joy_slot == 0); dm_tc_cancel_all(&s);   /* 起摇杆区一直到屏幕底：(90,425) 在内 | the stick-start zone reaches the bottom of the screen: (90,425) is inside */

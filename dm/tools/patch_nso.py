@@ -648,6 +648,10 @@ for o in range(0, TEXT_END, 4):
     if w & 0xFFFFFFE0 == 0xD53BD060: kinds[o] = ('tpidrro_r', None); continue
     if w & 0xFFFFFFE0 == 0xD53BE020: kinds[o] = ('cntpct', w & 31); continue
     if w & 0xFFFFFFE0 == 0xD53BE040: kinds[o] = ('cntvct', w & 31); continue
+    # x18/w18 只会占这些寄存器字段；无匹配的字无需反汇编 | x18/w18 can only occupy these register fields; skip words without a match
+    # x18/w18 can only occupy these register fields; skip words without a match
+    if not any((w >> p) & 31 == 18 for p in (0, 5, 10, 16)):
+        continue
     for ins in md.disasm(IMG[o:o + 4], o):
         if has18(ins): kinds[o] = ('x18', None)
 

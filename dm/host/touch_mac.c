@@ -18,6 +18,7 @@ static float ui_y_to_screen(float uy) { int x, y, w, h, rw = 0, rh = 0; dm_ui_re
 uint64_t guest_ns(void);
 uint32_t dm_cur_tick(void);
 int dm_loadscreen_down(void);
+int dm_game_paused(void);
 // 拍号：脚本回放按服务端拍（确定性）；真鼠标（App 形态）按墙钟折成每秒 30 拍——暂停菜单 / 设置页 / 大秘境面板开着时游戏停拍，
 // 按服务端拍的话鼠标事件排在队里不处理，这些页一下都点不进去
 // Tick number: script playback goes by server ticks (deterministic); a real mouse (App form) converts wall clock into 30 ticks per second - the game stops ticking while the pause menu / settings page / Greater Rift panel is open,
@@ -40,16 +41,23 @@ static struct {
     dm_tc_state state;
 } g_touch;
 
-// ---- 真鼠标（Mac App，front_mac.m）：事件来自前端而不是脚本表，进同一套状态机。界面用原版手柄 HUD，屏上没有触屏圆钮与摇杆：
-// 非面板态一个按钮目标都不开、左下角不起摇杆（点哪里都只是「点世界」：点到目标走过去交互，点空地不动）；面板态照旧（点控件、页签、物品格）。
+int dm_touch_host_world_active(void) {
+    int dm_uiscreen_ingame(void);
+    return !g_live_on || (dm_uiscreen_ingame() && !g_touch.state.navigation_mode && !dm_game_paused());
+}
+
+// ---- 真鼠标（Mac App，front_mac.m）：事件来自前端而不是脚本表。界面沿用触屏状态机，世界点击在按下时直接点选。界面用原版手柄 HUD，屏上没有触屏圆钮与摇杆：
+// 非面板态一个按钮目标都不开、左下角不起摇杆（点到目标走过去交互，点空地走过去）；面板态照旧（点控件、页签、物品格）。
 // 前端页（主菜单 / 选角 / 建角，不在局内）不经状态机，触点直接当界面点击（同 iOS 前端的 frontendMode）。
-// ---- Real mouse (Mac App, front_mac.m): events come from the front end rather than the script table and enter the same state machine. The UI is the original gamepad HUD, with no touch buttons or stick on screen:
-// outside panels no button target is opened and no stick is raised at the bottom left (a click anywhere is just "click the world": clicking a target walks over and interacts, clicking empty ground does nothing); in panels it works as before (clicking controls, tabs, item cells).
-// Front-end pages (main menu / character select / character creation, not in a game) bypass the state machine and the touch point is taken directly as a UI click (same as frontendMode in the iOS front end).
+// ---- Real mouse (Mac App, front_mac.m): events come from the front end, not a script table. The UI reuses the touch state machine, and world clicks pick on press. The UI uses the original controller HUD, with no touch buttons or stick on screen:
+// outside panels no button targets are enabled and the lower-left corner does not start a stick (click a target to walk over and interact, click empty ground to walk there); inside panels it works as before (widgets, tabs, item cells).
+// Front-end pages (main menu / character select / character creation, not in game) bypass the state machine and touches are UI clicks directly (same as frontendMode on the iOS front end).
 #include <stdatomic.h>
 static uint32_t g_live_tick0; static int g_live_based; static uint64_t g_live_btn; static uint32_t g_live_btn_until;
 static struct { _Atomic unsigned head, tail; struct { int op; float nx, ny; } q[64]; } g_live;
-static struct { int down; uint32_t t0, last; float x, y; unsigned tap_seq; float tap_x, tap_y; } g_lm;   // 真鼠标左键在世界上的状态（点地面走用）：按着没有、按下的拍、上次发「朝光标走」的拍、光标位置；等答案的那一笔点按 | state of the real mouse's left button on the world (for click-to-walk): whether it is down, the tick it went down, the tick "walk towards the pointer" was last sent, the pointer position; the click awaiting its answer
+// 世界手势从按下到抬起独占；点选答案只用于空地回退，不能让抬起再触发一次。
+// Own a world gesture from down through up; the pick result only supplies the ground fallback, never a second click on release.
+static struct { int owned, down, repeat; uint32_t last; float x, y; unsigned tap_seq; float tap_x, tap_y; } g_lm;
 void dm_touch_host_live(int op, float nx, float ny) {   // 前端线程：op 0 按下 1 移动 2 抬起；坐标 = 游戏画面归一化 [0,1] | Front-end thread: op 0 down, 1 move, 2 up; coordinates = normalized to the game picture [0,1]
     if (!g_live_on) return; unsigned t = atomic_load(&g_live.tail); if (t - atomic_load(&g_live.head) >= 64) return;
     g_live.q[t % 64].op = op; g_live.q[t % 64].nx = nx; g_live.q[t % 64].ny = ny; atomic_store(&g_live.tail, t + 1);
@@ -197,6 +205,12 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
         if (!in) g_live_based = 0;
         while ((h = atomic_load(&g_live.head)) != atomic_load(&g_live.tail)) {
             int op = g_live.q[h % 64].op; float nx = g_live.q[h % 64].nx, ny = g_live.q[h % 64].ny; if (op != 2) { px = nx; py = ny; }
+            if (op == 0) memset(&g_lm, 0, sizeof g_lm);
+            if (g_lm.owned) {
+                g_lm.x = px; g_lm.y = py;
+                if (op == 2) g_lm.owned = g_lm.down = 0;
+                atomic_store(&g_live.head, h + 1); continue;
+            }
             // 按在按键提示条的某一条上：这一下不当点击，改成按那个键 4 拍（dm_padmode.c）；按在局内底部 HUD 的技能格 / 腰带格 / 钮上：按住期间按着对应的键，抬起再放（至少 3 拍）；
             // HUD 上没有对应键的东西（血球、魔球、经验条）：吃掉。都吞到抬起为止
             // Pressed on an entry of the key-hint bar: this is not treated as a click but as pressing that key for 4 ticks (dm_padmode.c); pressed on a skill slot / belt cell / button of the in-game bottom HUD: the corresponding key is held while the mouse is down and released on mouse up (at least 3 ticks);
@@ -220,22 +234,34 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
             if (!in) {   // 前端页：抬起时先问一次命中——落在页签上就走「点页签 = 按对应的手柄键」（页签不认鼠标点击；局内由手势层做同一件事），其余照旧发鼠标点击 | front-end pages: on release, hit-test once first - landing on a tab goes through "clicking a tab = pressing the corresponding gamepad key" (tabs do not take mouse clicks; in game the gesture layer does the same), everything else sends a mouse click as before
                 if (op == 2 && dm_ui_item_at_now(px, py) == 2) { dm_ui_touch(3, px, py); dm_ui_tab_go(); } else dm_ui_touch(op, px, py);
                 atomic_store(&g_live.head, h + 1); continue; }
+            // 只有世界区域走按下响应；菜单、物品、页签和 HUD 继续走各自的手势路径。
+            // Only the world area responds on down; menus, items, tabs and the HUD keep their existing gesture paths.
+            if (op == 0 && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(px, py) == 3) {
+                unsigned dm_world_click(float, float);
+                g_lm.owned = g_lm.down = 1; g_lm.x = g_lm.tap_x = px; g_lm.y = py;
+                g_lm.tap_y = ui_y_to_screen(py); g_lm.tap_seq = dm_world_click(px, g_lm.tap_y);
+                atomic_store(&g_live.head, h + 1); continue;
+            }
             if (g_touch.next == g_touch.count) g_touch.next = g_touch.count = 0;   // 表里的都处理完了：从头复用 | Everything in the table has been handled: reuse from the start
             if (g_touch.count >= 256) break;
             touch_event *e = &g_touch.event[g_touch.count++]; e->beat = 0; e->slot = 0; e->op = op == 0 ? TOUCH_DOWN : op == 1 ? TOUCH_MOVE : TOUCH_UP; e->x = px * 2868; e->y = py * 1320;
-            if (op == 0) { g_lm.down = 1; g_lm.t0 = touch_cur_tick(); g_lm.last = 0; } else if (op == 2) g_lm.down = 0;
-            g_lm.x = px; g_lm.y = py;
             atomic_store(&g_live.head, h + 1);
         }
-        // 点地面走（键鼠玩家没有摇杆）。点一下空地：世界点选答「没有目标」后改成走到那一点（下面等答案）；按住不放：0.3 秒后起每 0.2 秒朝光标所在的地面点走一次，
-        // 光标挪到哪跟到哪，松手后走完最后那一段。只在局内、游戏没停、手势层没有面板开着、光标不在任何面板里时做。W A S D / 手柄摇杆在用时让给摇杆（dm_world.c）
-        // Click-to-walk (keyboard-and-mouse players have no stick). A click on empty ground: once the world pick answers "no target" it becomes walking to that point (the answer is awaited below); holding: after 0.3 s, walk towards the ground point under the pointer every 0.2 s,
-        // following the pointer wherever it moves, and finishing the last segment after release. Only in game, with the game not stopped, no panel open in the gesture layer and the pointer not inside any panel. While W A S D / the gamepad stick is in use it yields to the stick (dm_world.c)
+        // 空地答案一到就走；按住时每 30 Hz 拍更新目的地，不再等 0.3 秒起步、每 0.2 秒转向。
+        // 面板、暂停或离局会取消这一笔世界手势，直到抬起都不交给界面。
+        // Walk as soon as the empty-ground answer arrives; while held, update the destination every 30 Hz tick instead of waiting 0.3 s to start and steering every 0.2 s.
+        // A panel, pause or leaving the game cancels this world gesture, and nothing is handed to the UI until release.
         { void dm_world_walk(float, float); int dm_world_tap_result(unsigned), dm_game_paused(void); uint32_t tk = touch_cur_tick();
-          dm_tc_set_joy_block(&g_touch.state, 1);   // 鼠标不起触屏那个浮动摇杆（左下那片按住拖动原先会变成推摇杆） | the mouse does not start the touch layout's floating stick (holding and dragging in the bottom-left area used to turn into pushing the stick)
-          if (g_lm.tap_seq) { int r = dm_world_tap_result(g_lm.tap_seq); if (r >= 0) { if (r == 0 && in && !dm_game_paused()) dm_world_walk(g_lm.tap_x, g_lm.tap_y); g_lm.tap_seq = 0; } }
-          if (g_lm.down && in && !g_touch.state.navigation_mode && !dm_game_paused() && (int32_t)(tk - g_lm.t0) >= 9 && (!g_lm.last || (int32_t)(tk - g_lm.last) >= 6) && dm_ui_item_at_now(g_lm.x, g_lm.y) != 0) { g_lm.last = tk; dm_world_walk(g_lm.x, ui_y_to_screen(g_lm.y)); }
-          if (!in) g_lm.down = 0; }
+          dm_tc_set_joy_block(&g_touch.state, 1);
+          if (!in || g_touch.state.navigation_mode || dm_game_paused()) { g_lm.down = g_lm.repeat = 0; g_lm.tap_seq = 0; }
+          if (g_lm.tap_seq) { int r = dm_world_tap_result(g_lm.tap_seq); if (r >= 0) {
+              g_lm.repeat = r == 0 || r == 6; g_lm.last = tk;
+              if (r == 0) dm_world_walk(g_lm.tap_x, g_lm.tap_y);
+              g_lm.tap_seq = 0;
+          } }
+          if (g_lm.down && g_lm.repeat && tk != g_lm.last && dm_ui_item_at_now(g_lm.x, g_lm.y) == 3) {
+              g_lm.last = tk; dm_world_walk(g_lm.x, ui_y_to_screen(g_lm.y));
+          } }
     }
     if (g_live_btn) { if ((int32_t)(g_live_btn_until - touch_cur_tick()) > 0) *buttons |= g_live_btn; else g_live_btn = 0; }
     if (!g_touch.enabled || !g_touch.started) return;

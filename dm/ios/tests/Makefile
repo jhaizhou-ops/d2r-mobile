@@ -49,6 +49,7 @@ test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL
 	./t_joy_travel
 	./t_native_art
 	python3 test_native_art_capture.py
+	python3 test_touch_layout_options.py
 	$(call fixture_test,t_native_binding)
 	$(call fixture_test,t_game_bridge)
 	./t_binding_freshness

@@ -1,4 +1,5 @@
 #import "DmTouchOverlay.h"
+#include "DmTouchControlArt.h"
 #include <math.h>
 #include <TargetConditionals.h>
 #include "dm_touch_native_art.h"
@@ -6,8 +7,16 @@
 #include "dm_input.h"
 #include "../../host/dm_i18n.h"
 
-#define DM_SKILL_IDLE_ALPHA .6   // 五个技能钮、回城钮、技能组切换钮没按着时底圈与圆环的不透明度（图标、切换钮上的「Ⅰ / Ⅱ」不乘，保持清晰；要调浓淡只改这一处） | Opacity of the base circles and rings of the five skill buttons, the town portal button and the skill set switch button when not held (the icons and the "Ⅰ / Ⅱ" on the switch button are not multiplied and stay clear; to adjust the fade, change only this one place)
 static UIColor *bronze(CGFloat a) { return [UIColor colorWithRed:.66 green:.53 blue:.32 alpha:a]; }
+// 外观按落指立即反馈，不等待游戏按键判定；取消瞄准的手指不再点亮槽框。
+// Visual feedback starts on contact without waiting for game input; a cancelled aim finger no longer lights the frame.
+static BOOL button_held(const dm_tc_state *s, int target) {
+    uint64_t button=target>=0 && target<DM_TC_COUNT?s->layout.target[target].button:0;
+    if(button && (s->buttons&button)==button) return YES;
+    for(int i=0;i<DM_TC_MAX_TOUCH;i++)
+        if(s->finger[i].active && !s->finger[i].aim_cancelled && s->finger[i].target==target) return YES;
+    return NO;
+}
 static void caption(NSString *s, CGRect rect, CGFloat size, CGFloat alpha) {
     NSMutableParagraphStyle *p = [NSMutableParagraphStyle new]; p.alignment = NSTextAlignmentCenter;
     UIFont *f = [UIFont fontWithName:@"Palatino" size:size];
@@ -30,16 +39,19 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     return g;
 }
 @implementation DmTouchOverlay {
-    UIImage *_circle, *_joy, *_map, *_menu, *_nativeAtlases[DM_TA_ATLASES], *_silAtlases[DM_TA_ATLASES];   // _sil：同帧位的银色剪影图集（gen_hud_v4.py） | _sil: silver silhouette atlas at the same frame positions (gen_hud_v4.py)
-    NSMutableDictionary<NSString *,UIImage *> *_glyphFrames;
+    UIImage *_circle, *_socket, *_map, *_menu, *_nativeAtlases[DM_TA_ATLASES], *_silAtlases[DM_TA_ATLASES];   // _sil：同帧位的银色剪影图集（gen_hud_v4.py） | _sil: silver silhouette atlas at the same frame positions (gen_hud_v4.py)
+    NSMutableDictionary<NSString *,UIImage *> *_glyphFrames, *_buttonFrames;
     dm_ta_glyph _nativeVisualGlyphs[5];
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     self.backgroundColor = UIColor.clearColor; self.opaque = NO; self.userInteractionEnabled = NO;
-    _circle=[UIImage imageNamed:@"dm_native_circle"]; _joy=[UIImage imageNamed:@"dm_touch_joy"];
+    _circle=[UIImage imageNamed:@"dm_native_circle"];
+    // 通用按钮材质为新生成的美术，技能图案仍来自玩家自己的游戏文件。
+    // The generic socket texture is newly generated artwork; skill glyphs still come from the player's own game files.
+    _socket=[UIImage imageNamed:@"dm_mobile_socket"];
     _map=[UIImage imageNamed:@"dm_native_map"]; _menu=[UIImage imageNamed:@"dm_native_menu"];
-    _glyphFrames=[NSMutableDictionary dictionary];
+    _glyphFrames=[NSMutableDictionary dictionary]; _buttonFrames=[NSMutableDictionary dictionary];
     for(int i=0;i<DM_TA_ATLASES;i++) _nativeAtlases[i]=[UIImage imageNamed:[NSString stringWithUTF8String:dm_ta_atlases[i].asset]];
     for(int i=0;i<DM_TA_ATLASES;i++) _silAtlases[i]=[UIImage imageWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:
         [@"hud_v4_ui/sil_" stringByAppendingString:[NSString stringWithUTF8String:dm_ta_atlases[i].asset]]]];
@@ -69,8 +81,53 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     if(g.status!=DM_TA_GLYPH)return nil;
     int frame=held?g.pressed_frame:g.normal_frame;dm_ta_frame f;
     if(!dm_ta_frame_at(g.atlas,frame,&f))return nil;
-    UIImage *sil=_silAtlases[g.atlas];   // 优先剪影（技能键是圆形，PC 定稿演示图只放剪影） | Prefer the silhouette (skill buttons are round; the finalized PC demo image uses silhouettes only)
-    return [self frameImage:sil?sil:_nativeAtlases[g.atlas] key:[NSString stringWithFormat:@"%@:%d:%d",sil?@"sil":@"skill",g.atlas,frame] rect:CGRectMake(f.x,f.y,f.width,f.height)];
+    UIImage *sil=_silAtlases[g.atlas],*atlas=sil?:_nativeAtlases[g.atlas];
+    CGFloat trim=sil?0:round(f.width*.08);
+    UIImage *glyph=[self frameImage:atlas key:[NSString stringWithFormat:@"socket:%d:%d",g.atlas,frame] rect:CGRectInset(CGRectMake(f.x,f.y,f.width,f.height),trim,trim)];
+    if(!sil || !glyph) return glyph;
+    // 保留原版技能的明暗纹理，统一为银灰，不再做职业染色。
+    // Preserve the original skill shading in silver gray, without class tinting.
+    NSString *key=[NSString stringWithFormat:@"silver:%d:%d",g.atlas,frame];UIImage *image=_glyphFrames[key];
+    if(!image) {
+        UIGraphicsImageRendererFormat *format=[UIGraphicsImageRendererFormat preferredFormat];format.opaque=NO;format.scale=glyph.scale;
+        image=[[[UIGraphicsImageRenderer alloc] initWithSize:glyph.size format:format] imageWithActions:^(UIGraphicsImageRendererContext *ctx){
+            CGRect r=(CGRect){CGPointZero,glyph.size};[glyph drawInRect:r];dm_skill_silver(ctx.CGContext,r);[glyph drawInRect:r blendMode:kCGBlendModeDestinationIn alpha:1];
+        }];_glyphFrames[key]=image;
+    }
+    return image;
+}
+// 缓存控件的静态底图；移动时只换摇杆头坐标，不在每帧创建渐变。
+// Cache static control art; movement only changes the thumb position, without creating gradients every frame.
+- (UIImage *)controlArt:(NSString *)key size:(CGSize)size draw:(void (^)(CGContextRef))draw {
+    key=[NSString stringWithFormat:@"%@:%.3f:%.1f",key,size.width,self.contentScaleFactor];
+    UIImage *image=_buttonFrames[key];
+    if(!image) {
+        UIGraphicsImageRendererFormat *format=[UIGraphicsImageRendererFormat preferredFormat];format.opaque=NO;format.scale=self.contentScaleFactor;
+        image=[[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *ctx){draw(ctx.CGContext);}];
+        // 限制旋转 / 窗口缩放产生的缓存数量。
+        // Bound the cache count produced by rotation / window resizing.
+        if(_buttonFrames.count>=64) [_buttonFrames removeAllObjects];_buttonFrames[key]=image;
+    }
+    return image;
+}
+- (void)drawButton:(CGRect)rect held:(BOOL)held empty:(BOOL)empty primary:(BOOL)primary {
+    NSString *key=[NSString stringWithFormat:@"skill:%d:%d:%d",held,empty,primary];
+    UIImage *image=[self controlArt:key size:rect.size draw:^(CGContextRef c){
+        CGRect r=(CGRect){CGPointZero,rect.size};
+        if(self->_socket && !empty) {
+            [self->_socket drawInRect:r];dm_socket_neutralize(c,r);
+            if(held) dm_button_highlight(c,r);
+        } else dm_button_draw(c,r,held,empty,primary);
+    }];
+    [image drawInRect:rect];
+}
+- (void)drawJoystickPart:(CGRect)rect base:(BOOL)base active:(BOOL)active {
+    NSString *key=[NSString stringWithFormat:@"stick:%d:%d",base,active];
+    UIImage *image=[self controlArt:key size:rect.size draw:^(CGContextRef c){
+        if(base) dm_joystick_base_draw(c,(CGRect){CGPointZero,rect.size},active);
+        else dm_joystick_thumb_draw(c,(CGRect){CGPointZero,rect.size},active);
+    }];
+    [image drawInRect:rect];
 }
 - (void)setNavigationMode:(BOOL)n { _navigationMode = n; [self setNeedsDisplay]; }
 // ---- 底部 UI v4：UIKit 部分（经验条、「Lv · %」、角标、难度数字与 1–8 选择条），素材与几何由 tools/gen_hud_v4.py 生成（App 内 hud_v4_ui/）----
@@ -171,23 +228,14 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
                                                       // 原先只在游戏态跳过：只开着 NPC 对话菜单时（导航态 3，十字可点）这一格被画成圆底 + 写死的中文「功能」，英文界面也写中文。回城（技能弧上方圆钮）照技能钮画
                                                       // Previously skipped only in the gameplay state: with only the NPC dialog menu open (navigation state 3, cross tappable) this cell was drawn as a round base plus the hardcoded Chinese "功能" (Functions), even in the English UI. Town Portal (the round button above the skill arc) is drawn like a skill button
         const dm_tc_target *t = &l->target[i]; CGRect b = CGRectMake(t->x-t->r,t->y-t->r,t->r*2,t->r*2);
-        BOOL held = t->button != 0 && (s->buttons & t->button) == t->button;
-        if(i==DM_TC_PORTAL) for(int f=0;f<DM_TC_MAX_TOUCH;f++) held|=s->finger[f].active && s->finger[f].target==DM_TC_PORTAL;   // 回城钮不出按键（宿主施放回城技能），按住态看手指 | The town portal button emits no key (the host casts the town portal skill); the held state is read from the fingers
+        BOOL held=button_held(s,i);
         CGFloat opacity = held ? .6 : .28;
         if(!self.navigationMode && i==DM_TC_MAP && s->map_cancel_active) {
             CGContextSetFillColorWithColor(c,[UIColor colorWithRed:.55 green:.05 blue:.04 alpha:.36].CGColor); CGContextFillRect(c,b); labels[i]=@(dm_ui("dmTcCancel"));
         }
         BOOL skillKey=!self.navigationMode && (i<=DM_TC_SKILL4 || i==DM_TC_PORTAL);   // 回城钮（圆形、和技能图标一样） | Town portal button (round, same as the skill icons)
-        if (skillKey) {   // PC 定稿演示图同款：深色圆底 + 古铜圆环（外亮内暗两道） | Same as the finalized PC demo image: dark round base + bronze ring (two strokes, bright outside and dark inside)
-            CGFloat lw=MAX(1.5,t->r*0.075);
-            // 五个技能钮与回城钮平时底圈、圆环淡一些（DM_SKILL_IDLE_ALPHA，少挡画面），按住时恢复原样给手感；图标、角标、标签、充能用完的灰态不跟着变
-            // The base circles and rings of the five skill buttons and the town portal button are faded when idle (DM_SKILL_IDLE_ALPHA, to block less of the view) and return to normal while held for feedback; icons, badges, labels and the grey out-of-charges state do not follow
-            CGFloat fr=held?1:DM_SKILL_IDLE_ALPHA;
-            CGContextSetFillColorWithColor(c,[UIColor colorWithRed:.086 green:.067 blue:.047 alpha:held?.92:.80*fr].CGColor); CGContextFillEllipseInRect(c,b);
-            CGContextSetLineWidth(c,lw); CGContextSetStrokeColorWithColor(c,[UIColor colorWithRed:.60 green:.47 blue:.28 alpha:held?1:.9*fr].CGColor);
-            CGContextStrokeEllipseInRect(c,CGRectInset(b,lw/2,lw/2));
-            CGContextSetLineWidth(c,lw*.5); CGContextSetStrokeColorWithColor(c,[UIColor colorWithRed:.12 green:.09 blue:.05 alpha:.9*fr].CGColor);
-            CGContextStrokeEllipseInRect(c,CGRectInset(b,lw*1.3,lw*1.3));
+        if (skillKey) {
+            b=dm_button_rect(t->x,t->y,t->r);
         } else if (_circle) [_circle drawInRect:b blendMode:kCGBlendModeNormal alpha:opacity];
         else {
             CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:.02 alpha:.16].CGColor); CGContextFillEllipseInRect(c,b);
@@ -205,21 +253,19 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
             icon=[self frameImage:i==DM_TC_MAP?_map:_menu key:[NSString stringWithFormat:@"fixed:%d:%d",i,held] rect:CGRectMake(held?36:0,0,36,36)];
         }
         if(!self.navigationMode && i==DM_TC_MAP && s->map_cancel_active) {icon=nil;showCaption=YES;}
-        if(skillKey && !icon && (!showCaption || i==DM_TC_MAIN)) {   // 主钮取不到图标（如第二套里这一格没绑）也画十字、不写「攻击」：空格按下去不出普通攻击，画攻击图标或写字都会骗人   // 空技能位：圆底圆环里一个单色十字，不写 F 标签；点它进绑定技能（行为由输入层接） | when the main button cannot get an icon (e.g. this cell is not bound in the second set) it also draws the cross and does not say 「攻击」(Attack): pressing an empty cell does not produce a normal attack, so drawing the attack icon or the text would both be misleading   // empty skill slot: a single-color cross inside the round base and ring, no F label; tapping it goes to skill binding (the behavior is wired by the input layer)
-            CGFloat a_=t->r*.30, w_=MAX(1.5,t->r*.085);
-            CGContextSetStrokeColorWithColor(c,[UIColor colorWithRed:.60 green:.47 blue:.28 alpha:held?1:.9].CGColor); CGContextSetLineWidth(c,w_); CGContextSetLineCap(c,kCGLineCapButt);
-            CGContextMoveToPoint(c,t->x-a_,t->y); CGContextAddLineToPoint(c,t->x+a_,t->y); CGContextMoveToPoint(c,t->x,t->y-a_); CGContextAddLineToPoint(c,t->x,t->y+a_); CGContextStrokePath(c);
-            continue;
-        }
-        if(skillKey) {   // 剪影居中略偏上，下方标签：主键「攻击」，其余 F1–F4（第二套 F5–F8）；空槽只有圆底、圆环与标签 | silhouette centered and slightly high, label below: main button 「攻击」(Attack), the others F1–F4 (second set F5–F8); an empty slot has only the round base, the ring and the label
-            BOOL bare=icon!=nil;   // 有图标的技能钮不写字（最大的钮是「主技能 / 交互」、可绑任意技能，钮上只画所绑技能的图标，不写「攻击」）：图标放大并居中。取不到图标时主钮仍落回「攻击」字样 | skill buttons that have an icon carry no text (the largest button is "main skill / interact" and can be bound to any skill, so the button draws only the bound skill's icon and does not say 「攻击」(Attack)): the icon is enlarged and centered. When no icon can be obtained the main button still falls back to the 「攻击」(Attack) text
+        BOOL emptySkill=skillKey && !icon && (!showCaption || i==DM_TC_MAIN);
+        if(skillKey) [self drawButton:b held:held empty:emptySkill primary:i==DM_TC_MAIN];
+        if(emptySkill) continue;   // 空槽保留绑定入口，细边框和刻印由背景绘制 | Empty slots keep their binding entry; the background draws their thin rim and engraving
+        if(skillKey) {   // 技能美术居中；无图的未知槽保留原标签回退 | Center skill artwork; unknown slots with no image keep the existing label fallback
+            BOOL bare=icon!=nil;   // 有图标的技能钮不写字（最大的钮是「主技能 / 交互」、可绑任意技能，钮上只画所绑技能的图标，不写「攻击」）：图标放大并居中。取不到图标时主钮仍落回「攻击」字样 | skill buttons that have an icon carry no text (the largest button is "main skill / interact" and can be bound to any skill, so the button draws only the bound skill's icon and does not say 「攻击」(Attack)): the icon is enlarged and centered. When no icon can be obtained the main button still falls back to the 「攻击」(Attack) text | skill buttons that have an icon carry no text (the largest button is "main skill / interact" and can be bound to any skill, so it draws only the bound skill's icon and no Attack label): the icon is enlarged and centered. When no icon can be obtained the main button still falls back to the Attack label
             BOOL spent=(ssKind&2) && ssCharges<=0;   // 充能用完：钮变灰（灰底上按亮度贴图标 = 去色），按下也不换武器（dm_actions.c） | charges used up: the button turns gray (the icon applied by luminance on a gray base = desaturated), and pressing does not swap weapons either (dm_actions.c)
-            if(icon) { CGFloat size=b.size.width*(bare?.64:.56); CGSize in_=icon.size; CGFloat fit=size/MAX(in_.width,in_.height);
+            if(icon) { CGFloat size=b.size.width*(bare?.76:.68); CGSize in_=icon.size; CGFloat fit=size/MAX(in_.width,in_.height);
                 CGRect ir=CGRectMake(t->x-in_.width*fit/2,t->y-(bare?0:t->r*.12)-in_.height*fit/2,in_.width*fit,in_.height*fit);
-                if(spent) { CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:.30 alpha:1].CGColor); CGContextFillEllipseInRect(c,CGRectInset(b,t->r*.14,t->r*.14));
+                CGContextSaveGState(c); CGContextAddEllipseInRect(c,CGRectInset(b,b.size.width*.09,b.size.height*.09)); CGContextClip(c);
+                if(spent) { CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:.30 alpha:1].CGColor); CGContextFillEllipseInRect(c,CGRectInset(b,b.size.width*.08,b.size.height*.08));
                     [icon drawInRect:ir blendMode:kCGBlendModeLuminosity alpha:.55];
-                    CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:0 alpha:.35].CGColor); CGContextFillEllipseInRect(c,b); }
-                else [icon drawInRect:ir blendMode:kCGBlendModeNormal alpha:held?1:.92]; }   // 图标不淡：淡的只是底圈与圆环 | The icon is not faded: only the base circle and the ring are
+                    CGContextSetFillColorWithColor(c,[UIColor colorWithWhite:0 alpha:.35].CGColor); CGContextFillEllipseInRect(c,CGRectInset(b,b.size.width*.06,b.size.height*.06)); }
+                else { CGContextSetShadowWithColor(c,CGSizeZero,held?t->r*.10:t->r*.055,[UIColor colorWithWhite:.65 alpha:.32].CGColor); [icon drawInRect:ir blendMode:kCGBlendModeNormal alpha:held?1:.94]; } CGContextRestoreGState(c); }   // 图标保持清晰，只有空槽框淡出 | Keep icons clear; only empty slot frames fade
             // 副手组技能角标：右上「Ⅱ」= 技能在另一组武器上，按下先换武器；右下剩余次数 = 充能技能，字用腰带药水件数那套（ui.json badge）
             // Secondary weapon set skill badges: top right "Ⅱ" = the skill is on the other weapon set, pressing swaps weapons first; bottom right remaining count = charged skill, the text uses the same style as the belt potion count (ui.json badge)
             if(ssKind&1) { CGFloat br=t->r*.30, bx=t->x+t->r*.74, by=t->y-t->r*.74; CGRect bb=CGRectMake(bx-br,by-br,br*2,br*2), lw2=CGRectInset(bb,MAX(1,br*.08),MAX(1,br*.08));
@@ -246,16 +292,10 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         if (i>=DM_TC_BELT1 && i<=DM_TC_BELT4) caption([NSString stringWithFormat:@"%d",i-DM_TC_BELT1+1],CGRectMake(t->x-10*k,t->y+8*k,20*k,12*k),8*k,.65);
     }
     if (!self.navigationMode && l->swap.r > 0) {   // 技能组切换键：显示当前第几套 | skill set switch button: shows which set is current
-        CGRect b = CGRectMake(l->swap.x-l->swap.r,l->swap.y-l->swap.r,l->swap.r*2,l->swap.r*2);
-        // 与技能键同一套：深色圆底 + 古铜圆环（外亮内暗两道）；上面「Ⅰ / Ⅱ」、下面小字「换组」
-        // Same scheme as the skill buttons: dark round base + bronze ring (two strokes, bright outside and dark inside); "Ⅰ / Ⅱ" on top, small text 「换组」(switch set) below
-        CGFloat lw=MAX(1.5,l->swap.r*0.075);
-        BOOL sheld=NO; for(int f=0;f<DM_TC_MAX_TOUCH;f++) sheld|=s->finger[f].active && hypot(s->finger[f].x-l->swap.x,s->finger[f].y-l->swap.y)<=l->swap.r;   // 手指按在这颗上 | a finger is on this button
-        CGFloat fs=sheld?1:DM_SKILL_IDLE_ALPHA;   // 同技能钮：平时淡、按住变实；「Ⅰ / Ⅱ」是状态指示，不淡 | same as skill buttons: faded normally, solid while held; "Ⅰ / Ⅱ" is a state indicator and is not faded
-        CGContextSetFillColorWithColor(c,[UIColor colorWithRed:.086 green:.067 blue:.047 alpha:sheld?.92:.80*fs].CGColor); CGContextFillEllipseInRect(c,b);
-        CGContextSetLineWidth(c,lw); CGContextSetStrokeColorWithColor(c,[UIColor colorWithRed:.60 green:.47 blue:.28 alpha:sheld?1:.9*fs].CGColor); CGContextStrokeEllipseInRect(c,CGRectInset(b,lw/2,lw/2));
-        CGContextSetLineWidth(c,lw*.5); CGContextSetStrokeColorWithColor(c,[UIColor colorWithRed:.12 green:.09 blue:.05 alpha:.9*fs].CGColor); CGContextStrokeEllipseInRect(c,CGRectInset(b,lw*1.3,lw*1.3));
-        CGFloat ts = 14*k; caption(s->skill_set ? @"Ⅱ" : @"Ⅰ",CGRectMake(b.origin.x,l->swap.y-ts*.8,b.size.width,ts*1.6),ts,1);   // 只留 Ⅰ / Ⅱ、居中（「换组」小字去掉） | keep only Ⅰ / Ⅱ, centered (the small 「换组」(switch set) text is removed)
+        CGRect b=dm_button_rect(l->swap.x,l->swap.y,l->swap.r);
+        BOOL sheld=button_held(s,DM_TC_SWAP);
+        [self drawButton:b held:sheld empty:NO primary:NO];
+        CGFloat ts=12*k; caption(s->skill_set ? @"Ⅱ" : @"Ⅰ",CGRectMake(b.origin.x,l->swap.y-ts*.65,b.size.width,ts*1.6),ts,sheld?1:.86);
     }
     [self drawV4:c];   // 底栏：它自己按面板栈 / 死亡判显隐（dm_hud_bar_visible）。原先放在摇杆之后，被下面「面板开着就不画摇杆」的提前返回一起跳过—— | Bottom bar: it decides its own visibility from the panel stack / death (dm_hud_bar_visible). It used to come after the joystick and was skipped along with the early return below for "don't draw the joystick while a panel is open" —
                        // 只开着 NPC 对话菜单 / 说话框时（设计上底栏照常显示）UIKit 底栏不画，露出游戏层那份：没有数值和经验条、难度格空、十字位写着「功能」
@@ -266,15 +306,11 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     CGPoint o = moving ? CGPointMake(s->joy_origin_x,s->joy_origin_y) : CGPointMake(l->joy_x,l->joy_y);
     CGFloat radius=l->joy_radius;
     CGRect base=CGRectMake(o.x-radius,o.y-radius,radius*2,radius*2);
-    CGContextSetLineWidth(c,k); CGContextSetStrokeColorWithColor(c,bronze(moving ?.32:.12).CGColor); CGContextStrokeEllipseInRect(c,base);
+    [self drawJoystickPart:base base:YES active:moving];
     CGFloat dx=s->lx/32767.0*radius,dy=-s->ly/32767.0*radius;
     CGRect thumb=CGRectMake(o.x+dx-23*k,o.y+dy-23*k,46*k,46*k);
-    if (_joy) [_joy drawInRect:thumb blendMode:kCGBlendModeNormal alpha:moving ?.8:.18];
-    if (moving && (s->lx || s->ly)) {
-        CGFloat angle=atan2(dy,dx);
-        CGContextSetStrokeColorWithColor(c,bronze(.7).CGColor); CGContextSetLineWidth(c,2*k);
-        CGContextAddArc(c,o.x,o.y,radius+3*k,angle-M_PI/6,angle+M_PI/6,0); CGContextStrokePath(c);
-    }
+    [self drawJoystickPart:thumb base:NO active:moving];
+
 }
 - (NSDictionary *)controlMetadata {
     const dm_tc_state *s=self.controls; if (!s) return @{};
@@ -290,10 +326,10 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         }
         if(i<=DM_TC_SKILL4) {
             dm_ta_glyph g=shown_glyph(&visualNative,t->button,hostNow,s->skill_set);
-            BOOL held=t->button && (s->buttons&t->button)==t->button;
+            BOOL held=button_held(s,i);
             BOOL drawn=!self.navigationMode && [self skillImage:g held:held]!=nil;
             NSString *status=self.navigationMode?@"navigation_label":(g.status==DM_TA_EMPTY?@"empty_slot":(drawn?@"current_skill":@"empty_unknown"));
-            entry[@"currentSkill"]=@{@"schema":@"dm-current-skill-visual-1",@"status":status,@"reason":[NSString stringWithUTF8String:g.reason],@"raw_skill_id":@(g.raw_skill_id),@"slot":@(g.slot),@"effective_slot":@(g.effective_slot),@"atlas":@(g.atlas),@"normal_frame":@(g.normal_frame),@"pressed_frame":@(g.pressed_frame),@"display_frame":@(held?g.pressed_frame:g.normal_frame),@"glyph_drawn":@(drawn),@"icon_diameter_ratio":@(i==DM_TC_MAIN?.55:.62)};
+            entry[@"currentSkill"]=@{@"schema":@"dm-current-skill-visual-1",@"status":status,@"reason":[NSString stringWithUTF8String:g.reason],@"raw_skill_id":@(g.raw_skill_id),@"slot":@(g.slot),@"effective_slot":@(g.effective_slot),@"atlas":@(g.atlas),@"normal_frame":@(g.normal_frame),@"pressed_frame":@(g.pressed_frame),@"display_frame":@(held?g.pressed_frame:g.normal_frame),@"glyph_drawn":@(drawn),@"icon_diameter_ratio":@(.76),@"visual_rect_pt":@[@(dm_button_rect(t->x,t->y,t->r).origin.x),@(dm_button_rect(t->x,t->y,t->r).origin.y),@(t->r*2),@(t->r*2)]};
         }
         [a addObject:entry];
     }
@@ -311,9 +347,9 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         @"portal":@{@"valid":@(native.portal.valid),@"slot":@(native.portal.slot),@"raw_skill_id":@(native.portal.raw_skill_id),@"buttons":@(native.portal.buttons)}};
     // capture版本与布局版本分开；期望state由测试输入提供，不用visible反推。
     // The capture version and the layout version are separate; the expected state is supplied by the test input, not inferred back from visible.
-    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
+    return @{@"capture_schema":@"dm-touch-capture-2",@"profile_id":@"native_art_v1",@"binding_profile_id":@"touch_native_binding_v5",@"control_layout":@"thumb_fan_v5_lower_portal_arc",@"tablet_layout":@(s->layout.tablet),@"swap_above":@(s->layout.swap_above),@"input_schema":@"dm-touch-input-5",@"native_mapping":nativeInfo,
         @"layout_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"geometry_sha256":[NSString stringWithUTF8String:dm_ta_geometry_sha],@"binding_protocol_sha256":[NSString stringWithUTF8String:dm_ta_binding_sha],
-        @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
+        @"art_provenance":@{@"schema":@"dm-native-art-provenance-1",@"manifest":@"native_art_manifest.json",@"manifest_sha256":[NSString stringWithUTF8String:dm_ta_manifest_sha],@"shell_idle_alpha":@.28,@"shell_held_alpha":@.6,@"button_style":@"immortal_reference_v5_neutral",@"fixed_functions":@[@"portal",@"map",@"menu"],@"unsupported_state":@"no ammo/cooldown/mana tint"},
         @"source":TARGET_OS_SIMULATOR?@"uikit_simulator_overlay":@"uikit_device_overlay",
         @"right_aim":@{@"rx":@(s->rx),@"ry":@(s->ry),@"owner_slot":@(s->aim_slot),@"map_cancel_active":@(s->map_cancel_active),@"navigation_suppressed":@(s->navigation_mode),@"mapping":@"UIKit dx/r, -dy/r; independent clamped SDK axes"},
         @"state":self.navigationMode?@"navigation":@"game",@"joystick":joystick,@"coordinate_space":@"UIKit points",@"view_size_pt":@[@(s->layout.width),@(s->layout.height)],@"navigation":@(self.navigationMode),@"controls":a,@"portal_request":@{@"gesture_epoch":@(s->gesture_epoch),@"binding_identity":@(s->portal_binding_identity),@"scene_epoch":@(s->portal_scene_epoch),@"phase":@(s->portal_phase),@"pending":@(s->portal_pending)},@"portal_binding_verified":@NO,@"game_hud_relayout_verified":@NO};

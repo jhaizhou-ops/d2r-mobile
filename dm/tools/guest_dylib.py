@@ -11,20 +11,22 @@
 # 文件格式上要注意的三点（都是真机 / Mac 上实测出来的）：
 #   · 必须声明依赖 /usr/lib/libSystem.B.dylib，否则系统拒绝加载（「must link with at least libSystem.dylib」）；
 #   · 每个节按 16K 对齐、整页大小：装载器用 vm_remap 按整页取；
-#   · __LINKEDIT 放在最后并留在文件末尾：签名工具把签名追加在它后面。
+#   · __LINKEDIT 放在最后，末尾留一块预留的代码签名区，里面是链接器式的自签（CS_LINKER_SIGNED，与 ld 写的同类），空间充裕，重签工具可原地写入自己的签名；
+#     zsign（LiveContainer 等设备端签名器）没法给这个文件新增签名命令，因为它只靠名为 __text 的节找装载命令的空闲空间，而 Guest 没有这个节。
 # 用法：guest_dylib.py <产物目录> <输出目录> <模块名...>     输出 <输出目录>/Guest.framework/{Guest,Info.plist}
 # Write the rewritten module images directly as one Apple-format dynamic library Guest.framework/Guest: it holds only segments, no symbols, and nothing other than the code.
 # Uses only the Python standard library, calls no compiler, linker or any Apple tool, and produces byte-for-byte identical files on macOS / Linux / Windows.
 # Who it is for: the shell install package (ios/tools/shell_build.sh) contains no game program; after users rewrite the module images from their own game files, d2rm_pack.py calls this script
 # to write this library and put it into the install package's Frameworks/, and then the whole package is signed with a sideloading tool. The host's loader (the DM_SHELL branch of host/loader.c) loads it and fetches the segments by section name.
 # The section layout matches the embedded approach (ios/tools/gen_embed.py), so the loader does not need two variants:
-#   __TEXT,__dm<name>x0   original text: [0, round16K(TEXT_END))
-#   __DM<name>W,__img     writable segment: [round16K(TEXT_END), PATCH_OFF)
-#   __TEXT,__dm<name>x1   patch area: [PATCH_OFF, round16K(end of file))
+# __TEXT,__dm<name>x0   original text: [0, round16K(TEXT_END))
+# __DM<name>W,__img     writable segment: [round16K(TEXT_END), PATCH_OFF)
+# __TEXT,__dm<name>x1   patch area: [PATCH_OFF, round16K(end of file))
 # Three points to note about the file format (all found by measurement on a real device / Mac):
-#   · a dependency on /usr/lib/libSystem.B.dylib must be declared, otherwise the system refuses to load it ("must link with at least libSystem.dylib");
-#   · every section is aligned to 16K and is a whole number of pages: the loader takes whole pages with vm_remap;
-#   · __LINKEDIT goes last and stays at the end of the file: the signing tool appends the signature after it.
+# · a dependency on /usr/lib/libSystem.B.dylib must be declared, otherwise the system refuses to load it ("must link with at least libSystem.dylib");
+# · every section is aligned to 16K and is a whole number of pages: the loader takes whole pages with vm_remap;
+# · __LINKEDIT goes last and ends with a reserved code-signature area holding a linker-signed ad-hoc signature (CS_LINKER_SIGNED, the same kind ld writes) with room to spare, so a re-signing tool can write its signature in place;
+# zsign (LiveContainer and other on-device signers) cannot add a signature command to this file, because it only finds free header space via a section named __text, which Guest does not have.
 # Usage: guest_dylib.py <build output directory> <output directory> <module name...>     writes <output directory>/Guest.framework/{Guest,Info.plist}
 import hashlib, os, struct, sys
 
@@ -51,6 +53,15 @@ def dylib_cmd(cmd, name):
     return struct.pack('<IIIIII', cmd, 24 + len(name), 24, 2, 0x10000, 0x10000) + name
 
 
+def adhoc_sig(data, text_size):
+    # 苹果 cs_blobs.h 的 SuperBlob + CodeDirectory 0x20400，SHA-256 页哈希；用链接器式（CS_LINKER_SIGNED），重签工具不用强制标志就能替换它
+    # Apple cs_blobs.h SuperBlob + CodeDirectory 0x20400 with SHA-256 page hashes; linker-signed (CS_LINKER_SIGNED), so re-signing tools replace it without needing a force flag
+    n = (len(data) + 4095) // 4096; ident = b'Guest\0'; hdr = struct.calcsize('>IIIIIIIIIBBBBIIIIQQQQ'); assert hdr == 88
+    cd = struct.pack('>IIIIIIIIIBBBBIIIIQQQQ', 0xfade0c02, hdr + len(ident) + 32 * n, 0x20400, 0x20002, hdr + len(ident), hdr, 0, n, len(data), 32, 2, 0, 12, 0, 0, 0, 0, 0, 0, text_size, 0)
+    cd += ident + b''.join(hashlib.sha256(data[i:i + 4096]).digest() for i in range(0, len(data), 4096))
+    return struct.pack('>IIIII', 0xfade0cc0, 20 + len(cd), 1, 0, 20) + cd
+
+
 def build(out, names):
     text, wsegs = [], []
     for n in names:
@@ -64,22 +75,25 @@ def build(out, names):
     off = PG; tsects = []; body = b''          # 第一页：文件头与装载命令 | first page: file header and load commands
     for sn, b in text:
         tsects.append((sn, off, len(b), 0x80000400)); body += b; off += len(b)   # 纯指令节 | pure instructions section
-    cmds = [segment('__TEXT', 0, off, 0, off, 5, tsects)]
+    cmds = [segment('__TEXT', 0, off, 0, off, 5, tsects)]; tsz = off
     for sn, b in wsegs:
         cmds.append(segment(sn, off, len(b), off, len(b), 3, [('__img', off, len(b), 0)])); body += b; off += len(b)
     strtab = b'\0' * 8
+    cs_off = (off + len(strtab) + 15) & ~15; cs_size = (((cs_off // 4096 + 1) * 52 + 4095) & ~4095) + 0x40000   # 签名区：16 字节对齐；留足 SHA-1 + SHA-256 页哈希（52 字节/页）外加 256K | signature area: 16-byte aligned; room for SHA-1 + SHA-256 page hashes (52 bytes/page) plus 256K
     uuid = hashlib.sha256(body).digest()[:16]   # 由内容定：同样的输入在哪台机器上出的库都逐字节相同 | determined by content: the same input yields a byte-for-byte identical library on whatever machine it is built
-    cmds += [segment('__LINKEDIT', off, PG, off, len(strtab), 1, []),
+    cmds += [segment('__LINKEDIT', off, r16(cs_off + cs_size - off), off, cs_off + cs_size - off, 1, []),
              dylib_cmd(0xd, b'@rpath/Guest.framework/Guest'),                    # LC_ID_DYLIB
              struct.pack('<II10I', 0x80000022, 48, *([0] * 10)),                 # LC_DYLD_INFO_ONLY：没有重定位、没有绑定、没有导出 | LC_DYLD_INFO_ONLY: no relocations, no bindings, no exports
              struct.pack('<IIIIII', 0x2, 24, off, 0, off, len(strtab)),          # LC_SYMTAB：0 个符号 | LC_SYMTAB: 0 symbols
              struct.pack('<II18I', 0xb, 80, *([0] * 18)),                        # LC_DYSYMTAB
              struct.pack('<II16s', 0x1b, 24, uuid),                              # LC_UUID
              struct.pack('<IIIIII', 0x32, 24, 2, MIN_IOS, MIN_IOS, 0),           # LC_BUILD_VERSION：平台 2 = iOS | LC_BUILD_VERSION: platform 2 = iOS
-             dylib_cmd(0xc, b'/usr/lib/libSystem.B.dylib')]                      # LC_LOAD_DYLIB
+             dylib_cmd(0xc, b'/usr/lib/libSystem.B.dylib'),                      # LC_LOAD_DYLIB
+             struct.pack('<IIII', 0x1d, 16, cs_off, cs_size)]                    # LC_CODE_SIGNATURE：放在最后一条，与 ld 一致 | LC_CODE_SIGNATURE: the last command, as ld places it
     lc = b''.join(cmds); assert 32 + len(lc) <= PG
     mh = struct.pack('<IiiIIIII', 0xfeedfacf, 0x0100000c, 0, 6, len(cmds), len(lc), 0x00100085, 0)   # arm64、动态库 | arm64, dynamic library
-    return (mh + lc).ljust(PG, b'\0') + body + strtab
+    data = ((mh + lc).ljust(PG, b'\0') + body + strtab).ljust(cs_off, b'\0')
+    return (data + adhoc_sig(data, tsz)).ljust(cs_off + cs_size, b'\0')   # 签名覆盖 [0, cs_off) | the signature covers [0, cs_off)
 
 
 INFO_PLIST = '''<?xml version="1.0" encoding="UTF-8"?>

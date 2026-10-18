@@ -256,18 +256,19 @@ static void tick(void) {
     { int any=0;for(int i=0;i<16;i++)any|=controls.finger[i].active;
       dm_ui_hand_idle(!any&&!controls.pulse_button&&!dm_cursor_pending());
       dm_tc_set_hover_unid(dm_ui_hover_unid()); }
-}
-static void raise_skill_arc_locked(float bottom) {   /* 手势条安全边距：技能弧（主技能 / 技能 1-4 / 换组）整体上抬，别压在手势条下（用户口径"攻击键偏下不好按"） */
-    if(bottom<=0)return;
-    float max_up=controls.layout.height*0.06f; if(bottom>max_up)bottom=max_up;   /* 最多抬屏高的 6%，别把弧抬到腰带上 */
-    for(int i=0;i<=5;i++)controls.layout.target[i].y-=bottom;   /* 主技能 / 技能 1-4 / 回城钮（回城钮在技能四正上方，一起抬才保住间距） */
-    if(controls.layout.swap.r>0)controls.layout.swap.y-=bottom;
+    /* 自定义页改了「换组键在上」：不必等下一次尺寸变化，当场重排（对齐 front_ios.m 的 refreshPortalBinding）。第一次只记下现值，不做重排 | the Custom page's "swap key above" changed: re-lay out on the spot instead of waiting for a resize (mirrors refreshPortalBinding in front_ios.m); the first tick only records the current value */
+    { static int above=-1; int dm_custom_get(const char *); int want=dm_custom_get("touch_swap_above")!=0;
+      if(above<0) above=want;
+      else if(want!=above){ above=want; if(ready){ cancel(); dm_tc_set_swap_above(want);
+          dm_tc_resize(&controls,controls.layout.width,controls.layout.height); restrict_layout(); apply_ui_locked();
+          LOG("触屏布局：换组键 %s（自定义页设置）", want?"挪到技能区上方":"回原位"); } } }
 }
 JNIEXPORT void JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeResize(JNIEnv *env,jclass cls,jfloat w,jfloat h,jfloat left,jfloat right,jfloat bottom) {
     (void)env;(void)cls;if(!isfinite(w)||!isfinite(h)||w<=0||h<=0)return;
     pthread_mutex_lock(&lock);dm_tc_set_tall_scale(1);dm_tc_set_safe_insets(left,right);
+    dm_tc_set_safe_bottom(isfinite(bottom)&&bottom>0?bottom:0);   /* 手势条那一条：共享布局自己把技能弧抬上去（上游 API）——本文件原先手写的 raise_skill_arc_locked 撤掉，免得抬两次 | bottom gesture strip: the shared layout lifts the skill fan itself (upstream API) -- the hand-rolled raise_skill_arc_locked here is dropped so it is not lifted twice */
+    { int dm_custom_get(const char *); dm_tc_set_swap_above(dm_custom_get("touch_swap_above")!=0); }   /* 自定义页「换组键在上」（上游新设置项） | Custom page "swap key above" (new upstream setting) */
     if(ready){cancel();dm_tc_resize(&controls,w,h);}else{dm_tc_init(&controls,w,h);controls.mouse_click_mode=1;ready=1;}   /* 功能页里非物品区的点按走界面鼠标点击（front_ios.m:145 同一句） | taps outside the item area in function pages go through UI mouse clicks */
-    if(isfinite(bottom)&&bottom>0)raise_skill_arc_locked(bottom);
     restrict_layout();apply_ui_locked();pthread_mutex_unlock(&lock);
 }
 /* 取串（dm/i18n/ui_text.tsv）：界面文案跟游戏语言（英文版进英文） */

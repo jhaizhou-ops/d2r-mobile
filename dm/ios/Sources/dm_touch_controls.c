@@ -8,26 +8,27 @@
 #define DM_TC_POINTER_HOLD_S 0.5
 #define DM_TC_POINTER_TAP_S 0.35
 
-/* 控件缩放。手机（画面高 ≤ 440 点，最大的 iPhone 横屏就是 440）：min(1, 宽/667, 高/375)，与原来一字不差。
-   比手机高的画面（iPad 上居中的 16:9 那块，13 寸是 1366×768 点）：按画面高度等比放大（高/440），否则摇杆与技能钮还是手机的点数大小，
-   在大画面里只剩一小簇（Mac 上按 iPad 尺寸出图所见），而底栏与游戏界面都是按画面高度缩放的。
-   这条放大只在前端显式打开时生效（dm_tc_set_tall_scale，front_ios.m 建视图时开）：Mac 宿主的触屏用例通路（dm/host/touch_mac.c）是把像素数
-   （2868×1320）当点数传进来的，13 个用例的坐标按「缩放 = 1」写；不加这道开关，1320 > 440 会把它们的控件放大 3 倍、主钮挪位（skill_main 红）。
-   Widget scale. Phone (picture height ≤ 440 points; the largest iPhone in landscape is exactly 440): min(1, width/667, height/375), identical to before to the letter.
-      Pictures taller than the phone's (the centered 16:9 block on iPad; 13-inch is 1366×768 points): scale up proportionally by picture height (height/440), otherwise the stick and skill buttons keep the phone's point size
-      and are just a small cluster in the large picture (as seen when rendering at iPad size on Mac), while the bottom bar and the game UI both scale by picture height.
-      This enlargement takes effect only when the front end turns it on explicitly (dm_tc_set_tall_scale, turned on when front_ios.m creates the view): the Mac host's touch test-case path (dm/host/touch_mac.c) passes pixel counts
-      (2868×1320) in as points, and the coordinates of the 13 test cases are written for "scale = 1"; without this switch, 1320 > 440 would enlarge their widgets 3x and move the main button (skill_main red). */
-static int g_tall_scale;
+/* UIKit 使用点数：手机保持常规大小，平板最多放大 15%。
+   锚点间距使用相同的有界比例，不随屏幕高度增长。
+   Mac 的像素坐标回放默认不开平板缩放。
+   UIKit uses points: phone controls keep their normal size, tablet controls grow at most 15%.
+      Anchor distances use the same bounded scale rather than growing with screen height.
+      Tablet scaling stays off by default for the Mac pixel-coordinate replay path. */
+static int g_tall_scale, g_swap_above;
 void dm_tc_set_tall_scale(int on) { g_tall_scale = !!on; }
-float dm_tc_scale_for_size(float width, float height) { float k = fminf(1.0f, fminf(width / 667.0f, height / 375.0f)); return g_tall_scale && k >= 1.0f && height > 440.0f ? height / 440.0f : k; }
+void dm_tc_set_swap_above(int above) { g_swap_above = !!above; }
+float dm_tc_scale_for_size(float width, float height) {
+    float fit=fminf(width/667.0f,height/375.0f);
+    return g_tall_scale ? fminf(1.15f,fmaxf(1.0f,fit)) : fminf(1.0f,fit);
+}
 static float scale_for(const dm_tc_layout *l) { return dm_tc_scale_for_size(l->width, l->height); }
 
 /* 安全区（iPhone 横屏左右各有一条让给灵动岛 / 圆角的区域，17 Pro Max 实读各 62 点）：右侧技能键整组、左侧摇杆按最小位移平移到全部落在安全区内，
    组内相对排布不变。岛在哪一侧取决于玩家怎么拿，两侧都内缩。缺省 0（Mac 宿主、单测不设 = 原布局）。
    Safe area (in iPhone landscape there is a strip on each of the left and right yielded to the Dynamic Island / rounded corners; read as 62 points each on a 17 Pro Max): the whole right-side skill key group and the left stick are translated by the minimum displacement so that they lie entirely inside the safe area,
       with the relative arrangement within the group unchanged. Which side the island is on depends on how the player holds the device, so both sides are inset. Default 0 (Mac host and unit tests do not set it = original layout). */
-static float g_safe_l, g_safe_r;
+static float g_safe_l, g_safe_r, g_safe_b;
+void dm_tc_set_safe_bottom(float bottom) { g_safe_b=isfinite(bottom) && bottom>0 ? bottom : 0; }
 /* 屏幕底边归系统的那一条（点）：从这里起手往上划会被系统当成底边手势（iPad 上连着两次就拉出程序坞），而移动恰好是同一处反复起手往上推。
    这一条里起手不当摇杆、松手也不当点地；从上面起手的摇杆拖进来照常持有。只有 iPad 的前端会给非零值，手机恒为 0。
    The strip along the bottom edge of the screen that belongs to the system (points): a swipe up starting here is taken by the system as a bottom-edge gesture (on iPad two in a row pull out the Dock), and movement is exactly a repeated push upward starting from the same place.
@@ -41,15 +42,22 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->width = isfinite(width) && width > 0 ? width : 0;
     l->height = isfinite(height) && height > 0 ? height : 0;
     float k = scale_for(l);
-    float main_x = l->width - 56 * k, main_y = l->height - 82 * k;
-    { float over = main_x + 40*k - (l->width - g_safe_r); if (over > 0) main_x -= over; }   /* 右侧一组里最靠右的是主技能键（半径 40） | The rightmost one in the right-side group is the main skill key (radius 40) */
-    l->target[DM_TC_MAIN] = (dm_tc_target){ main_x, main_y, 40*k, DM_BTN_A };
-    /* 四分之一弧的单位向量：180°、150°、120°、90°。 | Unit vectors of the quarter arc: 180°, 150°, 120°, 90°. */
-    const float dx[4] = {-1, -0.8660254038f, -0.5f, 0};
-    const float dy[4] = {0, -0.5f, -0.8660254038f, -1};
-    const uint64_t skill[4] = {DM_BTN_B, DM_BTN_X, DM_BTN_Y, DM_BTN_R};
-    for (int i = 0; i < 4; ++i)
-        l->target[DM_TC_SKILL1+i] = (dm_tc_target){main_x+112*k*dx[i], main_y+112*k*dy[i], 26*k, skill[i]};
+    l->tablet=g_tall_scale; l->swap_above=g_swap_above;
+    // 右拇指技能扇区：主钮在下，四个技能保持原大小并留出独立触控间隔。
+    // 技能扇区锚点避开侧边与底部安全区。
+    // Right-thumb skill fan: main button at the bottom, the four skills keep their original size with independent touch gaps.
+    // The skill fan anchors avoid the side and bottom safe areas.
+    float main_x=l->width-g_safe_r-86*k, main_y=l->height-88*k-fmaxf(24*k,g_safe_b+8*k);
+    if (g_tall_scale && height<340) main_y=fmaxf(main_y,190*k);
+    // 整组向右下移动；小尺寸平板窗口保留原有底栏间隔。
+    // Move the whole fan down-right. Compact tablet windows need the original belt clearance.
+    main_x+=12*k;
+    if (!(g_tall_scale && height<340)) main_y+=28*k;
+    l->target[DM_TC_MAIN]=(dm_tc_target){main_x,main_y,40*k,DM_BTN_A};
+    const float dx[4]={-96,-84,-34,34},dy[4]={18,-50,-92,-92};
+    const uint64_t skill[4]={DM_BTN_B,DM_BTN_X,DM_BTN_Y,DM_BTN_R};
+    for(int i=0;i<4;i++)
+        l->target[DM_TC_SKILL1+i]=(dm_tc_target){main_x+dx[i]*k,main_y+dy[i]*k,26*k,skill[i]};
     /* 底栏 = 底部 UI v4 六格（NativeHUD/v4，游戏 HUD 按屏高缩放、以屏幕中线居中，所以按屏高换算）：
        效果图 2868×1320 里格心 x = 1090 + 120×格号、y = 1241.5、格宽 114；第 0 格难度，1–4 腰带四列，5 功能入口（PLUS）。
        回城不在底栏（离药水太近易误触）：改为技能弧最上面那颗（技能四）正上方的圆钮，同半径、间距 12，点下由宿主施放原版回城技能（dm_freetp.c），不出按键。
@@ -63,18 +71,20 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     for (int i = 0; i < 5; ++i)
         l->target[DM_TC_BELT1+i] = (dm_tc_target){l->width/2+(1090+120*cell[i]-1434)*u, 1241.5f*u, 57*u, bottom[i]};
     { const dm_tc_target *s4 = &l->target[DM_TC_SKILL4]; l->target[DM_TC_PORTAL] = (dm_tc_target){s4->x, s4->y-s4->r-12*k-26*k, 26*k, 0}; }
+    // 小尺寸平板窗口：传送门放在技能三上方，避开右上角地图按钮。
+    // Small tablet windows: put the portal above skill 3, clear of the top-right map control.
+    if (g_tall_scale && height<340)
+        l->target[DM_TC_PORTAL]=(dm_tc_target){main_x-34*k,main_y-156*k,26*k,0};
     /* 第 0 格难度与选择条：选择条 8 格同格宽、格距 120，中线对齐两球中线（效果图 1390），格心 y = 1051.5（七格之上、避开数值文字） | Cell 0 difficulty and the selector bar: the selector bar has 8 cells of the same cell width, cell pitch 120, centerline aligned with the centerline between the two orbs (mock 1390), cell center y = 1051.5 (above the seven cells, clear of the value text) */
     l->diff = (dm_tc_target){l->width/2+(1090-1434)*u, 1241.5f*u, 57*u, 0};
     for (int i = 0; i < 8; ++i) l->pick[i] = (dm_tc_target){l->width/2+(1390+(i-3.5f)*120-1434)*u, 1051.5f*u, 57*u, 0};
     l->target[DM_TC_MAP] = (dm_tc_target){l->width-30*k, 30*k, 22*k, DM_BTN_MINUS};
-    /* 技能组切换：主技能左下、技能一下方，避开主技能与弧上四键 | Skill set switch: lower-left of the main skill, below skill one, clear of the main skill and the four keys on the arc */
-    /* 位置与大小：技能一正下方，半径 22（直径 44 点 ≈ 7.3 毫米）；上沿离技能一下沿 4 点、下沿离屏幕底 10 点（956×440） | Position and size: directly below skill one, radius 22 (diameter 44 points ≈ 7.3 mm); top edge 4 points from the bottom edge of skill one, bottom edge 10 points from the bottom of the screen (956×440) */
-    /* 比手机窄的画面（16:9：iPad 留边 / 真全屏的游戏视图、667×375）底栏按屏高缩放、右端雕像翼尖（效果图 x 2075）会伸到换组键底下：
-       键向右让到离翼尖 8 点以外，大小不变（量：1366×768 下原位重叠 21 点；956×440 下本来就隔着 28 点，不动）
-       On pictures narrower than the phone's (16:9: iPad letterboxed / true full-screen game view, 667×375) the bottom bar scales by screen height and the right-end statue wing tip (mock x 2075) would extend under the set-switch key:
-              the key moves right to at least 8 points away from the wing tip, size unchanged (measured: at 1366×768 the original position overlaps by 21 points; at 956×440 it is already 28 points apart and is not moved) */
-    { float sx = main_x-112*k, bar_r = l->width/2+(2015-1434)*u+8*k+22*k;   /* 右雕像翼尖：七格时 2075，六格石条右端收进 60 | Right statue wing tip: 2075 with seven cells; with six cells the right end of the stone bar is pulled in by 60 */ if (sx < bar_r) sx = bar_r;
-      l->swap = (dm_tc_target){sx, main_y+52*k, 22*k, 0}; }
+    // 默认换组键沿传送门外弧向左排布，保持到主技能的半径不变。
+    // Default: continue the portal's outer arc to its left, preserving the radius around the primary.
+    const dm_tc_target *portal=&l->target[DM_TC_PORTAL];
+    float px=portal->x-main_x,py=portal->y-main_y,cs=cosf(.46f),sn=sinf(.46f);
+    l->swap=(dm_tc_target){main_x+px*cs+py*sn,main_y-px*sn+py*cs,22*k,0};
+    if (g_swap_above) l->swap=(dm_tc_target){main_x-124*k,main_y-114*k,22*k,0};
     /* 底栏外侧是血 / 蓝球；球不是输入目标。 | Outside the bottom bar are the life / mana orbs; the orbs are not input targets. */
     /* 左摇杆是浮动底盘：左下「起摇杆区」里手指落在哪，底盘圆心就落在哪，松手回静止位。
        静止位：圆心离安全区左界 90（底盘半径 60 + 30）、不小于 120，离屏幕底 115——只是没按时画在哪。
@@ -479,7 +489,7 @@ void dm_tc_begin_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
     }
     if (hit == DM_TC_SWAP) {
         if (s->navigation_mode) hit = DM_TC_NONE;
-        else { s->skill_set = !s->skill_set; *f = (dm_tc_finger){.active=1, .target=DM_TC_SWAP, .x=x, .y=y}; update(s); return; }
+        else { *f = (dm_tc_finger){.active=1, .target=DM_TC_SWAP, .x=x, .y=y}; update(s); return; }
     }
     int enabled = hit >= 0 && (s->enabled_targets & (1u << hit));
     /* 面板态：被禁用的目标（底栏腰带 / 功能键 / 回城、圆钮收起后的技能钮位置）不占手指——它们压着的地方可能正是面板的按钮
@@ -544,6 +554,8 @@ void dm_tc_move_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
         else if (s->mouse_click_mode && s->pointer_item != 1 && s->pointer_item != 3 && s->pointer_item != 6 && !f->ui_drag && !f->pointer_dragged && distance > DM_TC_POINTER_MOVE_PT * scale_for(&s->layout))
             f->ui_drag = fabsf(f->x - f->aim_origin_x) > fabsf(f->y - f->aim_origin_y) ? 2 : 1;   /* 界面连续手势：过阈值那一刻按方向定型（纵 = 滚动，横 = 滑块） | Continuous UI gesture: the type is fixed by direction at the moment the threshold is crossed (vertical = scroll, horizontal = slider) */
         update_pointer(s);
+    } else if (f->target==DM_TC_SWAP) {
+        if (dm_tc_hit(&s->layout,x,y)!=DM_TC_SWAP) f->aim_cancelled=1;
     } else if (!s->navigation_mode && skill_target(f->target)) {
         if (inside_map_cancel(s, f)) f->aim_cancelled = 1;
         if (!f->aim_cancelled) f->aim_move_sequence = ++s->aim_move_sequence;
@@ -560,6 +572,12 @@ void dm_tc_end_at(dm_tc_state *s, int slot, double now_s) {
         dm_tc_cancel_portal(s);return;
     }
     dm_tc_finger done = s->finger[slot];
+    if (done.target==DM_TC_SWAP) {
+        s->finger[slot]=(dm_tc_finger){.target=DM_TC_NONE};
+        if (!s->navigation_mode && !done.aim_cancelled && dm_tc_hit(&s->layout,done.x,done.y)==DM_TC_SWAP)
+            s->skill_set=!s->skill_set;
+        update(s);return;
+    }
     if (s->navigation_mode && slot == s->pointer_slot) {
         float distance = hypotf(done.x-done.aim_origin_x, done.y-done.aim_origin_y);
         double elapsed = now_s - done.start_time_s;

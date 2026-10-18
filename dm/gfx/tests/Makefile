@@ -59,6 +59,7 @@ t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 # 依赖一行一个、按字母序（免得加一个测试就整行冲突）；下面各条命令的先后不变
 # Dependencies one per line in alphabetical order (so that adding one test does not conflict on the whole line); the order of the commands below is unchanged
 run: \
+	t_copy_pitch \
 	t_builtin \
 	t_cover \
 	t_defer_chain \
@@ -83,6 +84,7 @@ run: \
 	t_ub \
 	t_xv \
 	t_zskip
+	./t_copy_pitch
 	./t_nvn
 	./t_dirty_slots
 	./t_dirty_race
@@ -121,3 +123,6 @@ run: \
 run-m3:
 	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m *.py ../tests_m3/
 	$(MAKE) -C ../tests_m3 run CFLAGS="$(CFLAGS) -DDM_NVN_M3=1 -mmacosx-version-min=15.0"
+
+t_copy_pitch: t_copy_pitch.c ../nvn/nvn_copy_pitch.h
+	clang -O1 -Wall -Werror -o $@ t_copy_pitch.c

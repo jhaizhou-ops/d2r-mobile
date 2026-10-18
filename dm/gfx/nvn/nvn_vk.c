@@ -173,7 +173,7 @@ typedef struct {
     const prog_t *program; p_set_rt rt; va_st attributes[16]; vs_st streams[16]; NVNbufferRange vbuf[16];
     Range uniform[6][16],storage[6][16]; uint64_t tex[6][128],samp[6][128],img[6][32];
     color_st color; chmask_st mask; blend_st blend[8]; poly_st polygon; ds_st ds; ms_st ms;
-    VkViewport viewport; VkRect2D scissor; float blend_color[4]; uint64_t copy_stride;
+    VkViewport viewport; VkRect2D scissor; float blend_color[4]; uint64_t copy_stride, copy_image_stride;
     const dpool_t *texture_pool,*sampler_pool; Range scratch; uint32_t stencil_compare[2],stencil_write[2],stencil_ref[2];
 } ReplayState;
 #include "nvn_vk_writeback_plan.h"
@@ -3043,8 +3043,9 @@ static void copy_b2t(const p_copy_b2t *p) {
     if(bc) {
         int bw,bh;int block=nvn_fmt_bpb(p->tex->d.format,&bw,&bh);
         row=G.state.copy_stride?G.state.copy_stride:(uint64_t)((p->r.width+bw-1)/bw)*block;
-        uint64_t rows=(p->r.height+bh-1)/bh,size=row*rows*p->r.depth;
-        if(!block || row<(uint64_t)((p->r.width+bw-1)/bw)*block ||
+        /* 层间距：上游 #68 的 SetCopyImageStride；0 = 紧排（= 行距 × 行数），与 Metal 端 nvn_copy_pitch.h 同一语义 | image pitch: upstream #68's SetCopyImageStride; 0 = tight (= row pitch × rows), same semantics as nvn_copy_pitch.h on the Metal side */
+        uint64_t rows=(p->r.height+bh-1)/bh,img=G.state.copy_image_stride?G.state.copy_image_stride:row*rows,size=img*p->r.depth;
+        if(!block || row<(uint64_t)((p->r.width+bw-1)/bw)*block || img<row*rows ||
            (uint64_t)p->r.xoffset+p->r.width>width || (uint64_t)p->r.yoffset+p->r.height>height)
             die("compressed buffer-to-texture range/stride",row);
         for(int i=0;i<S.nwrites;++i)if(overlap(p->src,size,S.writes[i].addr,S.writes[i].size))
@@ -3055,19 +3056,27 @@ static void copy_b2t(const p_copy_b2t *p) {
         const uint8_t *compressed=(const void *)(uintptr_t)p->src;
         uint64_t image_bytes=(uint64_t)p->r.width*p->r.height*t->bpp;
         VBuffer *staging=temporary(image_bytes*p->r.depth,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        for(int z=0;z<p->r.depth;++z)if(nvn_bc_decode(p->tex->d.format,compressed+z*row*rows,row,p->r.width,p->r.height,staging->map+z*image_bytes,(size_t)p->r.width*t->bpp))
+        for(int z=0;z<p->r.depth;++z)if(nvn_bc_decode(p->tex->d.format,compressed+z*img,row,p->r.width,p->r.height,staging->map+z*image_bytes,(size_t)p->r.width*t->bpp))
             die("buffer-to-texture BC decode",p->tex->d.format);
         all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkBufferImageCopy c={.imageSubresource={aspect(t->format),level,volume?0:layer,volume?1:p->r.depth},
             .imageOffset={p->r.xoffset,p->r.yoffset,volume?p->r.zoffset:0},.imageExtent={p->r.width,p->r.height,volume?p->r.depth:1}};
         vkCmdCopyBufferToImage(S.command,staging->b,t->image,t->layout,1,&c);t->cpu_owned=0;tex_dirty(t);return;
     }
-    if(row%t->bpp || row<(uint64_t)p->r.width*t->bpp || (uint64_t)p->r.xoffset+p->r.width>width || (uint64_t)p->r.yoffset+p->r.height>height)
+    uint64_t img=G.state.copy_image_stride?G.state.copy_image_stride:row*p->r.height;   /* 层间距：0 = 紧排（行距 × 行数） | image pitch: 0 = tight (row pitch × rows) */
+    if(row%t->bpp || row<(uint64_t)p->r.width*t->bpp || img<row*p->r.height || (uint64_t)p->r.xoffset+p->r.width>width || (uint64_t)p->r.yoffset+p->r.height>height)
        die("buffer-to-texture extent/stride",row);
-    uint64_t offset=0;VPool *src=pool_read(p->src,row*p->r.height*p->r.depth,&offset);all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkBufferImageCopy c={.bufferOffset=offset,.bufferRowLength=(uint32_t)(row/t->bpp),.imageSubresource={aspect(t->format),level,volume?0:layer,volume?1:p->r.depth},
-       .imageOffset={p->r.xoffset,p->r.yoffset,volume?p->r.zoffset:0},.imageExtent={p->r.width,p->r.height,volume?p->r.depth:1}};
-    vkCmdCopyBufferToImage(S.command,src->v.b,t->image,t->layout,1,&c);t->cpu_owned=0;tex_dirty(t);
+    uint64_t offset=0;VPool *src=pool_read(p->src,img*p->r.depth,&offset);all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    if(img==row*p->r.height) {
+        VkBufferImageCopy c={.bufferOffset=offset,.bufferRowLength=(uint32_t)(row/t->bpp),.imageSubresource={aspect(t->format),level,volume?0:layer,volume?1:p->r.depth},
+           .imageOffset={p->r.xoffset,p->r.yoffset,volume?p->r.zoffset:0},.imageExtent={p->r.width,p->r.height,volume?p->r.depth:1}};
+        vkCmdCopyBufferToImage(S.command,src->v.b,t->image,t->layout,1,&c);
+    } else for(uint32_t z=0;z<(uint32_t)p->r.depth;z++) {   /* 层间距非紧排：VkBufferImageCopy 没有层距字段，只能逐层各发一次（偏移进 bufferOffset） | non-tight layers: VkBufferImageCopy has no image-pitch field, so one copy per layer with the offset in bufferOffset */
+        VkBufferImageCopy c={.bufferOffset=offset+img*z,.bufferRowLength=(uint32_t)(row/t->bpp),.imageSubresource={aspect(t->format),level,volume?0:layer+z,1},
+           .imageOffset={p->r.xoffset,p->r.yoffset,(int32_t)((volume?p->r.zoffset:0)+(int32_t)z)},.imageExtent={p->r.width,p->r.height,1}};
+        vkCmdCopyBufferToImage(S.command,src->v.b,t->image,t->layout,1,&c);
+    }
+    t->cpu_owned=0;tex_dirty(t);
 }
 static void clear_color(const p_clear_color *p) {
     if(p->mask!=15 || p->index<0 || p->index>=G.state.rt.n)die("clear-color target/mask/view",p->mask);
@@ -3337,6 +3346,7 @@ static void execute(const uint8_t *p,unsigned depth) {
         case OP_CLEAR_TEX:payload_check(&h,sizeof(p_clear_tex));clear_tex((const p_clear_tex *)a);break;
         case OP_COPY_T2T:payload_check(&h,sizeof(p_copy_t2t));copy_t2t((const p_copy_t2t *)a);break;
         case OP_COPY_STRIDE:payload_check(&h,sizeof(p_copy_stride));G.state.copy_stride=((const p_copy_stride *)a)->stride;break;
+        case OP_COPY_IMAGE_STRIDE:payload_check(&h,sizeof(p_copy_stride));G.state.copy_image_stride=((const p_copy_stride *)a)->stride;break;
         case OP_BLEND_COLOR:payload_check(&h,sizeof(p_blend_color));memcpy(G.state.blend_color,((const p_blend_color *)a)->rgba,16);break;
         case OP_SHADER_SCRATCH:payload_check(&h,sizeof(p_bind_buf));
             {const p_bind_buf *r=(const p_bind_buf *)a;
