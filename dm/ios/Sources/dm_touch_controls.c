@@ -101,10 +101,10 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->joy_y = l->height - 115*k;
     l->joy_zone_r = l->width*0.40f; l->joy_zone_t = l->height*0.45f;
     l->joy_min_x = l->joy_radius + 8*k; l->joy_max_y = l->height - l->joy_radius - 8*k;
-    /* 固定在左侧安全区内；四个独立热区，中心留空，不抢物品区的触摸。
-       Fixed inside the left safe area, with four separate hit regions and a neutral center. */
-    float dk = fmaxf(1.0f, k), cx = g_safe_l + 68*dk, cy = l->joy_y;
-    const float ddx[4] = {0,0,-44,44}, ddy[4] = {-44,44,0,0};
+    /* 固定在左侧安全区内；44 点热区紧凑排列、互不重叠，给商店左侧货架留出空间。
+       Pack nonoverlapping 44-point targets inside the left safe area, clear of the vendor shelf. */
+    float dk = fmaxf(1.0f, k), cx = g_safe_l + 54*dk, cy = l->joy_y;
+    const float ddx[4] = {0,0,-32,32}, ddy[4] = {-32,32,0,0};
     const uint64_t db[4] = {DM_BTN_UP,DM_BTN_DOWN,DM_BTN_LEFT,DM_BTN_RIGHT};
     for(int i=0;i<4;i++) l->dpad[i]=(dm_tc_target){cx+ddx[i]*dk,cy+ddy[i]*dk,22*dk,db[i]};
 }

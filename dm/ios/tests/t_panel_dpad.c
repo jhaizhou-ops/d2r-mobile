@@ -4,6 +4,7 @@
 #include "../../host/dm_input.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 static int checks;
 #define CHECK(x) do { ++checks; if(!(x)) { fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x); exit(1); } } while(0)
@@ -78,9 +79,15 @@ int main(void) {
         for(int d=0;d<4;d++) {
             dm_tc_target t=l.dpad[d]; CHECK(t.r*2>=44); CHECK(t.x-t.r>=62 && t.x+t.r<=l.width);
             CHECK(t.y-t.r>=0 && t.y+t.r<=l.height); CHECK(dm_tc_dpad_hit(&l,t.x,t.y)==d);
+            for(int other=d+1;other<4;other++)
+                CHECK(hypotf(t.x-l.dpad[other].x,t.y-l.dpad[other].y)>=t.r+l.dpad[other].r);
         }
         CHECK(dm_tc_dpad_hit(&l,l.dpad[0].x,l.dpad[2].y)==-1);
     }
+    /* 真机 874×402 商店货架左缘约 176 点，十字键需完整留在它左侧。
+       On the 874×402 device the vendor shelf starts near x=176; keep every target clear. */
+    dm_tc_layout phone; dm_tc_layout_make(&phone,874,402);
+    for(int d=0;d<4;d++) CHECK(phone.dpad[d].x+phone.dpad[d].r<=172);
     dm_tc_set_safe_insets(0,0);
     printf("PASS panel D-pad %d checks\n",checks); return 0;
 }
