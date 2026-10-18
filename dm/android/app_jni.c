@@ -124,6 +124,17 @@ static void *game_thread(void *unused) {
     if (error) die("RomFS image setup errno=%d",errno);
     if (dm_android_fs_ensure_directory(save) || dm_android_fs_ensure_directory(temp) || dm_android_fs_ensure_directory(profile)) die("Android private directories");
     setenv("DM_ROMFS",rom,1); setenv("DM_SAVE",save,1); setenv("DM_TEMP",temp,1);
+    /* 自定义设置的目录现在就给（同 iOS 壳 main.m / Mac app_mac.m 那一句）：语言开关是在「挂存档那一刻」由 hle_fs.c 的 settings_lang_apply
+       读它、再把游戏的 Settings.json 里 Language / VoiceLanguage 改成中文或英文的；那一刻存档还没挂上，dm_save_commitdir() 还是 NULL，
+       dm_custom 找不到自己的文件就答 -1，于是开关永远不生效（真机症状：自定义页选了中文，重启仍是英文；日志里「自定义设置：读盘」那一行
+       比「fs 挂载 save」晚几百行）。这里给 port_root，sw_custom.txt 就在它下面，与原来 save/../sw_custom.txt 是同一个文件。
+       Give the Custom-settings directory right now (same line as the iOS shell main.m / Mac app_mac.m): the language switch is read by
+       settings_lang_apply in hle_fs.c at the moment the save is mounted, to rewrite Language / VoiceLanguage in the game's Settings.json.
+       At that moment the save is not mounted yet and dm_save_commitdir() is still NULL, so dm_custom cannot find its file, answers -1, and the
+       switch never takes effect (real-device symptom: Chinese chosen on the Custom page, still English after a restart; the 「自定义设置：读盘」
+       line lands hundreds of lines after 「fs 挂载 save」). Give port_root here: sw_custom.txt lives directly under it and is the same file as
+       the former save/../sw_custom.txt. */
+    { void dm_custom_init(const char *); dm_custom_init(port_root); }
     if (locale_tag[0]) setenv("DM_LOCALE_TAG",locale_tag,1);   /* 系统语言：首次建设置文件时写原版 Language（i18n_android.c 的 dm_sys_lang） */
     { char overlay[PATH_MAX]; path(overlay,sizeof overlay,port_root,"diagnostics/overlay");   /* 覆盖层根 = diagnostics/overlay（adb 可写通道；放进去的文件先于镜像生效） */
       setenv("DM_ROMFS_OVERLAY",overlay,1); }

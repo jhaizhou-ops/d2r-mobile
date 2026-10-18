@@ -417,3 +417,26 @@ P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插；P7 依赖 P
    （现在只是编进去了、能跑，没有逐页点过）。
 4. 面板滚动拖（`ui_drag` → `dm_ui_drag_*`）接上了但没有实测过的页面（需要一个长列表页）。
 5. 面板栈仍是 P1 精简版（读画面撤下时没有按面板树核对），`dm_cursor` 的面板树接管待收敛。
+6. **屏幕比例适配（2026-10-18 记录，未动手）**：分辨率/密度无所谓，**比例**是变量——出图默认档写死
+   2624×1220（`dm/android/diagnostics.c:250`），本机屏 1220×2712（20:9）→ 出图 19.35:9 被"拉满整屏"
+   （`nvn_vk.c:3443-3451`，不保比例）横向多拉 3.3%，覆盖层与游戏 HUD 越靠边差得越多（底栏最右约 17px）。
+   要改两处：①出图分辨率跟屏幕比例走（核心，几行）；②贴物理屏边的元素（技能弧/地图键）改贴"界面画布边"
+   = min(屏宽, 屏高×19/9)（20:9 差 23dp、21:9 差 45dp）。另加参考系自检 + 一行诊断日志。
+   详情、已核实的事实清单（带 file:line）与一台机的测试方法（`adb shell wm size` 扫 7 档比例）：
+   [`docs/android-screen-adaptation.zh-CN.md`](android-screen-adaptation.zh-CN.md)。
+
+### 2026-10-18 补记：语言开关在安卓不生效 —— 已修，真机验过
+
+- **症状**：自定义页选「中文」、点应用、重启 App，界面仍然英文。开关本身记下来了
+  （`sw_custom.txt` 里 `lang_en=0`），但游戏的 `save/Settings/Settings.json` 里 `Language` 一直是 0（英文）。
+- **根因**：语言开关是在**挂存档那一刻**由 `hle_fs.c:530` 的 `settings_lang_apply()` 读、再改写游戏设置文件的；
+  它读的是 `dm_custom.c` 的设置文件，而 `dm_custom` 在 `dm_save_commitdir()` 可用之前拿不到路径（`g_dir` 为空）
+  → 答 -1 → `settings_lang_apply` 第一句 `if (en < 0) return;` 直接放弃。`dm_custom_init()` 只有 iOS
+  `main.m:663`、tvOS、Mac `app_mac.m:134` 调过，**安卓漏了这一句**（iOS/Mac 那两处的注释写的就是这个坑）。
+  真机日志佐证：`自定义设置：读盘` 在挂存档之后几百行才出现，整份日志没有 `语言开关：… 改成 8`。
+- **修法**：`dm/android/app_jni.c` 的 `game_thread` 里，`setenv("DM_SAVE", …)` 之后加一句 `dm_custom_init(port_root)`
+  （`sw_custom.txt` 就在 `port_root` 下，与原来的 `save/../sw_custom.txt` 是同一个文件，只是能早读到）。
+- **验证**：重编装机重启，日志出现 `语言开关：设置文件的 Language / VoiceLanguage 改成 8（简中；原文字语言 0）`，界面变中文。
+- **两条注意**：①改语言仍需「应用 → 关掉 App 重开」——游戏只在启动挂存档时读设置；②这一版把原版
+  「文字语言 / 语音语言」两行藏了（`touch_layout.py` 的 `_drop_rows('LanguageOptions','VoiceLanguage','TextLanguage', …)`），
+  自定义页那一格是唯一入口，它一坏就等于完全改不了语言。
