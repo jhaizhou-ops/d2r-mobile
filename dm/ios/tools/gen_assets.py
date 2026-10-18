@@ -49,6 +49,16 @@ def ensure(R):
             os.path.join(os.environ.get('DM_NATIVE_ART_DIR') or os.path.join(HERE, '..', 'Sources', 'TouchArt'), 'dm_native_skill_0.png'),
             os.environ.get('DM_NATIVE_ART_C') or os.path.join(HERE, '..', 'Sources', 'dm_touch_native_art.c')]
     want = stamp(R); fresh = lambda: all(map(os.path.isfile, outs)) and os.path.isfile(st) and open(st).read() == want
+    # 加法开关（Android 构建用）：DM_ASSETS_REUSE=1 = 产物已经齐了就沿用，不再按指纹重跑美术生成。
+    # 为什么要它：指纹把 dm/ios/tools 下的每个文件都算进去，改一行 touch_layout.py 也会触发全部美术重出；
+    # 而 native_art 的「PNG 重编码字节」校验跟 Pillow 版本绑死（换了机器不一定复现那份冻结值），
+    # 只想按新布局重出覆盖层时没必要被它挡住。缺省不设 = 行为逐字不变（指纹变了就重出）。
+    # Additive switch (used by the Android build): DM_ASSETS_REUSE=1 = reuse the products when they are all present instead of
+    # regenerating the art on a fingerprint change. Why: the fingerprint covers every file under dm/ios/tools, so a one-line change
+    # in touch_layout.py would regenerate all the art; and native_art's "PNG re-encode bytes" check is tied to the Pillow version
+    # (another machine may not reproduce the frozen value). Not needed when only the overlay has to be rebuilt from a new layout.
+    # Unset = behaviour unchanged word for word (a changed fingerprint regenerates).
+    if os.environ.get('DM_ASSETS_REUSE') == '1' and all(map(os.path.isfile, outs)): return False
     if fresh(): return False
     t0 = time.time()
     while True:
