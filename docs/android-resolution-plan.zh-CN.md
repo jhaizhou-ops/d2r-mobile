@@ -17,12 +17,12 @@
 
 0. **不许写死分辨率（本方案的根）**：运行时决定分辨率的路径**只能**由"屏幕尺寸 × 预算"算出。
    - 三个档位只写**预算（MP）**，不写分辨率；
-   - 老档名（`2624-075` 等）**只作别名**，不再参与计算；
+   - 老档名（`2624-075` 等）**已删除**（v2.1）：`quality.txt` 写旧名会打红日志并回落到界面档位；
    - 代码里除调试用途（`flag-gameres-*`、`flag-scale-*`）外，不得出现 `2624×1220` 这类字面量；
    - 屏幕尺寸在 `nativeStart` 之前就已经到位（`nativeSurface(w,h)` → `window_state`），正常路径永远拿真实 Surface。
 
 1. **iOS 逐字不变**：改动只落在 `dm/android/**` 与 `dm/host/hle_oe.c` 的 Android 分支；`dm/android/diagnostics.c` 是安卓专属文件。
-2. **已完成功能不变**：`quality.txt` < `flag-*` < `env.txt` 的优先级、`DM_GAME_RES` / `DM_3D_SCALE` 的单值覆盖语义**全部保留**；老档名保留为别名。
+2. **已完成功能不变**：`quality.txt` < `flag-*` < `env.txt` 的优先级、`DM_GAME_RES` / `DM_3D_SCALE` 的单值覆盖语义**全部保留**；老档名不再识别（见 §3②）。
 3. **出图分辨率只能在启动时定**（窗口贴图启动时一次建好）；**3D 比例可以运行中改**。
 4. **比例永远等于 SurfaceView 的比例**：宽高由同一个 `k` 推出，取偶误差 ≤1px；不允许拉伸，也不允许为某台机器加黑边。
 5. 推覆盖层到设备后必须 `chmod -R 777`，否则 App 进不去目录、游戏 UI 初始化直接挂（见 [`docs/android-upstream-sync.zh-CN.md`](android-upstream-sync.zh-CN.md) §5-3）。
@@ -86,6 +86,10 @@ world.w = 偶数(round(world.h × out.w / out.h))   // 世界同样等比
 
 > `high` ≈ **今天的默认观感**（世界 1.76 vs 1.80MP）；`standard` 比它轻 ~30%，`low` 再轻 ~30%。
 > 档名 ASCII 是为了 `quality.txt` 好写、日志好 grep；界面文案走 `dm/i18n/ui_text.tsv`。
+>
+> **界面上（2026-10-18 定）**：分辨率档放在「自定义」页，Android 专属的一行三选一（省电 / 标准 / 高清），**不单开「图形」页签**。
+> 原因：页签条只有 5 个槽，第 5 个（原「控制」）打开的是 KeyBindingMenu（另一种面板类，没有可复用的选项表；「应用」高亮还依赖该面板的每帧更新函数地址），换面板需要真机验证，暂不做。
+
 
 ### 2.3 跨屏幕的落点（预算制的意义：成本带收窄）
 
@@ -129,13 +133,14 @@ uint64_t front_game_res(int docked) {
 
 **不要再给 `nativeConfigure` 加参数**：`GameActivity.surfaceChanged()` → `nativeSurface()` 在 `nativeStart()` 之前执行，`front_game_res()` 被问到时 `window_state` 已有值（`GameActivity.java:146→151`）。少改一处 JNI，iOS 风险为零。
 
-### ② `dm/android/app_jni.c` —— 档位表换成"预算"，老档名保留别名
+### ② `dm/android/app_jni.c` —— 档位表换成"预算"，老档名删除
 
 - `tiers[]` 由 `{name, gamres, scale}` 改成 `{name, out_budget_px, world_budget_px}`，`high` 的 `world_budget_px = 0` 表示"0.55 × 出图"（运行时算）；
 - 三档：`low`(1.8e6 / 1.0e6)、`standard`(2.4e6 / 1.25e6)、`high`(0 / 0.55)；
-- 老档名别名：`2624-075` / `2624-085` / `2624-070` → `high`；`1080-080` / `2168-075` → `standard`；`1600-100` → `switch`；
+- 老档名（`2624-075` / `1080-080` 等）**删除**：不认识的档名打红日志、回落到界面档位（自定义页 q_res）；
+- 调试档保留：`switch` / `1600-100` → 1600×900 + 1.0；`2624-100` / `native` → 原生出图 + 3D 1.0；
 - 导出两个小接口（实现放 `diagnostics.c`）：`dm_android_quality_out_budget()` / `dm_android_quality_world_budget()`，**必须返回最终出图**（含 `DM_GAME_RES` 覆盖后的像素）；
-- 别名日志：`ANDROID_QUALITY tier=standard（alias 1080-080）→ out 2270x1056 world 1638x762`。
+- 日志：`ANDROID_QUALITY tier=high → DM_QUALITY_TIER=2（预算档…）`；未知档名 `【红】ANDROID_QUALITY 未知档名…`。
 
 ### ③ `dm/host/hle_oe.c` —— 3D 比例按世界预算反算
 
@@ -178,6 +183,21 @@ const char *e = getenv("DM_3D_SCALE"); if (e) { /* 现有校验与覆盖逻辑�
 首启统计动态降档控制器停在 0 / 1 / 2 级的比例（`hle_oe.c` 的 `scale3d_ctl` 已有），600 帧写一次 `diagnostics/autotier.txt`（建议档 + 依据），下次启动在 `quality.txt` 未显式指定时采用。
 判定：>50% 时间在 1–2 级 → 下次降一档；全程 0 级且掉帧 <2% → 下次升一档；其余保持。热机（thermal ≥2）一律不升。
 **不要**用 GPU/CPU 型号名单做主依据（跨厂商数字不可比、新机追不上）。
+
+## 3.5 实施状态（2026-10-18 已落地）
+
+| 步骤 | 状态 |
+|---|---|
+| ① `front_game_res` 按档位预算派生出图 | ✅ 已实现（`dm/android/diagnostics.c`） |
+| ② 档位表改预算档、老档名删除、加 `DM_QUALITY_TIER` | ✅ 已实现（`dm/android/app_jni.c`） |
+| ③ `hle_oe.c` 3D 比例按世界预算反算 + 0.70 截断 | ✅ 已实现 |
+| ⑧（新增）自定义页「分辨率」三选一（Android） | ✅ 已实现（`dm/host/dm_custom.c`、`touch_layout.py`、`ui_text.tsv`、`gen_overlay.sh`） |
+| ④ 画布 19:9 裁剪 | ❌ 不做（要求"比例不改"，画布 = 出图） |
+| ⑤ blit 等比安全网 | ⬜ 未做（派生出的 out 已等于 Surface 比例，正常路径不触发） |
+| ⑥ 启动日志 | ✅ 已实现（`分辨率档读盘为…` / `出图：按分辨率档算 → …` / `ANDROID_3D_SCALE_CONFIG base=…`） |
+| ⑦ 自校准 | ⬜ 未做 |
+
+真机实测（本机 2624×1220）：`low` → 1966×914/0.746；`standard` → 2270×1056/0.722；`high` → 2624×1220/0.742；`native` → 2624×1220/1.000。
 
 ## 4. 验收
 
@@ -224,7 +244,7 @@ adb shell wm size reset
 | 只降 3D 到不了 30 帧 | scale 硬下限 0.70 × 出图 3.20MP = 世界 1.57MP，实测 24.1 帧 | 低档必须同时降出图；要更快只能开时域超分（§6） |
 | 世界预算被下限抬高 | 显式 `flag-gameres-2624` + low → 预算需 0.56 | clamp 到 0.70 + 黄字日志，不 die |
 | 手感变化（§④） | 贴边元素改贴画布，21:9/折叠上离边更远 | 本版不做；将来单独验收 |
-| 老档名失效 | 玩家/脚本里写的是 `2624-075` 这类 | 全部保留别名 + 日志打印映射 |
+| 老档名失效 | 玩家/脚本里写的是 `2624-075` 这类 | v2.1 起已删除；写旧名打红日志并回落到界面档位 |
 | 平板/折叠没真机 | 只能靠 `wm size` 模拟 | 至少按 16:10 / 折叠比例各过一遍 |
 
 ## 6. 明确不做
