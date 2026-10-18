@@ -484,7 +484,7 @@ static _Atomic int g_cc_open;
 static _Atomic int g_fe_name_open, g_fe_name_tap;   // 起名页开着；点了输入框（重新弹键盘） | Naming page open; the input box was tapped (bring the keyboard up again)
 static _Atomic int g_fe_name_has;   // 起名页开着期间已经填过名字（输入框确认过非空的字，含留空取的随机名） | a name has been filled in while the naming page was open (the input field confirmed non-empty text, including the random name taken when left empty)
 static const char *const k_cc_class[8] = { "Amazon", "Assassin", "Necromancer", "Barbarian", "Paladin", "Sorceress", "Warlock", "Druid" };
-static _Atomic int g_fe_opt_open, g_fe_confirm_open, g_fe_back;
+static _Atomic int g_fe_opt_open, g_fe_confirm_open, g_fe_back, g_fe_options;   /* g_fe_options：模式页点了标准 / 专家那块牌子（dm_ui_touch 置位）→ 接受流程 | the player tapped the Standard / Hardcore card on the mode page (set by dm_ui_touch) -> the accept flow */
 static _Atomic int g_fe_opt_side;   // 模式页最近一次点的是哪张牌：0 标准（左半屏）1 专家（右半屏） | Which card was tapped most recently on the mode page: 0 Standard (left half of the screen), 1 Hardcore (right half of the screen)
 // 「极乐世界」勾选项（布局见 touch_layout.py 的 _BLISS：模式页牌子下面一行，原版勾选框 TouchBliss + 标题 + 说明）。
 // 勾选框是原版开关按钮，点一下自己切换；点这一行的文字 = 点勾选框（点击挪到框心）。勾没勾读控件当前用的那组帧号：+0x6e8 = 当前常态帧，
@@ -510,7 +510,15 @@ void dm_ui_touch(int phase, float nx, float ny) { if (phase != 3 && dm_restart_b
     // The 「选择游戏模式」(Select game modes) page has only the two plaques standard / hardcore (layout y 899–1259 / 2160; the overlay has already moved away the ladder row and the key hints): tapping outside the plaque row = back to class selection;
     // the 「极乐世界」(Elysium) row and the added 「创建 / 返回」(Create / Back) buttons below y 1750 do not count as back -- those two spots are touch widgets and a tap must go to the game's own messages (AcceptCharacterOptions / ToConsoleClassConfirm)
     if (phase == 2 && atomic_load(&g_ut_phase) == 1 && atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_confirm_open) && (ny < 899 / 2160.0f || ny > 1259 / 2160.0f) && !(ny > BLISS_Y0 / 2160.0f && ny < BLISS_Y1 / 2160.0f) && !(ny > 1750 / 2160.0f)) { atomic_store(&g_ut_phase, 0); atomic_store(&g_fe_back, 1); return; }   // 牌子下面那一行是「极乐世界」勾选项，不算返回 | The row below the plaques is the 「极乐世界」(Elysium) checkbox and does not count as back
-    if (phase == 2 && atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_confirm_open)) atomic_store(&g_fe_opt_side, nx >= 0.5f);
+    if (phase == 2 && atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_confirm_open)) {
+        int side = nx >= 0.5f; atomic_store(&g_fe_opt_side, side);
+        /* 点在标准 / 专家那两块牌子上（布局 y 899–1259，左 = 标准、右 = 专家）= 「选了这个模式」：交给宿主的接受流程走
+           （先让原版勾选状态对上，再发原版接受消息进起名页）。这一下不吃鼠标点击——专家牌那一下翻转由宿主自己发，
+           两边都发会翻两次。 Classic 牌在更下面一行（y 约 1330 起），不在这一行里。
+           Tapping one of the Standard / Hardcore cards (layout y 899-1259; left = standard, right = hardcore) = "this mode was chosen":
+           hand it to the host's accept flow (make the original checked state match first, then send the original accept message into the naming page).
+           This tap does not go through as a mouse click - the host sends the hardcore flip itself, and sending both would flip it twice. The Classic card is on a lower row (y ~1330 up), not in this band. */
+        if (ny > 899 / 2160.0f && ny < 1259 / 2160.0f) { atomic_store(&g_ut_phase, 0); atomic_store(&g_fe_options, 1); return; } }
     if (phase == 2 && (atomic_exchange(&g_del_hold, 0) | atomic_exchange(&g_del_q, 0))) { atomic_store(&g_ut_phase, 0); return; }
     if (phase == 0 && atomic_load(&g_fe_del_open)) atomic_store(&g_del_q, 1);
     if (phase == 2) { if (atomic_load(&g_ut_phase) == 1) atomic_store(&g_ut_phase, 2); }
@@ -2803,6 +2811,25 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
     uint64_t r = atomic_load(&g_ut_xy);
     int x = (int)(((r >> 16) & 0xffff) / 65535.0 * width), y = (int)((r & 0xffff) / 65535.0 * height); if (x >= width) x = width - 1; if (y >= height) y = height - 1;
     if (atomic_load(&g_fe_opt_open)) { uint64_t bw = ui_find(root, "TouchBliss", 0);
+        // 模式页那颗「返回」（我们插的 TouchOptBack）：原版这一页只认手柄键（B = 退回职业页），布局里的 onClickMessage 那条
+        // ConsoleCharacterCreate:ToConsoleClassConfirm 实测点了没反应（点击发出去了、面板不动）。和「极乐世界」勾选框同法：
+        // 宿主认出这颗按钮、替玩家按原版的 B。判定走控件自己的命中函数（+0x48），和框里点格子认列号同一套。
+        if (ph == 2 && !atomic_load(&g_fe_confirm_open)) { uint64_t bk = ui_find(root, "TouchOptBack", 0);
+            /* 走 PanelManager 关页（和关 YouDiedModal 同一条已验证的路）：替按 B 那条实测不行——原版这一页的手柄动作
+               (main+0xc31c24) 只对焦点所在的那一行有反应，而焦点停在被挪走的天梯行上，B 落不到任何一行。 */
+            /* 判命中只按控件自己的矩形（+0x70/0x74 = x/y、+0x78/0x7c = 宽高、+0x80 缩放，同 AutoMap 面板那套读法）：
+               早先这里调了控件虚表 +0x48 的命中函数，真机直接把游戏打崩（main+0x20b7b48）——那套只对 SkillButton / TextTab 验过，普通按钮不能这么调。 */
+            if (bk) { static int lg; int32_t bx = *(int32_t *)(bk + 0x70), by = *(int32_t *)(bk + 0x74), bw = *(int32_t *)(bk + 0x78), bh = *(int32_t *)(bk + 0x7c);
+                float sc = *(float *)(bk + 0x80); if (sc <= 0) sc = 1;
+                /* 控件矩形是布局单位（原点在屏幕水平中线、纵轴 2160 = 界面高，同极乐世界那行 / 专家牌中心线的换法），
+                   触点是画面像素，换算用宿主的界面矩形（dm_ui_rect：这一层 main+0x211da3c 读不到画面尺寸，是 0）。 */
+                int ux, uy, uw, uh; dm_ui_rect(&ux, &uy, &uw, &uh); if (uh <= 0) uw = uh = 0;
+                float u = uh > 0 ? uh / 2160.0f : 0;
+                float x0 = uw / 2 + bx * u, x1 = uw / 2 + (bx + bw * sc) * u, y0 = uy + by * u, y1 = uy + (by + bh * sc) * u;
+                if (lg++ < 4) LOG("模式页「返回」读数：矩形（布局单位）%d,%d %dx%d → 画面 %.0f,%.0f–%.0f,%.0f；触点 %d,%d", bx, by, bw, bh, x0, y0, x1, y1, x, y);
+                if (*(uint8_t *)(bk + 0x50) && (float)x >= x0 && (float)x <= x1 && (float)y >= y0 && (float)y <= y1) { atomic_store(&g_ut_phase, 0);
+                    fe_send("PanelManager", "ClosePanel", "CharacterOptionsPanel");
+                    LOG("前端路径：点模式页的「返回」→ 关模式页，退回职业页"); } } }
         if (bw) { int on = *(int32_t *)(bw + 0x6e8) == 4; if (atomic_exchange(&g_fe_bliss, on) != on) { LOG("前端路径：极乐世界 %s", on ? "勾上" : "取消"); dm_elysium_arm(on); }
             int32_t vw = *(int32_t *)(m->base + 0x211da38), vh = *(int32_t *)(m->base + 0x211da3c);
             if (ph && vh > 0 && !atomic_load(&g_fe_confirm_open) && y > BLISS_Y0 * vh / 2160 && y < BLISS_Y1 * vh / 2160) { x = vw / 2 + (-1551 + 35) * vh / 2160; y = (1330 + 33) * vh / 2160; } } }   // 这一行里点哪都算点勾选框（悬停那几拍也要挪：控件没被悬停过不收点击） | a tap anywhere in this row counts as tapping the checkbox (the hover ticks must be moved too: a widget that has never been hovered does not accept clicks)
@@ -2889,7 +2916,7 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
 //   - If the 「选择游戏模式」(Select game modes) OnlinePlayModeModal still gets opened (new character tapped on the main menu): likewise go straight to offline character creation.
 #include <dirent.h>
 #include <sys/stat.h>
-static _Atomic int g_fe_ribbon, g_fe_list, g_fe_name_key; static _Atomic int g_fe_skip_tut, g_fe_menu, g_fe_mode_modal, g_fe_options; static _Atomic int g_fe_name, g_fe_name_done; static _Atomic uint64_t g_fe_key_until, g_fe_key_mask;
+static _Atomic int g_fe_ribbon, g_fe_list, g_fe_name_key; static _Atomic int g_fe_skip_tut, g_fe_menu, g_fe_mode_modal; static _Atomic int g_fe_name, g_fe_name_done; static _Atomic uint64_t g_fe_key_until, g_fe_key_mask;
 static int has_character(const char *dir, int depth) {
     DIR *d = opendir(dir); if (!d) return 0; struct dirent *e; int found = 0;
     while (!found && (e = readdir(d))) { if (e->d_name[0] == '.') continue; char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
@@ -2950,7 +2977,12 @@ void dm_ui_on_uimsg(const char *cat, const char *act, const char *arg) {
     if (strcmp(cat, "InputMessage") && strcmp(cat, "MonsterHealth") && strcmp(cat, "PartyPanelMessage")) DM_LAT("ui %s %s %s", cat, act, arg ? arg : "");
     { static const char *at; static int got; if (!got) { got = 1; at = getenv("DM_UI_TAPS_AT"); }
       if (at && !atomic_load(&g_taps_base)) { char k[160]; snprintf(k, sizeof k, "%s:%s", act, arg); if (strstr(k, at)) atomic_store(&g_taps_base, dm_guest_frame() | 1); } }
-    if (!strcmp(cat, "PanelManager") && !strcmp(arg, "CharacterCreateNamePanel")) { int op = !strcmp(act, "OpenPanel"); if (op || !strcmp(act, "ClosePanel") || !strcmp(act, "UnloadPanel")) { atomic_store(&g_fe_name_open, op); if (op) atomic_store(&g_fe_name_has, 0); if (op) atomic_store(&g_fe_name, 1); } }
+    // 起名页开着/关着也要顺带维护 hle_swkbd.c 的 g_swkbd_name_panel：软键盘返回前靠它把游戏对返回串的 ASCII 键入过滤关掉，
+    // 中文名才进得去（原来这个标志由 diag.c 按界面消息维护，安卓不编 diag.c → 一直是关的，中文名一进去就被滤成字母/被弹回）。
+    // While the naming page opens / closes, also maintain g_swkbd_name_panel in hle_swkbd.c: before the keyboard returns, it is what clears the
+    // game's ASCII typing filter on the returned string so that Chinese names get through (this flag used to be maintained by diag.c, which is not
+    // compiled on Android, so it stayed off and Chinese names were filtered away).
+    if (!strcmp(cat, "PanelManager") && !strcmp(arg, "CharacterCreateNamePanel")) { int op = !strcmp(act, "OpenPanel"); if (op || !strcmp(act, "ClosePanel") || !strcmp(act, "UnloadPanel")) { atomic_store(&g_fe_name_open, op); { extern int g_swkbd_name_panel; g_swkbd_name_panel = op; } if (op) atomic_store(&g_fe_name_has, 0); if (op) atomic_store(&g_fe_name, 1); } }
     if (!strcmp(cat, "PanelManager") && (!strcmp(arg, "CharacterOptionsPanel") || !strcmp(arg, "ConfirmationModal"))) { int op = !strcmp(act, "OpenPanel"); if (op || !strcmp(act, "ClosePanel") || !strcmp(act, "UnloadPanel")) atomic_store(arg[1] == 'h' ? &g_fe_opt_open : &g_fe_confirm_open, op); }
     if (!strcmp(cat, "PanelManager") && !strcmp(arg, "DeleteCharacterModal")) { if (!strcmp(act, "OpenPanel")) atomic_store(&g_fe_del_open, 1); else if (!strcmp(act, "ClosePanel") || !strcmp(act, "UnloadPanel")) { atomic_store(&g_fe_del_open, 0); atomic_store(&g_del_hold, 0); } }
     if (!strcmp(cat, "PanelManager") && !strcmp(arg, "CharacterCreatePanel")) { if (!strcmp(act, "OpenExclusivePanel") || !strcmp(act, "OpenPanel")) atomic_store(&g_cc_open, 1); else if (!strcmp(act, "ClosePanel") || !strcmp(act, "UnloadPanel")) atomic_store(&g_cc_open, 0); }
@@ -3208,7 +3240,11 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
               if (ck == 2) ui_send_mouse(mm, root, ui_hash("LeftMouseButtonDown"), x, y); else if (ck == 3) ui_send_mouse(mm, root, ui_hash("LeftMouseButtonUp"), x, y);
               if (++ck > 3) { ck = 0; at = fr + 4; } }
           else { int want = atomic_load(&g_fe_opt_side), cur = *(uint8_t *)(pn + 0x211) && hw && *(uint8_t *)(hw + 0xa88);
-              if (cur == want) { st = 0; fe_key(DM_BTN_A); next = fr + 8; LOG("前端路径：模式页点了%s牌（原版状态一致）→ 接受（A）", want ? "专家" : "标准"); return; }
+              if (cur == want) { st = 0; next = fr + 8;
+                  /* 接受走原版自己的界面消息（和布局里那颗「创建」按钮同一条：ConsoleCharacterCreate:AcceptCharacterOptions →
+                     ConfirmedCharacterOptions → ToConsoleNameInputPanel → 起名页弹系统键盘）。原先这里替按 A，回退到了职业页（真机）。 */
+                  fe_send("ConsoleCharacterCreate", "AcceptCharacterOptions", "");
+                  LOG("前端路径：模式页点了%s牌（勾选状态已对上）→ 接受（发原版消息 AcceptCharacterOptions）", want ? "专家" : "标准"); return; }
               if (tries++ < 2) { ck = 1; LOG("前端路径：模式页点了%s牌，原版状态还是%s → 替玩家点一下专家牌把勾翻过来（第 %d 次）", want ? "专家" : "标准", cur ? "专家" : "标准", tries); }
               else { st = 0; LOG("【红】前端路径：模式页点了%s牌，翻两次后原版状态仍是%s，不替玩家接受", want ? "专家" : "标准", cur ? "专家" : "标准"); } } }
       if (st) return; }

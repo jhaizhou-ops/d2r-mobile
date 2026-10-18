@@ -187,7 +187,14 @@ INSERT['controller/console/characteroptionspanelhd.json'] = (r'\{\s*"type"\s*:\s
     # (enters the naming page, which pops the system keyboard), 「返回」(Back) sends ToConsoleClassConfirm (back to the class selection page);
     # same positions as the two on the class page (x -235 / -785, y 1900); while the mode page is on top the host hides the class page's two,
     # leaving only this pair (otherwise two 「创建」overlap and the tap still hits the class page's one = back into the mode page, a dead end).
-    _BLISS + _btn_big('TouchOptBack', -785, 1900, '@UIBack', 'ConsoleCharacterCreate:ToConsoleClassConfirm')
+    # 「返回」只当视觉与命中区：原版这一页只认手柄键（B = 退回职业页），onClickMessage 那条 ConsoleCharacterCreate:ToConsoleClassConfirm
+    # 实测点了没反应（点击发出去了、面板不动），所以宿主认出这颗控件、替玩家按原版的 B（dm_cursor.c，与「极乐世界」勾选框同法）。
+    # 「创建」照旧发原版消息 AcceptCharacterOptions（点它 = 接受这一页的选择 → 起名页弹系统键盘）。
+    # 「返回」(Back) is visuals plus hit area only: the original page recognizes only controller keys (B = back to the class page), and the
+    # onClickMessage ConsoleCharacterCreate:ToConsoleClassConfirm did nothing when tapped (the click was sent, the panel stayed), so the host
+    # recognizes this widget and presses the original B for the player (dm_cursor.c, same approach as the 「极乐世界」 checkbox).
+    # 「创建」(Create) still sends the original message AcceptCharacterOptions (tapping it accepts this page's choice → naming page with the system keyboard).
+    _BLISS + _btn_big('TouchOptBack', -785, 1900, '@UIBack', '')
           + _btn_big('TouchOptNext', -235, 1900, '@UICreate', 'ConsoleCharacterCreate:AcceptCharacterOptions'))
 def pad_bliss(s):   # 手柄版建角模式页（原版布局原样）+ 「极乐世界」那一行（同触屏版定稿的那一行）+ 勾选框左边一个原版 Y 键帽（Switch 手柄左键）： | Controller-version character-creation mode page (original layout unchanged) + the "Elysium" row (the same row as finalized for the touch version) + an original Y keycap to the left of the checkbox (the left face button on a Switch controller):
     # 这一页原版只有写死的几行、没有自由光标，做不成「移上去按 A」，按 Y 勾 / 取消（dm_cursor.c；做不成可聚焦的一行就用快捷键，哪个键都行）
