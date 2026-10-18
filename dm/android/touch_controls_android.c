@@ -41,6 +41,14 @@ static int in_minimap(float x,float y) {
     if(controls.navigation_mode)return 0;
     float w=controls.layout.width,h=controls.layout.height; if(w<=0||h<=0)return 0;
     int dm_ui_minimap_tap_hit(float,float); int hit=dm_ui_minimap_tap_hit(x/w,y/h);
+    /* 「落在控件命中圆上的点归控件」要排掉那颗**地图键**：它在游戏态是禁用的（game_mask 不含 DM_TC_MAP），
+       模型不发键，可它压着的正是「场景名 / 地图框顶上那一条」——手指于是落到世界，被**游戏自己右上角那颗地图按钮**
+       接住（一次鼠标点击 = 开 / 关地图），表现就是「点场景名把地图关了」。所以命中判定里跳过地图键这一颗。
+       The "points on a widget's hit circle belong to the widget" rule must skip the **map key**: it is disabled in game state (game_mask has no
+       DM_TC_MAP) so the model sends no key, yet it sits exactly over the 「area name / top strip of the map frame」 -- the finger would then fall
+       through to the world and be caught by the **game's own top-right map button** (one mouse click = toggle the map), which is what "tapping the
+       area name closes the map" was. So the hit test skips the map key. */
+    int hw=dm_tc_hit(&controls.layout,x,y); if(hw>=0&&hw!=(int)DM_TC_MAP)return 0;
     if(hit<0){   /* 矩形还没读到过（进局头几拍、地图还关着）：按同一条规则的形状给个兜底 —— 那一条场景名所在的位置。
                     没有兜底的话，这一块会被当成世界点按，玩家点场景名「没反应」（真机口径）。
                     Rect not read yet (the first beats after entering, with the map still closed): fall back to the shape of the same rule -- where that
@@ -48,7 +56,6 @@ static int in_minimap(float x,float y) {
         if(dm_tc_hit(&controls.layout,x,y)>=0)return 0;
         return (x>=w*0.62f&&y<=h*0.16f)||(x<=w*0.38f&&y<=h*0.16f); }   /* 左右两侧都算（不看档位，同 iOS）| either side counts (no setting branch, same as iOS) */
     if(!hit)return 0;
-    if(dm_tc_hit(&controls.layout,x,y)>=0)return 0;
     return 1;
 }
 static void restrict_layout(void) {

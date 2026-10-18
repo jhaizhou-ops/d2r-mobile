@@ -1910,7 +1910,7 @@ static void ui_bind_pump(uint64_t root, uint64_t fr) {
 //   [main+0x2d5e8f0] = mode == 1 (on the left); [main+0x2d5c748] = mode != 0 (mini or not); on a change it calls main+0x411540 to re-layout the map and zeroes the scroll values [0x2d5e910 / 914].
 // Changing only the config value without calling the callback leaves the picture unchanged. Here the callback is called directly: pass 0 to switch to fullscreen, pass the config value to switch back (left / right as the player chose on the options page); the config object itself is untouched, so nothing is persisted and the next run follows the player's setting.
 // The controller has no key for switching this mode (the map key − only opens / closes).
-static _Atomic int g_map_req = -1, g_map_full_now;
+static _Atomic int g_map_req = -1, g_map_full_now, g_map_panel_seen;   /* g_map_panel_seen：AutoMap 面板建起来了（开没开另说）| the AutoMap panel has been created (open or not) */
 void dm_ui_map_full(int on) { atomic_store(&g_map_req, on != 0); }
 int dm_ui_map_is_full(void) { return atomic_load(&g_map_full_now); }
 // 真全屏局内，全屏地图的线条要盖在世界上：游戏把地图中心放在「屏幕高的一半」（它读到的是我们写的 16:9 界面高），画出来在 界面矩形 y + 界面高 ÷ 2；
@@ -1958,6 +1958,24 @@ static void ui_map_pump(module_t *m) {
         else if ((mini == 0) != r) { ((void (*)(int))(m->base + 0x40f780))(r ? 0 : cfg); mini = *(volatile int32_t *)(m->base + 0x2d5c748); LOG("地图切换：→ %s（配置值 %d 不动，不落盘）", r ? "全屏" : cfg == 1 ? "微缩放左" : "微缩放右", cfg); }
     }
     atomic_store(&g_map_full_now, mini == 0 && (cfg == 1 || cfg == 2));   // 只把「我们切出来的全屏」算全屏；玩家自己选全屏档的不算 | Only "the fullscreen we switched to" counts as fullscreen; the fullscreen mode chosen by the player does not
+    // 进局把地图开起来（用户口径「默认打开小地图」）。上游 iOS 靠设置里的「进局自动开」(AutomapAutoOpen=1)，安卓实测不生效
+    // （真机：设置文件里是 1，进局地图还是关的），所以这里替玩家按一次原版地图键。**必须等 AutoMap 面板建起来再按**：
+    // 面板还没建时 dm_ui_map_geom 只会答「关着」，按下去正好把游戏正要开的那张图按掉（真机踩过：进局没地图、点右上角半天才反应、
+    // 地图线画出小地图框）。按下去到地图画出来有一两帧延迟，两秒后再看一眼，没开就再按，同一局最多 3 次。
+    // Open the map on entering a run (player: "the minimap should be open by default"). Upstream iOS relies on the 「AutoMap Open On Load」setting
+    // (AutomapAutoOpen=1) and that does not take effect on Android (device: the settings file says 1 and the map is still closed on entry), so press
+    // the original map key once for the player. It **must** wait until the AutoMap panel exists: while the panel is not built dm_ui_map_geom only
+    // answers "closed", and pressing then knocks off the very map the game is about to open (seen on the device: no map on entry, tapping the top right
+    // takes ages, map lines drawn outside the minimap box). Drawing takes a frame or two after the press, so look again two seconds later and press
+    // again if it is still closed, at most 3 times per run.
+    { static int tries; static uint64_t at;
+      int dm_ui_map_panel_ready(void), dm_ui_map_actual(void);
+      uint64_t fr2 = dm_guest_frame();
+      if (!dm_uiscreen_ingame()) { tries = 0; at = 0; }
+      else if (!dm_ui_map_panel_ready()) { at = 0; }
+      else if (!dm_ui_map_actual() && tries < 3 && fr2 >= at) {
+          void dm_ui_key_pulse(uint64_t, int); dm_ui_key_pulse(DM_BTN_MINUS, 4); tries++; at = fr2 + 120;
+          LOG("地图：进局地图是关的 → 替玩家按一次原版地图键（第 %d 次）", tries); } }
 }
 // ---------- 右上角小地图的位置：触摸层把它当点击区（点一下 = 地图开关键），矩形取游戏自己的 AutoMap 面板，不写死 ----------
 // AutoMap 控件（虚表 main+0x20c58a0）：+0x70 / +0x74 = x / y、+0x78 / +0x7c = 宽 / 高（布局单位，2160 = 画面高；微缩地图放右时 x = −宽，即贴着画面右边），+0x80 缩放。
@@ -1983,7 +2001,14 @@ int dm_ui_minimap_tap_hit(float nx, float ny) {
     float r[4]; if (!dm_ui_minimap_rect(r)) return -1;
     if (nx < r[0] || nx > r[2]) return 0;
     float band = (r[3] - r[1]) * 0.25f;
-    return ny >= r[1] && ny <= r[1] + band ? 1 : 0;
+    // 上边界从屏幕顶算起，不从地图框的上沿算：地图框上沿在 y = 3.6%（诊断：控件 y 78 / 2160），而「场景名」那行字画在它上面
+    // （y ≈ 3%），正好落在框外——那一格是游戏自己右上角那颗地图键的位置，点它会**把地图关掉**（真机口径：「点流寇者营地
+    // 成了开关地图，点它左边一点才是切换地图」）。命中区往上补到屏幕顶，那一格就归「切换地图」，跟 iOS 的观感一致。
+    // The upper edge starts at the top of the screen, not at the map frame's top edge: the frame's top is at y = 3.6% (diagnostic: widget y 78 /
+    // 2160) while the 「area name」 line is drawn above it (y ~ 3%), i.e. just outside the frame -- and that spot is where the game's own top-right
+    // map key sits, so tapping it **closes the map** (device: "tapping 「Rogue Encampment」 toggled the map off; a little to its left switched the
+    // map"). Extending the tap area up to the top of the screen gives that spot to the map switch, matching how iOS feels.
+    return ny >= 0 && ny <= r[1] + band ? 1 : 0;
 }
 // 贴界面矩形顶边的面板回真实画面顶部（iPad 真全屏贴底 / 居中：界面矩形在画面里下移了 y0，见 dm_uiscreen.c）：面板矩形 y（+0x74，布局单位 2160 = 界面高）减去 y0 换成的单位数，
 // 画到界面坐标的负 y 上（图形层的界面下移是投影偏移，视口顶边仍在画面顶，负 y 画得出来）。
@@ -2330,6 +2355,7 @@ static void ui_safe_pump(module_t *m, uint64_t root, uint64_t fr) {
 static _Atomic uint64_t g_mapgeom;   // 高 32 位 = 模式（0 没开 / 1 微缩 / 2 全屏），低 32 位 = 每格像素（float 的位） | High 32 bits = mode (0 not open / 1 mini / 2 fullscreen), low 32 bits = pixels per cell (bits of a float)
 static void ui_map_geom_pump(module_t *m, uint64_t root) {
     uint64_t am = ui_panel(root, "AutoMap"); int mode = 0; float cell = 0;
+    if (am && *(uint64_t *)am == (uint64_t)m->base + 0x20c58a0) atomic_store(&g_map_panel_seen, 1);
     if (am && *(uint64_t *)am == (uint64_t)m->base + 0x20c58a0 && *(uint8_t *)(am + 0x50)) {
         mode = *(volatile int32_t *)(m->base + 0x2d5c748) == 0 ? 2 : 1;
         float q = ceilf(((float (*)(uint64_t))(m->base + 0x390b38))(am) * *(float *)(am + (mode == 2 ? 0x15a8 : 0x15ac)) * 8) / 8; if (q < 0.125f) q = 0.125f;   // 全屏 / 微缩各一档缩放（0xc0df58 / 0xc0de54；实测 1.0 / 0.5） | One zoom level each for fullscreen / mini (0xc0df58 / 0xc0de54; measured 1.0 / 0.5)
@@ -2337,6 +2363,11 @@ static void ui_map_geom_pump(module_t *m, uint64_t root) {
     uint32_t cb; memcpy(&cb, &cell, 4); atomic_store(&g_mapgeom, (uint64_t)mode << 32 | cb);
 }
 int dm_ui_map_geom(float *cell) { uint64_t v = atomic_load(&g_mapgeom); uint32_t cb = (uint32_t)v; memcpy(cell, &cb, 4); return (int)(v >> 32); }
+// 面板建起来了没有（开没开另说）：dm_ui_map_geom 对「面板还没有」与「面板有、但关着」都答 0，进局把地图开起来那一步要分清楚
+// Whether the panel has been created (open or not): dm_ui_map_geom answers 0 both for "no panel yet" and for "panel there but closed", and the step
+// that opens the map on entering a run has to tell them apart.
+int dm_ui_map_panel_ready(void) { return atomic_load(&g_map_panel_seen); }
+int dm_ui_map_actual(void) { float cell; int dm_ui_map_geom(float *); return dm_ui_map_geom(&cell) == 0 ? 0 : 1; }   // 地图现在开着没有（0 关 / 1 开）| is the map open now (0 closed / 1 open)
 // 顶部首领血条的百分比（接在血条右边同一行，取整）。布局覆盖层把手柄版挂在目标头顶的血条挪到了顶部，并在条右边加了空字的 TouchBossPct
 // （dm/ios/tools/touch_layout.py _boss_bar_top）；这里每帧把进度条控件（HealthBarWidget，虚表 main+0x2089650）自己的比例 +0x154 写成「NN%」——
 // 与条同一个数（游戏已按整百分比截断：客户端生命 126/128 = 98.4% → 0.98），不另算。面板没开 / 控件不在（Mac 宿主跑原版布局）什么都不做。
