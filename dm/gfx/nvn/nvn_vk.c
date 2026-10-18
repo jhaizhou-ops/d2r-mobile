@@ -2814,6 +2814,12 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     { static int uiq=-1; if(uiq<0){ const char *e=getenv("DM_UI_NO_QUERY"); uiq=(e&&!strcmp(e,"0"))?0:1; }
       G.diag_no_occlusion = uiq && G.state.rt.n==1 && G.state.rt.color[0] &&
           G.state.rt.color[0]->d.width>2000 && G.state.rt.color[0]->d.height>900 ? 1 : 0; }
+    /* 阴影/深度通道（1024×1024 仅深度）跳过遮挡查询：330 次/帧。DM_SHADOW_NO_QUERY=0 关。
+       Shadow/depth passes (1024x1024 depth-only) skip occlusion queries: 330 per frame. */
+    { static int shq=-1; if(shq<0){ const char *e=getenv("DM_SHADOW_NO_QUERY"); shq=(e&&!strcmp(e,"0"))?0:1; }
+      if(shq && !G.diag_no_occlusion && G.state.rt.n==0 && G.state.rt.depth &&
+         G.state.rt.depth->d.width==1024 && G.state.rt.depth->d.height==1024 && G.state.rt.depth->d.levels<=1)
+          G.diag_no_occlusion=1; }
     S.read_snapshots_allowed=1;
     for(unsigned stage=0;stage<2;stage++){VShader *s=stage?ps:vs;if(!s)continue;
         for(unsigned i=0;i<s->h.nb;i++){RBinding *b=&s->b[i];if(((b->kind==3||b->kind==9)&&b->flags)||b->kind==6||b->type==VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)S.read_snapshots_allowed=0;}
