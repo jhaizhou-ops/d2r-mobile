@@ -2182,7 +2182,9 @@ static VkDescriptorSet binding_plan_try(VShader *s) {
         else if(why==3)G.profile_plan_reg++;
         else G.profile_plan_pool++;
         G.profile_plan_misses++;return VK_NULL_HANDLE;} }
-    uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,sizeof(live_dyn));
+    /* 只清用到的那几项：LIMIT_BINDINGS=64 时全量 memset 每次 3KB，每帧 2000+ 次就是 6MB。 */
+    /* Clear only the entries in use: a full memset is 3KB per call and 2000+ calls per frame is 6MB. */
+    uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,(size_t)s->h.nb*sizeof(*live_dyn));
     for(uint32_t n=0;n<plan->nbuffer;n++){
         unsigned i=plan->buffers[n];const RBinding *b=&s->b[i];
         Range r=G.state.uniform[s->h.stage][b->slot];uint64_t offset=0;
@@ -2236,8 +2238,8 @@ static VkDescriptorSet bind_shader(VShader *s) {
     if(planned){G.profile_bind_hits++;return planned;}
     uint64_t bs_full=prof_now();G.profile_bind_full_calls++;
     VkWriteDescriptorSet w[LIMIT_BINDINGS];VkDescriptorBufferInfo bi[LIMIT_BINDINGS];VkDescriptorImageInfo ii[LIMIT_BINDINGS];
-    uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,sizeof(live_dyn));
-    BindingResource plan_resources[LIMIT_BINDINGS];memset(plan_resources,0,sizeof(plan_resources));
+    uint32_t live_dyn[LIMIT_BINDINGS];memset(live_dyn,0,(size_t)s->h.nb*sizeof(*live_dyn));
+    BindingResource plan_resources[LIMIT_BINDINGS];memset(plan_resources,0,(size_t)s->h.nb*sizeof(*plan_resources));
     int plan_safe=s->plan&&s->plan->eligible&&!G.disable_binding_plans&&!G.disable_desc_cache&&!G.trace_frame;
     memset(w,0,s->h.nb*sizeof(*w));memset(bi,0,s->h.nb*sizeof(*bi));memset(ii,0,s->h.nb*sizeof(*ii));
     int cacheable=!G.disable_desc_cache&&!G.trace_frame;VkDescriptorSet set=VK_NULL_HANDLE;
