@@ -5,6 +5,7 @@
 // oe::Initialize is in hle_sdkinit.c, not here.
 // Environment switches: DM_OPMODE=0 handheld / 1 console (default 1, corresponding to the console-mode render profile); DM_LANG=language code (default zh-Hans).
 #include "dm_cursor.h"
+#include "dm_custom.h"
 #include "hle.h"
 #ifdef __ANDROID__
 #include "../android/services_platform.h"
@@ -388,6 +389,22 @@ static void android_scale_configure(void) {
     /* 2026-10-16 起 Android 默认开世界档：3D 比例 0.75（= iOS 档）；DM_3D_SCALE=1.0 可关（纯原生）。
        档位可在 diagnostics/quality.txt 或 flag/env 里改（app_jni.c）。 */
     float base=0.75f;
+#if defined(__ANDROID__)
+    /* 分辨率档（自定义页 q_res）决定世界预算：low 1.0 MP / standard 1.25 MP / high 0.55×出图。
+       出图像素由 front_game_res 同一套预算算出（含 DM_GAME_RES 覆盖）。派生值自己夹在 0.70..1.0，
+       不把超出范围的数交给下面那句 die（那是给显式 DM_3D_SCALE 用的校验）。
+       Resolution tier (Custom page q_res) decides the world budget: low 1.0 MP / standard 1.25 MP / high 0.55x output.
+       The output pixels come from the same budgets in front_game_res (including the DM_GAME_RES override). The derived value is
+       clamped to 0.70..1.0 here instead of being handed to the die below (that check is for an explicit DM_3D_SCALE). */
+    { extern unsigned dm_android_quality_out_px(void);
+      unsigned out = dm_android_quality_out_px();
+      int tier = dm_custom_res_tier();
+      double wb = tier == 0 ? 1.0e6 : tier == 2 ? 0.55 * (double)out : 1.25e6;
+      if (out && wb > 0.0) { double s = sqrt(wb / (double)out);
+          if (s < 0.70) { static int once; if (!once++) LOG("【黄】世界预算需 3D 比例 %.3f < 0.70，按 0.70 截断", s); s = 0.70; }
+          if (s > 1.0) s = 1.0;
+          base = (float)s; } }
+#endif
     if (e) { char *end; errno=0; float want=strtof(e,&end);
         if (end==e || *end || errno==ERANGE || !isfinite(want) || want<0.70f || want>1.0f)
             die("ANDROID_3D_SCALE invalid value %s; expected finite 0.70..1.0",e);

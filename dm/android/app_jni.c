@@ -414,22 +414,34 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
           char line[64] = "", tok[32] = "";
           if (fgets(line, sizeof line, q)) sscanf(line, "%31s", tok);
           fclose(q);
-          struct { const char *name, *gamres, *scale; } tiers[] = {
-            {"2624-075", "2624x1220", "0.75"},
-            {"2168-075", "2168x1220", "0.75"},
-            {"1080-080", "1920x1080", "0.80"},
-            {"2624-085", "2624x1220", "0.85"},
-            {"2624-100", "2624x1220", "1.0"},
-            {"1600-100", "1600x900",  "1.0"},
+          /* 档位改成"预算档"，不再写死分辨率：low / standard / high 只把档号交给 DM_QUALITY_TIER，
+             出图与世界像素由屏幕尺寸 × 预算派生（dm/android/diagnostics.c 的 front_game_res、
+             dm/host/hle_oe.c 的 3D 比例）。老档名（2624-075 等）已删除，写进去会打红日志并回落到
+             界面档位；1600-100 这类对照档才继续写 DM_GAME_RES / DM_3D_SCALE 的原值（调试用）；native 用档位+显式 1.0 表达。
+             Tiers are now budget tiers and no longer pin a resolution: low / standard / high only pass the tier
+             number through DM_QUALITY_TIER, and the output and world pixels are derived from the screen size x
+             budgets (front_game_res in dm/android/diagnostics.c, the 3D scale in dm/host/hle_oe.c). The old tier
+             names (2624-075 and so on) are gone: writing one logs a failure and falls back to the UI tier;
+             the comparison/debug tier 1600-100 still sets the raw DM_GAME_RES / DM_3D_SCALE values; native is expressed as tier + an explicit 1.0. */
+          struct { const char *name; int tier; const char *gamres, *scale; } tiers[] = {
+            {"low",        0, NULL, NULL},
+            {"standard",   1, NULL, NULL},
+            {"high",       2, NULL, NULL},
+            {"switch",    -1, "1600x900",  "1.0"},
+            {"1600-100",  -1, "1600x900",  "1.0"},
+            {"native",     2, NULL,        "1.0"},
           };
           int hit = 0;
           for (unsigned i = 0; i < sizeof tiers / sizeof *tiers; i++)
             if (!strcmp(tok, tiers[i].name)) {
-              setenv("DM_GAME_RES", tiers[i].gamres, 0); setenv("DM_3D_SCALE", tiers[i].scale, 0);
-              LOG("ANDROID_QUALITY tier=%s → DM_GAME_RES=%s DM_3D_SCALE=%s", tok, tiers[i].gamres, tiers[i].scale);
+              if (tiers[i].tier >= 0) { char b[8]; snprintf(b, sizeof b, "%d", tiers[i].tier); setenv("DM_QUALITY_TIER", b, 1);
+                  LOG("ANDROID_QUALITY tier=%s → DM_QUALITY_TIER=%d（预算档：出图/世界按屏幕派生）", tok, tiers[i].tier); }
+              if (tiers[i].gamres) setenv("DM_GAME_RES", tiers[i].gamres, 1);
+              if (tiers[i].scale) setenv("DM_3D_SCALE", tiers[i].scale, 1);
+              if (tiers[i].gamres || tiers[i].scale) LOG("ANDROID_QUALITY tier=%s → 显式覆盖 DM_GAME_RES=%s DM_3D_SCALE=%s（调试档）", tok, tiers[i].gamres ? tiers[i].gamres : "（按预算）", tiers[i].scale ? tiers[i].scale : "（按预算）");
               hit = 1; break;
             }
-          if (!hit && tok[0]) LOG("【红】ANDROID_QUALITY 未知档名「%s」（用 2624-075 / 2168-075 / 1080-080 / 2624-085 / 2624-100 / 1600-100；缺省 2624-075）", tok);
+          if (!hit && tok[0]) LOG("【红】ANDROID_QUALITY 未知档名「%s」（现在只有 low / standard / high；调试档 switch / 1600-100 / native。老档名 2624-075 之类已删除，忽略）", tok);
         } }
       for (unsigned i = 0; i < sizeof env_flags / sizeof *env_flags; i++) {
         char f[PATH_MAX]; path(f, sizeof f, logs, env_flags[i].file);

@@ -80,6 +80,11 @@ dmCustomQ3dSmooth	流畅优先	Smoothness first	自定义页「3D 画质」单�
 dmCustomQ3dSmoothHint	掉帧时自动降低 3D 画面清晰度	Lowers 3D resolution when frames drop	流畅优先下面的说明小字
 dmCustomQ3dQuality	画质优先	Quality first	自定义页「3D 画质」单选的第二项（q3d=1）
 dmCustomQ3dQualityHint	始终保持设定的 3D 清晰度	Always keeps the set 3D resolution	画质优先下面的说明小字
+dmCustomQRes	分辨率	Resolution	自定义页「分辨率」单选（Android 专属；dm_custom.c 键 q_res 0/1/2）
+dmCustomQResLow	省电	Battery saver	分辨率单选的「省电」项（q_res=0）
+dmCustomQResStd	标准	Standard	分辨率单选的「标准」项（q_res=1，缺省）
+dmCustomQResHigh	高清	High	分辨率单选的「高清」项（q_res=2）
+dmCustomQResHint	重启游戏后生效	Takes effect after restarting the game	分辨率那一行下面的提示
 dmCustomLootFilter	掉落过滤（噩梦起自动隐藏杂物）	Loot Filter (auto, Nightmare+)	自定义页开关；Loot Filter 是原版过滤器的英文名
 dmCustomAutoBuff	自动补上增益技能（站着不动时）	Auto-recast buffs when idle	自定义页开关
 dmCustomLang	语言 / Language	语言 / Language	自定义页语言那一行的标签。两种界面写同样的中英两个词：这一行的文字控件指定原版的全球字体 BlizzardGlobal（英文界面缺省的 Formal 字体没有汉字，全球字体有；原版标题页、队伍名、合规提示同样按控件指定它）

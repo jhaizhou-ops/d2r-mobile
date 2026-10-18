@@ -22,6 +22,11 @@ PY=${DM_PY:-${DM_ROOT:-$HOME/dm-work}/build/cache/dm/venv/bin/python3}
 
 mkdir -p "$OUT"
 export DM_TOUCH_TWO_CARDS=1
+# Android 专属：自定义页多一行「分辨率」（省电 / 标准 / 高清，写 dm_custom.c 的 q_res，下次启动生效）。
+# iOS 出包不设这个变量，那边布局逐字不变（同 DM_TOUCH_TWO_CARDS 的加法式平台开关）。
+# Android-only: the Custom page gets one more row "Resolution" (Battery saver / Standard / High, writing dm_custom.c's q_res, effective at the next launch).
+# The iOS package does not set this variable, so its layout is unchanged word for word (the same additive platform switch as DM_TOUCH_TWO_CARDS).
+export DM_TOUCH_RES_TIER=1
 
 # 原版衍生资源（底部 UI v4、加宽储藏箱、百宝囊框、选角面板、小地图终点…）的落点：dm/android/build/gen-assets，
 # 不再写 iOS 的源码树。gen_paths.gen_dir() 认这个环境变量（iOS 出包不设，缺省仍是 dm/ios/Gen/assets）。

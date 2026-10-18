@@ -1,4 +1,7 @@
 #include "../host/dm.h"
+#include "../host/dm_custom.h"
+#include "services_platform.h"
+#include <math.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <time.h>
@@ -237,26 +240,53 @@ void dm_backtrace(uint64_t fp) {
         uintptr_t next=(uintptr_t)pair[0]&0x00ffffffffffffffULL;if(next<=frame)break;frame=next;
     }
 }
-/* 输出分辨率：iOS 前端返回设备原生值；Android 缺省 = 真窗口尺寸（2624×1220，与交换链 1:1，
- * 2026-10-16 起固化：见 docs/android-perf-notes.md §7）。DM_GAME_RES=宽x高 覆盖（与 iOS 前端同源
- * 的旋钮），也可在 diagnostics/quality.txt 按档名切（app_jni.c）。值经 KRES0/KRES1 参数位喂给游戏，
- * 游戏据此重建输出与 3D 目标（3D 内部再乘 3D 比例 0.75）。
- * Output resolution: the iOS front end returns the device's native value; Android defaults to the
- * real window size (2624x1220, 1:1 with the swapchain, fixed as default since 2026-10-16: see
- * docs/android-perf-notes.md §7). DM_GAME_RES=WxH overrides (the same knob the iOS front end
- * honours); diagnostics/quality.txt switches tiers by name (app_jni.c). The value feeds the game's
- * KRES0/KRES1 parameter slots, and the game rebuilds output and its 3D target from it (3D internal
- * x the 3D scale 0.75). */
-uint64_t front_game_res(int docked) {
+/* 输出分辨率：按「分辨率档」（自定义页 q_res，Android 专属）与屏幕尺寸算出来，比例严格等于 SurfaceView。
+ * 档位预算见 docs/android-resolution-plan.zh-CN.md：low 1.8 MP / standard 2.4 MP / high = 屏幕原生。
+ * DM_GAME_RES=宽x高 仍然最优先（脚本、调试、quality.txt 老档别名都走它）。
+ * Output resolution: derived from the "resolution tier" (Custom page q_res, Android only) and the surface size,
+ * with the aspect ratio exactly equal to the SurfaceView. Budgets: docs/android-resolution-plan.zh-CN.md
+ * (low 1.8 MP / standard 2.4 MP / high = screen native). DM_GAME_RES=WxH still wins (scripts, debugging, old quality.txt aliases). */
+static unsigned g_out_w, g_out_h;   // 最近一次算出的出图（hle_oe.c 反算 3D 比例要读同一个值） | last derived output (hle_oe.c reads the same value to derive the 3D scale)
+
+static int game_res_env(unsigned *w, unsigned *h) {
     const char *e = getenv("DM_GAME_RES");
-    if (e) {
-        unsigned w = 0, h = 0; char tail = 0;
-        if (sscanf(e, "%ux%u%c", &w, &h, &tail) == 2 && w >= 640 && w <= 3840 && h >= 360 && h <= 2160)
-            return ((uint64_t)h << 32) | w;
-        static int bad;
-        if (!bad) { bad = 1; LOG("DM_GAME_RES 非法：%s（要 宽x高，如 1920x1080）", e); }
-    }
+    if (!e) return 0;
+    unsigned a = 0, b = 0; char tail = 0;
+    if (sscanf(e, "%ux%u%c", &a, &b, &tail) == 2 && a >= 640 && a <= 3840 && b >= 360 && b <= 2160) { *w = a; *h = b; return 1; }
+    static int bad;
+    if (!bad) { bad = 1; LOG("DM_GAME_RES 非法：%s（要 宽x高，如 1920x1080）", e); }
+    return 0;
+}
+static void quality_out_compute(unsigned *ow, unsigned *oh) {
+    *ow = *oh = 0;
+    dm_android_window_state ws; dm_android_platform_get_window(&ws);
+    unsigned W = ws.width, H = ws.height;
+    if (W < 640 || H < 360) return;                       /* 窗口还没到位：调用方兜底 1280x720 | surface not ready yet: caller falls back to 1280x720 */
+    int tier = dm_custom_res_tier();                      /* 0 省电 / 1 标准 / 2 高清 | 0 saver / 1 standard / 2 high */
+    double budget = tier == 0 ? 1.8e6 : tier == 2 ? 0.0 : 2.4e6;   /* 0 = 不缩（屏幕原生） | 0 = do not shrink (screen native) */
+    double k = 1.0;
+    if (budget > 0.0 && (double)W * H > budget) k = sqrt(budget / ((double)W * H));
+    unsigned h = ((unsigned)(H * k)) & ~1u;
+    unsigned w = ((unsigned)(h * (double)W / H + 0.5)) & ~1u;   /* 宽由高推：比例严格不变 | width from height: aspect exactly preserved */
+    if (w < 320 || h < 180) return;
+    *ow = w; *oh = h;
+}
+uint64_t front_game_res(int docked) {
+    unsigned w = 0, h = 0;
+    if (game_res_env(&w, &h)) { g_out_w = w; g_out_h = h; return ((uint64_t)h << 32) | w; }
     (void)docked;
-    return ((uint64_t)1220 << 32) | 2624;
+    quality_out_compute(&w, &h);
+    if (!w || !h) { static int once; if (!once++) LOG("【红】窗口尺寸未就绪，出图回落 1280x720"); w = 1280; h = 720; }
+    g_out_w = w; g_out_h = h;
+    static int logged;
+    if (!logged++) LOG("出图：按分辨率档算 → %ux%u（tier=%d，比例不变；改档要重启游戏）", w, h, dm_custom_res_tier());
+    return ((uint64_t)h << 32) | w;
+}
+unsigned dm_android_quality_out_px(void) {   /* 3D 比例反算用：最终出图像素（含 DM_GAME_RES 覆盖） | for the 3D-scale derivation: final output pixels (incl. DM_GAME_RES override) */
+    unsigned w = 0, h = 0;
+    if (game_res_env(&w, &h)) return w * h;
+    if (g_out_w && g_out_h) return g_out_w * g_out_h;
+    quality_out_compute(&w, &h);
+    return w * h;
 }
 /* dm_game_res 由 dm_uiscreen.c 提供（P2 起编入）：先问前端再按真全屏规则处理 | dm_game_res comes from dm_uiscreen.c (compiled since P2) */
