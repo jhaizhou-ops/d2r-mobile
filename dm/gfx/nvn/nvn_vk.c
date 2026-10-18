@@ -60,6 +60,29 @@ static _Noreturn void die(const char *where,long long value) {
  * all_barrier() omits a full barrier only when nothing was recorded since the previous one. */
 enum { HZ_DRAW=1,HZ_ATTACH,HZ_TRANSFER,HZ_COMPUTE };
 static void hz_note(int kind);
+/* 附件读写字节（诊断，见 RENDER_TRAFFIC）：窗口内累计，每 60 帧打印并清零。
+ * Attachment load / store / clear bytes (diagnostic, see RENDER_TRAFFIC): accumulated within the window,
+ * printed every 60 frames and then reset. */
+static uint64_t g_att_load_bytes, g_att_store_bytes, g_att_clear_bytes, g_att_skip_bytes;
+static unsigned g_att_passes;
+/* draw 规模分布（诊断）：按每次绘制的顶点/索引数分桶，回答"是不是大量小物件"。 */
+/* Draw-size histogram (diagnostic): bucket every draw by its vertex/index count, answering "is this many tiny objects". */
+static uint64_t g_draw_hist[6], g_draw_idx_total, g_draw_n;
+/* 按"渲染目标类别"分组的 draw 统计：0 全屏(UI/合成) / 1 世界(3D) / 2 阴影(1024^2) / 3 其它。
+   "类别"用第一个颜色附件的宽高判定；只有深度附件的按阴影/世界分。 */
+/* Draw stats grouped by render-target class: 0 full-res (UI/composite) / 1 world (3D) / 2 shadow (1024^2) / 3 other.
+   The class is decided by the first color attachment's extent; depth-only ones fall to shadow or world. */
+static uint64_t g_cls_n[4], g_cls_idx[4], g_cls_hist[4][6];
+/* UI 合批可行性诊断：记录连续 UI draw 的（顶点缓冲地址, 索引缓冲地址, 类型, 数量, base_vertex），
+   统计"与上一笔同缓冲 + 连续/可平移"的比例。 */
+/* UI batching feasibility: record (vertex buffer, index buffer, index type, count, base vertex) of
+   consecutive UI draws and count how many share the previous buffer and are contiguous/shiftable. */
+static uint64_t g_ui_same_vbuf, g_ui_same_ibuf, g_ui_addr_contig, g_ui_pairs;
+static uint64_t g_ui_last_vb, g_ui_last_ib; static int g_ui_last_type, g_ui_last_count, g_ui_last_base; static int g_ui_have_last;
+static uint64_t g_ui_same_shader, g_ui_same_layout, g_ui_same_vfmt; static uint64_t g_ui_last_vs, g_ui_last_ps; static int g_ui_last_vfmt;
+static uint64_t g_ui_same_ubo_vs, g_ui_same_ubo_ps, g_ui_ubo_pairs;
+static uint64_t g_ui_last_ubo_vs[16], g_ui_last_ubo_ps[16];
+
 #undef vkCmdCopyImage
 #define vkCmdCopyImage(...) (S.command_dirty=1,hz_note(HZ_TRANSFER),(G.diag_skip_xfer&1)?(void)0:dm_vkCmdCopyImage(__VA_ARGS__))
 #undef vkCmdCopyImageToBuffer
@@ -1841,6 +1864,10 @@ static VShader *shader_get(const void *control,uint32_t stage) {
         for(uint32_t i=0;ordered&&i<s->h.nb;i++)
             if(s->b[i].kind==2&&s->b[i].type==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER&&s->b[i].slot>=0&&s->b[i].slot<16){
                 s->dyn_bindings|=1ull<<i;s->dyn_count++; }
+        /* 诊断：多少 shader 因为绑定号非升序而放弃了动态偏移（buf_addr 失效的主因之一是它们）。 */
+        /* Diagnostic: how many shaders give up dynamic offsets because the bindings are not ascending. */
+        { static unsigned ord_bad, ord_ok; if(!ordered)ord_bad++; else ord_ok++;
+          static unsigned n; if(++n==48) fprintf(stderr,"[nvn-vulkan] DYN_ORDER ascending_shaders=%u not_ascending=%u\n",ord_ok,ord_bad); }
     }
     VkDescriptorSetLayoutBinding bindings[LIMIT_BINDINGS];for(uint32_t i=0;i<s->h.nb;i++){
        if(s->b[i].count!=1 || s->b[i].set!=(stage==1?1u:0u))die("shader descriptor set/count",s->b[i].set);
@@ -2139,6 +2166,7 @@ static void binding_plan_remember(VShader *s,VkDescriptorSet set,const BindingRe
     if(s->h.nb)memcpy(plan->resources,resources,(size_t)s->h.nb*sizeof(*resources));
     plan->epoch=S.epoch;plan->state_revision=G.binding_revision[s->h.stage];
     plan->registry_revision=G.registry_revision;plan->pool_revision=G.pool_revision;
+
     plan->set=set;plan->resolved=1;
 }
 static VkDescriptorSet binding_plan_try(VShader *s) {
@@ -2162,7 +2190,12 @@ static VkDescriptorSet binding_plan_try(VShader *s) {
         VPool *pool=pool_read(r.addr,r.size,&offset);const BindingBuffer *cached=&plan->resources[i].buffer;
         int dynamic=(s->dyn_bindings>>i)&1;   // 动态绑定的偏移不算计划失效条件：它随绑定调用走 | A dynamic binding's offset is not a plan-invalidating condition: it rides the bind call
         if(offset%G.properties.limits.minUniformBufferOffsetAlignment){G.profile_plan_buf_align++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
-        if(r.addr!=cached->range.addr||r.size!=cached->range.size){G.profile_plan_buf_addr++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
+        /* 动态绑定的描述符内容是（缓冲, 0, 整段），逐 draw 的地址只变成绑定调用的偏移：地址变化
+           不算计划失效。非动态绑定才比较绝对地址与长度。 */
+        /* A dynamic binding's descriptor content is (buffer, 0, whole range); the per-draw address only
+           becomes the offset passed at bind time, so an address change is not a plan invalidation.
+           Only non-dynamic bindings compare the absolute address and length. */
+        if(!dynamic && (r.addr!=cached->range.addr||r.size!=cached->range.size)){G.profile_plan_buf_addr++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         if(pool->serial!=cached->pool_serial){G.profile_plan_buf_pool++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         if(!dynamic&&offset!=cached->offset){G.profile_plan_buf_off++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
         if(dynamic&&offset>0xffffffffu){G.profile_plan_buf_dynbig++;G.profile_plan_misses++;return VK_NULL_HANDLE;}
@@ -2590,6 +2623,7 @@ static VkRenderPass render_begin(void) {
         query_reset(S.occlusion,S.occlusion_reset_count,LIMIT_WRITES-S.occlusion_reset_count);S.occlusion_reset_count=LIMIT_WRITES;G.profile_query_preresets++; }
     G.profile_rp_chunk_ns+=prof_now()-rp_t0b;uint64_t rp_t1=prof_now();
     VkAttachmentDescription attachments[9];VkAttachmentReference color[8],depth;VkImageView views[9];uint32_t n=0,width=0,height=0;
+    unsigned long long seq_ser[4]={0,0,0,0};   /* 通道序列诊断：前 4 个附件的 serial | pass-sequence diagnostic: serials of the first 4 attachments */
     memset(attachments,0,sizeof(attachments));
     for(int i=0;i<rt->n;i++)color[i]=(VkAttachmentReference){VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     for(int i=0;i<rt->n+(rt->depth?1:0);i++) {
@@ -2605,6 +2639,7 @@ static VkRenderPass render_begin(void) {
          * must fit every attachment; its render area is their intersection. */
         if(!width){width=tw;height=th;}else {if(tw<width)width=tw;if(th<height)height=th;}
         t->cpu_owned=0;tex_attach_dirty(t,range.baseMipLevel);
+        if(n<4) seq_ser[n]=source->serial;
         if(S.pass_attach_n<9){S.pass_attach_t[S.pass_attach_n]=t;S.pass_attach_level[S.pass_attach_n]=range.baseMipLevel;S.pass_attach_n++;}
         VkImageLayout attachment_layout=is_depth?VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         if(is_depth&&S.depth_sampled&&depth_read_only())attachment_layout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
@@ -2621,6 +2656,18 @@ static VkRenderPass render_begin(void) {
         VkImageViewCreateInfo view={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.image=t->image,
             .viewType=VK_IMAGE_VIEW_TYPE_2D,.format=t->format,.subresourceRange=range};
         views[n]=G.fb_cache_enabled?attachment_view(&view):submission_image_view(&view);
+        /* 附件读写字节记账（诊断）：按附件尺寸 × bpp 累加 load / store / clear。
+         * 用来回答"我们有没有 issue #59 说的 500 MB/帧 附件流量"。不计 stencil 面（DS 的 1 字节），量级不影响判断。
+         * Attachment traffic accounting (diagnostic): size x bpp per attachment, summed into load / store / clear.
+         * Answers "do we waste ~500 MB/frame of attachment traffic like issue #59 describes". The stencil plane of a
+         * depth-stencil attachment (1 byte) is not counted; it does not change the magnitude. */
+        { uint64_t plane=(uint64_t)tw*(uint64_t)th*(uint64_t)(t->bpp?t->bpp:4);
+          g_att_passes++;
+          if(attachments[n].loadOp==VK_ATTACHMENT_LOAD_OP_LOAD) g_att_load_bytes+=plane;
+          else if(attachments[n].loadOp==VK_ATTACHMENT_LOAD_OP_CLEAR) g_att_clear_bytes+=plane;
+          else g_att_skip_bytes+=plane;
+          if(attachments[n].storeOp==VK_ATTACHMENT_STORE_OP_STORE) g_att_store_bytes+=plane;
+          else g_att_skip_bytes+=plane; }
         if(is_depth)depth=(VkAttachmentReference){n,layout};else color[i]=(VkAttachmentReference){n,layout};n++;
     }
     if(!n)die("render targets have no bound attachment",rt->n);
@@ -2643,6 +2690,19 @@ static VkRenderPass render_begin(void) {
     memcpy(S.pass_key.color,color,rt->n*sizeof(*color));if(rt->depth)S.pass_key.depth=depth;
     memcpy(S.pass_key.dependencies,deps,ri.dependencyCount*sizeof(*deps));
     FramebufferKey key;memset(&key,0,sizeof key);key.pass=S.pass_key;key.width=width;key.height=height;memcpy(key.views,views,n*sizeof(*views));
+    /* 通道序列诊断（DM_PASS_SEQ=1，只打一帧）：看同一目标是不是连续出现——连续才有合并空间。
+     * 载荷：序号 / 尺寸 / 颜色数 / 是否有深度 / 首附件 load-store / 前 2 个附件 serial。
+     * Pass-sequence diagnostic (DM_PASS_SEQ=1, one frame only): shows whether the same target appears on
+     * consecutive passes -- only then is there anything to merge. Payload: index / extent / color count /
+     * has depth / first attachment's load-store ops / the first two attachment serials. */
+    { static int seq_on=-1; static unsigned seq_i; static uint64_t seq_frame=~0ull, seq_at=~0ull;
+      if(seq_on<0){ seq_on = getenv("DM_PASS_SEQ")!=NULL; const char *sf=getenv("DM_PASS_SEQ_FRAME"); seq_at = sf? strtoull(sf,NULL,10) : 120; }
+      if(seq_on && G.present_count==seq_at && seq_i<220) {
+          if(seq_frame!=G.present_count){seq_frame=G.present_count;seq_i=0;}
+          fprintf(stderr,"[nvn-vulkan] PASS_SEQ frame=%llu idx=%u size=%ux%u colors=%u depth=%d load=%d store=%d ser=%llu,%llu\n",
+              (unsigned long long)G.present_count,seq_i,width,height,rt->n,rt->depth?1:0,
+              (int)attachments[0].loadOp,(int)attachments[0].storeOp,seq_ser[0],seq_ser[1]);
+          seq_i++; } }
     int index=0;
     if(!G.disable_resource_cache){
         for(;index<S.npass;index++)if(!memcmp(&S.framebuffer_keys[index],&key,sizeof key))break;
@@ -2703,6 +2763,23 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
      * per pass. The pre-reset experiment showed pass length matters a lot on this GPU (~100-draw
      * passes 15.8fps vs ~32-draw 25fps); this turns the accidental query-break splitter into a knob. */
     if(G.pass_split_draws && S.in_pass && G.draws-G.pass_draws0>=(uint64_t)G.pass_split_draws){G.profile_pass_splits++;pass_end();}
+    { uint32_t c=(uint32_t)(a?a->count:idx->count); unsigned bk=c<16?0:c<64?1:c<256?2:c<1024?3:c<4096?4:5;
+      g_draw_hist[bk]++;g_draw_idx_total+=c;g_draw_n++;
+      int cls=3; const p_set_rt *rt=&G.state.rt;
+      if(rt->n>0&&rt->color[0]){ uint32_t w=rt->color[0]->d.width,h=rt->color[0]->d.height;
+          if(w==2270||(w>2000&&h>900))cls=0; else if(w==1024&&h==1024)cls=2; else cls=1; }
+      else if(rt->depth){ uint32_t w=rt->depth->d.width,h=rt->depth->d.height; cls=(w==1024&&h==1024)?2:1; }
+      g_cls_n[cls]++;g_cls_idx[cls]+=c;g_cls_hist[cls][bk]++;
+      if(cls==0){
+          /* 非索引 draw 也统计：UI 精灵多半走 DrawArrays。 | Non-indexed draws are counted too: UI sprites mostly use DrawArrays. */
+          uint64_t vb=G.state.vbuf[0].address, ib=idx?idx->ibuf:0;
+          int type=idx?(int)idx->itype:-1, base=idx?idx->base_vertex:0;
+          if(g_ui_have_last){ g_ui_pairs++;
+              if(vb==g_ui_last_vb)g_ui_same_vbuf++;
+              if(type==g_ui_last_type)g_ui_same_ibuf++;
+              if(type<0 && vb==g_ui_last_vb && base==g_ui_last_base+g_ui_last_count)g_ui_addr_contig++; }
+          g_ui_last_vb=vb;g_ui_last_ib=ib;g_ui_last_type=type;g_ui_last_count=(int)c;g_ui_last_base=base;g_ui_have_last=1;
+      } }
     uint64_t dr_state=prof_now();
     int upper_left=atomic_load(&G.window_origin)==NVN_WINDOW_ORIGIN_MODE_UPPER_LEFT;
     if(G.state.ms.samples>1 || G.state.ms.a2c || G.state.ms.cov_mod || G.state.ms.sl_en)die("multisample semantics",G.state.ms.samples);
@@ -2711,11 +2788,32 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     /* A zero-color pass may still run fragment discard, depth export or
      * storage side effects. Only a program with no fragment stage omits it. */
     VShader *vs=program_stage(0),*ps=program_stage_optional(1);
+    { /* UI 合批前提：连续 UI draw 的 shader / 顶点格式是否一致 | UI batching prerequisite: same shader / vertex format across consecutive UI draws */
+      uint32_t c0=(uint32_t)(a?a->count:idx->count);
+      int cls0=3; const p_set_rt *rt0=&G.state.rt;
+      if(rt0->n>0&&rt0->color[0]){ uint32_t w=rt0->color[0]->d.width,h=rt0->color[0]->d.height; if(w>2000&&h>900)cls0=0; }
+      if(cls0==0){ uint64_t hs=(uint64_t)(uintptr_t)vs, hp=(uint64_t)(uintptr_t)ps;
+          int vfmt=(int)G.state.vbuf[0].size*100000+ (int)G.state.vbuf[0].address%7; (void)c0;
+          if(g_ui_have_last){ if(hs==g_ui_last_vs)g_ui_same_shader++; if(hp==g_ui_last_ps)g_ui_same_layout++; if(vfmt==g_ui_last_vfmt)g_ui_same_vfmt++;
+              /* 每精灵的位置/颜色走 uniform 还是顶点：比较两个 stage 的 uniform 地址。 */
+              /* Per-sprite position/colour via uniform or vertices: compare the uniform addresses of both stages. */
+              g_ui_ubo_pairs++; int sv=1, sp=1;
+              for(int q=0;q<16;q++){ if(G.state.uniform[0][q].addr!=g_ui_last_ubo_vs[q]) sv=0; if(G.state.uniform[1][q].addr!=g_ui_last_ubo_ps[q]) sp=0; }
+              g_ui_same_ubo_vs+=sv; g_ui_same_ubo_ps+=sp;
+              for(int q=0;q<16;q++){ g_ui_last_ubo_vs[q]=G.state.uniform[0][q].addr; g_ui_last_ubo_ps[q]=G.state.uniform[1][q].addr; } }
+          g_ui_last_vs=hs;g_ui_last_ps=hp;g_ui_last_vfmt=vfmt; } }
     if(G.pass_timing&&ps&&G.state.rt.n==1&&G.state.rt.color[0]&&G.state.rt.color[0]->d.width==1280&&G.state.rt.color[0]->d.height==720){
         uint32_t k=0;while(k<G.nhot&&strcmp(G.hot[k].key,ps->key))k++;
         if(k==G.nhot&&k<64){strcpy(G.hot[k].key,ps->key);G.hot[k].draws=0;G.nhot++;}
         if(k<G.nhot)G.hot[k].draws++;}
     if(G.skip_ps[0]&&ps&&!strcmp(ps->key,G.skip_ps))return;
+    /* UI（全屏渲染目标）跳过遮挡查询：812 次查询及其引起的通道中断都在这一档。
+       游戏若依赖 UI 的遮挡计数，画面会异常——用 DM_UI_NO_QUERY=0 立即关掉。 */
+    /* Skip occlusion queries for UI (full-res render targets): the 812 queries and their pass breaks live here.
+       If the game depends on UI occlusion counts the picture will break -- DM_UI_NO_QUERY=0 turns it off. */
+    { static int uiq=-1; if(uiq<0){ const char *e=getenv("DM_UI_NO_QUERY"); uiq=(e&&!strcmp(e,"0"))?0:1; }
+      G.diag_no_occlusion = uiq && G.state.rt.n==1 && G.state.rt.color[0] &&
+          G.state.rt.color[0]->d.width>2000 && G.state.rt.color[0]->d.height>900 ? 1 : 0; }
     S.read_snapshots_allowed=1;
     for(unsigned stage=0;stage<2;stage++){VShader *s=stage?ps:vs;if(!s)continue;
         for(unsigned i=0;i<s->h.nb;i++){RBinding *b=&s->b[i];if(((b->kind==3||b->kind==9)&&b->flags)||b->kind==6||b->type==VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)S.read_snapshots_allowed=0;}
@@ -3502,6 +3600,39 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         double elapsed_ms=(now-G.profile_start_ns)/1e6;
         double fps=elapsed_ms>0?1000.0*G.profile_frames/elapsed_ms:0;
         fprintf(stderr,"[nvn-vulkan] RENDER_PROFILE frame=%llu frames=%llu fps=%.3f elapsed_ms=%.3f pipeline_ms=%.3f gpu_wait_ms=%.3f upload_decode_ms=%.3f submits=%llu draws=%llu pso_new=%lu pso_slow=%lu pso_slow_ms=%.1f\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,fps,elapsed_ms,G.profile_pipeline_ns/1e6,G.profile_wait_ns/1e6,G.profile_decode_ns/1e6,(unsigned long long)G.profile_submits,(unsigned long long)(G.draws-G.profile_draws),(unsigned long)atomic_load(&g_pso_create_count),(unsigned long)atomic_load(&g_pso_slow_count),(double)atomic_load(&g_pso_slow_total_ns)/1e6);
+        /* 附件读写流量（issue #59 的 506→226 MB/帧 口径）：per-frame = 窗口合计 / 帧数。
+         * Attachment traffic (the 506->226 MB/frame metric from issue #59): per_frame = window total / frames. */
+        { double fr=G.profile_frames? (double)G.profile_frames:1.0;
+          fprintf(stderr,"[nvn-vulkan] RENDER_TRAFFIC frame=%llu frames=%llu load_mb_per_frame=%.1f store_mb_per_frame=%.1f clear_mb_per_frame=%.1f skipped_mb_per_frame=%.1f total_mb_per_frame=%.1f attachment_passes_per_frame=%.1f\n",
+              (unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,
+              g_att_load_bytes? g_att_load_bytes/1048576.0/fr:0.0, g_att_store_bytes? g_att_store_bytes/1048576.0/fr:0.0,
+              g_att_clear_bytes? g_att_clear_bytes/1048576.0/fr:0.0, g_att_skip_bytes? g_att_skip_bytes/1048576.0/fr:0.0,
+              (g_att_load_bytes+g_att_store_bytes+g_att_clear_bytes)/1048576.0/fr, g_att_passes/fr);
+          g_att_load_bytes=g_att_store_bytes=g_att_clear_bytes=g_att_skip_bytes=0; g_att_passes=0; }
+        { double fr=G.profile_frames? (double)G.profile_frames:1.0;
+          fprintf(stderr,"[nvn-vulkan] RENDER_DRAW_HIST frame=%llu draws=%.0f verts=%.0f avg=%.1f b16=%.1f b64=%.1f b256=%.1f b1k=%.1f b4k=%.1f bbig=%.1f\n",
+              (unsigned long long)G.present_count+1, g_draw_n/fr, g_draw_idx_total/fr, g_draw_n? (double)g_draw_idx_total/(double)g_draw_n:0.0,
+              g_draw_hist[0]/fr,g_draw_hist[1]/fr,g_draw_hist[2]/fr,g_draw_hist[3]/fr,g_draw_hist[4]/fr,g_draw_hist[5]/fr);
+          fprintf(stderr,"[nvn-vulkan] RENDER_DRAW_CLASS frame=%llu ui=%.0f ui_v=%.0f ui_b16=%.0f world=%.0f world_v=%.0f world_b16=%.0f shadow=%.0f shadow_v=%.0f other=%.0f other_v=%.0f\n",
+              (unsigned long long)G.present_count+1, g_cls_n[0]/fr, g_cls_idx[0]/fr, g_cls_hist[0][0]/fr,
+              g_cls_n[1]/fr, g_cls_idx[1]/fr, g_cls_hist[1][0]/fr, g_cls_n[2]/fr, g_cls_idx[2]/fr,
+              g_cls_n[3]/fr, g_cls_idx[3]/fr);
+          if(g_ui_pairs)fprintf(stderr,"[nvn-vulkan] RENDER_UI_BATCH frame=%llu pairs=%.0f same_vbuf=%.0f same_shader=%.0f same_ps=%.0f same_vfmt=%.0f contiguous=%.0f\n",
+              (unsigned long long)G.present_count+1, (double)g_ui_pairs/fr, (double)g_ui_same_vbuf/fr, (double)g_ui_same_shader/fr, (double)g_ui_same_layout/fr, (double)g_ui_same_vfmt/fr, (double)g_ui_addr_contig/fr);
+          if(g_ui_ubo_pairs)fprintf(stderr,"[nvn-vulkan] RENDER_UI_UBO frame=%llu pairs=%.0f same_vs_ubo=%.0f same_ps_ubo=%.0f\n",
+              (unsigned long long)G.present_count+1,(double)g_ui_ubo_pairs/fr,(double)g_ui_same_ubo_vs/fr,(double)g_ui_same_ubo_ps/fr);
+          g_ui_same_ubo_vs=g_ui_same_ubo_ps=g_ui_ubo_pairs=0;
+          g_ui_same_shader=g_ui_same_layout=g_ui_same_vfmt=0;
+          g_ui_pairs=g_ui_same_vbuf=g_ui_same_ibuf=g_ui_addr_contig=0; g_ui_have_last=0;
+          memset(g_draw_hist,0,sizeof g_draw_hist); memset(g_cls_n,0,sizeof g_cls_n); memset(g_cls_idx,0,sizeof g_cls_idx); memset(g_cls_hist,0,sizeof g_cls_hist); g_draw_idx_total=0; g_draw_n=0; }
+        /* 通道为什么结束：按 pass_end_at 的调用行号取前 5（行号 → 源码里的 pass_end() 调用点）。
+         * Why passes end: top 5 pass_end_at call-site lines (map the line back to the pass_end() call in the source). */
+        { unsigned long long c[5]={0}; int ln[5]={0};
+          for(int i=0;i<8192;i++){ unsigned long long v=G.pass_end_sites[i]; if(!v)continue;
+              for(int k=0;k<5;k++) if(v>c[k]){ for(int j=4;j>k;j--){c[j]=c[j-1];ln[j]=ln[j-1];} c[k]=v; ln[k]=i; break; } }
+          fprintf(stderr,"[nvn-vulkan] RENDER_END_SITES frame=%llu end1_line=%d end1_n=%llu end2_line=%d end2_n=%llu end3_line=%d end3_n=%llu end4_line=%d end4_n=%llu end5_line=%d end5_n=%llu\n",
+              (unsigned long long)G.present_count+1,ln[0],c[0],ln[1],c[1],ln[2],c[2],ln[3],c[3],ln[4],c[4]);
+          memset(G.pass_end_sites,0,sizeof G.pass_end_sites); }
         fprintf(stderr,"[nvn-vulkan] RENDER_SUBMIT_CLASS_PROFILE frame=%llu total_submits=%llu observed_eligible_candidates=%llu candidate_fence_wait_ms=%.3f pool_writeback_bytes=%llu events=%llu counter_reports=%llu write_submits=%llu event_submits=%llu report_submits=%llu trace_submits=%llu cpu_readback_submits=%llu event_wait_submits=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_submits,(unsigned long long)G.profile_submit_candidates,G.profile_candidate_wait_ns/1e6,(unsigned long long)G.profile_writeback_bytes,(unsigned long long)G.profile_events,(unsigned long long)G.profile_reports,(unsigned long long)G.profile_write_submits,(unsigned long long)G.profile_event_submits,(unsigned long long)G.profile_report_submits,(unsigned long long)G.profile_trace_submits,(unsigned long long)G.profile_cpu_readback_submits,(unsigned long long)G.profile_event_wait_submits);
         fprintf(stderr,"[nvn-vulkan] RENDER_CPU_PROFILE frame=%llu lookup_ms=%.3f pool_ms=%.3f bind_ms=%.3f renderpass_ms=%.3f present_ms=%.3f desc_alloc_ms=%.3f desc_update_ms=%.3f prep_ms=%.3f state_ms=%.3f vertex_ms=%.3f pso_ms=%.3f tail_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_lookup_ns/1e6,G.profile_pool_ns/1e6,G.profile_bind_ns/1e6,G.profile_render_ns/1e6,G.profile_present_ns/1e6,G.profile_desc_alloc_ns/1e6,G.profile_desc_update_ns/1e6,G.profile_prep_ns/1e6,G.profile_state_ns/1e6,G.profile_vertex_ns/1e6,G.profile_pso_ns/1e6,G.profile_tail_ns/1e6);
         fprintf(stderr,"[nvn-vulkan] RENDER_BIND_SPLIT frame=%llu plan_hits=%llu plan_ms=%.3f full_calls=%llu full_ms=%.3f\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_bind_hits,G.profile_bind_plan_ns/1e6,(unsigned long long)G.profile_bind_full_calls,G.profile_bind_full_ns/1e6);
@@ -3593,6 +3724,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
          * profile window (~1 s). A switch changes the render-pass keys from the next pass on (new
          * objects are created; old ones stay for the session). File absent: keep the current mode. */
         { static const char *lsdir; if(!lsdir)lsdir=getenv("DM_FRAME_DIR"); char lsf[1300];
+          { static int lg; if(lg++<2) fprintf(stderr,"[nvn-vulkan] RUNTIME_TOGGLES dir=%s\n", lsdir?lsdir:"(null)"); }
           if(lsdir&&*lsdir&&snprintf(lsf,sizeof lsf,"%s/loadstore.txt",lsdir)<(int)sizeof lsf){FILE *fp=fopen(lsf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=3&&m!=G.diag_loadstore){G.diag_loadstore=m;
                 fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE 运行中切换 → %d（%s）\n",m,m?"内容将不正确（诊断）":"恢复正常");}fclose(fp);}}}
@@ -3651,6 +3783,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_writeback_raw_bytes=G.profile_writeback_raw_ranges=G.profile_writeback_copy_ranges=G.profile_writeback_plan_cpu_ns=0;
         G.profile_write_submits=G.profile_event_submits=G.profile_report_submits=G.profile_trace_submits=G.profile_cpu_readback_submits=G.profile_event_wait_submits=0;
         G.profile_start_ns=now;G.profile_pipeline_ns=G.profile_wait_ns=G.profile_decode_ns=G.profile_submits=G.profile_frames=0;G.profile_draws=G.draws;}
+
     G.trace_frame=G.trace_ui=0;
     if(capture_root){char request[1200];snprintf(request,sizeof request,"%s/trace-ui-request",capture_root);
         if(!access(request,F_OK)){if(unlink(request))die("UI trace request consume",0);G.trace_frame=G.trace_ui=1;G.trace_meshes=G.ntrace_textures=0;
