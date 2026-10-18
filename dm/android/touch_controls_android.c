@@ -41,7 +41,13 @@ static int in_minimap(float x,float y) {
     if(mode==0)return x>=w*0.72f&&y<=h*0.35f&&dm_tc_hit(&controls.layout,x,y)<0;
     if(mode!=1&&mode!=2)return 0;
     float r[4]; int dm_ui_minimap_rect(float r[4]);
-    if(!dm_ui_minimap_rect(r))return 0;
+    if(!dm_ui_minimap_rect(r)){   /* 矩形还没读到过（进局头几拍、地图还是关着）：给个兜底区 —— 微缩放右 = 右上角那块，微缩放左 = 左上角那块。
+                                   没有兜底的话，地图关着时这一块会被当成世界点按，玩家点它「没反应」（真机口径）。
+                                   Rect not read yet (the first beats after entering, with the map still closed): fall back to a region -- mini on the
+                                   right = the top-right block, mini on the left = the top-left block. Without it, that area counts as a world tap
+                                   while the map is closed and the player's tap "does nothing" (device report). */
+        if(dm_tc_hit(&controls.layout,x,y)>=0)return 0;
+        return mode==2 ? (x>=w*0.62f&&y<=h*0.40f) : (x<=w*0.38f&&y<=h*0.40f); }
     if(x<r[0]*w||x>r[2]*w||y<r[1]*h||y>r[3]*h)return 0;
     if(dm_tc_hit(&controls.layout,x,y)>=0)return 0;
     return 1;
@@ -93,7 +99,7 @@ static void dispatch_seqs(void) {
  *         拖放的按松手这一刻的位置重问落点 → dm_tc_pointer_release[_at]。
  * 喂回模型之后，双击（使用 / 装备 / 免费鉴定 / 取一件）、长按（补充到腰带）、单击（鉴定态鉴定）、页签、点面板外关面板
  * 全都由模型自己判出来，序号派发（dispatch_seqs）照旧把它们发成 dm_ui_*。 */
-static unsigned map_seq; static int map_asked; static int map_slot=-1; static float map_x,map_y; static double map_t;   /* 小地图块点按（对齐 front_ios.m:579-587 的 _mapTouch） */
+static int map_slot=-1; static float map_x,map_y; static double map_t;   /* 小地图块点按（对齐 front_ios.m:579-587 的 _mapTouch）：松手时按原版地图键开 / 关 */
 static int mapbk_slot=-1; static float mapbk_x,mapbk_y; static double mapbk_t;   /* 全屏地图开着时点空处那根（对齐 front_ios.m:517 / 591-593 的 _mapBackTouch） */
 static unsigned pend_q; static int pend_slot=-1; static int pend_up; static double pend_at,pend_end_at;
 static unsigned pend_rel; static int pend_rel_asked; static int ui_drag_on; static float lift_x, lift_y; static int item_fed;
@@ -224,9 +230,8 @@ static void tick(void) {
     feed_item_kind();resolve_pending();
     double now=seconds();dm_android_input_status input;dm_android_input_status_get(&input);
     if(access_slot>=0 && now>=access_until){dm_tc_end_at(&controls,access_slot,now);access_slot=-1;}
-    if(map_asked){int wr=dm_world_tap_result(map_seq);
-        if(wr>=0){map_asked=0; if(wr==0&&!controls.navigation_mode){dm_ui_map_full(1);LOG("地图块：底下没有目标 → 全屏地图");}
-            else LOG("地图块：底下有世界目标（类 %d）→ 交互、不切地图",wr);}}
+    /* 地图块不再走「先看底下有没有世界目标」那一趟（见上面点按处）：这行留着只会误导，去掉。
+       The map block no longer goes through "first see whether there is a world target under it" (see the tap handler above); leaving this line here would only mislead. */
     dm_tc_tick(&controls,now);
     if(controls.pulse_button) {
         if(pulse_epoch!=controls.pulse_epoch){pulse_epoch=controls.pulse_epoch;pulse_samples=input.npad_samples;pulse_start=now;pulse_seen=0;}
@@ -293,10 +298,15 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeEvent(JN
                   float lx=lift_x>=0?lift_x*w:map_x,ly=lift_y>=0?lift_y*h:map_y;   /* 抬起那根手指的位置（前端给了就用它，判点按/拖动） */
                   if(hypotf(lx-map_x,ly-map_y)<=14.f&&now-map_t<0.6){
                       int dm_ui_automap_mode(void);
-                      if(dm_ui_automap_mode()==0){   /* 玩家自己那档是全屏（0）：点地图块 = 原版地图键开 / 关（显示 / 隐藏），档位不动（dm_cursor.c ui_map_pump） */
-                          dm_ui_map_full(1);LOG("地图块：玩家的地图是全屏档 → 按原版地图键开 / 关");}
-                      else if(dm_ui_map_is_full()){dm_ui_map_full(0);LOG("地图块：点小地图那一块 → 回小地图");}
-                      else{map_seq=dm_world_tap(map_x/w,map_y/h);map_asked=1;LOG("地图块：点小地图那一块 (%.0f,%.0f) → 先看底下有没有世界目标",map_x,map_y);}
+                      /* 点地图块 = 原版地图键（−）：显示 / 隐藏切换（玩家口径「点地名那个地方能把地图关了」）。
+                         档位（全屏 / 微缩放左 / 微缩放右）只由设置页决定，这一下不碰它。
+                         以前这里先问宿主「底下有没有世界目标」再决定，那趟往返就是真机口径的「点右上角半天才会反应」；
+                         地图块本来就是地图的开关，不该去猜下面有什么。
+                         Tapping the map block = the original map key (−): show / hide toggle (player: "tapping the area name place should close the
+                         map"). The setting (fullscreen / mini left / mini right) is decided on the options page only and is not touched here.
+                         This used to first ask the host "is there a world target under it" and then decide; that round trip is what the device
+                         called "tapping the top right takes ages to react". The map block is the map's own switch and should not guess what is under it. */
+                      { void dm_ui_map_key(void); dm_ui_map_key(); LOG("地图块：点地图那一块 (%.0f,%.0f) → 原版地图键显示 / 隐藏",map_x,map_y); }
                   } }
                 continue; }
             if(slot==mapbk_slot){   /* 全屏地图开着、点在空处：点按 = 回小地图（front_ios.m:591-593）；这根进过模型，照常走下面的结束 */

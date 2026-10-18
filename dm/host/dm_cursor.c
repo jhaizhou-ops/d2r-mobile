@@ -1913,6 +1913,13 @@ static void ui_bind_pump(uint64_t root, uint64_t fr) {
 static _Atomic int g_map_req = -1, g_map_full_now;
 void dm_ui_map_full(int on) { atomic_store(&g_map_req, on != 0); }
 int dm_ui_map_is_full(void) { return atomic_load(&g_map_full_now); }
+// 「点地图块」= 原版地图键（−）：显示 / 隐藏切换（玩家口径「点地名那个地方能把地图关了」）。开没开由游戏自己那一位说了算，
+// 点一下就翻过来——不再走「先看底下有没有世界目标」那一趟往返（真机口径「点右上角半天才会反应」：那一下要等宿主把落点分类回来）。
+// 「Tapping the map block」= the original map key (−): show / hide toggle (player: "tapping the area name place should close the map").
+// Whether it is open is the game's own bit and one tap flips it -- no more round trip through "first see whether there is a world target under it"
+// (device: "tapping the top right takes ages to react": that step waited for the host to classify the landing point).
+static _Atomic int g_map_key_want;
+void dm_ui_map_key(void) { atomic_store(&g_map_key_want, 1); }
 // 真全屏局内，全屏地图的线条要盖在世界上：游戏把地图中心放在「屏幕高的一半」（它读到的是我们写的 16:9 界面高），画出来在 界面矩形 y + 界面高 ÷ 2；
 // 世界的中心在真实画面高的一半，两者差 界面矩形 y −（真实高 − 界面高）÷ 2（贴底时 = 留边高度的一半，地图标记比人低约 128 点）。
 // 地图有一对卷动量 [main+0x2d5e910 / 914]（单位 = 地图格；中心 = 玩家所在格 + 卷动量，main+0x413354 / 0x4133d8；游戏只在切档等处清零，触摸 / 手柄下没有别的写入方），
@@ -1951,6 +1958,8 @@ static void ui_map_pump(module_t *m) {
     /* 玩家自己那一档照玩家说的来：不再把「全屏」(0) 强行改回微缩档。
        用户真机口径：把地图固定成 iOS 那种右上角迷你图之后「明显没有之前清楚」——迷你档的线条本来就淡（参考图 en_map.jpg 也一样淡），
        全屏档由游戏自己把画面压暗，线条才清楚。所以档位只由玩家的设置页决定（触屏 / 手柄一致）；地图能不能点开、点开是哪种，见下面的 g_map_req。 */
+    if (atomic_exchange(&g_map_key_want, 0)) { void dm_ui_key_pulse(uint64_t, int); dm_ui_key_pulse(DM_BTN_MINUS, 4);
+        LOG("地图块：按原版地图键（−）→ %s（玩家点右上角那块）", mini ? "显示 / 隐藏切换" : "显示 / 隐藏切换"); }
     int r = atomic_exchange(&g_map_req, -1);
     if (r >= 0) {
         if (cfg == 1 || cfg == 2) { if ((mini == 0) != r) { ((void (*)(int))(m->base + 0x40f780))(r ? 0 : cfg); mini = *(volatile int32_t *)(m->base + 0x2d5c748); LOG("地图切换：→ %s（配置值 %d 不动，不落盘）", r ? "全屏" : cfg == 1 ? "微缩放左" : "微缩放右", cfg); } }
@@ -1958,15 +1967,18 @@ static void ui_map_pump(module_t *m) {
             LOG("地图切换：玩家的「透视地图尺寸」是全屏档（0）→ 按原版地图键开 / 关（点地图块 = 显示 / 隐藏，不碰档位、不落盘）"); }
     }
     atomic_store(&g_map_full_now, mini == 0 && (cfg == 1 || cfg == 2));   // 只把「我们切出来的全屏」算全屏；玩家自己选全屏档的不算 | Only "the fullscreen we switched to" counts as fullscreen; the fullscreen mode chosen by the player does not
-    /* 进局后地图是关的就替玩家按一次原版地图键（用户口径「进入后看不到地图」）——原版那个「进局自动开」（AutomapAutoOpen）实测不可靠。
-       看 AutoMap 控件的可见位：dm_ui_map_geom 的高 32 位 0 = 没开 / 1 = 微缩 / 2 = 全屏（ui_map_geom_pump 每帧写；它在本函数后面，先声明）。
-       等 2 秒、最多按 3 次（按下去到地图画出来有一两帧延迟）；玩家自己关掉后不再按（tries 到 3 就停）。 */
-    { int dm_ui_map_geom(float *cell); static int tries, wait;
-      if (!dm_uiscreen_ingame()) { tries = 0; wait = 0; }
-      else if (tries < 3 && ++wait > 120) { float cell; int mgeo = dm_ui_map_geom(&cell);
-          if (mgeo == 0) { void dm_ui_key_pulse(uint64_t, int); dm_ui_key_pulse(DM_BTN_MINUS, 4); tries++; wait = 0;
-              LOG("地图：进局后地图是关的 → 替玩家按一次原版地图键（第 %d 次；地图默认显示）", tries); }
-          else { static int lg; if (lg++ < 4) LOG("地图：进局后地图已开（%s），不用替按", mgeo == 1 ? "微缩" : "全屏"); tries = 3; } } }
+    // 进局后不再替玩家按地图键（原先「进局看不到地图就替按一次」那套已删）：地图开没开是跟着角色存档记住的——
+    // 新角色默认开着，之后玩家自己开关，游戏把最后一次的状态存进存档，下一次进这个角色还是那个样子。替按一次等于每次进局都
+    // 推翻玩家的选择（真机口径：「我打开地图、保存、再进，还是关的」——那一下正是替按把它按回去的）；按的时机稍早还会跟游戏
+    // 正要画的那一帧抢（面板还没建起来时读到的永远是「关着」），真机表现是「进局没地图、点右上角半天才反应、地图线画出小地图框」。
+    // 所以这一页只留「点地图块 = 原版地图键」一条，状态完全交给玩家与存档。
+    // No more auto-pressing the map key after entering a run (the old "if the map is closed on entry, press it once for the player" is gone):
+    // whether the map is open is remembered with the character save -- a new character starts with it open, the player toggles it as they like,
+    // the game stores the last state in the save, and the next entry into that character looks the same. Auto-pressing overrode the player's
+    // choice on every entry (device: "I opened the map, saved, and it was closed again on entry" -- that press put it back), and pressing a
+    // moment too early raced the frame the game was about to draw (while the panel is not created yet it always reads "closed"), which showed up
+    // as "no map on entry, tapping the top right takes ages, map lines drawn outside the minimap box". So this page keeps one rule: tapping the
+    // map block is the original map key, and the state belongs to the player and the save.
 }
 /* 玩家「透视地图尺寸」的档位（0 全屏 / 1 微缩放左 / 2 微缩放右）：触屏层用它决定「点地图块」怎么切（见 ui_map_pump）。读不到返回 -1 */
 int dm_ui_automap_mode(void) { module_t *m = main_module(); if (!m) return -1; return *(volatile int32_t *)(m->base + 0x2d479f4); }
