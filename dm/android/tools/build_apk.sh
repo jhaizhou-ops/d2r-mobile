@@ -32,6 +32,9 @@ V4=${DM_HUD_V4_DIR:-$GEN_ROOT/NativeHUD/v4/hud_v4_ui}
 TA=${DM_TOUCH_ART_DIR:-${DM_NATIVE_ART_DIR:-$GEN_ROOT/native_art}}
 [ -d "$TA" ] && { mkdir -p "$OUT/assets"; cp "$TA"/*.png "$OUT/assets/"; echo "技能图集: $(ls "$TA"/*.png | wc -l) 张"; } || echo "警告：没有技能图集（TouchArt），技能钮只有文字"
 [ -d "$V4" ] && { mkdir -p "$OUT/assets/hud_v4_ui"; cp "$V4"/* "$OUT/assets/hud_v4_ui/"; echo "hud_v4_ui: $(ls "$OUT/assets/hud_v4_ui" | wc -l) 个文件"; } || echo "警告：没有 hud_v4_ui 素材，底栏 v4 不画"
+# 新触摸外观的通用嵌槽贴图（上游 46cb318 的新美术，只有 iOS 源码树里这一份）：和技能图集一起放进 assets 根。
+# The generic socket texture of the new touch look (new upstream art in 46cb318, kept only in the iOS source tree): stage it in the assets root next to the skill atlases.
+[ -f "$SRC/dm/ios/Sources/ControlArt/dm_mobile_socket.png" ] && { mkdir -p "$OUT/assets"; cp "$SRC/dm/ios/Sources/ControlArt/dm_mobile_socket.png" "$OUT/assets/"; echo "触摸外观: dm_mobile_socket.png"; } || echo "警告：没有 dm_mobile_socket.png，技能钮退回纯绘制底（dm_button_draw）"
 
 # 2) 清单 + 资源链接
 "$AAPT2" link -o "$OUT/base.apk" -I "$PLATFORM_JAR" \

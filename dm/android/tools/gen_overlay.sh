@@ -64,4 +64,11 @@ export PATH="$SHIM:$PATH"
 # 生成器要求每套 overlay 都有这份配置（run.sh:69-72 同款自检）
 [ -f "$OUT/data/.build.config" ] || { echo "缺 $OUT/data/.build.config" >&2; exit 1; }
 echo "overlay 出好了：$OUT（DM_TOUCH_TWO_CARDS=1，模式页只留标准 / 专家两块方块）"
-echo "推送到设备：adb push $OUT/. /sdcard/Android/data/org.d2r.binaryprobe/files/d2r-mobile/diagnostics/overlay/"
+# 推的时候必须连带修权限：adb push 建出来的 overlay/data 是 shell:shell 0770，App（u0_a214）进不去那个目录——
+# 覆盖层读不到，游戏会在 "D2Win: Fatal failure during UISystem initialization" 直接挂（2026-10-18 真机踩过）。
+# chmod 要在 push 之后做（目录也是 push 建的）。
+# The push must fix permissions too: adb push creates overlay/data as shell:shell 0770, and the app (u0_a214)
+# cannot enter that directory -- the overlay is unreadable and the game dies with "D2Win: Fatal failure during
+# UISystem initialization" (hit on a real device on 2026-10-18). chmod after the push, since push creates the directory.
+OVR=/sdcard/Android/data/org.d2r.binaryprobe/files/d2r-mobile/diagnostics/overlay
+echo "推送：adb push $OUT/. $OVR/ && adb shell \"chmod -R 777 $OVR\""

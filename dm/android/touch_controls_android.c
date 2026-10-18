@@ -368,7 +368,10 @@ JNIEXPORT jfloatArray JNICALL Java_org_d2r_binaryprobe_TouchControlsView_nativeF
     (void)cls;jfloat data[58]={0};pthread_mutex_lock(&lock);apply_ui_locked();tick();
     for(int i=0;i<DM_TC_COUNT;i++){dm_tc_target t=controls.layout.target[i];data[i*3]=t.x;data[i*3+1]=t.y;data[i*3+2]=(applied_mask&(1u<<i))?t.r:0;
         for(int j=0;j<16;j++)if(controls.finger[j].active&&controls.finger[j].target==i)data[44+i]=1;}
-    data[36]=controls.layout.joy_x;data[37]=controls.layout.joy_y;data[38]=controls.layout.joy_radius;
+    /* 摇杆是浮动的：按着时底盘跟着手指起点（layout.joy_x 只是静止位）；iOS 用 joy_origin_x/y，这里同口径给 Java | the stick floats: while held the base follows the touch origin (layout.joy_x is only the rest position); same as joy_origin_x/y on iOS */
+    data[36]=controls.joy_slot!=DM_TC_NONE?controls.joy_origin_x:controls.layout.joy_x;
+    data[37]=controls.joy_slot!=DM_TC_NONE?controls.joy_origin_y:controls.layout.joy_y;
+    data[38]=controls.layout.joy_radius;
     data[39]=controls.layout.swap.x;data[40]=controls.layout.swap.y;data[41]=controls.layout.swap.r;
     data[42]=data[36]+controls.lx/32767.f*data[38];data[43]=data[37]-controls.ly/32767.f*data[38];
     data[56]=(float)controls.skill_set;data[57]=controls.joy_slot!=DM_TC_NONE;

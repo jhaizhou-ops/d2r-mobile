@@ -46,15 +46,30 @@
 | `dm/ios/tests/test_touch_layout_options.py`（上游新测试，不需要游戏文件） | ✅ PASS |
 | `gen_overlay.sh` | ✅ 出覆盖层（见 §5 的开关） |
 | `dm/host/tests` | ⛔ macOS 专用（`malloc/malloc.h`、`TargetConditionals.h`），Linux 跑不了，用安卓构建代验 |
-| 真机 | ⏳ 手机不在时做的；装包与覆盖层推送见 §7 |
+| 真机（2026-10-18，Wi-Fi adb） | ✅ 见下面「真机验过的」 |
 
-## 5. 两个环境坑（跟合并无关，但会挡住构建）
+**真机验过的（合并 + 新覆盖层 + 新触摸外观，同一台机）：**
+- 选角页 = 触屏版（右侧存档列表、居中「进入游戏」、「创建新角色」、无 A/B 提示）✅
+- 进局、背包面板（页签/格子/说明框/「存放」/右上角关闭 X）✅
+- 暂停菜单（选项 / 保存并退出 / 一键重开 / 分享诊断日志）✅
+- 选项四页签 + 自定义页（语言勾在「中文」上）✅
+- 自定义页新增的「换组键：传送门左侧 / 技能区上方」两格：切换 → 应用 → `sw_custom.txt` 写入 `touch_swap_above=1`
+  → 日志 `触屏布局：换组键 挪到技能区上方（自定义页设置）` → Ⅰ 键当场挪位 ✅
+- 新触摸外观：嵌槽金属边、银色技能图、空槽细边 + 十字、换组键 Ⅰ/Ⅱ ✅
+- 底栏 v4：生命/法力球、经验条、Lv%、腰带四格与件数、金色十字 ✅
+- 全程日志无 FATAL / die / D2Win 报错 ✅
+
+## 5. 三个坑（前两个是构建环境，第三个是推覆盖层——这个会直接让游戏挂）
 
 1. **`native_art` 的「PNG 重编码字节」校验跟 Pillow 版本绑死**：报 `dm_native_skill_0.png 解出的 PNG 与冻结的不一致（Pillow 版本？）`。
    原件哈希（SHA-256 / MD5）仍然校验得过，说明游戏文件没问题；差的是 Pillow 重新编码 PNG 的字节。本机 Pillow 12.3.0。
    → 只想按新布局重出覆盖层时，用加法开关 **`DM_ASSETS_REUSE=1`**（`gen_assets.py` 的 `ensure()`：产物齐了就沿用，不再按指纹重跑美术）。
    根本解法是二选一：把 Pillow 固定到出冻结值那一版，或按当前工具链重出 `native_art_manifest.json`——**都不属于同步该干的事**。
 2. **`gen_hud_v4` 的 PC 版 2 倍素材目录不在**（`$DM_ROOT/data/assets-src/raw`）：缺了会回落到 Switch 半分辨率图（底栏 v4 会略糊）。这次因为用了 `DM_ASSETS_REUSE=1`，没有重出，所以没有影响。
+3. **推覆盖层之后必须 `chmod -R 777`**（2026-10-18 真机踩过，花了一个小时二分）：
+   `adb push` 建出来的 `overlay/data` 属主是 `shell:shell`、权限 `0770`，App（`u0_a214`）进不去那个目录 →
+   覆盖层读不到 → 游戏在 `D2Win: Fatal failure during UISystem initialization` 直接挂（日志里还有一串 SIGSEGV）。
+   **症状很容易被误判成"新覆盖层内容坏了"**：把整层覆盖层挪走游戏就正常。先看 `ls -la .../overlay/data` 的属主与权限。
 
 ## 6. 下次怎么同步（照抄）
 
@@ -83,6 +98,7 @@ python3 dm/i18n/scan_literals.py
 dm/android/tools/deploy_apk.sh
 adb shell rm -rf /sdcard/Android/data/org.d2r.binaryprobe/files/d2r-mobile/diagnostics/overlay/*
 adb push dm/android/build/romfs-overlay/. /sdcard/Android/data/org.d2r.binaryprobe/files/d2r-mobile/diagnostics/overlay/
+adb shell chmod -R 777 /sdcard/Android/data/org.d2r.binaryprobe/files/d2r-mobile/diagnostics/overlay   # 少了这句游戏 UI 初始化就挂，见 §5-3
 ```
 
 ## 7. 新触摸外观的移植（2026-10-18）
@@ -100,4 +116,4 @@ adb push dm/android/build/romfs-overlay/. /sdcard/Android/data/org.d2r.binarypro
 | 非技能格 `_circle` + 固定图标 | `circleCell()` + `fixedIcon()` |
 
 - 新素材：`dm_mobile_socket.png` 由 `build_apk.sh` 拷进 `assets/`；`dm_native_circle/map/menu.png` 与 `sil_dm_native_skill_*.png` 本来就在。
-- **还没做**：上机对图（颜色浓度、空槽边框亮度、摇杆头大小）。三个已知的等效替代（无 SATURATION 混合 / 阴影算法不同 / luminosity 近似）可能要按真机微调。
+- **已上机验过**（2026-10-18）：嵌槽底、银色技能图、空槽细边 + 十字、换组键、底栏 v4 都对得上；三个等效替代（无 SATURATION 混合 / 阴影算法不同 / luminosity 近似）在真机上没有肉眼可辨的偏差，暂不再调。
