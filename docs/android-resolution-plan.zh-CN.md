@@ -7,6 +7,12 @@
 
 ## 0. 硬约束（不许破坏）
 
+0. **不许写死分辨率（本方案的根）**：运行时决定分辨率的路径**只能**由"屏幕尺寸 × 预算"算出。
+   - 三个档位只写**预算（MP）**，不写分辨率；
+   - 老档名（`2624-075` 等）**只作别名**，不再参与计算；
+   - 代码里除调试用途（`flag-gameres-*`、`flag-scale-*`）外，不得出现 `2624×1220` 这类字面量；
+   - 屏幕尺寸在 `nativeStart` 之前就已经到位（`nativeConfigure` 先传显示尺寸、`nativeSurface` 再传真实 Surface 尺寸），所以正常路径永远拿真实屏幕。
+
 1. **iOS 逐字不变**：改动只落在 `dm/android/**` 与 `dm/host/hle_oe.c` 的 Android 分支；`dm/android/diagnostics.c` 是安卓专属文件。
 2. **已完成功能不变**：`quality.txt` < `flag-*` < `env.txt` 的优先级、`DM_GAME_RES` / `DM_3D_SCALE` 的单值覆盖语义**全部保留**；**老档名保留为别名**，别让现有脚本/文档失效。
 3. **出图分辨率只能在启动时定**（窗口贴图启动时一次建好）；**3D 比例可以运行中改**。
@@ -23,6 +29,8 @@
 | 游戏 UI 画布 | 宽度硬上限 **4560 单位 = 19:9**，高度 2160 单位 = 屏高 | `docs/android-perf-notes.md:280` |
 | 画质档 | 6 个"出图×比例"组合（2624-075 / 2168-075 / 1080-080 / 2624-085 / 2624-100 / 1600-100） | `dm/android/app_jni.c:410-432` |
 | 窗口尺寸 | **已经拿得到**：`nativeSurface()` 存进 `window_state`，`dm_android_platform_get_window()` 可读 | `dm/android/app_jni.c:457-470`、`services_platform.h:38` |
+| **写死清单**（本方案要清掉的） | `diagnostics.c:260` 默认 `2624×1220`；`app_jni.c:418-422` 档位表里的 6 个分辨率字面量 | 见 §3 ①② |
+| 可保留的显式覆盖 | `flag-gameres-*` / `flag-scale-*`（调试开关，不是默认） | `app_jni.c:379-380, 396-400` |
 | GPU 实测（2624-075） | 世界主通道 11.4 ms（1968×915）、纯深度 2.7、阴影 1.95、全屏效果链 2.7、UI 0.78、合成 0.5；总 ~20–23 ms；最重营地 25–27 帧 | `docs/android-perf-notes.md` §7.8 / §0.2 |
 
 ## 2. 设计
@@ -74,7 +82,6 @@ world  = out × scale
 unsigned out_budget_px = dm_android_quality_out_budget();   /* 新接口，见 ②；缺省 3.0e6 */
 dm_android_window_state ws; dm_android_platform_get_window(&ws);
 unsigned W = ws.width, H = ws.height;
-if (W < 640 || H < 360) return ((uint64_t)1220 << 32) | 2624;   /* 窗口还没到位：回落旧值 */
 double k = 1.0;
 if (W > 2880) k = 2880.0 / W;                                  /* UI 原生程度上限 */
 if ((double)W * H * k * k > out_budget_px) k = sqrt(out_budget_px / ((double)W * H));
@@ -82,6 +89,16 @@ unsigned w = (unsigned)(W * k) & ~1u, h = (unsigned)(H * k) & ~1u;
 LOG("出图：屏幕 %ux%u → %ux%u（预算 %.1f MP，比例不变）", W, H, w, h, out_budget_px / 1e6);
 return ((uint64_t)h << 32) | w;
 ```
+
+**前提：屏幕尺寸必须在游戏问分辨率之前就到位**（当前 Java 的调用顺序已经保证：
+
+- `GameActivity` → `nativeConfigure(files, locale, touchRoute)`：**新增两个参数**（或新接口）把
+  `getWindowManager().getCurrentWindowMetrics().bounds` 的宽高传进来，存成 `panel_w/h`；
+- `nativeSurface(surface, w, h, …)`：到达后**用真实 Surface 尺寸覆盖** `panel_w/h`（权威值）；
+- `nativeStart()` → 游戏主线程 → `guest_thread_init` → `front_game_res()`。
+
+两条都拿不到（理论上不可达）才兜底：`1280×720`（游戏自己的面板缺省）+ `【红】`日志。
+**不要**再兜底成 2624×1220——那正好是"换机就歪"的来源。
 
 ### ② `dm/android/app_jni.c` —— 档位表换成"预算"，老档名保留别名
 
