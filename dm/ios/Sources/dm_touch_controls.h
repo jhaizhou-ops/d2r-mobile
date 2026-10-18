@@ -9,6 +9,7 @@ enum { DM_TC_MAX_TOUCH = 16, DM_TC_COUNT = 12 };
 enum {
     DM_TC_NONE = -1, DM_TC_JOYSTICK = -2, DM_TC_SWAP = -3, DM_TC_DIFF = -4,   /* DIFF：难度格 / 选择条占用的手指，不发按键 | DIFF: a finger captured by the difficulty cell / selector bar; sends no key */
     DM_TC_EDGE = -5,   /* 屏幕底边归系统的那一条里起手的手指：不当摇杆，松手也不当点地 | A finger that started in the strip along the bottom edge of the screen that belongs to the system: not treated as the stick, and its release is not treated as a ground tap */
+    DM_TC_DPAD = -6,   /* 背包 / 商店的四向导航，不当指针或移动摇杆 | Inventory / vendor four-way navigation, never a pointer or movement stick */
     DM_TC_MAIN = 0,
     DM_TC_SKILL1, DM_TC_SKILL2, DM_TC_SKILL3, DM_TC_SKILL4,
     DM_TC_PORTAL, DM_TC_BELT1, DM_TC_BELT2, DM_TC_BELT3, DM_TC_BELT4,
@@ -19,6 +20,7 @@ typedef struct {
     float width, height;
     int tablet, swap_above;   // 已生效的布局配置，绘制和命中判定共用 | Applied layout profile; mirrors drawing and hit testing.
     dm_tc_target target[DM_TC_COUNT];
+    dm_tc_target dpad[4];   /* 上下左右；绘制与命中共用同一布局 | Up, down, left, right; drawing and hit testing share this layout */
     float joy_x, joy_y, joy_radius;   /* 没按时底盘的显示位置（静止位）与底盘半径 | where the base is shown while not pressed (rest position), and the base radius */
     float joy_zone_r, joy_zone_t, joy_min_x, joy_max_y;   /* 起摇杆区的右界与上界（左与下到屏幕边）；按下后底盘圆心的夹回界：x 不小于、y 不大于（只为底盘整圈画在屏内：屏幕边 + 半径 + 8） | right and upper bounds of the stick-start zone (left and bottom reach the screen edges); clamp bounds for the base centre once pressed: x not less than, y not greater than (only so that the whole base is drawn on screen: screen edge + radius + 8) */
     dm_tc_target swap;   /* 技能组切换键：本地开关，不直接发按键 | Skill set switch key: a local toggle; does not send a key directly */
@@ -51,6 +53,7 @@ typedef struct {
     uint64_t buttons;
     int32_t lx, ly, rx, ry;
     int aim_slot, navigation_mode, map_cancel_active;
+    int panel_dpad, panel_dpad_pulse;
     uint64_t aim_move_sequence;
     int portal_pending, portal_phase; // 0idle / 1modifier-pending / 2armed
     uint64_t gesture_epoch, portal_binding_identity, portal_scene_epoch;
@@ -135,6 +138,10 @@ typedef struct {
 typedef struct { int game; uint64_t panels; } dm_tc_scene;
 int dm_tc_navigation(dm_tc_scene *scene, const char *cat, const char *act, const char *arg);
 int dm_tc_scene_dialog_only(const dm_tc_scene *scene);   /* 只开着 NPC 对话菜单 | Only the NPC dialog menu is open */
+int dm_tc_scene_panel_dpad(const dm_tc_scene *scene);
+int dm_tc_dpad_hit(const dm_tc_layout *layout, float x, float y);
+int dm_tc_dpad_active(const dm_tc_state *state);
+void dm_tc_set_panel_dpad(dm_tc_state *state, int enabled);
 int dm_tc_scene_dead(void);   /* 死亡弹窗开着（导航态，但不给手柄圆钮） | Death popup open (navigation state, but no controller round buttons) */
 /* 面板模式（前端两端共用一个算式，iOS front_ios.m 与 Mac touch_mac.c）：0 = 游戏态；1 = 面板态；2 = 死亡页；3 = 只开着 NPC 对话菜单。
    nav = 手势层的导航判断（dm_tc_navigation，再并上「面板栈里还开着非常驻面板」）；blocked = 面板栈读数（dm_hud_stack_msg：只开着对话菜单时 -1）

@@ -68,6 +68,7 @@ static BOOL touch_control_log_enabled(void) {
 - (void)tickTouchControls:(double)now;
 - (void)navigationMode:(int)navigation;   // 0 游戏态 1 导航态 2 导航态且死亡弹窗开着（不给手柄圆钮） | 0 game mode, 1 navigation mode, 2 navigation mode with the death popup open (no round controller buttons)
 - (void)hudBlocked:(int)n;
+- (void)panelDpad:(BOOL)enabled;
 - (void)frontendMode:(BOOL)fe;
 - (void)padMode:(BOOL)pad;
 - (void)restartCover:(int)mode;
@@ -75,6 +76,7 @@ static BOOL touch_control_log_enabled(void) {
 - (void)refreshPortalBinding;
 @end
 static __weak DmMetalView *g_touch_view;
+static _Atomic int g_touch_panel_dpad;
 // 真全屏（屏幕比 16:9 窄，iPad 4:3）：3D 铺满整窗，游戏视图（界面、自绘控件、界面触点）是贴底的一块 16:9，见 front_ios_view。
 // 世界那一侧（点怪 / 点箱子 / 单位投影）按整窗算：world_rect = 整窗在游戏视图坐标里的矩形；不是真全屏时就是游戏视图自己。
 // True fullscreen (screen narrower than 16:9, iPad 4:3): 3D fills the whole window, and the game view (UI, custom-drawn widgets, UI touch points) is a bottom-anchored 16:9 block, see front_ios_view.
@@ -148,6 +150,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     _rsCover=[[DmSwallowView alloc] initWithFrame:self.bounds]; _rsCover.backgroundColor=UIColor.blackColor; _rsCover.hidden=YES; _rsCover.userInteractionEnabled=YES;   // 开的时候挂到窗口上（restartCover） | Attached to the window when turned on (restartCover)
     { extern void (*g_dm_restart_cover_hook)(int); g_dm_restart_cover_hook=restart_cover_hook; }
     _navigation=0; [self navigationMode:atomic_load(&g_touch_navigation)];
+    [self panelDpad:atomic_load(&g_touch_panel_dpad)];
     return self;
 }
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
@@ -175,8 +178,12 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
 - (void)hudBlocked:(int)n { _overlay.hudBlocked=n>0; _overlay.dialogOnly=n<0; dm_tc_set_joy_block(&_controls,n<0); [_overlay setNeedsDisplay]; }   // 只开着讲话文字框 / 对话菜单：点底座那一下不起摇杆（只关它，人不走） | only the speech text box / dialogue menu is open: a tap on the base starts no stick (it only closes it, the character does not move)
 // 前端页面（主菜单 / 选角 / 建角 / 读取画面，即不在局内）：不显示摇杆与技能圆钮，触点直接当原生点击交给游戏界面（dm_ui_touch → 鼠标消息，dm_cursor.c）
 // Front-end pages (main menu / character select / character creation / loading screen, i.e. not in a run): no stick or round skill buttons shown; touch points are given straight to the game UI as native clicks (dm_ui_touch → mouse messages, dm_cursor.c)
-- (void)padMode:(BOOL)pad { _padMode=pad; _overlay.hidden=_feMode || pad; _info.hidden=_feMode; if(pad) { _tipUntil=-2; dm_tc_cancel_all(&_controls); [self pushFrom:"padmode" phase:"none"]; } }   // 手柄模式藏触屏控件层（dm_gamepad.m 回调） | Controller mode hides the touch controls layer (dm_gamepad.m callback)
+- (void)padMode:(BOOL)pad { _padMode=pad; _overlay.hidden=_feMode || pad; _info.hidden=_feMode; if(pad) { _tipUntil=-2; dm_tc_cancel_all(&_controls); [self pushFrom:"padmode" phase:"none"]; } [self panelDpad:atomic_load(&g_touch_panel_dpad)]; }   // 手柄模式藏触屏控件层（dm_gamepad.m 回调） | Controller mode hides the touch controls layer (dm_gamepad.m callback)
 - (void)frontendMode:(BOOL)fe { _feMode=fe; _overlay.hidden=fe || _padMode; _info.hidden=fe; if(fe) { _pendEnd=nil; _finalAsked=NO; for(int i_=0;i_<16;i_++) _slot[i_]=nil; dm_tc_cancel_all(&_controls); [self pushFrom:"frontend" phase:"none"]; } }
+- (void)panelDpad:(BOOL)enabled {
+    dm_tc_set_panel_dpad(&_controls,enabled && !_feMode && !_padMode);
+    [self pushFrom:"panel_dpad" phase:"none"];
+}
 - (void)navigationMode:(int)n {
     if (_navigation==n) return;
     dm_tc_set_navigation_mode(&_controls,n); _navigation=n; atomic_store(&g_nav_pub,n);   // 内部按非零归一 | Internally normalized to non-zero
@@ -466,6 +473,11 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     // The tooltip cannot be closed, so the approach is the same as binding mode: when the time is up, park the cursor at the left edge of the screen (outside the panel). Do nothing while holding an item, in binding mode, or while keys are still being delivered.
     // Panel just opened and not tapped yet: the game puts the controller cursor on the belt by default, and with a multi-row belt the belt stays expanded over the ring slot, so tapping the ring hits a potion and a double tap drinks it -- park the cursor away at the moment the panel opens too
     if(!_controls.navigation_mode || _padMode) _tipUntil=-2;   // 手柄模式：光标归原版手柄管，不发停靠请求（停靠请求一直有效，物品栏里十字键 / 摇杆挪不动光标） | Controller mode: the cursor belongs to the original controller handling, so no park request is sent (a park request stays in effect indefinitely, and the D-pad / stick could not move the cursor in the inventory)
+    else if(dm_tc_dpad_active(&_controls)) {
+        /* 方向键交给原版选格；清除之前点按 / 自动停靠留下的固定光标。
+           Let the game navigate slots; release cursor pinning left by taps or tooltip parking. */
+        _tipUntil=-1; _controls.pointer_valid=0; dm_cursor_clear();
+    }
     else if(_controls.pointer_slot>=0) _tipUntil=-1;   // 手指按着：不收（松手时重新计时） | Finger down: do not close (timing restarts on release)
     else if(_tipUntil==-2) { if(dm_ui_free_cursor()) _tipUntil=now+0.3; }   // 只在有自由光标的页停（暂停菜单 / 主菜单这类不动：冒烟玩家路径红） | Park only on pages with a free cursor (pause menu / main menu and the like stay put: smoke test player path fails)
     else if(_tipUntil>0 && now>=_tipUntil && !_controls.holding && !dm_ui_bind_active() && !dm_ui_touch_active() && !_controls.pulse_button && !dm_tc_pulse_pending(&_controls) && !dm_cursor_pending()) {   // dm_ui_touch_active：这一下点击宿主还没处理完（点绑定框格子要等它处理了才进绑定态）——不等的话光标先被挪走，游戏的绑定框就不认随后的键 | dm_ui_touch_active: the host has not finished handling this click (tapping a binding box cell enters binding mode only after it is handled) -- without waiting, the cursor is moved away first and the game's binding box does not accept the following key
@@ -523,7 +535,7 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
             if(!_navigation && !_mapBackTouch && _controls.finger[i].target==DM_TC_NONE && dm_ui_map_is_full()) { _mapBackTouch=t; _mapP0=p; _mapT0=CACurrentMediaTime(); }   // 全屏地图开着、这根手指没落在任何键和摇杆区上：松手时若是点按就回小地图 | Fullscreen map open and this finger landed on no button and no stick area: if it turns out to be a tap on release, return to the minimap
             // 功能页里的指针手指：问宿主这点是不是物品区（游戏主线程下一帧作答，松手时取）
             // Pointer finger in a function page: ask the host whether this point is an item area (the game main thread answers on the next frame; fetched on release)
-            if(_controls.navigation_mode && _controls.pointer_slot==i && self.bounds.size.width>0) _itemSeq=dm_ui_item_query((float)(p.x/self.bounds.size.width),(float)(p.y/self.bounds.size.height)); _itemAsked=YES; _itemKind=-1;
+            if(_controls.navigation_mode && _controls.pointer_slot==i && self.bounds.size.width>0) { _itemSeq=dm_ui_item_query((float)(p.x/self.bounds.size.width),(float)(p.y/self.bounds.size.height)); _itemAsked=YES; _itemKind=-1; }
             break;
         }
         [self recordTouch:t slot:slot phase:"began"];
@@ -708,6 +720,10 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         if([name isEqualToString:@"joy"]) base=CGPointMake(_controls.layout.joy_x,_controls.layout.joy_y);
         else if([name isEqualToString:@"swap"]) base=CGPointMake(_controls.layout.swap.x,_controls.layout.swap.y);
         else if(i!=NSNotFound) base=CGPointMake(_controls.layout.target[i].x,_controls.layout.target[i].y);
+        else if([@[@"dpad_up",@"dpad_down",@"dpad_left",@"dpad_right"] containsObject:name]) {
+            NSUInteger d=[@[@"dpad_up",@"dpad_down",@"dpad_left",@"dpad_right"] indexOfObject:name];
+            base=CGPointMake(_controls.layout.dpad[d].x,_controls.layout.dpad[d].y);
+        }
         else if([name isEqualToString:@"mmname"] || [name isEqualToString:@"mmbody"]) { CGRect wh,tp;
             if([self minimapRect:&wh tap:&tp]) { CGRect q=[name isEqualToString:@"mmname"]?tp:wh; base=CGPointMake(CGRectGetMidX(q),CGRectGetMidY(q));
                 LOG("[script] 小地图：矩形 x %.0f–%.0f y %.0f–%.0f 点，点击区 y %.0f–%.0f（高 %.0f 点）；%s = (%.0f,%.0f)",wh.origin.x,CGRectGetMaxX(wh),wh.origin.y,CGRectGetMaxY(wh),tp.origin.y,CGRectGetMaxY(tp),tp.size.height,name.UTF8String,base.x,base.y); }
@@ -827,7 +843,12 @@ static void touch_ui_message(const char *cat,const char *act,const char *arg) {
     // Test: with DM_TOUCH_SCRIPT_START=menu the touch script times from when the main menu appears (default: from first entering a run); used by player-path cases on front-end pages
     if(getenv("DM_TOUCH_SCRIPT_START") && !strcmp(cat,"PanelManager") && !strcmp(act,"OpenPanel") && !strcmp(arg,"MainMenuButtonRibbon")) dispatch_async(dispatch_get_main_queue(),^{ touch_script_start(); });
     int nmode=dm_tc_panel_mode(mode,&scene,atomic_load(&g_hud_blocked));   // 3 = 只开着 NPC 对话菜单（面板栈读数 -1）；菜单上又开了雇佣列表这类不在名单里的页就不算（那时底栏十字不该露出来） | 3 = only the NPC dialog menu is open (panel stack reading -1); if a page not on the list such as the hire list is opened on top of the menu, it does not count (the bottom bar cross should not show then)
-    if(atomic_exchange(&g_touch_navigation,nmode)!=nmode) dispatch_async(dispatch_get_main_queue(),^{ [g_touch_view navigationMode:nmode]; });
+    int dpad=dm_tc_scene_panel_dpad(&scene);
+    int navChanged=atomic_exchange(&g_touch_navigation,nmode)!=nmode;
+    int dpadChanged=atomic_exchange(&g_touch_panel_dpad,dpad)!=dpad;
+    if(navChanged || dpadChanged) dispatch_async(dispatch_get_main_queue(),^{
+        [g_touch_view navigationMode:nmode]; [g_touch_view panelDpad:dpad];
+    });
     dm_uiscreen_set_panel(nmode==1);   // iPad 真全屏：面板模式下界面移到正中；没开真全屏时宿主不动 | iPad true fullscreen: in panel mode the UI moves to the center; without true fullscreen the host does nothing
 }
 

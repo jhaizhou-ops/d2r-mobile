@@ -101,6 +101,35 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->joy_y = l->height - 115*k;
     l->joy_zone_r = l->width*0.40f; l->joy_zone_t = l->height*0.45f;
     l->joy_min_x = l->joy_radius + 8*k; l->joy_max_y = l->height - l->joy_radius - 8*k;
+    /* 固定在左侧安全区内；四个独立热区，中心留空，不抢物品区的触摸。
+       Fixed inside the left safe area, with four separate hit regions and a neutral center. */
+    float dk = fmaxf(1.0f, k), cx = g_safe_l + 68*dk, cy = l->joy_y;
+    const float ddx[4] = {0,0,-44,44}, ddy[4] = {-44,44,0,0};
+    const uint64_t db[4] = {DM_BTN_UP,DM_BTN_DOWN,DM_BTN_LEFT,DM_BTN_RIGHT};
+    for(int i=0;i<4;i++) l->dpad[i]=(dm_tc_target){cx+ddx[i]*dk,cy+ddy[i]*dk,22*dk,db[i]};
+}
+
+int dm_tc_dpad_hit(const dm_tc_layout *l, float x, float y) {
+    if(!isfinite(x) || !isfinite(y)) return -1;
+    for(int i=0;i<4;i++) if(hypotf(x-l->dpad[i].x,y-l->dpad[i].y)<=l->dpad[i].r) return i;
+    return -1;
+}
+int dm_tc_dpad_active(const dm_tc_state *s) {
+    if(!s->panel_dpad || !s->navigation_mode || s->pointer_slot>=0 || s->holding ||
+       s->pointer_pulse_active || s->pointer_pulse_pending || (s->pulse_button && !s->panel_dpad_pulse)) return 0;
+    for(int i=0;i<DM_TC_MAX_TOUCH;i++)
+        if(s->finger[i].active && s->finger[i].target==DM_TC_DPAD && !s->finger[i].aim_cancelled) return 1;
+    return s->panel_dpad_pulse;
+}
+static uint64_t dpad_buttons(const dm_tc_state *s) {
+    if(!dm_tc_dpad_active(s)) return 0;
+    for(int i=0;i<DM_TC_MAX_TOUCH;i++) {
+        const dm_tc_finger *f=&s->finger[i];
+        if(!f->active || f->target!=DM_TC_DPAD || f->aim_cancelled) continue;
+        int d=dm_tc_dpad_hit(&s->layout,f->x,f->y);
+        if(d>=0) return s->layout.dpad[d].button;
+    }
+    return 0;
 }
 
 int dm_tc_hit(const dm_tc_layout *l, float x, float y) {
@@ -161,7 +190,7 @@ static void update_aim(dm_tc_state *s) {
 }
 
 static void update(dm_tc_state *s) {
-    s->buttons = 0;
+    s->buttons = dpad_buttons(s);
     for (int i = 0; i < DM_TC_MAX_TOUCH; ++i) {
         dm_tc_finger *f = &s->finger[i];
         if (f->active && !f->aim_cancelled && f->target >= 0 && f->target < DM_TC_COUNT) {
@@ -333,6 +362,7 @@ void dm_tc_cancel_all(dm_tc_state *s) {
     s->aim_move_sequence = 0;
     s->map_cancel_active = 0;
     s->pulse_button = 0; s->pulse_rx = s->pulse_ry = 0;
+    s->panel_dpad_pulse = 0;
     s->belt_q = 0; s->belt_gap_cell = 0;   /* 排着的、等着发的喝药一起作废 | queued and pending drinks are voided as well */   /* 等着判单双击的腰带格、等着发的喂雇佣兵一起作废 | The belt cell waiting for single/double tap decision and the pending mercenary feed are voided together */
     s->defer_button = 0;   /* 等着补发的那下技能也作废：原先取消后 0.2 秒照样放出来 | The skill press waiting for a make-up send is voided as well: previously it was still cast 0.2 seconds after the cancel */
     s->pointer_slot = DM_TC_NONE;
@@ -347,6 +377,7 @@ int dm_tc_pulse_end(dm_tc_state *s, uint64_t epoch) {
     int ended_pointer = s->pointer_pulse_active;
     if (s->defer_button && s->defer_at_s < s->last_time_s + DM_TC_ZL_LEAD_S) s->defer_at_s = s->last_time_s + DM_TC_ZL_LEAD_S;   /* 等着补发的技能：从这一刻起 ZL 才能领先（见 dm_tc_tick） | Skill waiting for a make-up send: ZL can start leading only from this moment (see dm_tc_tick) */
     s->pulse_button = 0; s->pulse_rx = s->pulse_ry = 0; s->pulse_hold_s = 0;
+    s->panel_dpad_pulse = 0;
     s->pointer_pulse_active = 0;
     if (ended_pointer == 1) {
         s->pointer_pickup_done = 1;
@@ -396,6 +427,16 @@ void dm_tc_set_navigation_mode(dm_tc_state *s, int navigation_mode) {
     if (navigation_mode == s->navigation_mode) return;
     dm_tc_cancel_all(s);
     s->navigation_mode = navigation_mode;
+    if(!navigation_mode) s->panel_dpad=0;
+}
+void dm_tc_set_panel_dpad(dm_tc_state *s, int enabled) {
+    enabled=enabled && s->navigation_mode;
+    if(s->panel_dpad==enabled) return;
+    s->panel_dpad=enabled;
+    for(int i=0;i<DM_TC_MAX_TOUCH;i++) if(s->finger[i].target==DM_TC_DPAD)
+        s->finger[i]=(dm_tc_finger){.target=DM_TC_NONE};
+    if(s->panel_dpad_pulse) { s->pulse_button=0; s->panel_dpad_pulse=0; }
+    update(s);
 }
 
 /* 系统取消了这根手指（通知横幅、系统手势）：不当松手——不补脉冲、不点世界、不点界面；只把它按着的键、摇杆、光标放掉 | The system cancelled this finger (notification banner, system gesture): do not treat it as a release -- no make-up pulse, no world tap, no UI click; only let go of the keys, stick and cursor it was holding */
@@ -462,6 +503,12 @@ void dm_tc_begin_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
     if (slot < 0 || slot >= DM_TC_MAX_TOUCH || s->finger[slot].active || !isfinite(x) || !isfinite(y)) return;
     s->last_time_s = now_s;
     dm_tc_finger *f = &s->finger[slot];
+    if(s->panel_dpad && s->navigation_mode && dm_tc_dpad_hit(&s->layout,x,y)>=0) {
+        *f=(dm_tc_finger){.active=1,.target=DM_TC_DPAD,.x=x,.y=y,.start_time_s=now_s,
+                          .aim_cancelled=s->pointer_slot>=0 || s->holding || s->pointer_pulse_active};
+        if(!f->aim_cancelled) s->pointer_valid=0;
+        update(s); return;
+    }
     if (!s->navigation_mode) {   /* 难度：点第 0 格开 / 收选择条；展开时点某格 = 选档并收起，点别处只收起、照常处理 | Difficulty: tapping cell 0 opens / collapses the selector bar; when expanded, tapping a cell = select that level and collapse; tapping elsewhere only collapses and is then handled as usual */
         const dm_tc_target *d = &s->layout.diff;
         int on_diff = d->r > 0 && hypotf(x-d->x, y-d->y) <= d->r, pick = -1;
@@ -508,6 +555,10 @@ void dm_tc_begin_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
                            .start_time_s=now_s};
     /* 禁用圆仍阻止落入左摇杆区，防止隐藏回城触点变成移动。 | A disabled circle still blocks falling through into the left stick area, preventing a hidden town-portal touch point from turning into movement. */
     if (s->navigation_mode && hit == DM_TC_NONE && s->pointer_slot == DM_TC_NONE) {
+        /* 新的物品触点优先；按着方向键的旧手指须重新落下才恢复，避免松拖放时方向和确认一起发。
+           A new item touch wins; held D-pad fingers must restart, avoiding direction plus confirm at drop. */
+        for(int i=0;i<DM_TC_MAX_TOUCH;i++) if(s->finger[i].target==DM_TC_DPAD) s->finger[i].aim_cancelled=1;
+        if(s->panel_dpad_pulse) { s->pulse_button=0; s->panel_dpad_pulse=0; }
         s->pointer_slot = slot;
         s->pointer_item = 0;
         /* 鼠标点击模式下，手柄光标只跟「落在物品区的手指」走（前端答出命中后调 dm_tc_pointer_item）：
@@ -572,6 +623,18 @@ void dm_tc_end_at(dm_tc_state *s, int slot, double now_s) {
         dm_tc_cancel_portal(s);return;
     }
     dm_tc_finger done = s->finger[slot];
+    if(done.active && done.target==DM_TC_DPAD) {
+        uint64_t b=dpad_buttons(s);
+        int direction=dm_tc_dpad_hit(&s->layout,done.x,done.y);
+        s->finger[slot]=(dm_tc_finger){.target=DM_TC_NONE};
+        /* 短点也等游戏取走按键；长按的连移由原版方向键重复处理。
+           Deliver even short taps through the sampled pulse; the game handles held-key repeat. */
+        if(b && direction>=0 && b==s->layout.dpad[direction].button && !dpad_buttons(s) &&
+           !done.aim_cancelled && !s->pulse_button && now_s-done.start_time_s<0.12) {
+            s->pulse_button=b; s->pulse_hold_s=0; s->panel_dpad_pulse=1; ++s->pulse_epoch;
+        }
+        update(s); return;
+    }
     if (done.target==DM_TC_SWAP) {
         s->finger[slot]=(dm_tc_finger){.target=DM_TC_NONE};
         if (!s->navigation_mode && !done.aim_cancelled && dm_tc_hit(&s->layout,done.x,done.y)==DM_TC_SWAP)
@@ -713,7 +776,7 @@ void dm_tc_tick(dm_tc_state *s, double now_s) {
 }
 
 int dm_tc_navigation(dm_tc_scene *s, const char *cat, const char *act, const char *arg) {
-    static const char *names[]={"PlayerInventoryExpansionLayout","SkillsTreePanel","PauseLayout","PauseLayoutGarden","CharacterStatsPanel","QuestLogPanelExpansion","BankExpansionLayout","HoradricCubeLayout","WaypointsPanelExpansion","NpcDialogPanel","NpcTradePanel","ButtonBindingModal","SkillSelect","YouDiedModal"};
+    static const char *names[]={"PlayerInventoryExpansionLayout","SkillsTreePanel","PauseLayout","PauseLayoutGarden","CharacterStatsPanel","QuestLogPanelExpansion","BankExpansionLayout","HoradricCubeLayout","WaypointsPanelExpansion","NpcDialogPanel","NpcTradePanel","ButtonBindingModal","SkillSelect","YouDiedModal","VendorPanelLayout"};
     if(!strcmp(cat,"FrontEndNavigation")&&!strcmp(act,"ToFrontEnd")) { s->game=0;s->panels=0; }
     if(!strcmp(cat,"PanelManager")) {
         if(!strcmp(arg,"LoadScreenPanel")&&!strcmp(act,"OpenPanel"))s->game=0;
@@ -730,4 +793,10 @@ int dm_tc_navigation(dm_tc_scene *s, const char *cat, const char *act, const cha
 /* 死亡弹窗开着：也算导航态（触点走界面点击，能点到「继续」），但五个手柄圆钮不给——死后点技能钮位置会触发复活，容易误触 | Death popup open: also counts as navigation state (touch points go through UI clicks, so 「继续」(Continue) can be tapped), but the five controller round buttons are not offered -- after death a tap at a skill button position triggers resurrection, which is easy to hit by mistake */
 int dm_tc_scene_dead(void) { return atomic_load(&g_dead_modal); }
 int dm_tc_scene_dialog_only(const dm_tc_scene *s) { return s->game && s->panels == (1ull << 9); }   /* 面板表第 9 项 = NpcDialogPanel（见 dm_tc_navigation 的 names） | Entry 9 of the panel table = NpcDialogPanel (see names in dm_tc_navigation) */
+int dm_tc_scene_panel_dpad(const dm_tc_scene *s) {
+    /* 背包 / 商店可叠着 NPC 对话；暂停、技能选择、死亡等其他已登记面板均让开。
+       Inventory/vendor may coexist with NPC dialogue; yield to other registered panels. */
+    uint64_t item=(1ull<<0)|(1ull<<10)|(1ull<<14), allowed=item|(1ull<<9);
+    return s->game && (s->panels&item) && !(s->panels&~allowed);
+}
 

@@ -1,7 +1,7 @@
 DM_ROOT ?= $(HOME)/dm-work
 CC ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -pedantic -O2
-TARGET = t_touch_controls
+TARGET = t_touch_controls t_panel_dpad
 METAL_CACHE_TARGET = t_metal_cache_guard
 BINDING_TARGETS = t_native_binding t_game_bridge t_binding_freshness t_portal_sequence t_binding_group t_native_hud_identity t_native_hud_bridge
 BINDING_FIXTURES = fixtures/native_binding/mapping.bin fixtures/native_binding/bindings.bin
@@ -13,8 +13,10 @@ fixture_test = $(if $(HAVE_BINDING_FIXTURES),./$(1) $(BINDING_FIXTURES),@echo "è
 .PHONY: all run test clean
 all: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL_CACHE_TARGET)
 run: test
-$(TARGET): t_touch_controls.c $(wildcard ../Sources/dm_touch_controls.[ch]) ../../host/dm_input.h
+t_touch_controls: t_touch_controls.c $(wildcard ../Sources/dm_touch_controls.[ch]) ../../host/dm_input.h
 	$(CC) $(CFLAGS) -I../Sources t_touch_controls.c ../Sources/dm_touch_controls.c -lm -o $@
+t_panel_dpad: t_panel_dpad.c ../Sources/dm_touch_controls.c ../Sources/dm_touch_controls.h
+	$(CC) $(CFLAGS) -I../Sources t_panel_dpad.c ../Sources/dm_touch_controls.c -lm -o $@
 t_native_binding: t_native_binding.c ../Sources/dm_touch_game_state.c ../Sources/dm_touch_game_state.h ../Sources/dm_touch_controls.c ../Sources/dm_touch_controls.h
 	$(CC) $(CFLAGS) -I../Sources t_native_binding.c ../Sources/dm_touch_game_state.c ../Sources/dm_touch_controls.c -lm -o $@
 t_game_bridge: t_game_bridge.c ../Sources/dm_touch_game_bridge.c ../Sources/dm_touch_game_identity.c ../Sources/dm_touch_game_identity.h ../Sources/dm_touch_game_state.c ../Sources/dm_touch_game_state.h ../../host/dm.h
@@ -44,7 +46,8 @@ t_metal_cache_guard: t_metal_cache_guard.c ../Sources/dm_metal_cache_guard.c ../
 	$(CC) $(CFLAGS) -I../Sources t_metal_cache_guard.c ../Sources/dm_metal_cache_guard.c -o $@
 test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL_CACHE_TARGET)
 	./$(METAL_CACHE_TARGET)
-	./$(TARGET)
+	./t_touch_controls
+	./t_panel_dpad
 	./t_skill_aim
 	./t_joy_travel
 	./t_native_art

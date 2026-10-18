@@ -301,7 +301,23 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
                        // 只开着 NPC 对话菜单 / 说话框时（设计上底栏照常显示）UIKit 底栏不画，露出游戏层那份：没有数值和经验条、难度格空、十字位写着「功能」
                        // When only the NPC dialog menu / speech box is open (by design the bottom bar stays visible), the UIKit bottom bar is not drawn and the game-layer copy shows through: no values or experience bar, the difficulty cell empty, and "功能" (Functions) written in the cross slot
     if (self.hud.valid && self.hud.dead) return;   // 死亡画面：右侧圆钮已由掩码收起，左侧摇杆圈也不画（截图：死后摇杆圈还在） | death screen: the round buttons on the right are already hidden by the mask, and the stick ring on the left is not drawn either (screenshot: the stick ring was still there after death)
-    if (s->navigation_mode) return;   // 面板开着（与起摇杆同一个判定：dm_touch_controls.c 起摇杆的条件带 !navigation_mode）：摇杆起不来，静止淡影只会压在面板上（iPad 上双面板占满整宽）——不画 | a panel is open (the same check as starting the stick: the stick-start condition in dm_touch_controls.c includes !navigation_mode): the stick cannot start, and the idle faint shadow would only sit on top of the panel (on iPad the dual panels fill the whole width) - not drawn
+    if (s->navigation_mode) {
+        if(s->panel_dpad) for(int i=0;i<4;i++) {
+            const dm_tc_target *t=&l->dpad[i];
+            BOOL held=(s->buttons&t->button)!=0;
+            [self drawButton:CGRectMake(t->x-t->r,t->y-t->r,2*t->r,2*t->r) held:held empty:NO primary:NO];
+            /* 箭头直接画几何图形，不依赖新增图片或屏上文字。
+               Draw geometric arrows without new images or on-screen text. */
+            CGFloat dx=i==2?-1:i==3?1:0, dy=i==0?-1:i==1?1:0, r=t->r*.43;
+            CGContextSetRGBFillColor(c,1,.92,.72,held?1:.88);
+            CGContextBeginPath(c);
+            CGContextMoveToPoint(c,t->x+dx*r,t->y+dy*r);
+            CGContextAddLineToPoint(c,t->x-dx*r*.65-dy*r*.8,t->y-dy*r*.65+dx*r*.8);
+            CGContextAddLineToPoint(c,t->x-dx*r*.65+dy*r*.8,t->y-dy*r*.65-dx*r*.8);
+            CGContextClosePath(c); CGContextFillPath(c);
+        }
+        return;
+    }
     BOOL moving = s->joy_slot >= 0;
     CGPoint o = moving ? CGPointMake(s->joy_origin_x,s->joy_origin_y) : CGPointMake(l->joy_x,l->joy_y);
     CGFloat radius=l->joy_radius;
@@ -334,6 +350,12 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
         [a addObject:entry];
     }
     [a addObject:@{@"id":@"swap",@"rect_pt":@[@(s->layout.swap.x-s->layout.swap.r),@(s->layout.swap.y-s->layout.swap.r),@(s->layout.swap.r*2),@(s->layout.swap.r*2)],@"skill_set":@(s->skill_set),@"visible":@(!self.navigationMode)}];
+    NSArray *directions=@[@"dpad_up",@"dpad_down",@"dpad_left",@"dpad_right"];
+    for(int i=0;i<4;i++) {
+        const dm_tc_target *t=&s->layout.dpad[i];
+        [a addObject:@{@"id":directions[i],@"visible":@(s->panel_dpad && s->navigation_mode),
+                      @"rect_pt":@[@(t->x-t->r),@(t->y-t->r),@(2*t->r),@(2*t->r)],@"npad_button":@(t->button)}];
+    }
     BOOL moving=s->joy_slot>=0; CGFloat k=s->layout.joy_radius/60;
     CGFloat jx=moving?s->joy_origin_x:s->layout.joy_x,jy=moving?s->joy_origin_y:s->layout.joy_y,r=s->layout.joy_radius;
     CGFloat tx=jx+s->lx/32767.0*r,ty=jy-s->ly/32767.0*r;
