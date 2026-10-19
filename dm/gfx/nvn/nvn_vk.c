@@ -217,7 +217,7 @@ static struct {
     VkInstance instance; VkPhysicalDevice physical; VkDevice device; VkQueue queue; uint32_t family; VkSampler fetch_sampler;
     VkPhysicalDeviceMemoryProperties memory; VkPhysicalDeviceProperties properties;
     VkPipelineCache pipeline_cache;
-    VkSubmission submission_slot,submission_slot2;VkSubmission *current_submission;VkSemaphore swap_finished[16];int async_enabled,completing,async_drain_after_submit;uint64_t recording_epoch;
+    VkSubmission submission_slot_ring[2],submission_slot2;VkSubmission *current_submission;int slot_ring_index,slot_ring_enabled;VkSemaphore swap_finished[16];int async_enabled,completing,async_drain_after_submit;uint64_t recording_epoch;
     VBuffer support,zero; VPool pools[LIMIT_POOLS]; int npool;
     PoolUpload pool_uploads[UPLOAD_BUCKETS][UPLOAD_WAYS];uint64_t upload_age;
     int disable_dirty_uploads,enable_writeback_prepare,enable_writeback_coalesce,event_trace;
@@ -591,7 +591,8 @@ static void backend_init(void) {
     {const char *prepare=getenv("DM_WRITEBACK_PREPARE");G.enable_writeback_prepare=prepare&&atoi(prepare)!=0;}
     {const char *coalesce=getenv("DM_WRITEBACK_COALESCE");G.enable_writeback_coalesce=coalesce&&atoi(coalesce)!=0;}
     G.event_trace=getenv("DM_EVENT_TRACE")!=NULL;
-    G.current_submission=&G.submission_slot;
+    G.current_submission=&G.submission_slot_ring[0];
+    {const char *e=getenv("DM_SUB_RING");G.slot_ring_enabled=!(e&&!strcmp(e,"0"));}
     G.control_cache=calloc(CONTROL_CACHE,sizeof(*G.control_cache));
     if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
@@ -599,8 +600,7 @@ static void backend_init(void) {
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
      fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}
-    VkCommandPoolCreateInfo ci={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.queueFamilyIndex=G.family,
-       .flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT}; CHECK(vkCreateCommandPool(G.device,&ci,NULL,&S.command_pool));CHECK(vkCreateCommandPool(G.device,&ci,NULL,&G.submission_slot2.command_pool));
+    /* 命令池改由 submission_pools_create 按上下文创建。 | Command pools are created per context in submission_pools_create. */
     G.support=buffer_make(1392,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT); G.zero=buffer_make(65536,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     for(int i=0;i<73;i++) { float one=1; memcpy(G.support.map+192+16*i,&one,4); }
     G.state.mask.mask=UINT32_MAX; G.state.polygon.mode=NVN_POLYGON_MODE_FILL;
@@ -962,6 +962,13 @@ static Pso pso_remember(const PsoKey *key,uint64_t hash,Pso pso) {
     return pso;
 }
 static void submission_pools_create(VkSubmission *sub) {
+    /* 命令池按上下文创建：双缓冲主槽的第二个槽位原来没有池（init 只给槽位 0/出图槽建过），
+       vkAllocateCommandBuffers 会拿 NULL 池直接段错误。 */
+    /* The command pool belongs to the context. Ring slot 1 used to have none (init created pools
+       only for slot 0 and the present slot), so vkAllocateCommandBuffers dereferenced NULL. */
+    if(!sub->command_pool){VkCommandPoolCreateInfo pc={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .queueFamilyIndex=G.family,.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT};
+        CHECK(vkCreateCommandPool(G.device,&pc,NULL,&sub->command_pool));}
     VkCommandBufferAllocateInfo a={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.commandPool=sub->command_pool,
         .level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};CHECK(vkAllocateCommandBuffers(G.device,&a,&sub->command));sub->command_primary=sub->command;sub->chunk_cb[0]=sub->command;sub->chunk_alloc=1;
     VkQueryPoolCreateInfo q={.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,.queryType=VK_QUERY_TYPE_OCCLUSION,.queryCount=LIMIT_WRITES};
@@ -1102,7 +1109,7 @@ static void sub_begin_ctx(VkSubmission *ctx) {
         uint64_t d=dm_android_nvn_clock_ns()-w0;G.profile_wait_ns+=d;
         /* 分别统计主上下文与出图上下文的等待：决定流水化哪一个。 */
         /* Count the wait per context (main vs present) so we know which one to pipeline. */
-        if(ctx==&G.submission_slot)G.profile_wait_slot_ns+=d; else if(ctx==&G.submission_slot2)G.profile_wait_slot2_ns+=d; else G.profile_wait_other_ns+=d; }
+        if(ctx==&G.submission_slot_ring[0]||ctx==&G.submission_slot_ring[1])G.profile_wait_slot_ns+=d; else if(ctx==&G.submission_slot2)G.profile_wait_slot2_ns+=d; else G.profile_wait_other_ns+=d; }
     G.current_submission=ctx;
     if(G.active || (S.phase!=SUBMISSION_UNUSED && S.phase!=SUBMISSION_RETIRED))die("nested/unretired submission",S.epoch);
     if(S.phase==SUBMISSION_UNUSED)submission_pools_create(&S);
@@ -1129,7 +1136,15 @@ static void sub_begin_ctx(VkSubmission *ctx) {
     if(S.pass_ts){if(!G.enable_query_reset_range){query_reset(S.pass_ts,0,1024);S.pass_reset_count=1024;}S.npt=0;S.pt_open=0;}
     G.profile_begin_cpu_ns+=dm_android_nvn_thread_cpu_ns()-begin_cpu;G.profile_begin_calls++;
 }
-void mtl_sub_begin(void) { sub_begin_ctx(&G.submission_slot); }
+/* 主提交上下文双缓冲：单槽时 sub_begin_ctx 必须等上一帧 GPU 完成 + 写回发布才能开始录制，
+ * 实测每帧白等 2.8–4.7ms（WAIT_SPLIT slot_ms）。两槽轮换后录制与上一帧尾部 GPU 工作重叠。
+ * DM_SUB_RING=0 回退单槽。 | Double-buffered main submission context: with one slot,
+ * sub_begin_ctx waited for the previous frame's GPU completion + writeback publication before
+ * recording could start (measured 2.8-4.7ms dead wait per frame, WAIT_SPLIT slot_ms). */
+void mtl_sub_begin(void) {
+    if(G.slot_ring_enabled)G.slot_ring_index^=1; else G.slot_ring_index=0;
+    sub_begin_ctx(&G.submission_slot_ring[G.slot_ring_index]);
+}
 void mtl_sub_copy(uint64_t src,uint64_t dst,uint64_t len) {
     all_barrier(); uint64_t so=0,doff=0; VPool *s=pool_read(src,len,&so),*d=pool_find(dst,len,&doff);
     if(!d || overlap(src,len,dst,len)) die("buffer copy bounds/overlap",dst);pool_materialize(d);
