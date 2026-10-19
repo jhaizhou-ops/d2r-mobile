@@ -18,10 +18,10 @@
 
 | # | 项目 | 现状（实测） | 动作 | 优先级 |
 |---|------|------------|------|--------|
-| 1 | **VkPipelineCache** | **零命中**（三处创建全传 `VK_NULL_HANDLE`） | 落盘缓存 + 预热清单 + 后台串行编译 | ★★★ 最大低垂果实 |
-| 2 | **分块带宽** | 仅 stencil 有 DONT_CARE；color/depth 全 `STORE` | 按 §2 机会点逐个打开（先低风险两项） | ★★★ |
-| 3 | **测量基建** | 有分项计时/累计计数/`@display_ms` 行；无热翻转开关、无配对统计 | §5 最小协议：热翻转 + 掉帧口径 + 配对脚本 | ★★★ 先有尺子 |
-| 4 | **翻译线程化** | 回放层已实现（真实回放链，非存根）；无翻译线程 | rebase 白拿共享层 + 两类适配（§4） | ★★ |
+| 1 | **VkPipelineCache** | **已落盘且有效**（2026-10-19 复核：`pso-cache.bin` 载入/写回，营地稳态 `pso_new` 全程不变 = 零重建；50 次慢创建 `PSO_COLD` 全在进场帧，累计 268ms） | ~~落盘缓存~~ 已完成；**后台预热清单不必做**——稳态零创建，它只优化进场那几秒，不影响 fps | ✗ 已关闭 |
+| 2 | **分块带宽** | 深度通道 store 可跳（−45% store，−23% 总流量），`diagnostics/enable-att-skip`；颜色未验证 | 深度项已完成但**默认关**（战斗/特效/过场未验证）；颜色通道风险更高 | ★★ 待试玩验证 |
+| 3 | **测量基建** | 已有 **23 种**分项（`RENDER_CPU_PROFILE`/`PHASE_CPU`/`TAIL_SPLIT`/`RP_SPLIT`/`BIND_SPLIT`/`BIND_DEEP`/`TRAFFIC`/`OP_HIST`/`PLAN_REASON`…），另加 `dm/android/nvn_platform_present.inc` 的提交HLE/取图分解/主线程让出计数 | 已超上游口径；**异常帧独立日志判断为不必做**（现有数据已能区分"活变多/每次变慢"，且根因已定） | ✓ 已关闭 |
+| 4 | **翻译线程化** | **已默认开启**（`0cf4904`：队列 + 25ms 节拍，营地 30 → 36.6fps，+22%） | ~~rebase 白拿~~ 已在本树落地；回退 `diagnostics/disable-nvn-queue` | ✓ 已关闭 |
 | 5 | **3D 比例自动降档** | 本树为**旧版**简单控制器（2 档） | rebase 拿到新版（5 档+滞回），Vulkan 接线渲染比例 | ★★ |
 | 6 | **显存池按需驻留** | 无对应物（上游改的是 Metal 层） | 在 `nvn_vk.c` 池路径做"按需绑定"（实施时定机制） | ★ |
 | 7 | **翻译/渲染微项** | — | WaitSync nop、hz_auto、p5/p50/p95 间隔日志等随 rebase 到 | 白拿 |
@@ -93,11 +93,16 @@
 
 ### 3.1 现状（实测）
 
-- **三处创建全部传 `VK_NULL_HANDLE`**：`pso_get()` → `vkCreateGraphicsPipelines` :6985；`pso_cs_get()` → `vkCreateComputePipelines` :7514；测试笔 :6612。全库无 `vkCreatePipelineCache`。
+- **已落盘（2026-10-19 复核，本节原记录过时）**：`mtl_init` 从 `DM_FRAME_DIR/pso-cache.bin`
+  载入（`vkCreatePipelineCache` :620，失败则退回空缓存 :625），退出写回。三处创建
+  （`pso_get` / `pso_cs_get` / 测试笔）**现在都传 `G.pipeline_cache`**。
+  实证有效：营地稳态 `pso_new` 全程不变 = **零重建**；50 次慢创建（`PSO_COLD`，累计 268ms）
+  全部落在进场帧 f≈7976–11715，之后一次都没有。**结论：后台预热清单不必做**——它只能优化
+  进场那几秒加载，对稳态 fps 无影响。
 - 软缓存：`g_pso2[4096]`（:6440）**线性扫描**（`pso_key()` :6448，键含 program serial / renderpass 句柄 / 全固定功能状态，不含 SPIR-V 内容）；**无淘汰**，满 4096 后新管线不再缓存；`g_pso_created` 计数、前 200 条逐条 dump（:7006-7023）。
 - 计算管线：64 槽直接映射（`serial % 64`，:7499-7505），冲突顶掉（历史上每次重建实测 6.7ms/次→3fps）。
 - 着色器：构建期已译好 SPIR-V（`DM_ROOT/shader/vk_refl.tsv` + `vk_data.bin`，:4166-4180；`DM_VK_DIR` 可覆盖）；运行时按需 `pread` + `vkCreateShaderModule` 缓存（`shader_mod()` :4300-4329）。**无运行时翻译**。
-- 预热：**Android 无**。iOS 有 `dm/gfx/nvn/pso_manifest.tsv`（397 行：181 S / 13 C / 其余 R）+ `warm_start()` 后台串行队列（nvn_mtl.m:2520、:2537），env `DM_PSO_MANIFEST` 可关——**清单文件与 Android 同目录约定，可直接当种子**。
+- 预热：**Android 无（且经复核判断不需要，见上）**。iOS 有 `dm/gfx/nvn/pso_manifest.tsv`（397 行：181 S / 13 C / 其余 R）+ `warm_start()` 后台串行队列（nvn_mtl.m:2520、:2537），env `DM_PSO_MANIFEST` 可关——**清单文件与 Android 同目录约定，可直接当种子**。
 
 ### 3.2 落地方案
 
@@ -152,9 +157,9 @@
 
 | 上游口径 | 缺口 |
 |---|---|
-| ① 同进程切换 A/B + 配对差 + 符号检验 | **无运行时热翻转**（env 进程启动只读一次）；无配对统计脚本 |
-| ② 热机稳态尾 30s | 无稳态窗口聚合 |
-| ③ 掉帧按上屏间隔 >25ms | **无掉帧计数器**（`@display_ms` 数据在，但没有"计数+结论"） |
+| ① 同进程切换 A/B + 配对差 + 符号检验 | 已有**运行时切换**：`rtpar.txt`、`rtseg.txt`、`attskip.txt`、`chunkd.txt`（每帧重读，改完即生效，无需重启）——**比 env 热翻转更省事**（2026-10-19 补）；配对统计脚本仍缺 |
+| ② 热机稳态尾 30s | 无稳态窗口聚合；且已确认存在**跨启动双稳态**（同配置 34 / 39.9fps），单次测量不可信，须交替 ≥3 轮 |
+| ③ 掉帧按上屏间隔 >25ms | `tools/pf/sf_fps.py` 已给 fps/drops/p50/p95（验收用）；内部按 60 帧窗口给 `RENDER_PROFILE`，**逐帧异常日志判断不必做** |
 | ④ 游戏内存判场景 | 已有（dm_hud），直接用 |
 | ⑤ 校验层必关 | 现状 OK（release 不带 VkLayer；`DM_VK_VAL=1` 仅诊断轮） |
 
@@ -167,6 +172,21 @@
 3. **A/B 配对脚本**：`dm/android/tools/ab_pair.sh`：同进程按固定帧数交替翻转开关 → 每对记录帧时/掉帧 → 配对差 + 符号检验 p 值（Python `scipy.stats.wilcoxon` 或手写符号检验）→ TSV 归档。
 4. **稳态窗口**：启动 ≥5 分钟且 `dm_hud` 在局（`valid && !dead`）后，只聚合**最后 30s**。
 5. **延迟闭环**：present 处补一条 `DM_LAT("present …")`，与前端的 `DM_LAT("click"/"ui_touch …")` 相减 = 手指→上屏延迟。
+
+---
+
+### 5.4 本轮（2026-10-19）补的测量纪律
+
+1. **A/B 先确认没有更早的天花板**：只开翻译队列却用默认 33.3ms 节拍测，得出「队列无收益」的
+   错误结论——节拍本身就把上限钉在 30fps。
+2. **像素对拍必须先跑噪声基线**：营地静止的同配置连拍基线是 2.6–3.1%。曾把跨场景截图
+   （相隔 22s、测试者正在走动）的 71.6% 差异误判为「画质崩坏」。
+3. **热态跨启动双稳态**：同一配置不同启动会给 34fps 或 39.9fps，单次测量不可信。
+4. **Android 提交/出图路径只认 `dm/android/nvn_platform_present.inc`**；`hle_nvn.c` 的 `#else`
+   分支在 Android 上是死代码（本会话先后三次把改动写进那里，全部无效）。
+5. **`DM_PRESENT_HZ` 要乘游戏 interval**：25ms 档得写 `80`（不是 `40`）。
+6. **`CHUNK_TIME` 的 `dur` / `gap` 是判定「GPU 算不动」还是「CPU 喂不上」的直接依据**：
+   `dur` 恒定 = GPU 工作量没变，帧时间差异全在 `gap`。
 
 ---
 
