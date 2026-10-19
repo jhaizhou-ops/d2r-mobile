@@ -302,7 +302,7 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
                        // When only the NPC dialog menu / speech box is open (by design the bottom bar stays visible), the UIKit bottom bar is not drawn and the game-layer copy shows through: no values or experience bar, the difficulty cell empty, and "功能" (Functions) written in the cross slot
     if (self.hud.valid && self.hud.dead) return;   // 死亡画面：右侧圆钮已由掩码收起，左侧摇杆圈也不画（截图：死后摇杆圈还在） | death screen: the round buttons on the right are already hidden by the mask, and the stick ring on the left is not drawn either (screenshot: the stick ring was still there after death)
     if (s->navigation_mode) {
-        if(s->panel_dpad) for(int i=0;i<4;i++) {
+        if(s->panel_dpad && l->dpad_guard[2]>0) for(int i=0;i<4;i++) {
             const dm_tc_target *t=&l->dpad[i];
             BOOL held=(s->buttons&t->button)!=0;
             [self drawButton:CGRectMake(t->x-t->r,t->y-t->r,2*t->r,2*t->r) held:held empty:NO primary:NO];
@@ -353,11 +353,11 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     NSArray *directions=@[@"dpad_up",@"dpad_down",@"dpad_left",@"dpad_right"];
     for(int i=0;i<4;i++) {
         const dm_tc_target *t=&s->layout.dpad[i];
-        [a addObject:@{@"id":directions[i],@"visible":@(s->panel_dpad && s->navigation_mode),
+        [a addObject:@{@"id":directions[i],@"visible":@(s->panel_dpad && s->navigation_mode && s->layout.dpad_guard[2]>0),
                       @"rect_pt":@[@(t->x-t->r),@(t->y-t->r),@(2*t->r),@(2*t->r)],
                       @"hit_radius_pt":@(dm_tc_dpad_hit_radius(&s->layout)),@"npad_button":@(t->button)}];
     }
-    [a addObject:@{@"id":@"panel_navigation_guard",@"visible":@(s->panel_dpad && s->navigation_mode),
+    [a addObject:@{@"id":@"panel_navigation_guard",@"visible":@(s->panel_dpad && s->navigation_mode && s->layout.dpad_guard[2]>0),
                   @"rect_pt":@[@(s->layout.dpad_guard[0]),@(s->layout.dpad_guard[1]),@(s->layout.dpad_guard[2]),@(s->layout.dpad_guard[3])]}];
     BOOL moving=s->joy_slot>=0; CGFloat k=s->layout.joy_radius/60;
     CGFloat jx=moving?s->joy_origin_x:s->layout.joy_x,jy=moving?s->joy_origin_y:s->layout.joy_y,r=s->layout.joy_radius;

@@ -101,25 +101,41 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->joy_y = l->height - 115*k;
     l->joy_zone_r = l->width*0.40f; l->joy_zone_t = l->height*0.45f;
     l->joy_min_x = l->joy_radius + 8*k; l->joy_max_y = l->height - l->joy_radius - 8*k;
-    /* 固定在左侧安全区内；44 点热区紧凑排列、互不重叠，给商店左侧货架留出空间。
-       Pack nonoverlapping 44-point targets inside the left safe area, clear of the vendor shelf. */
+    /* 商店货架随高度缩放并居中，左沿约为屏中线减 0.646 倍高度；留少量余量。
+       窄屏先左移，16:9 小屏再收窄横距、拉开纵距，仍保留 44 点圆钮且不互叠。
+       The centered vendor shelf scales with height; its left edge is about mid-screen minus 0.646 heights.
+       Leave a margin, shift left first, then narrow the horizontal spacing on small 16:9 screens,
+       increasing vertical spacing to keep the 44-point circles separate. */
     float dk = fmaxf(1.0f, k), cx = g_safe_l + 54*dk, cy = l->joy_y;
-    const float ddx[4] = {0,0,-32,32}, ddy[4] = {-32,32,0,0};
+    float room=fmaxf(0,l->width*.5f-l->height*.65f), dpx=32*dk, dpy=32*dk;
+    /* 极窄窗口放不下 44 点方向键时，保留原有直接触摸，不用覆盖商品来硬塞按钮。
+       In very narrow windows that cannot fit 44-point arrows, retain direct touch instead of covering goods. */
+    if(room<88*dk) return;
+    if(cx+58*dk>room) {
+        cx=fmaxf(54*dk,fminf(cx,room-58*dk));
+        if(room<112*dk) {
+            dpx=fmaxf(22*dk,fminf(32*dk,room*.5f-22*dk)); cx=room*.5f;
+            float diameter=44*dk;
+            dpy=fmaxf(dpy,sqrtf(fmaxf(0,diameter*diameter-dpx*dpx)));
+        }
+    }
+    const float ddx[4] = {0,0,-dpx,dpx}, ddy[4] = {-dpy,dpy,0,0};
     const uint64_t db[4] = {DM_BTN_UP,DM_BTN_DOWN,DM_BTN_LEFT,DM_BTN_RIGHT};
-    for(int i=0;i<4;i++) l->dpad[i]=(dm_tc_target){cx+ddx[i]*dk,cy+ddy[i]*dk,22*dk,db[i]};
-    /* 左、上、下留 16 点缓冲；右侧只扩 4 点，避免吞掉紧邻的商店货架。
-       Add a 16-point buffer left/above/below; only four points right to preserve vendor shelf taps. */
-    l->dpad_guard[0]=cx-70*dk; l->dpad_guard[1]=cy-70*dk;
-    l->dpad_guard[2]=128*dk; l->dpad_guard[3]=140*dk;
+    for(int i=0;i<4;i++) l->dpad[i]=(dm_tc_target){cx+ddx[i],cy+ddy[i],22*dk,db[i]};
+    /* 常规尺寸左、上、下留 16 点缓冲，右侧只扩 4 点；窄屏按可用空间裁剪。
+       Normal sizes add 16 points left/above/below and four right; clip to available space on narrow screens. */
+    l->dpad_guard[0]=fmaxf(0,cx-dpx-38*dk); l->dpad_guard[1]=fmaxf(0,cy-dpy-38*dk);
+    l->dpad_guard[2]=fmaxf(0,fminf(room,cx+dpx+26*dk)-l->dpad_guard[0]);
+    l->dpad_guard[3]=fmaxf(0,fminf(l->height,cy+dpy+38*dk)-l->dpad_guard[1]);
 }
 
 float dm_tc_dpad_hit_radius(const dm_tc_layout *l) { return l->dpad[0].r*(26.0f/22.0f); }
 int dm_tc_dpad_guard_hit(const dm_tc_layout *l, float x, float y) {
-    return isfinite(x) && isfinite(y) && x>=l->dpad_guard[0] && y>=l->dpad_guard[1] &&
+    return l->dpad_guard[2]>0 && l->dpad_guard[3]>0 && isfinite(x) && isfinite(y) && x>=l->dpad_guard[0] && y>=l->dpad_guard[1] &&
         x<=l->dpad_guard[0]+l->dpad_guard[2] && y<=l->dpad_guard[1]+l->dpad_guard[3];
 }
 int dm_tc_dpad_hit(const dm_tc_layout *l, float x, float y) {
-    if(!isfinite(x) || !isfinite(y)) return -1;
+    if(!dm_tc_dpad_guard_hit(l,x,y)) return -1;
     /* 扩大热区但不改按钮外观；交叠处取最近方向，等距线保持中立。
        Enlarge hit areas without changing artwork; overlap selects the nearest direction, ties stay neutral. */
     float radius=dm_tc_dpad_hit_radius(l), best=radius+1; int direction=-1, tied=0;
