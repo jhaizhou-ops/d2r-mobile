@@ -78,6 +78,9 @@ static uint64_t g_writes_sum, g_writes_max, g_writes_n;
 /* 每帧回放指令的 opcode 直方图：找出 36k 条记录里到底哪些指令最多。 */
 /* Per-frame replay opcode histogram: which records dominate the ~36k stream. */
 static uint64_t g_op_hist[256];
+/* 按 RT 分组统计命令流结构：0 世界(3D) / 1 全屏(UI) / 2 其它。组间切换次数是并行可行性的关键——
+ * 命令流若是连续的几大段，按组并行很容易；若频繁交错则不行。只统计，不改行为。 */
+static uint64_t g_rtgrp_ops[3],g_rtgrp_draws[3],g_rtgrp_switches;static int g_rtgrp_last=-1;
 /* 按"渲染目标类别"分组的 draw 统计：0 全屏(UI/合成) / 1 世界(3D) / 2 阴影(1024^2) / 3 其它。
    "类别"用第一个颜色附件的宽高判定；只有深度附件的按阴影/世界分。 */
 /* Draw stats grouped by render-target class: 0 full-res (UI/composite) / 1 world (3D) / 2 shadow (1024^2) / 3 other.
@@ -3491,6 +3494,14 @@ static void execute(const uint8_t *p,unsigned depth) {
         if(!command_memory_readable(&cursor,p,8))die("command memory outside pools",(long long)(uintptr_t)p);
         op_hdr h;memcpy(&h,p,sizeof(h));if(h.size<8 || h.size%8 || !command_memory_readable(&cursor,p,h.size))die("command record size",h.size);
         G.profile_command_records++;G.profile_command_bytes+=h.size;g_op_hist[h.op&255]++;
+        { int grp=2; const p_set_rt *rt=&G.state.rt;
+          if(rt->n>0&&rt->color[0]){uint32_t w=rt->color[0]->d.width,hh=rt->color[0]->d.height;
+              if(w>2000&&hh>900)grp=1; else grp=0;}
+          else if(rt->depth)grp=0;
+          g_rtgrp_ops[grp]++;
+          if(h.op==OP_DRAW||h.op==OP_DRAW_IDX)g_rtgrp_draws[grp]++;
+          if(g_rtgrp_last>=0&&g_rtgrp_last!=grp)g_rtgrp_switches++;
+          g_rtgrp_last=grp; }
         const uint8_t *a=p+8;
         switch(h.op) {
         case OP_END:return;
@@ -3795,6 +3806,11 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 if(best<0||!bestc)break; n+=snprintf(line+n,sizeof line-n," op%d=%.0f",best,(double)bestc/fr);
                 g_op_hist[best]=0; }
             fprintf(stderr,"[nvn-vulkan] RENDER_OP_HIST frame=%llu %s\n",(unsigned long long)G.present_count+1,line); }
+          { fprintf(stderr,"[nvn-vulkan] RENDER_RT_GROUPS frame=%llu world_ops=%.0f world_draws=%.0f ui_ops=%.0f ui_draws=%.0f other_ops=%.0f switches=%.0f\n",
+                (unsigned long long)G.present_count+1,(double)g_rtgrp_ops[0]/fr,(double)g_rtgrp_draws[0]/fr,
+                (double)g_rtgrp_ops[1]/fr,(double)g_rtgrp_draws[1]/fr,(double)g_rtgrp_ops[2]/fr,(double)g_rtgrp_switches/fr);
+            g_rtgrp_ops[0]=g_rtgrp_ops[1]=g_rtgrp_ops[2]=0;g_rtgrp_draws[0]=g_rtgrp_draws[1]=g_rtgrp_draws[2]=0;
+            g_rtgrp_switches=0;g_rtgrp_last=-1; }
           { uint64_t fs[3];nvn_dirty_find_stats(fs);
             fprintf(stderr,"[nvn-vulkan] RENDER_FIND_CACHE frame=%llu miss_scans=%.0f hits=%.0f steps=%.0f\n",
                 (unsigned long long)G.present_count+1,(double)fs[0]/fr,(double)fs[1]/fr,(double)fs[2]/fr); }
