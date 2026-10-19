@@ -363,7 +363,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL validation_message(VkDebugUtilsMessageSeve
     static struct {int32_t id;unsigned count;} seen[128];static unsigned count;
     unsigned i=0;while(i<count && seen[i].id!=data->messageIdNumber)i++;
     if(i==count){if(count==128)return VK_FALSE;seen[count++].id=data->messageIdNumber;}
-    if(seen[i].count++<10)fprintf(stderr,"[nvn-vulkan] VALIDATION severity=%#x draw=%llu id=%s message=%s\n",severity,(unsigned long long)G.draws,data->pMessageIdName?data->pMessageIdName:"unknown",data->pMessage);
+    /* 崩溃点附近的告警最容易有用：按 id 计数只做降噪，上限放宽到 400，并把出现次数带上。 */
+    if(seen[i].count++<400)fprintf(stderr,"[nvn-vulkan] VALIDATION severity=%#x draw=%llu id=%s n=%u message=%s\n",severity,(unsigned long long)G.draws,data->pMessageIdName?data->pMessageIdName:"unknown",seen[i].count,data->pMessage);
     return VK_FALSE;
 }
 
@@ -468,14 +469,28 @@ static void backend_init(void) {
     dm_vkCreateInstance=(PFN_vkCreateInstance)dm_vk_get(NULL,"vkCreateInstance");if(!dm_vkCreateInstance)die("Vulkan create instance unavailable",0);
     VkApplicationInfo app={.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO,.pApplicationName="D2R Android",.apiVersion=VK_API_VERSION_1_1};
     int validation=getenv("DM_VULKAN_VALIDATION")!=NULL;
+    int want_debug=getenv("DM_VK_DEBUG")!=NULL;
+    /* 本机没有 Khronos validation layer（vkCreateInstance 返回 LAYER_NOT_PRESENT），但驱动自己
+     * 会通过 VK_EXT_debug_utils 的 messenger 报 API 误用/内部错误。DM_VK_DEBUG=1 只启用扩展+
+     * messenger、不加载 layer，用来抓驱动侧报错。 | No Khronos validation layer on this device,
+     * but the driver reports API misuse/internal errors through the VK_EXT_debug_utils messenger.
+     * DM_VK_DEBUG=1 enables the extension + messenger without the layer. */
     const char *ie[]={VK_KHR_SURFACE_EXTENSION_NAME,VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
     const char *layers[]={"VK_LAYER_KHRONOS_validation"};
+    int has_debug_utils=0;
+    if(validation||want_debug){PFN_vkEnumerateInstanceExtensionProperties list=(PFN_vkEnumerateInstanceExtensionProperties)dm_vk_get(NULL,"vkEnumerateInstanceExtensionProperties");
+        if(list){uint32_t n=0;if(list(NULL,&n,NULL)==VK_SUCCESS&&n){VkExtensionProperties *p=calloc(n,sizeof(*p));
+            if(p){if(list(NULL,&n,p)==VK_SUCCESS)for(uint32_t i=0;i<n;i++)if(!strcmp(p[i].extensionName,VK_EXT_DEBUG_UTILS_EXTENSION_NAME))has_debug_utils=1;free(p);}}}}
+    int dbg=has_debug_utils&&(validation||want_debug);
     VkDebugUtilsMessengerCreateInfoEXT debug={.sType=VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
         .messageSeverity=VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT|VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
         .messageType=VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT|VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT|VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,.pfnUserCallback=validation_message};
     VkInstanceCreateInfo ii={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&app,
-        .enabledExtensionCount=validation?3u:2u,.ppEnabledExtensionNames=ie,.enabledLayerCount=validation?1u:0u,.ppEnabledLayerNames=validation?layers:NULL,.pNext=validation?&debug:NULL}; CHECK(vkCreateInstance(&ii,NULL,&G.instance));
-    if(validation){PFN_vkCreateDebugUtilsMessengerEXT create=(PFN_vkCreateDebugUtilsMessengerEXT)dm_vk_get(G.instance,"vkCreateDebugUtilsMessengerEXT");if(!create)die("validation debug messenger unavailable",0);CHECK(create(G.instance,&debug,NULL,&validation_messenger));fprintf(stderr,"[nvn-vulkan] VALIDATION_ENABLED\n");}
+        .enabledExtensionCount=dbg?3u:2u,.ppEnabledExtensionNames=ie,.enabledLayerCount=validation?1u:0u,.ppEnabledLayerNames=validation?layers:NULL,.pNext=dbg?&debug:NULL}; CHECK(vkCreateInstance(&ii,NULL,&G.instance));
+    if(dbg){PFN_vkCreateDebugUtilsMessengerEXT create=(PFN_vkCreateDebugUtilsMessengerEXT)dm_vk_get(G.instance,"vkCreateDebugUtilsMessengerEXT");
+        if(create&&create(G.instance,&debug,NULL,&validation_messenger)==VK_SUCCESS)
+            fprintf(stderr,"[nvn-vulkan] VALIDATION_ENABLED layer=%d debug_utils=%d\n",validation,has_debug_utils);
+        else fprintf(stderr,"[nvn-vulkan] VALIDATION messenger unavailable (layer=%d ext=%d)\n",validation,has_debug_utils);}
     dm_vk_resolve(G.instance);
     uint32_t n=0; CHECK(vkEnumeratePhysicalDevices(G.instance,&n,NULL)); if(!n) die("Vulkan physical device",0);
     VkPhysicalDevice *physical=calloc(n,sizeof(*physical)); if(!physical) die("allocate physical list",n);
@@ -2944,6 +2959,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     /* A zero-color pass may still run fragment discard, depth export or
      * storage side effects. Only a program with no fragment stage omits it. */
     VShader *vs=program_stage(0),*ps=program_stage_optional(1);
+
 
     { /* UI 合批前提：连续 UI draw 的 shader / 顶点格式是否一致 | UI batching prerequisite: same shader / vertex format across consecutive UI draws */
       uint32_t c0=(uint32_t)(a?a->count:idx->count);
