@@ -70,6 +70,9 @@ static unsigned g_att_passes;
 static uint64_t g_draw_hist[6], g_draw_idx_total, g_draw_n;
 /* 每帧写回区间数（pool 上传的 O(n*m) 扫描规模）。 | Writes per frame (scale of the O(n*m) scan in pool upload). */
 static uint64_t g_writes_sum, g_writes_max, g_writes_n;
+/* 每帧回放指令的 opcode 直方图：找出 36k 条记录里到底哪些指令最多。 */
+/* Per-frame replay opcode histogram: which records dominate the ~36k stream. */
+static uint64_t g_op_hist[256];
 /* 按"渲染目标类别"分组的 draw 统计：0 全屏(UI/合成) / 1 世界(3D) / 2 阴影(1024^2) / 3 其它。
    "类别"用第一个颜色附件的宽高判定；只有深度附件的按阴影/世界分。 */
 /* Draw stats grouped by render-target class: 0 full-res (UI/composite) / 1 world (3D) / 2 shadow (1024^2) / 3 other.
@@ -3337,7 +3340,7 @@ static void execute(const uint8_t *p,unsigned depth) {
     for(unsigned guard=0;guard<1000000;guard++) {
         if(!command_memory_readable(&cursor,p,8))die("command memory outside pools",(long long)(uintptr_t)p);
         op_hdr h;memcpy(&h,p,sizeof(h));if(h.size<8 || h.size%8 || !command_memory_readable(&cursor,p,h.size))die("command record size",h.size);
-        G.profile_command_records++;G.profile_command_bytes+=h.size;
+        G.profile_command_records++;G.profile_command_bytes+=h.size;g_op_hist[h.op&255]++;
         const uint8_t *a=p+8;
         switch(h.op) {
         case OP_END:return;
@@ -3636,6 +3639,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
               (g_att_load_bytes+g_att_store_bytes+g_att_clear_bytes)/1048576.0/fr, g_att_passes/fr);
           g_att_load_bytes=g_att_store_bytes=g_att_clear_bytes=g_att_skip_bytes=0; g_att_passes=0; }
         { double fr=G.profile_frames? (double)G.profile_frames:1.0;
+          { char line[512]; int n=0; n+=snprintf(line+n,sizeof line-n,"TOPOP");
+            for(int rank=0;rank<8;rank++){ int best=-1; uint64_t bestc=0;
+                for(int i=0;i<256;i++)if(g_op_hist[i]>bestc){bestc=g_op_hist[i];best=i;}
+                if(best<0||!bestc)break; n+=snprintf(line+n,sizeof line-n," op%d=%.0f",best,(double)bestc/fr);
+                g_op_hist[best]=0; }
+            fprintf(stderr,"[nvn-vulkan] RENDER_OP_HIST frame=%llu %s\n",(unsigned long long)G.present_count+1,line); }
           if(g_writes_n)fprintf(stderr,"[nvn-vulkan] RENDER_WRITES frame=%llu uplifts=%.0f avg_writes=%.1f max_writes=%llu\n",
               (unsigned long long)G.present_count+1,(double)g_writes_n/fr,(double)g_writes_sum/(double)g_writes_n, (unsigned long long)g_writes_max);
           fprintf(stderr,"[nvn-vulkan] RENDER_DRAW_HIST frame=%llu draws=%.0f verts=%.0f avg=%.1f b16=%.1f b64=%.1f b256=%.1f b1k=%.1f b4k=%.1f bbig=%.1f\n",
