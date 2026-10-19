@@ -3023,22 +3023,37 @@ static void warm_step(int budget) {
     }
 }
 
+/* 读一个清单文件并合并进 g_warm_recs（按 hash + vs/ps 内容键去重）。
+   种子里已有的不重复加，用户自学习的追加在后面。 */
+static void warm_read_file(const char *path) {
+    FILE *f=fopen(path,"rb"); if(!f)return;
+    uint32_t hdr[3]={0,0,0};
+    if(fread(hdr,sizeof hdr,1,f)!=1 || hdr[0]!=WARM_MAGIC || hdr[1]!=1 || !hdr[2] || hdr[2]>WARM_MAX){ fclose(f); return; }
+    static WarmRec tmp[WARM_MAX];
+    size_t got=fread(tmp,sizeof(WarmRec),hdr[2],f); fclose(f);
+    if(!g_warm_recs){ g_warm_recs=calloc(WARM_MAX,sizeof(*g_warm_recs)); if(!g_warm_recs)return; }
+    unsigned added=0;
+    for(size_t i=0;i<got && g_warm_nrec<WARM_MAX;i++){
+        WarmRec *r=&tmp[i]; int dup=0;
+        for(unsigned j=0;j<g_warm_nrec;j++){ WarmRec *q=&g_warm_recs[j];
+            if(q->hash==r->hash && q->has_ps==r->has_ps && !strcmp(q->vs,r->vs) && (!r->has_ps||!strcmp(q->ps,r->ps))){dup=1;break;} }
+        if(!dup){ g_warm_recs[g_warm_nrec++]=*r; added++; }
+    }
+    fprintf(stderr,"[nvn-vulkan] PSO_WARM 读入 %s：%u 条（新增 %u，累计 %u）\n",path,(unsigned)got,added,g_warm_nrec);
+}
+
 static void warm_load(void) {
     static int started; if(started)return; started=1;
     const char *e=getenv("DM_PSO_WARM");
     if(e && !strcmp(e,"off"))return;
-    if(!g_pso_cache_path[0])return;
-    char path[sizeof g_pso_cache_path]; snprintf(path,sizeof path,"%s",g_pso_cache_path);
-    char *slash=strrchr(path,'/'); if(!slash)return; snprintf(slash+1,(size_t)(sizeof path-(size_t)(slash+1-path)),"pso-vk-warm.bin");
-    FILE *f=fopen(path,"rb"); if(!f)return;
-    uint32_t hdr[3]={0,0,0};
-    if(fread(hdr,sizeof hdr,1,f)!=1 || hdr[0]!=WARM_MAGIC || hdr[1]!=1 || !hdr[2] || hdr[2]>WARM_MAX){ fclose(f); return; }
-    g_warm_recs=calloc(WARM_MAX,sizeof(*g_warm_recs));
-    if(!g_warm_recs){ fclose(f); return; }
-    size_t got=fread(g_warm_recs,sizeof(WarmRec),hdr[2],f); fclose(f);
-    if(!got)return;
-    g_warm_nrec=(unsigned)got; g_warm_done_loaded=1;
-    fprintf(stderr,"[nvn-vulkan] PSO_WARM 载入清单 %u 条（%s），渲染线程分帧预热\n",g_warm_nrec,path);
+    /* 种子（随包、与着色器同目录）+ 用户自学习（运行目录），后者追加。
+       种子可跨设备复用：重建是在本机按着色器内容键真编，不依赖生成种子时的 GPU。 */
+    if(G.shader_root[0]){ char seed[1200]; if(snprintf(seed,sizeof seed,"%s/pso_vk_manifest.bin",G.shader_root)<(int)sizeof seed) warm_read_file(seed); }
+    if(g_pso_cache_path[0]){ char path[sizeof g_pso_cache_path]; snprintf(path,sizeof path,"%s",g_pso_cache_path);
+        char *slash=strrchr(path,'/'); if(slash){ snprintf(slash+1,(size_t)(sizeof path-(size_t)(slash+1-path)),"pso-vk-warm.bin"); warm_read_file(path); } }
+    if(!g_warm_nrec)return;
+    g_warm_done_loaded=1;
+    fprintf(stderr,"[nvn-vulkan] PSO_WARM 待预热 %u 条，渲染线程分帧进行\n",g_warm_nrec);
 }
 
 /* 取用：运行时键命中预热表就直接拿走，省掉这一次 vkCreateGraphicsPipelines。 */
