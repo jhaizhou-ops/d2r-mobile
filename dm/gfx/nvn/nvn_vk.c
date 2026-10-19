@@ -138,7 +138,11 @@ typedef struct {
     BindingPlan *plan;
 } VShader;
 typedef struct { uint64_t serial,incarnation; tex_t source; VkImage image; VkDeviceMemory memory;
-    VkImageView view; VkFormat format; VkImageLayout layout; uint32_t width,height,depth,bpp; int cpu_owned; uint64_t upload_stamp,version;
+    VkImageView view; VkFormat format; VkImageLayout layout; VkImageUsageFlags usage; uint32_t width,height,depth,bpp; int cpu_owned; uint64_t upload_stamp,version;
+    /* 至多一次惰性 STORAGE 升级：旧分配随纹理保留，直到纹理销毁时两个提交槽位都已 drain。
+     * At most one lazy STORAGE promotion. Prior commands and slot caches keep the old allocation
+     * alive until texture finalization drains both slots. */
+    VkImage before_storage;VkDeviceMemory before_storage_memory;VkImageView before_storage_view;
     uint8_t *cpu_snapshot;
     VkImage sample_copy;VkDeviceMemory sample_memory;VkImageView sample_view;VkImageLayout sample_layout;
     VkImage shadow;VkDeviceMemory shadow_memory;VkImageView shadow_view;VkFormat shadow_format;VkImageLayout shadow_layout;uint64_t shadow_version;uint64_t other_version,sample_other;uint32_t dirty_levels,sc_valid,sc_level,sc_levels,sc_layer,sc_layers;
@@ -239,8 +243,8 @@ static struct {
     uint32_t last_pso_slot;int enable_pso_last;
     int disable_pso_reuse;
 
-    int disable_resource_cache;
-    uint64_t profile_view_hits,profile_view_misses,profile_framebuffer_hits,profile_framebuffer_misses;
+    int disable_resource_cache,image_usage_by_flags;
+    uint64_t image_usage_omitted,image_usage_storage,image_promotions,image_retired_live;    uint64_t profile_view_hits,profile_view_misses,profile_framebuffer_hits,profile_framebuffer_misses;
     int active,feedback_layout,shader_draw_parameters;
     ReplayState state; VkPhysicalDeviceSubgroupProperties subgroup;
     uint8_t *shader_index; size_t index_bytes; char shader_root[1024]; ANativeWindow *window;
@@ -571,6 +575,14 @@ static void backend_init(void) {
     G.read_memo_enabled=getenv("DM_DISABLE_READ_MEMO")==NULL;
     G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
     G.disable_resource_cache=getenv("DM_DISABLE_RESOURCE_CACHE")!=NULL;
+    /* 上游（dodola）默认开启，在 Adreno 642L 系统驱动上实测营地 +17.5%（19.23→22.60 fps）。
+     * 我们在 Adreno 730 / 同一驱动 id=8 上交替重启四轮 A/B：按标志 27.79/27.55 vs 保守
+     * 28.58/27.77 fps——中性偏负，故本移植默认关闭，用 DM_VK_IMAGE_USAGE_FLAGS=1 开启。
+     * Upstream enables this by default and measured +17.5% (19.23 -> 22.60 fps) on an Adreno 642L
+     * with the system driver. On our Adreno 730 / same driver id 8, four alternating restarts gave
+     * 27.79/27.55 (by flag) vs 28.58/27.77 (conservative) fps -- neutral to slightly worse, so this
+     * port defaults to off; DM_VK_IMAGE_USAGE_FLAGS=1 enables it. */
+    {const char *usage=getenv("DM_VK_IMAGE_USAGE_FLAGS");G.image_usage_by_flags=usage&&atoi(usage)!=0;}
     G.disable_binding_plans=getenv("DM_DISABLE_BINDING_PLANS")!=NULL;G.plan_precise_state=getenv("DM_PLAN_PRECISE_STATE")!=NULL;
     {const char *cache=getenv("DM_COMMAND_STATE_CACHE");G.enable_command_cache=cache&&atoi(cache)!=0;}
     G.disable_dirty_uploads=getenv("DM_DISABLE_DIRTY_UPLOADS")!=NULL;
@@ -1485,6 +1497,33 @@ static int nvn_bc_vk_format(uint32_t f,VkFormat *out,uint8_t *block) {
     default: return 0;
     }
 }
+/* 图像用途会影响移动驱动的 tile/压缩选择。仅 guest 标了 IMAGE 的纹理声明 STORAGE，
+ * 其余在首次真正 storage 绑定时一次性升级（见 texture_require_storage）。
+ * Image usages influence tile/compression choices on mobile drivers. Only textures the guest flags
+ * as IMAGE declare STORAGE; the rest are upgraded once at their first real storage binding. */
+static void texture_image_allocate(const VTexture *t,VkImageUsageFlags usage,
+    VkImage *image,VkDeviceMemory *memory,VkImageView *view) {
+    const tex_t *source=&t->source;
+    int one=source->d.target==NVN_TEXTURE_TARGET_1D||source->d.target==NVN_TEXTURE_TARGET_1D_ARRAY;
+    int layered=source->d.target==NVN_TEXTURE_TARGET_2D_ARRAY||source->d.target==NVN_TEXTURE_TARGET_1D_ARRAY;
+    int volume=source->d.target==NVN_TEXTURE_TARGET_3D;
+    int cube=source->d.target==NVN_TEXTURE_TARGET_CUBEMAP||source->d.target==NVN_TEXTURE_TARGET_CUBEMAP_ARRAY;
+    VkImageCreateInfo ii={.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,.imageType=volume?VK_IMAGE_TYPE_3D:one?VK_IMAGE_TYPE_1D:VK_IMAGE_TYPE_2D,
+        .format=t->format,.flags=cube?VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT:0,
+        .extent={t->width,t->height,t->depth},.mipLevels=source->d.levels,.arrayLayers=source->L.layers,
+        .samples=VK_SAMPLE_COUNT_1_BIT,.tiling=VK_IMAGE_TILING_OPTIMAL,.usage=usage,.sharingMode=VK_SHARING_MODE_EXCLUSIVE};
+    CHECK(vkCreateImage(G.device,&ii,NULL,image));VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(G.device,*image,&requirements);
+    VkMemoryAllocateInfo allocation={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.allocationSize=requirements.size,
+        .memoryTypeIndex=memory_type(requirements.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
+    CHECK(vkAllocateMemory(G.device,&allocation,NULL,memory));CHECK(vkBindImageMemory(G.device,*image,*memory,0));
+    VkImageViewType view_type=volume?VK_IMAGE_VIEW_TYPE_3D:one?(layered?VK_IMAGE_VIEW_TYPE_1D_ARRAY:VK_IMAGE_VIEW_TYPE_1D):
+        cube?(source->L.layers==6?VK_IMAGE_VIEW_TYPE_CUBE:VK_IMAGE_VIEW_TYPE_CUBE_ARRAY):layered?VK_IMAGE_VIEW_TYPE_2D_ARRAY:VK_IMAGE_VIEW_TYPE_2D;
+    VkImageViewCreateInfo vi={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.image=*image,.viewType=view_type,.format=t->format,
+        .subresourceRange={aspect(t->format)&VK_IMAGE_ASPECT_DEPTH_BIT?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT,
+            0,source->d.levels,0,source->L.layers}};
+    CHECK(vkCreateImageView(G.device,&vi,NULL,view));
+}
 static VTexture *texture_acquire(const tex_t *source,int upload,TextureRef ref) {
     if(!source || !source->serial) die("texture serial",0);
     VTexture *t=texture_reference_get(ref);int found=0;uint32_t registry_slot=0;
@@ -1528,19 +1567,18 @@ static VTexture *texture_acquire(const tex_t *source,int upload,TextureRef ref) 
     if(aspect(t->format)&VK_IMAGE_ASPECT_DEPTH_BIT) usage|=VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     else if(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) usage|=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     int attachment_image=(usage&(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))!=0;
-    if((fp.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)&&!(G.diag_img_usage>=1&&attachment_image)) usage|=VK_IMAGE_USAGE_STORAGE_BIT;
+    /* 用途会影响移动驱动的 tile/压缩选择：只有 guest 标了 IMAGE 的纹理才声明 STORAGE，其余
+       在首次真正存储绑定时做一次性升级（texture_require_storage）。
+       Usages influence tile/compression choices on mobile drivers: only guest IMAGE textures declare
+       STORAGE; the rest are upgraded once at their first real storage binding. */
+    if((fp.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)&&
+       (!(G.image_usage_by_flags||(G.diag_img_usage>=1&&attachment_image))||(source->d.flags&NVN_TEXTURE_FLAGS_IMAGE)))
+        usage|=VK_IMAGE_USAGE_STORAGE_BIT;
     if(G.feedback_layout && attachment_image && G.diag_img_usage<2)usage|=VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
-    VkImageCreateInfo ii={.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,.imageType=volume?VK_IMAGE_TYPE_3D:one?VK_IMAGE_TYPE_1D:VK_IMAGE_TYPE_2D,.format=t->format,
-      .flags=cube?VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT:0,
-      .extent={t->width,t->height,t->depth},.mipLevels=source->d.levels,.arrayLayers=source->L.layers,.samples=VK_SAMPLE_COUNT_1_BIT,
-      .tiling=VK_IMAGE_TILING_OPTIMAL,.usage=usage,.sharingMode=VK_SHARING_MODE_EXCLUSIVE};
-    CHECK(vkCreateImage(G.device,&ii,NULL,&t->image)); VkMemoryRequirements r; vkGetImageMemoryRequirements(G.device,t->image,&r);
-    VkMemoryAllocateInfo a={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.allocationSize=r.size,
-      .memoryTypeIndex=memory_type(r.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
-    CHECK(vkAllocateMemory(G.device,&a,NULL,&t->memory)); CHECK(vkBindImageMemory(G.device,t->image,t->memory,0));
-    VkImageViewType view_type=volume?VK_IMAGE_VIEW_TYPE_3D:one?(layered?VK_IMAGE_VIEW_TYPE_1D_ARRAY:VK_IMAGE_VIEW_TYPE_1D):cube?(source->L.layers==6?VK_IMAGE_VIEW_TYPE_CUBE:VK_IMAGE_VIEW_TYPE_CUBE_ARRAY):layered?VK_IMAGE_VIEW_TYPE_2D_ARRAY:VK_IMAGE_VIEW_TYPE_2D;
-    VkImageViewCreateInfo vi={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.image=t->image,.viewType=view_type,
-       .format=t->format,.subresourceRange={aspect(t->format)&VK_IMAGE_ASPECT_DEPTH_BIT?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT,0,source->d.levels,0,source->L.layers}}; CHECK(vkCreateImageView(G.device,&vi,NULL,&t->view));
+    t->usage=usage;
+    if(usage&VK_IMAGE_USAGE_STORAGE_BIT)G.image_usage_storage++;
+    else if(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)G.image_usage_omitted++;
+    texture_image_allocate(t,usage,&t->image,&t->memory,&t->view);
 upload_existing:
     if(upload) {
         uint32_t decoded_format=0;int decoded_bpp=0;
@@ -1615,6 +1653,7 @@ void mtl_tex_release(tex_t *source) {
     pthread_mutex_lock(&G.lock);wait_submission_idle_locked();int found=0;uint32_t slot=texture_table_slot(source->serial,&found);
     if(found){VTexture *t=&G.textures[G.texture_table[slot]-1];
        free(t->cpu_snapshot);
+       if(t->before_storage){vkDestroyImageView(G.device,t->before_storage_view,NULL);vkDestroyImage(G.device,t->before_storage,NULL);vkFreeMemory(G.device,t->before_storage_memory,NULL);G.image_retired_live--;}
        if(t->shadow){vkDestroyImageView(G.device,t->shadow_view,NULL);vkDestroyImage(G.device,t->shadow,NULL);vkFreeMemory(G.device,t->shadow_memory,NULL);}
        if(t->sample_copy){vkDestroyImageView(G.device,t->sample_view,NULL);vkDestroyImage(G.device,t->sample_copy,NULL);vkFreeMemory(G.device,t->sample_memory,NULL);}
        vkDestroyImageView(G.device,t->view,NULL); vkDestroyImage(G.device,t->image,NULL); vkFreeMemory(G.device,t->memory,NULL);
@@ -1908,6 +1947,39 @@ static int depth_read_only(void) {
     if(!d->st || (!G.state.stencil_write[0]&&!G.state.stencil_write[1]))return 1;
     return d->fail_f==NVN_STENCIL_OP_KEEP&&d->zfail_f==NVN_STENCIL_OP_KEEP&&d->zpass_f==NVN_STENCIL_OP_KEEP&&d->fail_b==NVN_STENCIL_OP_KEEP&&d->zfail_b==NVN_STENCIL_OP_KEEP&&d->zpass_b==NVN_STENCIL_OP_KEEP;
 }
+/* 首次真正做 storage 绑定之前把图像升级成带 STORAGE 的新分配，并保留旧分配（已录制的
+ * 描述符 / framebuffer 可能还引用它），直到纹理 Finialize 时按原有 drain 顺序释放。
+ * 单向、至多一次，因此额外保留上限是一份该纹理的旧图像。
+ * Upgrade the image to a STORAGE-capable allocation at the first real storage binding, keeping the
+ * old allocation (already-recorded descriptors/framebuffers may still reference it) until texture
+ * finalization runs the normal drain. One-way and at most once, so the extra retention is bounded
+ * to one old image per texture. */
+static void texture_require_storage(VTexture *t) {
+    if(!t||(t->usage&VK_IMAGE_USAGE_STORAGE_BIT))return;
+    VkFormatProperties properties;vkGetPhysicalDeviceFormatProperties(G.physical,t->format,&properties);
+    if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)||aspect(t->format)!=VK_IMAGE_ASPECT_COLOR_BIT)
+        die("storage image format unsupported",t->format);
+    if(t->before_storage)die("repeated image storage promotion",t->serial);
+    VTexture upgraded=*t;upgraded.usage|=VK_IMAGE_USAGE_STORAGE_BIT;
+    texture_image_allocate(t,upgraded.usage,&upgraded.image,&upgraded.memory,&upgraded.view);
+    upgraded.layout=VK_IMAGE_LAYOUT_UNDEFINED;upgraded.mixed=0;memset(upgraded.lvl,0,sizeof upgraded.lvl);
+    all_barrier();texture_transition(t,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    texture_transition(&upgraded,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    for(unsigned level=0;level<t->source.d.levels;level++){
+        unsigned w=t->width>>level,h=t->height>>level,d=t->depth>>level;if(!w)w=1;if(!h)h=1;if(!d)d=1;
+        VkImageCopy copy={.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,level,0,t->source.L.layers},
+            .dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,level,0,t->source.L.layers},.extent={w,h,d}};
+        vkCmdCopyImage(S.command,t->image,t->layout,upgraded.image,upgraded.layout,1,&copy);
+    }
+    texture_transition(&upgraded,VK_IMAGE_LAYOUT_GENERAL);
+    t->before_storage=t->image;t->before_storage_memory=t->memory;t->before_storage_view=t->view;
+    t->image=upgraded.image;t->memory=upgraded.memory;t->view=upgraded.view;t->usage=upgraded.usage;
+    t->layout=upgraded.layout;t->mixed=upgraded.mixed;memcpy(t->lvl,upgraded.lvl,sizeof t->lvl);
+    t->incarnation=++G.texture_incarnation;G.registry_revision++;G.image_promotions++;G.image_retired_live++;
+    fprintf(stderr,"[nvn-vulkan] IMAGE_STORAGE_PROMOTION serial=%llu flags=%#x usage=%#x extent=%u,%u,%u levels=%u layers=%u retained_old_images=%llu\n",
+        (unsigned long long)t->serial,t->source.d.flags,t->usage,t->width,t->height,t->depth,t->source.d.levels,t->source.L.layers,
+        (unsigned long long)G.image_retired_live);
+}
 static void collect_image_uses(VShader *s) {
     if(!s)return;
     for(unsigned i=0;i<s->h.nb;i++) {RBinding *b=&s->b[i];if(b->kind!=4&&b->kind!=6)continue;
@@ -1917,6 +1989,7 @@ static void collect_image_uses(VShader *s) {
         uint64_t serial=G.tslot[tid].texture.serial;unsigned j=0;while(j<S.nimage_uses&&S.image_uses[j].serial!=serial)j++;
         if(j==S.nimage_uses){if(j==2*LIMIT_BINDINGS)die("image-use capacity",j);S.image_uses[S.nimage_uses++]=(ImageUse){serial,0};}
         S.image_uses[j].roles|=b->kind==6?2u:1u;
+        if(b->kind==6)texture_require_storage(slot_texture(&G.tslot[tid],1));
     }
 }
 static int storage_image_use(uint64_t serial) {
@@ -2359,6 +2432,11 @@ static VkDescriptorSet bind_shader(VShader *s) {
            unsigned tid=(unsigned)handle&0xfffff;if(tid>=(unsigned)G.texture_pool_n || tid>=G.texture_slots || !G.tslot[tid].live)die("unbound texture descriptor",tid);
            TSlot *slot=&G.tslot[tid];
            VTexture *t=slot_texture(slot,1);
+           if(b->kind==6&&!(t->usage&VK_IMAGE_USAGE_STORAGE_BIT)){
+               fprintf(stderr,"[nvn-vulkan] STORAGE_USAGE_REQUIRED shader=%s binding=%u serial=%llu flags=%#x usage=%#x\n",
+                   s->key,b->binding,(unsigned long long)t->serial,t->source.d.flags,t->usage);
+               die("storage image without declared Vulkan usage",t->serial);
+           }
            trace_texture(t,s,b);
            int alias=b->kind==4&&(s->dref_bindings&(1ull<<i))&&aspect(t->format)==VK_IMAGE_ASPECT_COLOR_BIT;
            int sampled_copy=b->kind==4&&!alias&&disjoint_sampling(t,slot,s->h.stage),ranged=0;
@@ -3706,6 +3784,17 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_desc_hits=G.profile_desc_misses=G.profile_control_hits=G.profile_control_misses=G.profile_barriers_skipped=G.profile_sample_copy_hits=G.profile_sample_copy_misses=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_BINDING_PLAN_PROFILE frame=%llu hits=%llu misses=%llu fallbacks=%llu prepared_buffers=%llu prepared_images=%llu enabled=%u\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_plan_hits,(unsigned long long)G.profile_plan_misses,(unsigned long long)G.profile_plan_fallbacks,(unsigned long long)G.profile_plan_buffers,(unsigned long long)G.profile_plan_images,!G.disable_binding_plans);
         G.profile_plan_hits=G.profile_plan_misses=G.profile_plan_fallbacks=G.profile_plan_buffers=G.profile_plan_images=0;
+        /* 图像用途策略运行时 A/B：imageusage.txt = 0 保守（旧行为，全部声明 STORAGE）/ 1 按标志。
+         * 每个 profile 窗口读一次；切换只影响之后创建的图像（已建图像保持原用途，便于同局对比）。
+         * Runtime A/B for the image-usage policy: imageusage.txt = 0 conservative (old behaviour, every
+         * image declares STORAGE) / 1 by guest flag. Read once per profile window; a switch only affects
+         * images created afterwards (existing ones keep their usage, which is what makes in-session A/B
+         * comparable). */
+        { static const char *iudir; if(!iudir)iudir=getenv("DM_FRAME_DIR"); char iuf[1300];
+          if(iudir&&*iudir&&snprintf(iuf,sizeof iuf,"%s/imageusage.txt",iudir)<(int)sizeof iuf){FILE *fp=fopen(iuf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.image_usage_by_flags){G.image_usage_by_flags=m;
+                fprintf(stderr,"[nvn-vulkan] IMAGE_USAGE_BY_FLAGS 运行中切换 → %d（影响之后创建的图像）\n",m);}fclose(fp);}}}
+        fprintf(stderr,"[nvn-vulkan] RENDER_IMAGE_USAGE_PROFILE frame=%llu declared_policy=%d diagnostic=%d storage_images=%llu omitted_storage=%llu promotions=%llu retained_old_images=%llu\n",(unsigned long long)G.present_count+1,G.image_usage_by_flags,G.diag_img_usage,(unsigned long long)G.image_usage_storage,(unsigned long long)G.image_usage_omitted,(unsigned long long)G.image_promotions,(unsigned long long)G.image_retired_live);
         fprintf(stderr,"[nvn-vulkan] RENDER_VIEW_CACHE_PROFILE frame=%llu view_hits=%llu view_misses=%llu framebuffer_hits=%llu framebuffer_misses=%llu rp_hits=%llu rp_creates=%llu rp_overflow=%llu rtv_hits=%llu rtv_creates=%llu rtv_stale=%llu rtf_hits=%llu rtf_creates=%llu rtf_stale=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_view_hits,(unsigned long long)G.profile_view_misses,(unsigned long long)G.profile_framebuffer_hits,(unsigned long long)G.profile_framebuffer_misses,(unsigned long long)G.profile_rpc_hits,(unsigned long long)G.profile_rpc_creates,(unsigned long long)G.profile_rpc_overflow,(unsigned long long)G.profile_rtv_hits,(unsigned long long)G.profile_rtv_creates,(unsigned long long)G.profile_rtv_stale,(unsigned long long)G.profile_rtf_hits,(unsigned long long)G.profile_rtf_creates,(unsigned long long)G.profile_rtf_stale);
         G.profile_view_hits=G.profile_view_misses=G.profile_framebuffer_hits=G.profile_framebuffer_misses=G.profile_rpc_hits=G.profile_rpc_creates=G.profile_rpc_overflow=G.profile_rtv_hits=G.profile_rtv_creates=G.profile_rtv_stale=G.profile_rtf_hits=G.profile_rtf_creates=G.profile_rtf_stale=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_POOL_UPLOAD_PROFILE frame=%llu pools=%d uploaded_bytes=%llu reused_ranges=%llu reused_bytes=%llu read_memo_hits=%llu read_memo_misses=%llu\n",(unsigned long long)G.present_count+1,G.npool,(unsigned long long)G.profile_pool_uploaded_bytes,(unsigned long long)G.profile_pool_reused_ranges,(unsigned long long)G.profile_pool_reused_bytes,(unsigned long long)G.profile_read_memo_hits,(unsigned long long)G.profile_read_memo_misses);
