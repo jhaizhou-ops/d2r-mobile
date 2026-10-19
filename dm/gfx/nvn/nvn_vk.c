@@ -245,6 +245,36 @@ typedef struct {
 } PsoKey;
 typedef struct { VkPipeline pipeline; VkPipelineLayout layout; } Pso;
 typedef struct { PsoKey key;Pso pso;uint64_t hash; } CachedPso;
+
+/* ── 管线预热（方案 A）──────────────────────────────────────────────────────
+   首次遇到新 shader 组合时 vkCreateGraphicsPipelines 会在提交线程上现编（营地/野外实测
+   中位 5ms、最大 27ms），表现就是「第一次见怪 / 进新场景卡一下」。这里把上一局真实建成
+   的创建参数落盘（PsoKey 全是 POD，加 vs/ps 的内容键），下次启动在后台线程用同一个
+   shader_create_by_key 重建，运行时按同样的键直接取用。
+   与 Metal 侧 pso_manifest.tsv + warm_worker 同构（nvn_mtl.m:2832/2891）。
+   Pipeline prewarm (plan A): on a first encounter vkCreateGraphicsPipelines compiles on the
+   submit thread (5 ms median, 27 ms max) -- the "hitch when first seeing a monster or entering a
+   new area". Persist the creation parameters of pipelines actually built (PsoKey is POD, plus the
+   vs/ps content keys) and rebuild them on a background thread next launch via the same
+   shader_create_by_key. Mirrors the Metal-side pso_manifest.tsv + warm_worker. */
+#define WARM_MAX 4096
+#define WARM_MAGIC 0x57504d44u   /* "DMPW" */
+typedef struct { PsoKey key; uint64_t hash; char vs[17],ps[17]; uint8_t vs_stage,ps_stage,has_ps,pad; } WarmRec;
+typedef struct { PsoKey key; uint64_t hash; Pso pso; } WarmPso;
+static WarmRec *g_warm_recs; static unsigned g_warm_nrec; static int g_warm_dirty;
+static WarmPso *g_warm_psos; static unsigned g_warm_npsos;
+static pthread_mutex_t g_warm_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int g_warm_done;
+static uint64_t g_warm_built, g_warm_failed, g_warm_adopted;
+static void warm_adopt_try(const PsoKey *key,uint64_t hash,Pso *out);
+static void warm_load(void);
+static void warm_step(int budget);
+static unsigned g_warm_next;static int g_warm_done_loaded;
+static void warm_flush(void);
+static void warm_record(const PsoKey *key,uint64_t hash,const VShader *vs,const VShader *ps);
+static VShader *shader_create_by_key(const char *key,uint32_t stage);
+static VkRenderPass render_pass_get(const PassKey *key,const VkRenderPassCreateInfo *ri);
+static Pso pso_remember(const PsoKey *key,uint64_t hash,Pso pso);
 typedef struct {
     const prog_t *program; p_set_rt rt; va_st attributes[16]; vs_st streams[16]; NVNbufferRange vbuf[16];
     Range uniform[6][16],storage[6][16]; uint64_t tex[6][128],samp[6][128],img[6][32];
@@ -329,7 +359,7 @@ static struct {
     ControlCache *control_cache;
     uint64_t profile_desc_hits,profile_desc_misses,profile_control_hits,profile_control_misses,profile_control_evict,profile_control_changed,profile_barriers_skipped,profile_sample_copy_hits,profile_sample_copy_misses;
     uint64_t profile_passes,profile_barriers,profile_uniform_updates,profile_cpu_snapshots,profile_gpu_copies,profile_snapshot_reuses;char trace_shader[17];
-    uint64_t profile_pso_hits,profile_pso_misses;
+    uint64_t profile_pso_warm_hits,profile_pso_hits,profile_pso_misses;
     uint64_t profile_pso_lookups,profile_pso_hash_calls,profile_pso_hash_ns,profile_pso_lookup_ns;
     uint64_t profile_pso_last_hits,profile_pso_last_misses,profile_pso_table_hits,profile_pso_probes,profile_pso_max_probe;
     uint64_t profile_replay_cpu_ns,profile_begin_cpu_ns,profile_commit_prepare_cpu_ns,profile_commit_wait_cpu_ns,profile_retire_cpu_ns,profile_writeback_cpu_ns,profile_present_cpu_ns;
@@ -1062,6 +1092,11 @@ static Pso *pso_lookup(const PsoKey *key,uint64_t *hash) {
         }else G.profile_pso_last_misses++;
     }
     if(!cached){*hash=pso_key_hash(key);cached=pso_cached(key,*hash);}
+    if(!cached){   /* 未命中：先看后台预热有没有建好同一条（方案 A）；有就直接用，不现编 */
+        Pso warm={0};
+        warm_adopt_try(key,*hash,&warm);
+        if(warm.pipeline){pso_remember(key,*hash,warm);cached=pso_cached(key,*hash);G.profile_pso_warm_hits++;}
+    }
     G.profile_pso_lookup_ns+=prof_now()-started;return cached;
 }
 static Pso pso_remember(const PsoKey *key,uint64_t hash,Pso pso) {
@@ -1962,9 +1997,9 @@ static const uint8_t *shader_entry(const void *control,uint32_t stage) {
         slot=(slot+1)&(G.shader_entry_capacity-1);}
     return NULL;
 }
-static VShader *shader_get(const void *control,uint32_t stage) {
-    const uint8_t *entry=shader_entry(control,stage);if(!entry)die("original shader not in verified Vulkan cache",stage);
-    char key[17]={0};memcpy(key,entry,16);
+/* 按内容键创建（或复用）着色器：只依赖磁盘上的 <key>.vkmeta / SPIR-V，不依赖客体对象。
+   预热（方案 A）与正常路径共用它，所以两边拿到的 VShader 是同一个、索引也一致。 */
+static VShader *shader_create_by_key(const char *key,uint32_t stage) {
     for(int i=0;i<G.nshader;i++)if(!strcmp(G.shaders[i].key,key))return &G.shaders[i];
     if(G.nshader==LIMIT_OBJECTS)die("shader object limit",G.nshader); VShader *s=&G.shaders[G.nshader++]; strcpy(s->key,key);
     char name[40];snprintf(name,sizeof(name),"%s.vkmeta",key);size_t size=0;uint8_t *bytes=read_file(name,&size);
@@ -2094,6 +2129,12 @@ static VShader *shader_get(const void *control,uint32_t stage) {
        bindings[i]=(VkDescriptorSetLayoutBinding){s->b[i].binding,type,1,stage==0?VK_SHADER_STAGE_VERTEX_BIT:stage==1?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_COMPUTE_BIT,NULL}; }
     VkDescriptorSetLayoutCreateInfo li={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,.bindingCount=s->h.nb,.pBindings=bindings};
     CHECK(vkCreateDescriptorSetLayout(G.device,&li,NULL,&s->layout));s->plan=binding_plan_compile(s);return s;
+}
+
+static VShader *shader_get(const void *control,uint32_t stage) {
+    const uint8_t *entry=shader_entry(control,stage);if(!entry)die("original shader not in verified Vulkan cache",stage);
+    char key[17]={0};memcpy(key,entry,16);
+    return shader_create_by_key(key,stage);
 }
 void mtl_prog_release(prog_t *p) { (void)p; /* Programs own only immutable shared shader-cache entries; no per-program GPU allocation. */ }
 static void aligned_writeback(void) {
@@ -2450,10 +2491,13 @@ static void direct_storage_read(Range r) {
     if(entry<0&&S.ndirect_reads<LIMIT_WRITES){entry=S.ndirect_reads++;S.direct_reads[entry]=r;}
     if(entry>=0)S.direct_read_write_count[entry]=S.nwrites;
 }
-static VkSpecializationInfo storage_specialization(VShader *s,VkSpecializationMapEntry entries[LIMIT_BINDINGS]) {
+static VkSpecializationInfo storage_specialization_ex(VShader *s,VkSpecializationMapEntry entries[LIMIT_BINDINGS],const uint32_t *bias) {
     uint32_t count=0;
     for(unsigned i=0;i<s->h.nb;i++)if(s->storage_bias.mask&(1ull<<i))entries[count++]=(VkSpecializationMapEntry){s->storage_bias.spec_id[i],i*4,4};
-    return (VkSpecializationInfo){count,entries,sizeof(S.storage_bias[s->h.stage]),S.storage_bias[s->h.stage]};
+    return (VkSpecializationInfo){count,entries,sizeof(uint32_t)*(unsigned)LIMIT_BINDINGS,(void *)bias};
+}
+static VkSpecializationInfo storage_specialization(VShader *s,VkSpecializationMapEntry entries[LIMIT_BINDINGS]) {
+    return storage_specialization_ex(s,entries,S.storage_bias[s->h.stage]);
 }
 static VkImageView submission_image_view(const VkImageViewCreateInfo *info) {
     ImageViewKey key;memset(&key,0,sizeof key);
@@ -2869,6 +2913,150 @@ static void sub_chunk_flush(void) {
  * descriptions, no handles), and render-pass objects are immutable after creation, so they can
  * live as long as the device. Saves the per-epoch recreate churn; a full table or long probe
  * chain degrades to "create without caching" (the object retires with the epoch like today). */
+/* ── 预热实现（数据与前置声明见文件上方）────────────────────────────────── */
+
+/* 记录：本次真正建成的图形管线。去重按 (hash, vs, ps)。在 G.lock 下调用。 */
+static void warm_record(const PsoKey *key,uint64_t hash,const VShader *vs,const VShader *ps) {
+    if(!g_warm_recs){ g_warm_recs=calloc(WARM_MAX,sizeof(*g_warm_recs)); if(!g_warm_recs)return; }
+    for(unsigned i=0;i<g_warm_nrec;i++){ WarmRec *r=&g_warm_recs[i];
+        if(r->hash==hash && r->key.shader[0]==key->shader[0] && r->key.shader[1]==key->shader[1]
+           && !strcmp(r->vs,vs->key) && ((ps&&r->has_ps&&!strcmp(r->ps,ps->key))||(!ps&&!r->has_ps))) return; }
+    if(g_warm_nrec>=WARM_MAX)return;
+    WarmRec *r=&g_warm_recs[g_warm_nrec++];
+    memset(r,0,sizeof(*r));
+    r->key=*key; r->hash=hash;
+    memcpy(r->vs,vs->key,16); r->vs_stage=(uint8_t)vs->h.stage;
+    if(ps){ r->has_ps=1; memcpy(r->ps,ps->key,16); r->ps_stage=(uint8_t)ps->h.stage; }
+    g_warm_dirty=1;
+}
+
+/* 落盘：整表重写（与 pso-cache.bin 同样的时机调用）。 */
+static void warm_flush(void) {
+    if(!g_warm_dirty || !g_warm_recs || !g_warm_nrec || !g_pso_cache_path[0]) return;
+    char path[sizeof g_pso_cache_path]; snprintf(path,sizeof path,"%s",g_pso_cache_path);
+    char *slash=strrchr(path,'/'); if(!slash)return; snprintf(slash+1,(size_t)(sizeof path-(size_t)(slash+1-path)),"pso-vk-warm.bin");
+    char tmp[sizeof path+8]; snprintf(tmp,sizeof tmp,"%s.tmp",path);
+    FILE *f=fopen(tmp,"wb"); if(!f)return;
+    uint32_t hdr[3]={WARM_MAGIC,1,g_warm_nrec};
+    int ok=fwrite(hdr,sizeof hdr,1,f)==1 && fwrite(g_warm_recs,sizeof(WarmRec),g_warm_nrec,f)==g_warm_nrec;
+    if(fclose(f)!=0)ok=0;
+    if(ok){ rename(tmp,path); g_warm_dirty=0; }
+    else fprintf(stderr,"[nvn-vulkan] PSO_WARM 清单写入失败 %s\n",path);
+}
+
+/* 后台重建一条：着色器按内容键建（与正常路径同一个函数，索引因此一致），
+   PassKey 自包含所以能独立重建渲染通道，其余固定状态全部来自 PsoKey。 */
+static int warm_build_one(WarmRec *rec) {
+    static unsigned dbg; int trace=dbg<1;
+    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u enter vs=%s ps=%s\n",dbg,rec->vs,rec->has_ps?rec->ps:"-");
+    VShader *vs=shader_create_by_key(rec->vs,rec->vs_stage);
+    VShader *ps=rec->has_ps?shader_create_by_key(rec->ps,rec->ps_stage):NULL;
+    if(!vs||(rec->has_ps&&!ps))return 0;
+    PsoKey k=rec->key;
+    k.shader[0]=(uint32_t)(vs-G.shaders)+1;
+    k.shader[1]=ps?(uint32_t)(ps-G.shaders)+1:0;
+    VkSubpassDescription sub={.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS,.colorAttachmentCount=k.pass.color_count,
+        .pColorAttachments=k.pass.color,.pDepthStencilAttachment=k.pass.has_depth?&k.pass.depth:NULL};
+    VkRenderPassCreateInfo ri={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,.attachmentCount=k.pass.count,
+        .pAttachments=k.pass.attachments,.subpassCount=1,.pSubpasses=&sub,
+        .dependencyCount=k.pass.dependency_count,.pDependencies=k.pass.dependencies};
+    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u shaders ok, building rp\n",dbg);
+    VkRenderPass rp=render_pass_get(&k.pass,&ri);
+    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u rp ok\n",dbg);
+    VkDescriptorSetLayout set_layouts[2]={vs->layout,ps?ps->layout:VK_NULL_HANDLE};
+    VkPipelineLayoutCreateInfo li={.sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=ps?2u:1u,.pSetLayouts=set_layouts};
+    Pso pso={0};
+    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u creating layout\n",dbg);
+    if(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout)!=VK_SUCCESS)return 0;
+    VkPipelineVertexInputStateCreateInfo vi={.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount=k.binding_count,.pVertexBindingDescriptions=k.bindings,
+        .vertexAttributeDescriptionCount=k.attribute_count,.pVertexAttributeDescriptions=k.attributes};
+    VkPipelineInputAssemblyStateCreateInfo ai={.sType=VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,.topology=(VkPrimitiveTopology)k.topology};
+    VkPipelineViewportStateCreateInfo vp={.sType=VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,.viewportCount=1,.scissorCount=1};
+    VkPipelineRasterizationStateCreateInfo raster={.sType=VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,.polygonMode=VK_POLYGON_MODE_FILL,
+        .cullMode=(VkCullModeFlags)k.cull,.frontFace=(VkFrontFace)k.front,.lineWidth=1};
+    VkPipelineMultisampleStateCreateInfo ms={.sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT};
+    VkPipelineDepthStencilStateCreateInfo ds={.sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,.depthTestEnable=k.depth_test,
+        .depthWriteEnable=k.depth_write,.depthCompareOp=(VkCompareOp)k.depth_compare,.stencilTestEnable=k.stencil_test,
+        .front=k.stencil[0],.back=k.stencil[1]};
+    VkPipelineColorBlendStateCreateInfo cb={.sType=VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,.attachmentCount=k.color_count,.pAttachments=k.blend};
+    VkDynamicState dynamic[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_BLEND_CONSTANTS};
+    VkPipelineDynamicStateCreateInfo dy={.sType=VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,.dynamicStateCount=3,.pDynamicStates=dynamic};
+    VkSpecializationMapEntry bm[2][LIMIT_BINDINGS];VkSpecializationInfo bias[2];
+    bias[0]=storage_specialization_ex(vs,bm[0],k.storage_bias[0]);
+    if(ps)bias[1]=storage_specialization_ex(ps,bm[1],k.storage_bias[1]);
+    VkPipelineShaderStageCreateInfo stages[2]={
+        {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_VERTEX_BIT,.module=vs->module,.pName="main"},
+        {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=ps?ps->module:VK_NULL_HANDLE,.pName="main"}};
+    if(bias[0].mapEntryCount)stages[0].pSpecializationInfo=&bias[0];
+    if(ps&&bias[1].mapEntryCount)stages[1].pSpecializationInfo=&bias[1];
+    VkGraphicsPipelineCreateInfo gp={.sType=VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,.flags=(VkPipelineCreateFlags)k.flags,
+        .stageCount=ps?2u:1u,.pStages=stages,.pVertexInputState=&vi,.pInputAssemblyState=&ai,.pViewportState=&vp,
+        .pRasterizationState=&raster,.pMultisampleState=&ms,.pDepthStencilState=&ds,.pColorBlendState=&cb,
+        .pDynamicState=&dy,.layout=pso.layout,.renderPass=rp};   /* layout 必须给：漏了驱动会空指针崩 */
+    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u creating pipeline (attrs=%u binds=%u colors=%u)\n",dbg,k.attribute_count,k.binding_count,k.color_count);
+    if(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline)!=VK_SUCCESS){ vkDestroyPipelineLayout(G.device,pso.layout,NULL); return 0; }
+    if(trace){fprintf(stderr,"[nvn-vulkan] WARM_STEP %u pipeline ok\n",dbg);dbg++;}
+    /* 建成的键要按当前索引重算 hash——运行时用同一个算法算出来的值才对得上。 */
+    uint64_t h=pso_key_hash(&k);
+    pthread_mutex_lock(&g_warm_mu);
+    if(!g_warm_psos){ g_warm_psos=malloc(WARM_MAX*sizeof(*g_warm_psos)); }
+    if(g_warm_psos && g_warm_npsos<WARM_MAX){ g_warm_psos[g_warm_npsos].key=k; g_warm_psos[g_warm_npsos].hash=h; g_warm_psos[g_warm_npsos].pso=pso; g_warm_npsos++; g_warm_built++; }
+    pthread_mutex_unlock(&g_warm_mu);
+    return 1;
+}
+
+/* 分帧预热：在渲染线程上一帧建 budget 条，直到清单走完。
+   不在后台线程建——VkPipelineCache 不允许并发使用，且实测后台线程会让驱动崩（空指针 +0xE8）。
+   实测建一条约 5ms，所以只在前 1200 帧（约 30 秒，菜单/读盘阶段）做，玩家进局前就完成。 */
+static void warm_step(int budget) {
+    if(!g_warm_done_loaded) return;
+    while(budget-- > 0 && g_warm_next < g_warm_nrec) {
+        WarmRec *rec=&g_warm_recs[g_warm_next];
+        if(!warm_build_one(rec)) g_warm_failed++;
+        g_warm_next++;
+    }
+    if(g_warm_next>=g_warm_nrec && !atomic_load(&g_warm_done)) {
+        atomic_store(&g_warm_done,1);
+        fprintf(stderr,"[nvn-vulkan] PSO_WARM 完成：清单 %u 条，重建 %llu 条，失败 %llu 条\n",
+            g_warm_nrec,(unsigned long long)g_warm_built,(unsigned long long)g_warm_failed);
+    }
+}
+
+static void warm_load(void) {
+    static int started; if(started)return; started=1;
+    const char *e=getenv("DM_PSO_WARM");
+    if(e && !strcmp(e,"off"))return;
+    if(!g_pso_cache_path[0])return;
+    char path[sizeof g_pso_cache_path]; snprintf(path,sizeof path,"%s",g_pso_cache_path);
+    char *slash=strrchr(path,'/'); if(!slash)return; snprintf(slash+1,(size_t)(sizeof path-(size_t)(slash+1-path)),"pso-vk-warm.bin");
+    FILE *f=fopen(path,"rb"); if(!f)return;
+    uint32_t hdr[3]={0,0,0};
+    if(fread(hdr,sizeof hdr,1,f)!=1 || hdr[0]!=WARM_MAGIC || hdr[1]!=1 || !hdr[2] || hdr[2]>WARM_MAX){ fclose(f); return; }
+    g_warm_recs=calloc(WARM_MAX,sizeof(*g_warm_recs));
+    if(!g_warm_recs){ fclose(f); return; }
+    size_t got=fread(g_warm_recs,sizeof(WarmRec),hdr[2],f); fclose(f);
+    if(!got)return;
+    g_warm_nrec=(unsigned)got; g_warm_done_loaded=1;
+    fprintf(stderr,"[nvn-vulkan] PSO_WARM 载入清单 %u 条（%s），渲染线程分帧预热\n",g_warm_nrec,path);
+}
+
+/* 取用：运行时键命中预热表就直接拿走，省掉这一次 vkCreateGraphicsPipelines。 */
+static void warm_adopt_try(const PsoKey *key,uint64_t hash,Pso *out) {
+    if(!g_warm_npsos)return;
+    pthread_mutex_lock(&g_warm_mu);
+    for(unsigned i=0;i<g_warm_npsos;i++){
+        if(g_warm_psos[i].hash!=hash)continue;
+        if(memcmp(&g_warm_psos[i].key,key,sizeof(*key)))continue;
+        *out=g_warm_psos[i].pso;
+        g_warm_psos[i]=g_warm_psos[--g_warm_npsos];   /* 取走即摘除，避免重复占用 */
+        g_warm_adopted++;
+        pthread_mutex_unlock(&g_warm_mu);
+        return;
+    }
+    pthread_mutex_unlock(&g_warm_mu);
+}
+
 static VkRenderPass render_pass_get(const PassKey *key,const VkRenderPassCreateInfo *ri) {
     uint64_t h=14695981039346656037ULL;const uint8_t *b=(const uint8_t *)key;
     for(size_t i=0;i<sizeof *key;i++)h=(h^b[i])*1099511628211ULL;
@@ -3283,7 +3471,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     if(cached)pso=*cached;
     else{
         uint64_t pipeline_start=dm_android_nvn_clock_ns();CHECK(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout));gp.layout=pso.layout;
-        CHECK(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline));{uint64_t pns=dm_android_nvn_clock_ns()-pipeline_start;G.profile_pipeline_ns+=pns;g_pso_cache_dirty=1;pso_create_account("gfx",pns,hash,G.present_count+1);}
+        CHECK(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline));{uint64_t pns=dm_android_nvn_clock_ns()-pipeline_start;G.profile_pipeline_ns+=pns;g_pso_cache_dirty=1;pso_create_account("gfx",pns,hash,G.present_count+1);warm_record(&key,hash,vs,ps);}
         pso=pso_remember(&key,hash,pso);
     }
     G.profile_pso_ns+=prof_now()-pso_started;
@@ -4096,7 +4284,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
             G.pass_end_sites[best]=0;G.pass_end_draws[best]=0;}
             memset(G.pass_end_sites,0,sizeof G.pass_end_sites);memset(G.pass_end_draws,0,sizeof G.pass_end_draws);}
         fprintf(stderr,"[nvn-vulkan] RENDER_WRITEBACK_PROFILE frame=%llu enabled=%u raw_ranges=%llu copied_ranges=%llu raw_bytes=%llu copied_bytes=%llu plan_thread_cpu_ms=%.3f\n",(unsigned long long)G.present_count+1,G.enable_writeback_coalesce,(unsigned long long)G.profile_writeback_raw_ranges,(unsigned long long)G.profile_writeback_copy_ranges,(unsigned long long)G.profile_writeback_raw_bytes,(unsigned long long)G.profile_writeback_bytes,G.profile_writeback_plan_cpu_ns/1e6);
-        fprintf(stderr,"[nvn-vulkan] RENDER_PSO_PROFILE frame=%llu cached=%u hits=%llu misses=%llu\n",(unsigned long long)G.present_count+1,G.npso,(unsigned long long)G.profile_pso_hits,(unsigned long long)G.profile_pso_misses);
+        fprintf(stderr,"[nvn-vulkan] RENDER_PSO_PROFILE frame=%llu cached=%u hits=%llu misses=%llu warm_adopted=%llu\n",(unsigned long long)G.present_count+1,G.npso,(unsigned long long)G.profile_pso_hits,(unsigned long long)G.profile_pso_misses,(unsigned long long)G.profile_pso_warm_hits);
         if(G.profile_frames>=60)fprintf(stderr,"[nvn-vulkan] RENDER_PSO_HASH_PROFILE frame=%llu frames=%llu key_bytes=%zu hash_mode=byte_fnv1a last_cache=%d lookups=%llu hash_calls=%llu hash_ms=%.3f lookup_ms=%.3f last_hits=%llu last_misses=%llu table_hits=%llu misses=%llu table_probes=%llu max_probe=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,sizeof(PsoKey),G.enable_pso_last,(unsigned long long)G.profile_pso_lookups,(unsigned long long)G.profile_pso_hash_calls,G.profile_pso_hash_ns/1e6,G.profile_pso_lookup_ns/1e6,(unsigned long long)G.profile_pso_last_hits,(unsigned long long)G.profile_pso_last_misses,(unsigned long long)G.profile_pso_table_hits,(unsigned long long)G.profile_pso_misses,(unsigned long long)G.profile_pso_probes,(unsigned long long)G.profile_pso_max_probe);
         if(G.profile_frames>=60)fprintf(stderr,"[nvn-vulkan] RENDER_PHASE_CPU_PROFILE frame=%llu frames=%llu clock=thread_cpu writeback_prepare=%d replay_inclusive_ms=%.3f begin_ms=%.3f commit_prepare_ms=%.3f commit_wait_ms=%.3f retire_ms=%.3f writeback_subset_ms=%.3f present_body_inclusive_ms=%.3f replay_calls=%llu begin_calls=%llu commit_calls=%llu writeback_calls=%llu present_calls=%llu wb_global_faults=%llu wb_global_preps=%llu wb_global_mp_calls=%llu wb_global_mp_pages=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_frames,G.enable_writeback_prepare,G.profile_replay_cpu_ns/1e6,G.profile_begin_cpu_ns/1e6,G.profile_commit_prepare_cpu_ns/1e6,G.profile_commit_wait_cpu_ns/1e6,G.profile_retire_cpu_ns/1e6,G.profile_writeback_cpu_ns/1e6,G.profile_present_cpu_ns/1e6,(unsigned long long)G.profile_replay_calls,(unsigned long long)G.profile_begin_calls,(unsigned long long)G.profile_commit_calls,(unsigned long long)G.profile_writeback_calls,(unsigned long long)G.profile_present_calls,(unsigned long long)G.profile_writeback_global_faults,(unsigned long long)G.profile_writeback_global_preps,(unsigned long long)G.profile_writeback_global_mp_calls,(unsigned long long)G.profile_writeback_global_mp_pages);
         if(G.profile_frames>=60)fprintf(stderr,"[nvn-vulkan] RENDER_SUBMISSION_PROFILE frame=%llu contexts=1 epoch=%llu creates=%llu reuses=%llu publications=%llu context_bytes=%zu async=0\n",(unsigned long long)G.present_count+1,(unsigned long long)S.epoch,(unsigned long long)G.profile_submission_creates,(unsigned long long)G.profile_submission_reuses,(unsigned long long)G.profile_submission_publications,sizeof(VkSubmission)+DESC_ARENA+DESC_ENTRIES*sizeof(DescEntry));
@@ -4271,10 +4459,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 memcpy(G.trace_shader,key,16);G.trace_shader[16]=0;
             }
             fprintf(stderr,"[nvn-vulkan] TRACE_NEXT_FRAME frame=%llu\n",(unsigned long long)G.present_count+2);}}
-    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return pticket;}
+    warm_load();   /* 方案 A：首次出图时读清单 */
+    if(G.present_count<1200)warm_step(2);   /* 菜单/读盘阶段分帧预热，进局前完成 */
+    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();}pthread_mutex_unlock(&G.lock);return pticket;}
     if(S.nwrites || S.nevents || S.ncounter)die("present has unpublished guest effects",S.epoch);
     submission_publish(&S);submission_released(&S);
-    uint64_t ticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();}pthread_mutex_unlock(&G.lock);return ticket;
+    uint64_t ticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();}pthread_mutex_unlock(&G.lock);return ticket;
 }
 void mtl_present_wait(uint64_t ticket) { if(ticket>G.present_count)die("unknown present ticket",ticket); }
 void mtl_present_flush(void) { mtl_finish(); }
