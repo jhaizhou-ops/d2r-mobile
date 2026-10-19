@@ -112,11 +112,15 @@ Priority: `DM_GAME_RES` / `DM_3D_SCALE` environment variables > `DM_QUALITY_TIER
 
 | Metric | Value |
 |---|---|
-| Frame rate | **29.9–30.1 fps** (SurfaceFlinger actual presentation timestamps) |
+| Frame rate | **29.9–30.1 fps** (cool state, X2 at 1.5–2.1 GHz; SurfaceFlinger actual presentation timestamps) |
 | Frame interval | P50 33.06 ms, P95 41.3 ms, dropped frames 0 |
 | CPU (game thread) | about 33 ms/frame — replay 16–19 ms, command recording about 3 ms |
 | GPU | about 28 ms/frame (80–90% utilisation) |
 | Core usage | one render thread is saturated at 100% (the bottleneck); about 2 cores for the whole process |
+
+**Thermal effect**: after a long session the SoC throttles (measured: X2 dropping from 2.13 GHz to
+1.29 GHz) and the same scene falls to about **27 fps**. That is the device's thermal design, not a
+software regression; holding the higher frame rate needs better cooling.
 
 **World scale versus frame rate** (same camp, stepped through restarts): with the standard output
 fixed at 2270×1056, a world scale of 0.722 → 0.90 holds the same frame rate (**81% more world pixels
