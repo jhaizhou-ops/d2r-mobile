@@ -28,6 +28,7 @@
 #include "../../android/nvn_platform_backend.h"
 
 void dm_guest_write_prepare(void *address,size_t length);
+uint64_t dm_rec_take(uint64_t out[2]);   /* 录制路径计数/耗时 | record-path count/time */
 
 #define LIMIT_POOLS 512
 #define LIMIT_OBJECTS 4096
@@ -253,6 +254,7 @@ static struct {
     uint32_t nswap; VkFormat swap_format; VkExtent2D swap_extent; int display_hz;
     _Atomic uint64_t fence,completed,present_count; uint64_t draws,pass_count,uploads,pool_adds,frame;
     int trace_frame,trace_ui;_Atomic int window_origin;
+    uint64_t profile_wait_slot_ns,profile_wait_slot2_ns,profile_wait_other_ns;
     uint64_t profile_pipeline_ns,profile_wait_ns,profile_decode_ns,profile_submits,profile_start_ns,profile_draws,profile_frames;
     uint64_t profile_submit_candidates,profile_candidate_wait_ns,profile_writeback_bytes,profile_events,profile_reports;
     uint64_t profile_writeback_raw_bytes,profile_writeback_raw_ranges,profile_writeback_copy_ranges,profile_writeback_plan_cpu_ns;
@@ -590,8 +592,8 @@ static void backend_init(void) {
     {const char *coalesce=getenv("DM_WRITEBACK_COALESCE");G.enable_writeback_coalesce=coalesce&&atoi(coalesce)!=0;}
     G.event_trace=getenv("DM_EVENT_TRACE")!=NULL;
     G.current_submission=&G.submission_slot;
-    S.desc_entries=calloc(DESC_ENTRIES,sizeof(*S.desc_entries));S.desc_arena=malloc(DESC_ARENA);G.control_cache=calloc(CONTROL_CACHE,sizeof(*G.control_cache));
-    if(!S.desc_entries||!S.desc_arena||!G.control_cache)die("descriptor/control cache allocation",0);
+    G.control_cache=calloc(CONTROL_CACHE,sizeof(*G.control_cache));
+    if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
      const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
@@ -973,6 +975,11 @@ static void submission_pools_create(VkSubmission *sub) {
     VkDescriptorPoolCreateInfo d={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=8192,
         .poolSizeCount=7,.pPoolSizes=sizes};CHECK(vkCreateDescriptorPool(G.device,&d,NULL,&sub->descriptors));
     VkFenceCreateInfo f={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};CHECK(vkCreateFence(G.device,&f,NULL,&sub->gpu_fence));
+    /* 描述符缓存按上下文分配（双缓冲主槽各一份）；原来只在 init 给当前槽位分配，第二个槽位会是 NULL。 */
+    /* The descriptor cache is per context (one per ring slot). It used to be allocated only for the
+       current context at init, so a second slot would hold NULL. */
+    sub->desc_entries=calloc(DESC_ENTRIES,sizeof(*sub->desc_entries));sub->desc_arena=malloc(DESC_ARENA);
+    if(!sub->desc_entries||!sub->desc_arena)die("descriptor cache allocation",0);
     G.profile_submission_creates++;
 }
 static void submission_gpu_done(VkSubmission *sub) {
@@ -1091,7 +1098,11 @@ static int ctx_busy(const VkSubmission *c) { return c->phase==SUBMISSION_INFLIGH
 static void async_drain_locked(void) { while(g_jcount)pthread_cond_wait(&g_done_cv,&G.lock); }
 static void sub_begin_ctx(VkSubmission *ctx) {
     mtl_init();uint64_t begin_cpu=dm_android_nvn_thread_cpu_ns();pthread_mutex_lock(&G.lock);
-    if(ctx_busy(ctx)){uint64_t w0=dm_android_nvn_clock_ns();while(ctx_busy(ctx))pthread_cond_wait(&g_done_cv,&G.lock);G.profile_wait_ns+=dm_android_nvn_clock_ns()-w0;}
+    if(ctx_busy(ctx)){uint64_t w0=dm_android_nvn_clock_ns();while(ctx_busy(ctx))pthread_cond_wait(&g_done_cv,&G.lock);
+        uint64_t d=dm_android_nvn_clock_ns()-w0;G.profile_wait_ns+=d;
+        /* 分别统计主上下文与出图上下文的等待：决定流水化哪一个。 */
+        /* Count the wait per context (main vs present) so we know which one to pipeline. */
+        if(ctx==&G.submission_slot)G.profile_wait_slot_ns+=d; else if(ctx==&G.submission_slot2)G.profile_wait_slot2_ns+=d; else G.profile_wait_other_ns+=d; }
     G.current_submission=ctx;
     if(G.active || (S.phase!=SUBMISSION_UNUSED && S.phase!=SUBMISSION_RETIRED))die("nested/unretired submission",S.epoch);
     if(S.phase==SUBMISSION_UNUSED)submission_pools_create(&S);
@@ -3723,6 +3734,9 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 if(best<0||!bestc)break; n+=snprintf(line+n,sizeof line-n," op%d=%.0f",best,(double)bestc/fr);
                 g_op_hist[best]=0; }
             fprintf(stderr,"[nvn-vulkan] RENDER_OP_HIST frame=%llu %s\n",(unsigned long long)G.present_count+1,line); }
+          { uint64_t rc[2];dm_rec_take(rc);
+            fprintf(stderr,"[nvn-vulkan] RENDER_RECORD_PATH frame=%llu records=%.0f rec_ms=%.3f ns_per_record=%.1f\n",
+                (unsigned long long)G.present_count+1,(double)rc[0]/fr,rc[1]/1e6,rc[0]?(double)rc[1]/(double)rc[0]:0.0); }
           if(g_writes_n)fprintf(stderr,"[nvn-vulkan] RENDER_WRITES frame=%llu uplifts=%.0f avg_writes=%.1f max_writes=%llu\n",
               (unsigned long long)G.present_count+1,(double)g_writes_n/fr,(double)g_writes_sum/(double)g_writes_n, (unsigned long long)g_writes_max);
           fprintf(stderr,"[nvn-vulkan] RENDER_DRAW_HIST frame=%llu draws=%.0f verts=%.0f avg=%.1f b16=%.1f b64=%.1f b256=%.1f b1k=%.1f b4k=%.1f bbig=%.1f\n",
@@ -3828,6 +3842,8 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
         G.profile_query_reset_calls=G.profile_query_reset_slots=G.profile_query_preresets=G.profile_query_breaks=G.profile_pass_splits=0;
         G.profile_counter_resets=G.profile_counter_reports=G.profile_counter_ops=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_SYNC_PROFILE frame=%llu passes=%llu all_barriers=%llu uniform_updates=%llu aligned_cpu_snapshots=%llu aligned_gpu_copies=%llu aligned_snapshot_reuses=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)(G.pass_count-G.profile_passes),(unsigned long long)G.profile_barriers,(unsigned long long)G.profile_uniform_updates,(unsigned long long)G.profile_cpu_snapshots,(unsigned long long)G.profile_gpu_copies,(unsigned long long)G.profile_snapshot_reuses);
+        fprintf(stderr,"[nvn-vulkan] WAIT_SPLIT slot_ms=%.3f slot2_ms=%.3f other_ms=%.3f\n",G.profile_wait_slot_ns/1e6,G.profile_wait_slot2_ns/1e6,G.profile_wait_other_ns/1e6);
+        G.profile_wait_slot_ns=G.profile_wait_slot2_ns=G.profile_wait_other_ns=0;
         fprintf(stderr,"[nvn-vulkan] PRESENT_PARTS acquire_ms=%.1f fence_ms=%.1f idle_ms=%.1f\n",G.pres_acq_ns/1e6,G.pres_fence_ns/1e6,G.pres_idle_ns/1e6);G.pres_acq_ns=G.pres_fence_ns=G.pres_idle_ns=0;
         for(int q=0;q<4;q++){fprintf(stderr,"[nvn-vulkan] SEG%d record_ms=%.1f wait_ms=%.1f last_chunk_draws=%llu chunks=%llu gpu_busy_ms=%.1f gpu_gap_ms=%.1f gpu_span_ms=%.1f\n",q,G.seg_record_ns[q]/1e6,G.seg_wait_ns[q]/1e6,(unsigned long long)G.seg_draws[q],(unsigned long long)G.seg_chunks[q],G.gts_busy[q]/1e6,G.gts_gap[q]/1e6,G.gts_span[q]/1e6);G.gts_busy[q]=G.gts_gap[q]=G.gts_span[q]=G.gts_chunks[q]=0;G.seg_record_ns[q]=G.seg_wait_ns[q]=G.seg_draws[q]=G.seg_chunks[q]=0;}
         if(G.precise_sync||G.barrier_stats)fprintf(stderr,"[nvn-vulkan] HZ_SYNC barriers=%llu chunks=%llu wait_elided=%llu\n",(unsigned long long)G.profile_hz_barriers,(unsigned long long)G.profile_chunks,(unsigned long long)G.profile_wait_elided);G.profile_chunks=0;G.profile_wait_elided=0;fprintf(stderr,"[nvn-vulkan] HZ_KINDS pass_frag=%llu pass_wide=%llu xfer=%llu cs=%llu tr_shaderread=%llu tr_attach=%llu tr_transfer=%llu tr_other=%llu\n",(unsigned long long)G.hz_count[0],(unsigned long long)G.hz_count[1],(unsigned long long)G.hz_count[2],(unsigned long long)G.hz_count[3],(unsigned long long)G.hz_count[4],(unsigned long long)G.hz_count[5],(unsigned long long)G.hz_count[6],(unsigned long long)G.hz_count[7]);memset(G.hz_count,0,sizeof G.hz_count);G.profile_hz_barriers=0;

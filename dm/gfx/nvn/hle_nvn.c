@@ -667,10 +667,24 @@ NVN(nvnCommandBufferUpdateUniformBuffer, void, NVNcommandBuffer *c, NVNbufferAdd
 
 // ---------- 渲染命令：参数按 nvn_obj.h 的载荷格式录进命令内存，回放见 nvn_mtl.m ----------
 // ---------- Render commands: parameters are recorded into command memory in the payload format of nvn_obj.h; for replay see nvn_mtl.m ----------
+/* 录制路径成本（诊断）：rec() 的次数与耗时，含命令内存分配与清零。 */
+/* Recording-path cost (diagnostic): rec() call count and time, including command-memory allocation and clearing. */
+uint64_t dm_android_nvn_clock_ns(void);
+static _Atomic uint64_t g_rec_calls, g_rec_ns;
+uint64_t dm_rec_take(uint64_t out[2]) {
+    out[0]=atomic_exchange(&g_rec_calls,0);out[1]=atomic_exchange(&g_rec_ns,0);return out[0];
+}
 static void *rec(NVNcommandBuffer *c, uint32_t op, size_t payload) {
     uint32_t sz = (uint32_t)((8 + payload + 7) & ~(size_t)7);
+    /* 采样 1/16 计时：每条都 clock_gettime 会淹没被测量的成本。 */
+    /* Sample 1 in 16: timing every record would swamp the cost being measured. */
+    static _Atomic uint32_t tick;
+    int timed = ((atomic_fetch_add_explicit(&tick,1,memory_order_relaxed)&15u)==0);
+    uint64_t t=timed?dm_android_nvn_clock_ns():0;
     uint8_t *p = cmd_alloc(CB(c), sz); put_hdr(p, op, sz);
     memset(p + 8, 0, sz - 8);
+    if(timed)atomic_fetch_add(&g_rec_ns,(dm_android_nvn_clock_ns()-t)*16);
+    atomic_fetch_add(&g_rec_calls,1);
     return p + 8;
 }
 #define REC(c, OP, T) ((T *)rec((c), (OP), sizeof(T)))
