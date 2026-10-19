@@ -271,6 +271,9 @@ static struct {
     uint64_t profile_tail_bind_ns,profile_tail_state_ns,profile_tail_draw_ns;   // tail 子桶：管线+描述符 / 状态+查询 / 绘制调用 | tail sub-buckets
     /* bind 内部细分 | inside bind */
     uint64_t profile_bind_plan_try_ns,profile_bind_loop_ns,profile_bind_call_ns;
+    /* 绑定循环按类型细分：缓冲侧（UBO/SSBO/texel，含 pool_read）vs 图像侧（纹理/采样器/视图）。 */
+    /* Bind-loop split by binding class: buffer side (UBO/SSBO/texel, includes pool_read) vs image side. */
+    uint64_t profile_bind_buf_ns,profile_bind_img_ns,profile_bind_buf_n,profile_bind_img_n;
     uint64_t profile_rp_flush_ns,profile_rp_attach_ns,profile_rp_key_ns,profile_rp_begin_ns;   // render_begin 子桶：冲刷 / 附件 / 键+创建 / 编码 | render_begin sub-buckets
     uint64_t profile_rp_chunk_ns,profile_rp_scan_ns,profile_rp_create_ns,profile_tail_idx_ns;   // 细分：分块提交 / 键构建+扫描 / 创建对象 / 索引读
     uint64_t profile_chunk_end_ns,profile_chunk_submit_ns,profile_chunk_begin_ns;   // 分块提交三分：vkEndCommandBuffer / vkQueueSubmit / 新缓冲开始+状态重置
@@ -2381,7 +2384,10 @@ static VkDescriptorSet bind_shader(VShader *s) {
     memset(w,0,s->h.nb*sizeof(*w));memset(bi,0,s->h.nb*sizeof(*bi));memset(ii,0,s->h.nb*sizeof(*ii));
     int cacheable=!G.disable_desc_cache&&!G.trace_frame;VkDescriptorSet set=VK_NULL_HANDLE;
     uint64_t loop_t0=prof_now();
-    for(uint32_t i=0;i<s->h.nb;i++) { RBinding *b=&s->b[i]; w[i]=(VkWriteDescriptorSet){.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    for(uint32_t i=0;i<s->h.nb;i++) { RBinding *b=&s->b[i];
+       int is_img=(b->kind==4||b->kind==6);
+       uint64_t item_t0=prof_now();
+       w[i]=(VkWriteDescriptorSet){.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
        .dstBinding=b->binding,.descriptorCount=1,.descriptorType=(VkDescriptorType)b->type};
        if(b->kind==1)bi[i]=(VkDescriptorBufferInfo){G.support.b,0,1392};
        else if(b->kind==7) { if(!s->c1.b)die("missing shader c1",i);bi[i]=(VkDescriptorBufferInfo){s->c1.b,0,65536}; }
@@ -2544,9 +2550,12 @@ static VkDescriptorSet bind_shader(VShader *s) {
                    plan_safe=0;
                else plan_resources[i].image=(BindingImage){.texture=texture_reference(t),.descriptor_id=tid,.layout=ii[i].imageLayout,.sampler=ii[i].sampler};
            }
+           G.profile_bind_img_ns+=prof_now()-item_t0;G.profile_bind_img_n++;
            w[i].pImageInfo=&ii[i];continue;
        } else die("Vulkan shader resource kind",b->kind);
        w[i].pBufferInfo=&bi[i];
+       if(is_img){G.profile_bind_img_ns+=prof_now()-item_t0;G.profile_bind_img_n++;}
+       else {G.profile_bind_buf_ns+=prof_now()-item_t0;G.profile_bind_buf_n++;}
     }
     if(s->dyn_count){uint32_t k=0;for(uint32_t i=0;i<s->h.nb;i++)if((s->dyn_bindings>>i)&1)S.dyn_offset[s->h.stage][k++]=live_dyn[i];S.dyn_count[s->h.stage]=k;}
     uint32_t nb=s->h.nb;size_t half=(size_t)nb*sizeof(VkDescriptorBufferInfo);uint32_t slot=0;uint64_t hash=0;
@@ -2934,6 +2943,8 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     /* A zero-color pass may still run fragment discard, depth export or
      * storage side effects. Only a program with no fragment stage omits it. */
     VShader *vs=program_stage(0),*ps=program_stage_optional(1);
+
+
     { /* UI 合批前提：连续 UI draw 的 shader / 顶点格式是否一致 | UI batching prerequisite: same shader / vertex format across consecutive UI draws */
       uint32_t c0=(uint32_t)(a?a->count:idx->count);
       int cls0=3; const p_set_rt *rt0=&G.state.rt;
@@ -3798,6 +3809,10 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           memset(G.pass_end_sites,0,sizeof G.pass_end_sites); }
         fprintf(stderr,"[nvn-vulkan] RENDER_SUBMIT_CLASS_PROFILE frame=%llu total_submits=%llu observed_eligible_candidates=%llu candidate_fence_wait_ms=%.3f pool_writeback_bytes=%llu events=%llu counter_reports=%llu write_submits=%llu event_submits=%llu report_submits=%llu trace_submits=%llu cpu_readback_submits=%llu event_wait_submits=%llu\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_submits,(unsigned long long)G.profile_submit_candidates,G.profile_candidate_wait_ns/1e6,(unsigned long long)G.profile_writeback_bytes,(unsigned long long)G.profile_events,(unsigned long long)G.profile_reports,(unsigned long long)G.profile_write_submits,(unsigned long long)G.profile_event_submits,(unsigned long long)G.profile_report_submits,(unsigned long long)G.profile_trace_submits,(unsigned long long)G.profile_cpu_readback_submits,(unsigned long long)G.profile_event_wait_submits);
         fprintf(stderr,"[nvn-vulkan] RENDER_CPU_PROFILE frame=%llu lookup_ms=%.3f pool_ms=%.3f bind_ms=%.3f renderpass_ms=%.3f present_ms=%.3f desc_alloc_ms=%.3f desc_update_ms=%.3f prep_ms=%.3f state_ms=%.3f vertex_ms=%.3f pso_ms=%.3f tail_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_lookup_ns/1e6,G.profile_pool_ns/1e6,G.profile_bind_ns/1e6,G.profile_render_ns/1e6,G.profile_present_ns/1e6,G.profile_desc_alloc_ns/1e6,G.profile_desc_update_ns/1e6,G.profile_prep_ns/1e6,G.profile_state_ns/1e6,G.profile_vertex_ns/1e6,G.profile_pso_ns/1e6,G.profile_tail_ns/1e6);
+        fprintf(stderr,"[nvn-vulkan] RENDER_BIND_KIND frame=%llu buf_ms=%.3f buf_n=%llu img_ms=%.3f img_n=%llu\n",
+            (unsigned long long)G.present_count+1,G.profile_bind_buf_ns/1e6,(unsigned long long)G.profile_bind_buf_n,
+            G.profile_bind_img_ns/1e6,(unsigned long long)G.profile_bind_img_n);
+        G.profile_bind_buf_ns=G.profile_bind_img_ns=G.profile_bind_buf_n=G.profile_bind_img_n=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_BIND_DEEP frame=%llu plan_try_ms=%.3f loop_ms=%.3f alloc_ms=%.3f upd_ms=%.3f bindcall_ms=%.3f\n",(unsigned long long)G.present_count+1,G.profile_bind_plan_try_ns/1e6,G.profile_bind_loop_ns/1e6,G.profile_desc_alloc_ns/1e6,G.profile_desc_update_ns/1e6,G.profile_bind_call_ns/1e6);
         G.profile_bind_plan_try_ns=G.profile_bind_loop_ns=G.profile_bind_call_ns=0;
         fprintf(stderr,"[nvn-vulkan] RENDER_BIND_SPLIT frame=%llu plan_hits=%llu plan_ms=%.3f full_calls=%llu full_ms=%.3f\n",(unsigned long long)G.present_count+1,(unsigned long long)G.profile_bind_hits,G.profile_bind_plan_ns/1e6,(unsigned long long)G.profile_bind_full_calls,G.profile_bind_full_ns/1e6);
