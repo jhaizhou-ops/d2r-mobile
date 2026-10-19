@@ -156,6 +156,16 @@ static void *game_thread(void *unused) {
     const char *names[]={"main","sdk","subsdk0"}; load_modules(modules,names,3); guest_thread_init();
     { void dm_padmode_boot(void); dm_padmode_boot(); }   /* P4：开机改布局前缀为触屏版（覆盖层有 ctrl_touch 标记时）+ 载入字符串旁路表 */
     { void target_rank_install(void); target_rank_install(); }   /* 触屏点按自动选怪：Boss > 精英 > 普通（hle_target.c）。iOS 入口 main.c 有这一句，Android 入口原先没有 */
+    /* 转向回跳平滑 + 模型转身参数（dm_turnsmooth.c，观测门 19 / 20）。iOS 在 diag.c 里装，Android 原先根本没编这个文件：
+       触屏摇杆走的是「手柄」那一组转向参数，掉头时原版会播一段原地转身、逻辑位置同时往回走，观感就是「转身时突然变慢甚至停下」。
+       只动本地玩家、纯画面层，不改逻辑位置 / 发包 / 存档。
+       Turn snap-back smoothing + model turning parameters (dm_turnsmooth.c, observation gates 19 / 20). iOS installs it in diag.c; Android never
+       compiled the file at all. The touch stick goes through the "controller" turning group, so a U-turn plays the original's turn-in-place
+       animation while the logical position already moves back -- felt as "turns suddenly slow down or stop". Local player only, purely visual:
+       it never touches the logical position, packets or saves. */
+    { void dm_turnsmooth_install(uint8_t *); module_t *tm = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) tm = &g_mod[i];
+      if (tm) dm_turnsmooth_install((uint8_t *)tm->base); else LOG("【红】转向平滑：找不到 main 模块，没装（掉头会走原版原地转身）"); }
+
     { void dm_touch_game_live_check(int); int dm_touch_game_attach(void);       /* P7：技能绑定桥（OBS_BINDING_GETTER 门 + HUD 身份核对） */
     dm_touch_game_live_check(1);
     if (!dm_touch_game_attach()) LOG("【红】技能绑定读取没挂上（产物没有观测门 OBS_BINDING_GETTER，或 main 模块不符）：技能键图标 / 回城键绑定不工作"); }

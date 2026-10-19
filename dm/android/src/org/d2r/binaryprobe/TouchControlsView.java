@@ -193,23 +193,29 @@ public final class TouchControlsView extends View {
         if(b==null)return;
         artRect.set(x-r,y-r,x+r,y+r);artPaint.setStyle(Paint.Style.FILL);artPaint.setAlpha(255);canvas.drawBitmap(b,null,artRect,artPaint);
     }
-    /** 底盘向边缘渐隐 + 四向刻纹（dm_joystick_base_draw）。 | Base fades out towards the edge, plus four direction etchings (dm_joystick_base_draw). */
+    /* 摇杆可见性（Android 实测：iOS 那套 α 值在手机上几乎看不见，玩家反馈「非常透明、看不清」）。
+       这里只抬高不透明度，几何与画法仍与 iOS DmTouchControlArt.h 逐项一致；闲时也保留一圈能看清的轮廓。
+       Joystick visibility (measured on Android: the iOS alpha values are almost invisible on a phone, players reported "very transparent, cannot see it").
+       Only opacity is raised; geometry and drawing still follow iOS DmTouchControlArt.h item by item, and even the idle state keeps a readable outline. */
     private void joystickBaseDraw(Canvas c,float s,boolean active){
         float cx=s/2,cy=s/2;
         artFill.setStyle(Paint.Style.FILL);
         artFill.setShader(new RadialGradient(cx,cy,s*.48f,
-            new int[]{gray(.025,active?.10:.045),gray(.025,active?.22:.12),gray(.025,0)},new float[]{0f,.78f,1f},Shader.TileMode.CLAMP));
+            new int[]{gray(.025,active?.20:.11),gray(.025,active?.34:.24),gray(.025,0)},new float[]{0f,.78f,1f},Shader.TileMode.CLAMP));
         c.drawCircle(cx,cy,s*.48f,artFill);artFill.setShader(null);
-        artPaint.setStyle(Paint.Style.STROKE);artPaint.setStrokeWidth(s*.004f);artPaint.setStrokeCap(Paint.Cap.ROUND);
+        /* 外圈一条实线：坐标「底盘在哪」一眼可辨（iOS 只有渐隐与刻纹，手机上太淡） | One solid outer ring so "where the base is" reads at a glance (iOS only has the fade and etchings, too faint on a phone) */
+        artPaint.setStyle(Paint.Style.STROKE);artPaint.setStrokeWidth(s*.012f);
+        artPaint.setColor(gray(.70,active?.40:.26));c.drawCircle(cx,cy,s*.455f,artPaint);
+        artPaint.setStrokeWidth(s*.004f);artPaint.setStrokeCap(Paint.Cap.ROUND);
         RectF ring=new RectF(cx-s*.416f,cy-s*.416f,cx+s*.416f,cy+s*.416f);
         for(int i=0;i<4;i++){
             float a=(float)(i*Math.PI/2);
-            artPaint.setColor(gray(.63,active?.12:.055));
+            artPaint.setColor(gray(.72,active?.30:.16));
             c.drawArc(ring,(float)Math.toDegrees(a+.20),(float)Math.toDegrees(Math.PI/2-.40),false,artPaint);
             c.save();c.translate(cx,cy);c.rotate((float)Math.toDegrees(a));
             float xx=s*.414f,kk=s*.028f;Path p=new Path();
             p.moveTo(xx+kk,0);p.lineTo(xx-kk,-kk*.65f);p.lineTo(xx-kk*.42f,0);p.lineTo(xx-kk,kk*.65f);p.close();
-            artPaint.setColor(gray(.68,active?.25:.13));c.drawPath(p,artPaint);
+            artPaint.setColor(gray(.76,active?.45:.30));c.drawPath(p,artPaint);
             c.drawLine(xx-kk*.42f,0,xx-kk*2.1f,0,artPaint);
             c.restore();
         }
@@ -220,20 +226,24 @@ public final class TouchControlsView extends View {
         float in=s*.055f,mid=s/2;
         artFill.setStyle(Paint.Style.FILL);
         artFill.setShader(new LinearGradient(0,in,0,s-in,
-            new int[]{gray(.23,active?.78:.46),gray(.14,active?.82:.49),gray(.065,active?.84:.52)},new float[]{0f,.5f,1f},Shader.TileMode.CLAMP));
+            new int[]{gray(.23,active?.94:.72),gray(.14,active?.96:.76),gray(.065,active?.97:.80)},new float[]{0f,.5f,1f},Shader.TileMode.CLAMP));
         c.drawOval(in,in,s-in,s-in,artFill);artFill.setShader(null);
         artPaint.setStyle(Paint.Style.STROKE);
-        artPaint.setColor(gray(.025,active?.65:.32));artPaint.setStrokeWidth(s*.035f);c.drawOval(in,in,s-in,s-in,artPaint);
+        artPaint.setColor(gray(.02,active?.90:.62));artPaint.setStrokeWidth(s*.035f);c.drawOval(in,in,s-in,s-in,artPaint);
+        /* 亮边压在暗盘上：草地上/火光旁都能看出摇杆头推到哪 | A bright rim over the dark disc so the thumb position reads on grass or next to firelight */
+        artPaint.setColor(gray(.86,active?.85:.55));artPaint.setStrokeWidth(s*.016f);
+        c.drawArc(new RectF(in,in,s-in,s-in),(float)Math.toDegrees(Math.PI*1.02),(float)Math.toDegrees(Math.PI*.96),false,artPaint);
         RectF r1=new RectF(mid-s*.437f,mid-s*.437f,mid+s*.437f,mid+s*.437f);
-        artPaint.setColor(gray(.64,active?.40:.22));artPaint.setStrokeWidth(s*.014f);
+        artPaint.setColor(gray(.70,active?.55:.34));artPaint.setStrokeWidth(s*.014f);
         c.drawArc(r1,(float)Math.toDegrees(Math.PI*1.07),(float)Math.toDegrees(Math.PI*.84),false,artPaint);
         RectF r2=new RectF(mid-s*.410f,mid-s*.410f,mid+s*.410f,mid+s*.410f);
-        artPaint.setColor(gray(.42,active?.20:.10));artPaint.setStrokeWidth(s*.012f);
+        artPaint.setColor(gray(.48,active?.30:.16));artPaint.setStrokeWidth(s*.012f);
         c.drawArc(r2,(float)Math.toDegrees(Math.PI*1.12),(float)Math.toDegrees(Math.PI*.76),false,artPaint);
     }
+    /** 静态底图缓存键要带「按下态」：iOS 的 key 是 stick:base:active，这里原先漏了 active，按下时一直拿闲时那张（最淡）| The static-art cache key must include the pressed state: the iOS key is stick:base:active, this one used to drop active and always reused the faint idle image while pushed. */
     private void drawStickPart(Canvas canvas,float x,float y,float side,boolean base,boolean active){
         final boolean act=active;
-        Bitmap b=controlArt(base?"stick-base":"stick-thumb",side,(c,s)->{if(base)joystickBaseDraw(c,s,act);else joystickThumbDraw(c,s,act);});
+        Bitmap b=controlArt((base?"stick-base":"stick-thumb")+(act?":down":":idle"),side,(c,s)->{if(base)joystickBaseDraw(c,s,act);else joystickThumbDraw(c,s,act);});
         if(b==null)return;
         artRect.set(x-side/2,y-side/2,x+side/2,y+side/2);artPaint.setStyle(Paint.Style.FILL);artPaint.setAlpha(255);canvas.drawBitmap(b,null,artRect,artPaint);
     }
