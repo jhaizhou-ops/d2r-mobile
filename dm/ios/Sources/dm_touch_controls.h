@@ -21,6 +21,7 @@ typedef struct {
     int tablet, swap_above;   // 已生效的布局配置，绘制和命中判定共用 | Applied layout profile; mirrors drawing and hit testing.
     dm_tc_target target[DM_TC_COUNT];
     dm_tc_target dpad[4];   /* 上下左右；绘制与命中共用同一布局 | Up, down, left, right; drawing and hit testing share this layout */
+    float dpad_guard[4];   /* 十字键保护矩形 x/y/宽/高：空隙起手整次不响应 | D-pad guard x/y/width/height: gestures starting in its gaps stay inert */
     float joy_x, joy_y, joy_radius;   /* 没按时底盘的显示位置（静止位）与底盘半径 | where the base is shown while not pressed (rest position), and the base radius */
     float joy_zone_r, joy_zone_t, joy_min_x, joy_max_y;   /* 起摇杆区的右界与上界（左与下到屏幕边）；按下后底盘圆心的夹回界：x 不小于、y 不大于（只为底盘整圈画在屏内：屏幕边 + 半径 + 8） | right and upper bounds of the stick-start zone (left and bottom reach the screen edges); clamp bounds for the base centre once pressed: x not less than, y not greater than (only so that the whole base is drawn on screen: screen edge + radius + 8) */
     dm_tc_target swap;   /* 技能组切换键：本地开关，不直接发按键 | Skill set switch key: a local toggle; does not send a key directly */
@@ -140,6 +141,8 @@ int dm_tc_navigation(dm_tc_scene *scene, const char *cat, const char *act, const
 int dm_tc_scene_dialog_only(const dm_tc_scene *scene);   /* 只开着 NPC 对话菜单 | Only the NPC dialog menu is open */
 int dm_tc_scene_panel_dpad(const dm_tc_scene *scene);
 int dm_tc_dpad_hit(const dm_tc_layout *layout, float x, float y);
+float dm_tc_dpad_hit_radius(const dm_tc_layout *layout);
+int dm_tc_dpad_guard_hit(const dm_tc_layout *layout, float x, float y);
 int dm_tc_dpad_active(const dm_tc_state *state);
 void dm_tc_set_panel_dpad(dm_tc_state *state, int enabled);
 int dm_tc_scene_dead(void);   /* 死亡弹窗开着（导航态，但不给手柄圆钮） | Death popup open (navigation state, but no controller round buttons) */

@@ -73,6 +73,44 @@ int main(void) {
     setup(&s); dm_tc_set_panel_dpad(&s,0); begin(&s,0,3,1);
     CHECK(s.finger[0].target!=DM_TC_DPAD && !s.buttons);
 
+    /* 保护区空隙不起指针，也不在移动 / 松手时退回关窗逻辑。
+       Guard gaps never create a pointer or fall through to window closing on move/release. */
+    dm_tc_set_safe_insets(62,62);
+    const float gaps[][2]={{116,287},{50,287},{116,220},{116,354},{50,220},{173,220},{132,271}};
+    for(unsigned i=0;i<sizeof gaps/sizeof *gaps;i++) {
+        setup(&s); float x=gaps[i][0],y=gaps[i][1];
+        CHECK(dm_tc_dpad_guard_hit(&s.layout,x,y)); CHECK(dm_tc_dpad_hit(&s.layout,x,y)==-1);
+        dm_tc_begin_at(&s,0,x,y,1); CHECK(s.finger[0].target==DM_TC_DPAD);
+        CHECK(s.pointer_slot==DM_TC_NONE && !s.buttons && !dm_tc_dpad_active(&s));
+        dm_tc_move_at(&s,0,s.layout.dpad[3].x,s.layout.dpad[3].y,1.02); CHECK(!s.buttons);
+        dm_tc_move_at(&s,0,830,300,1.03); dm_tc_end_at(&s,0,1.05); dm_tc_tick(&s,1.3);
+        CHECK(!s.buttons && !s.close_left && !s.pulse_button);
+        CHECK(!s.mouse_click_seq && !s.world_tap_seq && !s.shop_drop_seq);
+    }
+    const float enlarged[][2]={{116,230},{116,344},{59,287},{173,287}};
+    for(int d=0;d<4;d++) {
+        setup(&s); CHECK(hypotf(enlarged[d][0]-s.layout.dpad[d].x,enlarged[d][1]-s.layout.dpad[d].y)>s.layout.dpad[d].r);
+        dm_tc_begin_at(&s,0,enlarged[d][0],enlarged[d][1],1);
+        CHECK(s.buttons==buttons[d] && s.pointer_slot==DM_TC_NONE);
+        dm_tc_end_at(&s,0,1.2); CHECK(!s.buttons && !s.close_left);
+    }
+    setup(&s); dm_tc_begin_at(&s,0,600,160,1); dm_tc_begin_at(&s,1,50,287,1.1);
+    CHECK(s.pointer_slot==0 && !s.buttons); dm_tc_end_at(&s,1,1.2); CHECK(s.pointer_slot==0 && !s.close_left);
+    setup(&s); dm_tc_begin_at(&s,0,50,287,1); dm_tc_set_panel_dpad(&s,0); dm_tc_end_at(&s,0,1.1);
+    CHECK(!s.buttons && !s.close_left && !s.finger[0].active);
+    /* 货架从约 x176 起仍走物品指针；保护区以外的左右空白照旧关窗。
+       The shelf from about x176 still uses item gestures; blank space on both sides still closes panels. */
+    setup(&s); CHECK(!dm_tc_dpad_guard_hit(&s.layout,176,287)); dm_tc_begin_at(&s,0,176,287,1);
+    CHECK(s.pointer_slot==0); dm_tc_pointer_item(&s,1); dm_tc_end_at(&s,0,1.2); CHECK(!s.close_left);
+    const float outside[][2]={{25,150},{830,300}};
+    for(int i=0;i<2;i++) {
+        setup(&s); dm_tc_begin_at(&s,0,outside[i][0],outside[i][1],1); CHECK(s.pointer_slot==0);
+        dm_tc_pointer_item(&s,3); dm_tc_end_at(&s,0,1.1); dm_tc_tick(&s,1.2); CHECK(s.buttons==DM_BTN_B);
+    }
+    setup(&s); dm_tc_set_panel_dpad(&s,0); dm_tc_begin_at(&s,0,50,287,1); CHECK(s.pointer_slot==0);
+    dm_tc_pointer_item(&s,3); dm_tc_end_at(&s,0,1.1); dm_tc_tick(&s,1.2); CHECK(s.buttons==DM_BTN_B);
+    dm_tc_set_safe_insets(0,0);
+
     const float sizes[][2]={{667,375},{874,402},{932,430},{1024,576},{1366,768}};
     for(unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) {
         dm_tc_set_safe_insets(62,62); dm_tc_layout l; dm_tc_layout_make(&l,sizes[i][0],sizes[i][1]);

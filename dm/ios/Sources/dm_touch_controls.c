@@ -107,12 +107,29 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     const float ddx[4] = {0,0,-32,32}, ddy[4] = {-32,32,0,0};
     const uint64_t db[4] = {DM_BTN_UP,DM_BTN_DOWN,DM_BTN_LEFT,DM_BTN_RIGHT};
     for(int i=0;i<4;i++) l->dpad[i]=(dm_tc_target){cx+ddx[i]*dk,cy+ddy[i]*dk,22*dk,db[i]};
+    /* 左、上、下留 16 点缓冲；右侧只扩 4 点，避免吞掉紧邻的商店货架。
+       Add a 16-point buffer left/above/below; only four points right to preserve vendor shelf taps. */
+    l->dpad_guard[0]=cx-70*dk; l->dpad_guard[1]=cy-70*dk;
+    l->dpad_guard[2]=128*dk; l->dpad_guard[3]=140*dk;
 }
 
+float dm_tc_dpad_hit_radius(const dm_tc_layout *l) { return l->dpad[0].r*(26.0f/22.0f); }
+int dm_tc_dpad_guard_hit(const dm_tc_layout *l, float x, float y) {
+    return isfinite(x) && isfinite(y) && x>=l->dpad_guard[0] && y>=l->dpad_guard[1] &&
+        x<=l->dpad_guard[0]+l->dpad_guard[2] && y<=l->dpad_guard[1]+l->dpad_guard[3];
+}
 int dm_tc_dpad_hit(const dm_tc_layout *l, float x, float y) {
     if(!isfinite(x) || !isfinite(y)) return -1;
-    for(int i=0;i<4;i++) if(hypotf(x-l->dpad[i].x,y-l->dpad[i].y)<=l->dpad[i].r) return i;
-    return -1;
+    /* 扩大热区但不改按钮外观；交叠处取最近方向，等距线保持中立。
+       Enlarge hit areas without changing artwork; overlap selects the nearest direction, ties stay neutral. */
+    float radius=dm_tc_dpad_hit_radius(l), best=radius+1; int direction=-1, tied=0;
+    for(int i=0;i<4;i++) {
+        float distance=hypotf(x-l->dpad[i].x,y-l->dpad[i].y);
+        if(distance>radius) continue;
+        if(distance<best-0.001f) { best=distance; direction=i; tied=0; }
+        else if(fabsf(distance-best)<=0.001f) tied=1;
+    }
+    return tied ? -1 : direction;
 }
 int dm_tc_dpad_active(const dm_tc_state *s) {
     if(!s->panel_dpad || !s->navigation_mode || s->pointer_slot>=0 || s->holding ||
@@ -503,9 +520,9 @@ void dm_tc_begin_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
     if (slot < 0 || slot >= DM_TC_MAX_TOUCH || s->finger[slot].active || !isfinite(x) || !isfinite(y)) return;
     s->last_time_s = now_s;
     dm_tc_finger *f = &s->finger[slot];
-    if(s->panel_dpad && s->navigation_mode && dm_tc_dpad_hit(&s->layout,x,y)>=0) {
+    if(s->panel_dpad && s->navigation_mode && dm_tc_dpad_guard_hit(&s->layout,x,y)) {
         *f=(dm_tc_finger){.active=1,.target=DM_TC_DPAD,.x=x,.y=y,.start_time_s=now_s,
-                          .aim_cancelled=s->pointer_slot>=0 || s->holding || s->pointer_pulse_active};
+                          .aim_cancelled=dm_tc_dpad_hit(&s->layout,x,y)<0 || s->pointer_slot>=0 || s->holding || s->pointer_pulse_active};
         if(!f->aim_cancelled) s->pointer_valid=0;
         update(s); return;
     }

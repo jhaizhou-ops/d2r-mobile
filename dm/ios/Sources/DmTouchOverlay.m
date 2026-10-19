@@ -354,8 +354,11 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
     for(int i=0;i<4;i++) {
         const dm_tc_target *t=&s->layout.dpad[i];
         [a addObject:@{@"id":directions[i],@"visible":@(s->panel_dpad && s->navigation_mode),
-                      @"rect_pt":@[@(t->x-t->r),@(t->y-t->r),@(2*t->r),@(2*t->r)],@"npad_button":@(t->button)}];
+                      @"rect_pt":@[@(t->x-t->r),@(t->y-t->r),@(2*t->r),@(2*t->r)],
+                      @"hit_radius_pt":@(dm_tc_dpad_hit_radius(&s->layout)),@"npad_button":@(t->button)}];
     }
+    [a addObject:@{@"id":@"panel_navigation_guard",@"visible":@(s->panel_dpad && s->navigation_mode),
+                  @"rect_pt":@[@(s->layout.dpad_guard[0]),@(s->layout.dpad_guard[1]),@(s->layout.dpad_guard[2]),@(s->layout.dpad_guard[3])]}];
     BOOL moving=s->joy_slot>=0; CGFloat k=s->layout.joy_radius/60;
     CGFloat jx=moving?s->joy_origin_x:s->layout.joy_x,jy=moving?s->joy_origin_y:s->layout.joy_y,r=s->layout.joy_radius;
     CGFloat tx=jx+s->lx/32767.0*r,ty=jy-s->ly/32767.0*r;
