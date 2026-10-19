@@ -269,6 +269,7 @@ static uint64_t g_warm_built, g_warm_failed, g_warm_adopted;
 static void warm_adopt_try(const PsoKey *key,uint64_t hash,Pso *out);
 static void warm_load(void);
 static void warm_step(int budget);
+static void warm_start_thread(void);
 static unsigned g_warm_next;static int g_warm_done_loaded;
 static void warm_flush(void);
 static void warm_record(const PsoKey *key,uint64_t hash,const VShader *vs,const VShader *ps);
@@ -3042,6 +3043,36 @@ static void warm_read_file(const char *path) {
     fprintf(stderr,"[nvn-vulkan] PSO_WARM 读入 %s：%u 条（新增 %u，累计 %u）\n",path,(unsigned)got,added,g_warm_nrec);
 }
 
+/* 后台线程重建（与 Metal 侧 warm_worker 同构）：每条单独拿 G.lock——渲染线程的管线创建也在
+   这把锁里，所以 VkPipelineCache 不会被并发使用（Vulkan 要求），而不需要持 queue_lock。
+   启动期不再占用渲染线程，菜单/读盘不会因为分帧预热掉帧。 */
+static void *warm_thread(void *arg) {
+    (void)arg;
+    uint64_t t0=dm_android_nvn_clock_ns();
+    for(;;) {
+        pthread_mutex_lock(&g_warm_mu);
+        unsigned i=g_warm_next;
+        if(i<g_warm_nrec)g_warm_next++;
+        pthread_mutex_unlock(&g_warm_mu);
+        if(i>=g_warm_nrec)break;
+        pthread_mutex_lock(&G.lock);
+        if(!warm_build_one(&g_warm_recs[i]))g_warm_failed++;
+        pthread_mutex_unlock(&G.lock);
+    }
+    if(!atomic_load(&g_warm_done)) {
+        atomic_store(&g_warm_done,1);
+        fprintf(stderr,"[nvn-vulkan] PSO_WARM 完成：清单 %u 条，重建 %llu 条，失败 %llu 条，用时 %.0f ms\n",
+            g_warm_nrec,(unsigned long long)g_warm_built,(unsigned long long)g_warm_failed,(double)(dm_android_nvn_clock_ns()-t0)/1e6);
+    }
+    return NULL;
+}
+static void warm_start_thread(void) {
+    pthread_t th; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at,1u<<20);
+    if(pthread_create(&th,&at,warm_thread,NULL)==0)pthread_detach(th);
+    else fprintf(stderr,"[nvn-vulkan] PSO_WARM 线程创建失败，退回渲染线程分帧\n");
+    pthread_attr_destroy(&at);
+}
+
 static void warm_load(void) {
     static int started; if(started)return; started=1;
     const char *e=getenv("DM_PSO_WARM");
@@ -3053,7 +3084,7 @@ static void warm_load(void) {
         char *slash=strrchr(path,'/'); if(slash){ snprintf(slash+1,(size_t)(sizeof path-(size_t)(slash+1-path)),"pso-vk-warm.bin"); warm_read_file(path); } }
     if(!g_warm_nrec)return;
     g_warm_done_loaded=1;
-    fprintf(stderr,"[nvn-vulkan] PSO_WARM 待预热 %u 条，渲染线程分帧进行\n",g_warm_nrec);
+    fprintf(stderr,"[nvn-vulkan] PSO_WARM 待预热 %u 条，后台线程进行\n",g_warm_nrec);
 }
 
 /* 取用：运行时键命中预热表就直接拿走，省掉这一次 vkCreateGraphicsPipelines。 */
@@ -4475,7 +4506,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
             }
             fprintf(stderr,"[nvn-vulkan] TRACE_NEXT_FRAME frame=%llu\n",(unsigned long long)G.present_count+2);}}
     warm_load();   /* 方案 A：首次出图时读清单 */
-    if(G.present_count<1200)warm_step(2);   /* 菜单/读盘阶段分帧预热，进局前完成 */
+    { static int thr; if(g_warm_done_loaded&&!thr){thr=1;warm_start_thread();} }
     if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();}pthread_mutex_unlock(&G.lock);return pticket;}
     if(S.nwrites || S.nevents || S.ncounter)die("present has unpublished guest effects",S.epoch);
     submission_publish(&S);submission_released(&S);
