@@ -2150,7 +2150,21 @@ static void collect_image_uses(VShader *s) {
     for(unsigned i=0;i<s->h.nb;i++) {RBinding *b=&s->b[i];if(b->kind!=4&&b->kind!=6)continue;
         if(b->slot<0 || b->slot>=(b->kind==6?32:128))die("image-use shader slot",b->slot);
         uint64_t handle=b->kind==6?G.state.img[s->h.stage][b->slot]:G.state.tex[s->h.stage][b->slot];unsigned tid=handle&0xfffff;
-        if(tid>=G.texture_slots||!G.tslot[tid].live)die("image-use texture descriptor",tid);
+        /* 客体把「未绑定」写成哨兵句柄（低 20 位全 1，实测 1048575）时会走到这里。
+           原先直接 die——进房间遇到新 shader 组合就闪退（发版阻塞项）。
+           这里改为跳过该绑定：它只影响 image-use/反馈环分析，不该让整个进程崩。
+           真正绘制时若该槽位仍无效，绑定路径（unbound texture descriptor）会照实报错，
+           所以跳过不会把问题藏起来。 | The guest encodes "unbound" as a sentinel handle
+           (low 20 bits all ones, measured 1048575). Previously this killed the process when a
+           new shader combination appeared (entering a room). Skip the binding instead: it only
+           affects image-use/feedback analysis. If the slot is still invalid at draw time, the
+           bind path reports it truthfully, so nothing is hidden. */
+        if(tid>=G.texture_slots||!G.tslot[tid].live){
+            static _Atomic unsigned unbound_n;unsigned n=atomic_fetch_add(&unbound_n,1);
+            if(n<8||n%512==0)fprintf(stderr,"[nvn-vulkan] IMAGE_USE_UNBOUND shader=%s stage=%u slot=%d kind=%u handle=%#llx tid=%u (累积 %u)\n",
+                s->key,s->h.stage,b->slot,b->kind,(unsigned long long)handle,tid,n+1);
+            continue;
+        }
         uint64_t serial=G.tslot[tid].texture.serial;unsigned j=0;while(j<S.nimage_uses&&S.image_uses[j].serial!=serial)j++;
         if(j==S.nimage_uses){if(j==2*LIMIT_BINDINGS)die("image-use capacity",j);S.image_uses[S.nimage_uses++]=(ImageUse){serial,0};}
         S.image_uses[j].roles|=b->kind==6?2u:1u;
@@ -2192,7 +2206,12 @@ static int disjoint_sampling(VTexture *t,TSlot *slot,unsigned stage) {
 static void prepare_sampling_copies(VShader *s) {
     if(!s || G.feedback_layout || s->h.stage==5)return;
     for(unsigned i=0;i<s->h.nb;i++)if(s->b[i].kind==4 && !(s->dref_bindings&(1ull<<i))){
-        unsigned tid=G.state.tex[s->h.stage][s->b[i].slot]&0xfffff;TSlot *slot=&G.tslot[tid];
+        unsigned tid=G.state.tex[s->h.stage][s->b[i].slot]&0xfffff;
+        /* 未绑定哨兵句柄（低 20 位全 1）会越界索引 G.tslot——进房间时实测崩在这里。
+           没有贴图就没有采样拷贝可准备，跳过。 | An unbound sentinel handle would index
+           G.tslot out of bounds; with no texture there is no sampling copy to prepare. */
+        if(tid>=G.texture_slots||!G.tslot[tid].live)continue;
+        TSlot *slot=&G.tslot[tid];
         VTexture *t=slot_texture(slot,1);if(!disjoint_sampling(t,slot,s->h.stage)||texture_range_ok(t))continue;
         view_t *sv=&slot->view;unsigned slevel=slot->has_view&&sv->set_levels?sv->base_level:0,slevels=slot->has_view&&sv->set_levels?sv->nlevels:t->source.d.levels;
         unsigned slayer=slot->has_view&&sv->set_layers?sv->min_layer:0,slayers=slot->has_view&&sv->set_layers?sv->nlayers:t->source.L.layers;
@@ -2299,10 +2318,44 @@ static void comparison_image(VTexture *t) {
     vkCmdPipelineBarrier(S.command,VK_PIPELINE_STAGE_TRANSFER_BIT,HZ_COPY_DST,0,0,NULL,0,NULL,1,&barrier);
     t->shadow_layout=barrier.newLayout;t->shadow_version=t->version;
 }
+/* ── 空贴图兜底（dummy）────────────────────────────────────────────────
+   客体把「这里没有贴图」绑成一个哨兵句柄（低 20 位全 1，实测 0xfffff）。NVN 语义下这就是一张
+   空贴图，不是错误——原先直接 die，导致进房间遇到带空槽位的 shader 组合就闪退（发版阻塞项）。
+   给一张 1×1 的 dummy（GENERAL 布局：采样与存储两种用途都合法），让描述符始终有效。
+   着色器若真去采样它，读到的值本来就是未定义；不采样则完全无影响。
+   Dummy texture for the guest's "no texture" sentinel handle (low 20 bits all ones, measured
+   0xfffff). Under NVN this is an empty texture, not an error; dying on it crashed the process when
+   entering rooms. A 1x1 dummy in GENERAL layout keeps the descriptor valid for both sampled and
+   storage use. Sampling it reads undefined data, which matches the original semantics. */
+static VkImage g_dummy_img=VK_NULL_HANDLE;static VkImageView g_dummy_view=VK_NULL_HANDLE;static VkDeviceMemory g_dummy_mem=VK_NULL_HANDLE;
+static void dummy_texture_init(void) {
+    if(g_dummy_view)return;
+    VkImageCreateInfo ic={.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,.imageType=VK_IMAGE_TYPE_2D,
+        .format=VK_FORMAT_R8G8B8A8_UNORM,.extent={1,1,1},.mipLevels=1,.arrayLayers=1,
+        .samples=VK_SAMPLE_COUNT_1_BIT,.tiling=VK_IMAGE_TILING_OPTIMAL,
+        .usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode=VK_SHARING_MODE_EXCLUSIVE,.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED};
+    CHECK(vkCreateImage(G.device,&ic,NULL,&g_dummy_img));
+    VkMemoryRequirements r;vkGetImageMemoryRequirements(G.device,g_dummy_img,&r);
+    VkMemoryAllocateInfo ma={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.allocationSize=r.size,
+        .memoryTypeIndex=memory_type(r.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
+    CHECK(vkAllocateMemory(G.device,&ma,NULL,&g_dummy_mem));CHECK(vkBindImageMemory(G.device,g_dummy_img,g_dummy_mem,0));
+    VkImageMemoryBarrier b={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask=0,.dstAccessMask=VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT,
+        .oldLayout=VK_IMAGE_LAYOUT_UNDEFINED,.newLayout=VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+        .image=g_dummy_img,.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}};
+    vkCmdPipelineBarrier(S.command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,0,NULL,0,NULL,1,&b);
+    VkImageViewCreateInfo vi={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.image=g_dummy_img,
+        .viewType=VK_IMAGE_VIEW_TYPE_2D,.format=VK_FORMAT_R8G8B8A8_UNORM,
+        .subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}};
+    CHECK(vkCreateImageView(G.device,&vi,NULL,&g_dummy_view));
+}
 static void prepare_comparison_images(VShader *s) {
     if(!s)return;
     for(unsigned i=0;i<s->h.nb;i++)if(s->b[i].kind==4&&(s->dref_bindings&(1ull<<i))){
         unsigned tid=G.state.tex[s->h.stage][s->b[i].slot]&0xfffff;
+        if(tid>=G.texture_slots||!G.tslot[tid].live)continue;   /* 未绑定哨兵：无比较图可准备 */
         VTexture *t=slot_texture(&G.tslot[tid],1);
         if(aspect(t->format)==VK_IMAGE_ASPECT_COLOR_BIT)comparison_image(t);
     }
@@ -2602,7 +2655,19 @@ static VkDescriptorSet bind_shader(VShader *s) {
        } else if(b->kind==4 || b->kind==6) {
            if(b->slot<0 || b->slot>=(b->kind==6?32:128))die("texture shader slot",b->slot);
            uint64_t handle=b->kind==6?G.state.img[s->h.stage][b->slot]:G.state.tex[s->h.stage][b->slot];
-           unsigned tid=(unsigned)handle&0xfffff;if(tid>=(unsigned)G.texture_pool_n || tid>=G.texture_slots || !G.tslot[tid].live)die("unbound texture descriptor",tid);
+           unsigned tid=(unsigned)handle&0xfffff;
+           if(tid>=(unsigned)G.texture_pool_n || tid>=G.texture_slots || !G.tslot[tid].live){
+               /* 空贴图哨兵：绑 dummy，不杀进程（进房间实测崩在这里）。 */
+               static _Atomic unsigned unbound_n;unsigned un=atomic_fetch_add(&unbound_n,1);
+               if(un<8||un%1024==0)fprintf(stderr,"[nvn-vulkan] UNBOUND_TEX_DUMMY shader=%s stage=%u slot=%d kind=%u handle=%#llx (累积 %u)\n",
+                   s->key,s->h.stage,b->slot,b->kind,(unsigned long long)handle,un+1);
+               dummy_texture_init();
+               if(!G.fetch_sampler){VkSamplerCreateInfo ci={.sType=VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,.magFilter=VK_FILTER_NEAREST,.minFilter=VK_FILTER_NEAREST,.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST,.addressModeU=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,.addressModeV=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,.maxLod=VK_LOD_CLAMP_NONE};CHECK(vkCreateSampler(G.device,&ci,NULL,&G.fetch_sampler));}
+               ii[i].imageView=g_dummy_view;ii[i].imageLayout=VK_IMAGE_LAYOUT_GENERAL;ii[i].sampler=G.fetch_sampler;
+               w[i].pImageInfo=&ii[i];
+               G.profile_bind_img_ns+=prof_now()-item_t0;G.profile_bind_img_n++;
+               continue;
+           }
            TSlot *slot=&G.tslot[tid];
            VTexture *t=slot_texture(slot,1);
            if(b->kind==6&&!(t->usage&VK_IMAGE_USAGE_STORAGE_BIT)){
@@ -3687,6 +3752,14 @@ static void execute(const uint8_t *p,unsigned depth) {
             int limit=h.op==OP_BIND_IMG?32:128;if(b->stage<0||b->stage>=6||b->first<0||b->n<0||b->n>32||b->first>limit||b->n>limit-b->first)die("texture/sampler binding range",b->n);
             payload_check(&h,offsetof(p_bind_handles,h)+(size_t)b->n*sizeof(uint64_t));
             uint64_t *dest=h.op==OP_BIND_TEX?G.state.tex[b->stage]:h.op==OP_BIND_SAMP?G.state.samp[b->stage]:G.state.img[b->stage];
+            /* 诊断：绑定里出现「空贴图」哨兵句柄时，打出整组句柄——用来判断客体是「数组里夹一个
+               空槽」（材质没用到的可选贴图）还是「整组都空」（资源还没加载完）。 */
+            if(h.op!=OP_BIND_SAMP){static _Atomic unsigned null_n;
+              for(int k=0;k<b->n;k++)if((b->h[k]&0xfffff)==0xfffff){
+                unsigned n=atomic_fetch_add(&null_n,1);
+                if(n<12){char buf[320];size_t o=0;for(int q=0;q<b->n&&o<260;q++)o+=snprintf(buf+o,sizeof buf-o,"%#llx ",(unsigned long long)b->h[q]);
+                  fprintf(stderr,"[nvn-vulkan] BIND_NULL_HANDLE op=%d stage=%u first=%d n=%d idx=%d handles=[%s]\n",h.op,b->stage,b->first,b->n,k,buf);}
+                break;}}
             size_t bytes=(size_t)b->n*sizeof(uint64_t);if(bytes&&memcmp(dest+b->first,b->h,bytes)){memcpy(dest+b->first,b->h,bytes);G.binding_revision[b->stage]++;G.texbind_revision[b->stage]++;}break;}
         case OP_DRAW:payload_check(&h,sizeof(p_draw));draw((const p_draw *)a,NULL);break;
         case OP_DRAW_IDX:payload_check(&h,sizeof(p_draw_idx));draw(NULL,(const p_draw_idx *)a);break;
