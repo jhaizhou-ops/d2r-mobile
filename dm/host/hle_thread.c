@@ -565,6 +565,18 @@ int svc_thread(int num, uint64_t *regs) {
         } else if (ns > 0) { struct timespec ts = {ns / 1000000000, ns % 1000000000}; nanosleep(&ts, 0); }
         else {   // 让出（0 / -1 / -2）。主线程的让出次数与耗时记账：游戏渲染任务图「等全部做完」是纯轮询 + 让出（main+0x15ee898），量它占一帧多少 | Yield (0 / -1 / -2). Count and time of the main thread's yields are recorded: the game's render task graph "wait for everything to finish" is pure polling + yield (main+0x15ee898); measure how much of a frame it takes
             thr_t *me = pthread_getspecific(g_keythr);
+            /* 让出退避：裸 sched_yield 在「等全部 worker 做完」的纯轮询里会把主线程反复推回调度器，
+               而它等的 worker 恰恰被它自己挤掉。实测主线程每帧让出 403–1771 次（sydeEvans 报 273 次）。
+               策略：16ms 窗口内让出超过 16 次，就插一次 100µs nanosleep 把时间片让实；其余路径一字不变。
+               依据 sydeEvans/d2r-android a67df10（同源代码血统），其实测 main_yield 273.5 → 14.5/帧。
+               Yield backoff: a bare sched_yield in the "wait for all workers" spin bounces the main thread
+               back to the scheduler, and the workers it waits for are the ones it starved. Measured here:
+               403-1771 yields/frame. Past 16 yields in a 16 ms window, insert one 100 us nanosleep. */
+            static _Thread_local uint64_t win_start,yields_in_win;
+            uint64_t now = now_ns();
+            if (!win_start || now - win_start >= 16000000ULL) { win_start = now; yields_in_win = 0; }
+            static int backoff_on=-1; if(backoff_on<0)backoff_on=getenv("DM_YIELD_BACKOFF")!=NULL||getenv("DM_NO_YIELD_BACKOFF")==NULL;
+            if (backoff_on && ++yields_in_win > 16) { struct timespec ts = {0, 100000}; nanosleep(&ts, 0); }
             if (me && me->handle == 0x1001) { uint64_t y0 = now_ns(); sched_yield(); g_main_yield_ns += now_ns() - y0; g_main_yield_n++; }
             else sched_yield();
         }

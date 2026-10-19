@@ -206,5 +206,12 @@ NVN(nvnQueuePresentTexture,void,NVNqueue *q,NVNwindow *window,int index) {
     w->ticket[index] = x_push(&j);   // 存任务号；取图时经 x_present_ticket 换成出图票号 | Store the job number; the acquire converts it via x_present_ticket
     w->presents++;
     uint64_t frame=atomic_fetch_add(&android_nvn_frame,1)+1;mtl_set_frame(frame);dm_android_nvn_presented(frame);android_game_thread_cpu_tick(frame);
+    { /* 主线程让出次数（hle_thread.c 记账；hle_nvn.c 的消费端在 Apple 分支，Android 看不到） */
+      extern void dm_main_yield_stats(uint64_t*,uint64_t*);
+      static uint64_t pyn,pyns,pf;
+      uint64_t yn=0,yns=0;dm_main_yield_stats(&yn,&yns);
+      if(pf&&frame>pf){ static unsigned c;
+        if(++c%60==0) LOG("[nvn-android] 主线程让出 每帧 %.1f 次 / %.3f ms",(double)(yn-pyn)/(double)(frame-pf),(double)(yns-pyns)/1e6/(double)(frame-pf)); }
+      pyn=yn;pyns=yns;pf=frame; }
     dm_android_nvn_work_end(frame);android_gfx_leave();
 }
