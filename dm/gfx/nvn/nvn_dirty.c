@@ -99,9 +99,27 @@ static int busy_wait(range_t *r, uintptr_t p) {
     }
     return 1;
 }
+/* find() 缓存：脏检查每帧上万次（缓冲绑定 9,627 次/帧），而 g_r 是定长数组、指针稳定。
+ * 直接映射缓存只需校验 live 与地址范围，把绝大多数调用变成 O(1)，不再线性扫全表。 */
+/* find() cache: dirty checks run tens of thousands of times per frame (9,627 buffer bindings per
+ * frame) and g_r is a fixed array with stable pointers, so a direct-mapped cache validated against
+ * live + range turns almost every call into O(1) instead of a linear scan. */
+static _Thread_local struct { uintptr_t base, end; range_t *r; } g_fc[16];
+static uint64_t g_find_calls, g_find_hits, g_find_steps;
+void nvn_dirty_find_stats(uint64_t out[3]) { out[0]=g_find_calls; out[1]=g_find_hits; out[2]=g_find_steps; g_find_calls=g_find_hits=g_find_steps=0; }
 static range_t *find(uintptr_t a) {
+    unsigned h = (unsigned)(((a >> 20) ^ (a >> 28)) & 15);
+    if (g_fc[h].r && atomic_load_explicit(&g_fc[h].r->live, memory_order_acquire) &&
+        a >= g_fc[h].base && a < g_fc[h].end) { g_find_hits++; return g_fc[h].r; }
     int n = atomic_load(&g_nr);
-    for (int i = 0; i < n; i++) if (atomic_load_explicit(&g_r[i].live, memory_order_acquire) && a >= g_r[i].base && a < g_r[i].end) return &g_r[i];
+    g_find_calls++;
+    for (int i = 0; i < n; i++) {
+        g_find_steps++;
+        if (atomic_load_explicit(&g_r[i].live, memory_order_acquire) && a >= g_r[i].base && a < g_r[i].end) {
+            g_fc[h].base = g_r[i].base; g_fc[h].end = g_r[i].end; g_fc[h].r = &g_r[i];
+            return &g_r[i];
+        }
+    }
     return NULL;
 }
 static void store_generation(range_t *r,uintptr_t page) {

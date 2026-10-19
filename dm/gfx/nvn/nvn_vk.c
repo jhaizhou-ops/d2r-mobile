@@ -31,7 +31,8 @@
 #include "../../android/nvn_platform_backend.h"
 
 void dm_guest_write_prepare(void *address,size_t length);
-uint64_t dm_rec_take(uint64_t out[2]);   /* 录制路径计数/耗时 | record-path count/time */
+uint64_t dm_rec_take(uint64_t out[2]);
+void nvn_dirty_find_stats(uint64_t out[3]);   /* find() 缓存统计 | find() cache stats */   /* 录制路径计数/耗时 | record-path count/time */
 
 #define LIMIT_POOLS 512
 #define LIMIT_OBJECTS 4096
@@ -3779,6 +3780,9 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 if(best<0||!bestc)break; n+=snprintf(line+n,sizeof line-n," op%d=%.0f",best,(double)bestc/fr);
                 g_op_hist[best]=0; }
             fprintf(stderr,"[nvn-vulkan] RENDER_OP_HIST frame=%llu %s\n",(unsigned long long)G.present_count+1,line); }
+          { uint64_t fs[3];nvn_dirty_find_stats(fs);
+            fprintf(stderr,"[nvn-vulkan] RENDER_FIND_CACHE frame=%llu miss_scans=%.0f hits=%.0f steps=%.0f\n",
+                (unsigned long long)G.present_count+1,(double)fs[0]/fr,(double)fs[1]/fr,(double)fs[2]/fr); }
           { uint64_t rc[2];dm_rec_take(rc);
             fprintf(stderr,"[nvn-vulkan] RENDER_RECORD_PATH frame=%llu records=%.0f rec_ms=%.3f ns_per_record=%.1f\n",
                 (unsigned long long)G.present_count+1,(double)rc[0]/fr,rc[1]/1e6,rc[0]?(double)rc[1]/(double)rc[0]:0.0); }
