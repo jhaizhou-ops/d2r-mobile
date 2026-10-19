@@ -29,6 +29,7 @@ void dm_cursor_set(int x, int y);
 // it reaches the game in the same sample as the keys. If the front-end main thread writes the cursor global directly at an arbitrary time, the game writes it back from its own controller cursor state before processing A, and A lands at the old cursor
 void dm_cursor_set_screen(float x, float y, float screen_w, float screen_h);
 void dm_cursor_clear(void);
+int dm_ui_mouse_hover_now(float nx, float ny);   // 游戏线程：Mac 无按键悬停，只更新自由光标；不点击、不吸附邻格 | Game thread: Mac button-free hover, updates the free cursor without clicking or snapping to nearby cells
 // 摇杆闭环（过渡做法，原版鼠标模式开关找到前用）：真机上原版逐帧鼠标移动那条路不跑，直写的光标会被手柄光标逻辑盖回。
 // 改为：每次读手柄时读原版光标 (main+0x2d128f8/fc)，离目标 > DM_CURSOR_NEAR（9）像素就推左摇杆朝目标走（60 像素内按距离减力）；
 // 没到位时按下的 A 连同当时的目标位置排队扣住，光标走到该位置才放出（拖放的起点 / 终点各一下）；排队 1.5 秒没到位报红并丢掉。
