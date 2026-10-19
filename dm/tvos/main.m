@@ -13,6 +13,10 @@
 #import <CommonCrypto/CommonDigest.h>
 #include <pthread.h>
 #include <signal.h>
+#include <mach/mach.h>
+#include <os/proc.h>
+#include <time.h>
+#include <unistd.h>
 #include "front.h"
 #include "romfs_validate.h"
 #include "dm_i18n.h"
@@ -111,6 +115,31 @@ static NSString *validate_resources(NSString *base, BOOL needs_astc) {
     [stamps writeToFile:stamp_path atomically:YES];
     return nil;
 }
+// 仅诊断开启：100 ms 采样可捕获加载时被低频帧日志漏掉的瞬时峰值，写入设备本地。
+// Opt-in diagnostics: sample every 100 ms to capture load peaks missed by frame logs; write locally on device.
+static void *memory_trace(void *context) {
+    @autoreleasepool {
+        NSString *base = (__bridge_transfer NSString *)context;
+        FILE *f = fopen([base stringByAppendingPathComponent:@"memory-trace.tsv"].fileSystemRepresentation, "w");
+        if (!f) return NULL;
+        fprintf(f, "# elapsed_ms\tfootprint_MiB\tpeak_MiB\theadroom_MiB\tGPU_MiB\n");
+        struct timespec start; clock_gettime(CLOCK_MONOTONIC, &start);
+        for (unsigned i = 0; i < 18000; i++) { // 约 30 分钟；正常游玩不设环境变量 | About 30 minutes; unset during normal play.
+            task_vm_info_data_t vm; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+            if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &count) == KERN_SUCCESS) {
+                struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+                long long ms = (now.tv_sec - start.tv_sec) * 1000ll + (now.tv_nsec - start.tv_nsec) / 1000000ll;
+                unsigned long long mtl_gpu_allocated_mb(void);
+                fprintf(f, "%lld\t%llu\t%llu\t%llu\t%llu\n", ms, vm.phys_footprint >> 20, vm.ledger_phys_footprint_peak >> 20,
+                        (unsigned long long)os_proc_available_memory() >> 20, mtl_gpu_allocated_mb());
+                fflush(f);
+            }
+            usleep(100000);
+        }
+        fclose(f);
+    }
+    return NULL;
+}
 static void *boot(void *unused) {
     (void)unused;
     @autoreleasepool {
@@ -133,6 +162,12 @@ static void *boot(void *unused) {
     NSString *bundle = NSBundle.mainBundle.resourcePath;
     NSFileManager *fm = NSFileManager.defaultManager;
     for (NSString *p in @[@"save", @"temp", @"RomFS"]) [fm createDirectoryAtPath:[base stringByAppendingPathComponent:p] withIntermediateDirectories:YES attributes:nil error:NULL];
+    static BOOL tracing;
+    if (!tracing && getenv("DM_TV_MEM_TRACE")) {
+        pthread_t thread; void *context = (void *)CFBridgingRetain(base);
+        if (!pthread_create(&thread, NULL, memory_trace, context)) { pthread_detach(thread); tracing = YES; }
+        else CFRelease(context);
+    }
     pathenv("DM_ROMFS", [base stringByAppendingPathComponent:@"RomFS"]);
     pathenv("DM_SAVE", [base stringByAppendingPathComponent:@"save"]);
     pathenv("DM_TEMP", [base stringByAppendingPathComponent:@"temp"]);
