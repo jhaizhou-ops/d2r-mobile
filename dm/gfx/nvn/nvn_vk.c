@@ -98,6 +98,7 @@ static int8_t g_rtf_grp[RT_FSEG_MAX];static int g_rtf_n,g_rtf_print;static uint6
 /* 运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 组别统计 / 2 再加分段表 / 3 再加跨组依赖探针。
    Runtime A/B: rtseg.txt = 0 off (default) / 1 group stats / 2 + segment table / 3 + dependency probe. */
 static int g_rtseg_on;
+static int g_att_audit_on;   /* DM_ATT_AUDIT：附件 store 后是否被读（诊断） | attachment store audit */
 static int g_rtgrp_cur=2;
 /* 跨组依赖探针：T2T 拷贝的源/目标按自身尺寸归类（>2000x900 = 全屏组），统计跨组拷贝。
    跨组拷贝就是并行两组之间必须插同步的点。 | Cross-group dependency probe: T2T copies classified
@@ -634,7 +635,7 @@ static void backend_init(void) {
     {const char *ps=getenv("DM_PASS_SPLIT");G.pass_split_draws=ps?atoi(ps):0;}
     G.fb_cache_enabled=getenv("DM_DISABLE_FB_CACHE")==NULL;
     G.read_memo_enabled=getenv("DM_DISABLE_READ_MEMO")==NULL;
-    G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
+    G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;g_att_audit_on=getenv("DM_ATT_AUDIT")!=NULL;{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
     G.disable_resource_cache=getenv("DM_DISABLE_RESOURCE_CACHE")!=NULL;
     /* 上游（dodola）默认开启，在 Adreno 642L 系统驱动上实测营地 +17.5%（19.23→22.60 fps）。
      * 我们在 Adreno 730 / 同一驱动 id=8 上交替重启四轮 A/B：按标志 27.79/27.55 vs 保守
@@ -866,7 +867,65 @@ static void occlusion_end(void) {
     }
 }
 static void chunk_ts_write(int end);
-static void pass_end_at(int line) { if(S.in_pass) { G.pass_end_sites[line&8191]++;G.pass_end_draws[line&8191]+=G.draws-G.pass_draws0;if(G.profile_detail&&G.profile_frames==30)fprintf(stderr,"[nvn-vulkan] PASSLOG seg=%u rt=%s ps=%.6s n=%d bb=%#x uses=%s draws=%llu end_line=%d\n",G.seg_index,G.pass_desc,G.last_ps,G.last_count,G.last_barrier_bits,G.last_uses,(unsigned long long)(G.draws-G.pass_draws0),line);occlusion_end();vkCmdEndRenderPass(S.command); S.in_pass=0;S.pass_attach_n=0;
+/* ── 附件写后是否被读：诊断探针（DM_ATT_AUDIT=1）──────────────────────────
+   两遍式：录制期记录「每次采样读的 serial + 当时的帧内 op 序号」，以及「每个通道的附件
+   serial + 通道结束时的 op 序号」；帧末结算——某附件若在通道结束之后再也没有被采样，
+   它的 store 就是白写。只统计，不改行为。
+   Pass-attachment store audit (diagnostic): during recording, log every sampled serial with the
+   frame op index, and every pass's attachment serials with its end op index. At frame end, an
+   attachment whose store is followed by no sample is a wasted store. Statistics only. */
+#define ATT_AUDIT_MAX 512
+static struct { uint64_t serial; uint32_t op; } g_att_reads[ATT_AUDIT_MAX*4];
+static unsigned g_att_nreads;
+static struct { uint64_t serial; uint32_t end_op; uint64_t bytes; int depth; } g_att_stores[ATT_AUDIT_MAX];
+static unsigned g_att_nstores;
+static uint64_t g_att_unread_bytes, g_att_unread_n, g_att_store_bytes_all, g_att_store_n_all;
+/* 跨帧：上一帧最后一次 store 的 serial → (帧号, op)，用于判断「本帧开头才被读」的也算被读 */
+#define ATT_XFRAME_MAX 512
+static struct { uint64_t serial; uint64_t frame; uint32_t op; uint64_t bytes; } g_att_prev[ATT_XFRAME_MAX];
+static unsigned g_att_nprev;
+static uint64_t g_att_prev_hit_bytes, g_att_prev_hit_n;
+static void att_audit_read(uint64_t serial) {
+    if(!g_att_audit_on || g_att_nreads >= ATT_AUDIT_MAX*4) return;
+    g_att_reads[g_att_nreads].serial = serial; g_att_reads[g_att_nreads].op = (uint32_t)G.draws; g_att_nreads++;
+}
+static void att_audit_store(uint64_t serial, uint32_t end_op, uint64_t bytes, int depth) {
+    if(!g_att_audit_on || g_att_nstores >= ATT_AUDIT_MAX) return;
+    g_att_stores[g_att_nstores].serial = serial; g_att_stores[g_att_nstores].end_op = end_op;
+    g_att_stores[g_att_nstores].bytes = bytes; g_att_stores[g_att_nstores].depth = depth;
+    g_att_nstores++; g_att_store_bytes_all += bytes; g_att_store_n_all++;
+}
+static void att_audit_frame_end(void) {
+    if(!g_att_audit_on) return;
+    for(unsigned i = 0; i < g_att_nstores; i++) {
+        int read_after = 0;
+        for(unsigned r = 0; r < g_att_nreads; r++)
+            if(g_att_reads[r].serial == g_att_stores[i].serial && g_att_reads[r].op > g_att_stores[i].end_op) { read_after = 1; break; }
+        if(!read_after) { g_att_unread_bytes += g_att_stores[i].bytes; g_att_unread_n++; }
+    }
+    /* 跨帧判定：本帧没读、但上一帧 store 过且本帧读过 → 那次 store 不是白写 */
+    for(unsigned p = 0; p < g_att_nprev; p++) {
+        int read_this_frame = 0;
+        for(unsigned r = 0; r < g_att_nreads; r++) if(g_att_reads[r].serial == g_att_prev[p].serial) { read_this_frame = 1; break; }
+        if(read_this_frame) { g_att_prev_hit_bytes += g_att_prev[p].bytes; g_att_prev_hit_n++; }
+    }
+    g_att_nprev = 0;
+    for(unsigned i = 0; i < g_att_nstores && g_att_nprev < ATT_XFRAME_MAX; i++) {
+        g_att_prev[g_att_nprev].serial = g_att_stores[i].serial;
+        g_att_prev[g_att_nprev].frame = G.present_count;
+        g_att_prev[g_att_nprev].op = g_att_stores[i].end_op;
+        g_att_prev[g_att_nprev].bytes = g_att_stores[i].bytes;
+        g_att_nprev++;
+    }
+    g_att_nreads = g_att_nstores = 0;
+}
+static void pass_end_at(int line) { if(S.in_pass) {
+        if(g_att_audit_on){
+            for(int k=0;k<S.pass_attach_n;k++){
+                VTexture *t=(VTexture *)S.pass_attach_t[k]; if(!t)continue;
+                att_audit_store(t->serial,(uint32_t)G.draws,(uint64_t)t->width*t->height*(t->bpp?t->bpp:4),0);
+            }
+        } G.pass_end_sites[line&8191]++;G.pass_end_draws[line&8191]+=G.draws-G.pass_draws0;if(G.profile_detail&&G.profile_frames==30)fprintf(stderr,"[nvn-vulkan] PASSLOG seg=%u rt=%s ps=%.6s n=%d bb=%#x uses=%s draws=%llu end_line=%d\n",G.seg_index,G.pass_desc,G.last_ps,G.last_count,G.last_barrier_bits,G.last_uses,(unsigned long long)(G.draws-G.pass_draws0),line);occlusion_end();vkCmdEndRenderPass(S.command); S.in_pass=0;S.pass_attach_n=0;
     if(S.pt_open){S.pt_open=0;vkCmdWriteTimestamp(S.command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,S.pass_ts,S.pt[S.npt].q0+1);S.pt[S.npt].q1=S.pt[S.npt].q0+1;S.pt[S.npt].draws=G.draws-S.pt_draws0;S.npt++;} } }
 #define pass_end() pass_end_at(__LINE__)
 static void query_reset(VkQueryPool pool,uint32_t first,uint32_t count) {
@@ -2094,6 +2153,7 @@ static void collect_image_uses(VShader *s) {
         uint64_t serial=G.tslot[tid].texture.serial;unsigned j=0;while(j<S.nimage_uses&&S.image_uses[j].serial!=serial)j++;
         if(j==S.nimage_uses){if(j==2*LIMIT_BINDINGS)die("image-use capacity",j);S.image_uses[S.nimage_uses++]=(ImageUse){serial,0};}
         S.image_uses[j].roles|=b->kind==6?2u:1u;
+        if(b->kind==4)att_audit_read(serial);
         /* 跨组读依赖：这张贴图本帧被别的组写过。 | Cross-group read dependency: written by another group this frame. */
         if(g_rtseg_on>2){int wg;if(wreg_get(serial,&wg)){
             if(wg!=g_rtgrp_cur){g_rtdep_cross++;if(g_rtdep_cn<8){g_rtdep_cs[g_rtdep_cn][0]=serial;g_rtdep_cs[g_rtdep_cn][1]=(uint64_t)g_rtgrp_cur;g_rtdep_cn++;}}
@@ -3856,6 +3916,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
     for(int i=0;i<S.nview;++i)vkDestroyImageView(G.device,S.temporary_views[i],NULL);
     temporaries_retire(&S);
     }
+    att_audit_frame_end();
     G.profile_frames++;
     G.profile_present_ns+=dm_android_nvn_clock_ns()-present_started;
     if(--present_cpu_depth==0){G.profile_present_cpu_ns+=dm_android_nvn_thread_cpu_ns()-present_cpu_started;G.profile_present_calls++;}
@@ -3879,6 +3940,14 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 if(best<0||!bestc)break; n+=snprintf(line+n,sizeof line-n," op%d=%.0f",best,(double)bestc/fr);
                 g_op_hist[best]=0; }
             fprintf(stderr,"[nvn-vulkan] RENDER_OP_HIST frame=%llu %s\n",(unsigned long long)G.present_count+1,line); }
+          if(g_att_audit_on){
+                double fr2=G.profile_frames?(double)G.profile_frames:1.0;
+                fprintf(stderr,"[nvn-vulkan] RENDER_ATT_AUDIT frame=%llu store_mb_per_frame=%.1f unread_mb_per_frame=%.1f unread_passes_per_frame=%.1f unread_pct=%.1f prev_store_read_next_frame_mb=%.1f\n",
+                    (unsigned long long)G.present_count+1,(double)g_att_store_bytes_all/1048576.0/fr2,
+                    (double)g_att_unread_bytes/1048576.0/fr2,(double)g_att_unread_n/fr2,
+                    g_att_store_bytes_all?100.0*(double)g_att_unread_bytes/(double)g_att_store_bytes_all:0.0,
+                    (double)g_att_prev_hit_bytes/1048576.0/fr2);
+                g_att_unread_bytes=g_att_unread_n=g_att_store_bytes_all=g_att_store_n_all=0;g_att_prev_hit_bytes=g_att_prev_hit_n=0; }
           if(g_rtseg_on){ fprintf(stderr,"[nvn-vulkan] RENDER_RT_GROUPS frame=%llu world_ops=%.0f world_draws=%.0f ui_ops=%.0f ui_draws=%.0f other_ops=%.0f switches=%.0f\n",
                 (unsigned long long)G.present_count+1,(double)g_rtgrp_ops[0]/fr,(double)g_rtgrp_draws[0]/fr,
                 (double)g_rtgrp_ops[1]/fr,(double)g_rtgrp_draws[1]/fr,(double)g_rtgrp_ops[2]/fr,(double)g_rtgrp_switches/fr);
