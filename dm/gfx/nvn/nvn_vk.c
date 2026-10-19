@@ -17,6 +17,9 @@
 #include "../tex/nvn_bcdec.h"
 #include <stdatomic.h>
 #include <pthread.h>
+#if defined(__ANDROID__)
+#include <sched.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1141,7 +1144,23 @@ static void sub_begin_ctx(VkSubmission *ctx) {
  * DM_SUB_RING=0 回退单槽。 | Double-buffered main submission context: with one slot,
  * sub_begin_ctx waited for the previous frame's GPU completion + writeback publication before
  * recording could start (measured 2.8-4.7ms dead wait per frame, WAIT_SPLIT slot_ms). */
+/* 诊断：游戏/平台把渲染线程的亲和性限制在 0-6（排除 cpu7 = X2 超大核），实测该线程
+ * 吃满一核而 cpu7 停在 787MHz 空闲。这里允许本线程用全部核，让调度器有机会把它放到
+ * 大核上。DM_AFFINITY_ALL=1 开启（默认关，先做对照）。 */
+/* Diagnostic: the game/platform restricts the render thread's affinity to 0-6 (excluding cpu7,
+ * the X2 prime core). Measured: that thread saturates one core while cpu7 idles at 787MHz.
+ * This widens the calling thread's affinity to every core so the scheduler can place it on the
+ * prime. DM_AFFINITY_ALL=1 enables it (default off for A/B). */
+static void affinity_widen(void) {
+#if defined(__ANDROID__)
+    static int on=-1; if(on<0){const char *e=getenv("DM_AFFINITY_ALL");on=e&&atoi(e)!=0;}
+    if(!on)return;
+    cpu_set_t set; CPU_ZERO(&set); for(int i=0;i<8;i++)CPU_SET(i,&set);
+    sched_setaffinity(0,sizeof(set),&set);
+#endif
+}
 void mtl_sub_begin(void) {
+    affinity_widen();
     if(G.slot_ring_enabled)G.slot_ring_index^=1; else G.slot_ring_index=0;
     sub_begin_ctx(&G.submission_slot_ring[G.slot_ring_index]);
 }
