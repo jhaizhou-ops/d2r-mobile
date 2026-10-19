@@ -78,6 +78,32 @@ static uint64_t g_writes_sum, g_writes_max, g_writes_n;
 /* 每帧回放指令的 opcode 直方图：找出 36k 条记录里到底哪些指令最多。 */
 /* Per-frame replay opcode histogram: which records dominate the ~36k stream. */
 static uint64_t g_op_hist[256];
+/* 按 RT 分类的组别统计 + 分段表：0 世界(3D) / 1 全屏(UI) / 2 其它。
+   组别只随 OP_SET_RT 变化，所以结果缓存在 g_rtgrp_cur，绝不在逐条回放里解引用
+   RT→附件指针（实测那种逐条分类要 -0.9fps / 3%，见 docs/android-resolution-plan.zh-CN.md 附十）。
+   组间切换次数 = 并行可行性的关键；每段起始 op 序号用于确认切分点每帧稳定。
+   RT-class group stats + segment table: 0 world (3D) / 1 full-screen (UI) / 2 other.
+   The group changes only at OP_SET_RT, so it is cached in g_rtgrp_cur and never recomputed
+   per record (per-record classification measured at -0.9 fps / 3%, see the plan doc appendix 10).
+   Group switches gate the parallel feasibility; each segment's start op index shows the split points. */
+#define RT_SEG_MAX 24
+static uint64_t g_rtgrp_ops[3],g_rtgrp_draws[3],g_rtgrp_switches;static int g_rtgrp_last=-1;
+static uint32_t g_rtseg_start[RT_SEG_MAX],g_rtseg_ops[RT_SEG_MAX],g_rtseg_draws[RT_SEG_MAX];
+static int8_t g_rtseg_grp[RT_SEG_MAX];static int g_rtseg_n,g_rtseg_last=-2;static uint32_t g_rtseg_idx;
+/* 帧级累加：一帧跨多个 mtl_exec 句柄，把各句柄的段并入帧段表（相邻同组合并）。
+   Frame-level accumulation: a frame spans several mtl_exec handles; merge them into one table. */
+#define RT_FSEG_MAX 40
+static uint32_t g_rtf_start[RT_FSEG_MAX],g_rtf_ops[RT_FSEG_MAX],g_rtf_draws[RT_FSEG_MAX];
+static int8_t g_rtf_grp[RT_FSEG_MAX];static int g_rtf_n,g_rtf_print;static uint64_t g_rtf_frame=~0ull;static uint32_t g_rtf_idx;
+/* 运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 只组别统计 / 2 再加分段表。
+   Runtime A/B: rtseg.txt = 0 off (default, zero cost) / 1 group stats only / 2 + segment table. */
+static int g_rtseg_on;
+static int g_rtgrp_cur=2;
+static void rt_seg_print(const char *tag,uint64_t frame,uint32_t ops,int n,const int8_t *grp,const uint32_t *st,const uint32_t *op,const uint32_t *dr){
+    char line[900];int m=0;m+=snprintf(line+m,sizeof line-m,"segments=%d ops=%u",n,ops);
+    for(int i=0;i<n&&m<(int)sizeof line-96;i++)
+        m+=snprintf(line+m,sizeof line-m," [%d]g%d@%u+%u/%u",i,(int)grp[i],st[i],op[i],dr[i]);
+    fprintf(stderr,"[nvn-vulkan] %s frame=%llu %s\n",tag,(unsigned long long)frame,line); }
 /* 按"渲染目标类别"分组的 draw 统计：0 全屏(UI/合成) / 1 世界(3D) / 2 阴影(1024^2) / 3 其它。
    "类别"用第一个颜色附件的宽高判定；只有深度附件的按阴影/世界分。 */
 /* Draw stats grouped by render-target class: 0 full-res (UI/composite) / 1 world (3D) / 2 shadow (1024^2) / 3 other.
@@ -3491,6 +3517,19 @@ static void execute(const uint8_t *p,unsigned depth) {
         if(!command_memory_readable(&cursor,p,8))die("command memory outside pools",(long long)(uintptr_t)p);
         op_hdr h;memcpy(&h,p,sizeof(h));if(h.size<8 || h.size%8 || !command_memory_readable(&cursor,p,h.size))die("command record size",h.size);
         G.profile_command_records++;G.profile_command_bytes+=h.size;g_op_hist[h.op&255]++;
+        if(g_rtseg_on){ int grp=g_rtgrp_cur;
+          g_rtgrp_ops[grp]++;
+          if(h.op==OP_DRAW||h.op==OP_DRAW_IDX)g_rtgrp_draws[grp]++;
+          if(g_rtgrp_last>=0&&g_rtgrp_last!=grp)g_rtgrp_switches++;
+          g_rtgrp_last=grp;
+          if(g_rtseg_on>1){
+              if(g_rtseg_last!=grp){
+                  if(g_rtseg_n<RT_SEG_MAX){g_rtseg_start[g_rtseg_n]=g_rtseg_idx+1;g_rtseg_grp[g_rtseg_n]=(int8_t)grp;
+                      g_rtseg_ops[g_rtseg_n]=0;g_rtseg_draws[g_rtseg_n]=0;g_rtseg_n++;}
+                  g_rtseg_last=grp; }
+              if(g_rtseg_n>0){int si=g_rtseg_n-1;g_rtseg_ops[si]++;
+                  if(h.op==OP_DRAW||h.op==OP_DRAW_IDX)g_rtseg_draws[si]++;}
+              g_rtseg_idx++; } }
         const uint8_t *a=p+8;
         switch(h.op) {
         case OP_END:return;
@@ -3511,7 +3550,11 @@ static void execute(const uint8_t *p,unsigned depth) {
             pool_materialize(pool);vkCmdUpdateBuffer(S.command,pool->v.b,off,len,a+16);mark_write(dst,len);S.write_cpu[S.nwrites-1]=a+16;break;}
         case OP_SET_RT:payload_check(&h,sizeof(p_set_rt));G.setrt_total++;
             if(!memcmp(&G.state.rt,a,sizeof(p_set_rt))){G.setrt_same++;if(!G.disable_setrt_skip)break;}
-            pass_end();memcpy(&G.state.rt,a,sizeof(p_set_rt));break;
+            pass_end();memcpy(&G.state.rt,a,sizeof(p_set_rt));
+            if(g_rtseg_on){const p_set_rt *rt=&G.state.rt;int g=2;
+              if(rt->n>0&&rt->color[0])g=(rt->color[0]->d.width>2000&&rt->color[0]->d.height>900)?1:0;
+              else if(rt->depth)g=0; g_rtgrp_cur=g;}
+            break;
         case OP_CLEAR_COLOR:payload_check(&h,sizeof(p_clear_color));clear_color((const p_clear_color *)a);break;
         case OP_CLEAR_DS:payload_check(&h,sizeof(p_clear_ds));clear_ds((const p_clear_ds *)a);break;
         case OP_VIEWPORTS:{payload_check(&h,sizeof(p_viewports));const p_viewports *v=(const void *)a;if(v->first || v->n!=1)die("multiple viewports",v->n);
@@ -3645,9 +3688,26 @@ static void execute(const uint8_t *p,unsigned depth) {
 }
 void mtl_exec(const uint8_t *handle) {
     if(!G.active)die("execute without submission",0);
-    if(replay_cpu_depth++==0)replay_cpu_started=dm_android_nvn_thread_cpu_ns();
+    int outer=(replay_cpu_depth++==0);
+    if(outer){replay_cpu_started=dm_android_nvn_thread_cpu_ns();
+        if(g_rtseg_on>1){
+        /* 帧边界：present_count 一帧内不变（出图时才自增），变化即新帧，打印上一帧的完整分段表。
+           Frame boundary: present_count is constant within a frame; on change print the finished frame. */
+        if(G.present_count!=g_rtf_frame){
+            if(g_rtf_frame!=~0ull && g_rtf_print)rt_seg_print("RENDER_RT_FRAME_SEG",g_rtf_frame,g_rtf_idx,g_rtf_n,g_rtf_grp,g_rtf_start,g_rtf_ops,g_rtf_draws);
+            g_rtf_frame=G.present_count;g_rtf_n=0;g_rtf_idx=0;g_rtf_print=(G.present_count%300<8); }
+        g_rtseg_n=0;g_rtseg_idx=0;g_rtseg_last=-2;} }
     execute(handle,0);
-    if(--replay_cpu_depth==0){G.profile_replay_cpu_ns+=dm_android_nvn_thread_cpu_ns()-replay_cpu_started;G.profile_replay_calls++;}
+    if(--replay_cpu_depth==0){G.profile_replay_cpu_ns+=dm_android_nvn_thread_cpu_ns()-replay_cpu_started;G.profile_replay_calls++;
+        if(g_rtseg_on>1){
+        /* 把本句柄的段并入帧段表，相邻同组合并。 | Merge this handle's segments into the frame table. */
+        for(int i=0;i<g_rtseg_n;i++){
+            if(g_rtf_n>0&&g_rtf_grp[g_rtf_n-1]==g_rtseg_grp[i]){
+                g_rtf_ops[g_rtf_n-1]+=g_rtseg_ops[i];g_rtf_draws[g_rtf_n-1]+=g_rtseg_draws[i]; }
+            else if(g_rtf_n<RT_FSEG_MAX){
+                g_rtf_start[g_rtf_n]=g_rtf_idx+1;g_rtf_grp[g_rtf_n]=g_rtseg_grp[i];
+                g_rtf_ops[g_rtf_n]=g_rtseg_ops[i];g_rtf_draws[g_rtf_n]=g_rtseg_draws[i];g_rtf_n++; }
+            g_rtf_idx+=g_rtseg_ops[i]; } } }
 }
 void mtl_exec_rest(const uint64_t *handles,int n) { (void)handles;(void)n; } /* Optimization-only lookahead; replay order is unchanged. */
 void mtl_sub_index(const uint64_t *handles,int n) { (void)handles;(void)n; } /* No attachment store-elision optimizer in this backend. */
@@ -3795,6 +3855,11 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 if(best<0||!bestc)break; n+=snprintf(line+n,sizeof line-n," op%d=%.0f",best,(double)bestc/fr);
                 g_op_hist[best]=0; }
             fprintf(stderr,"[nvn-vulkan] RENDER_OP_HIST frame=%llu %s\n",(unsigned long long)G.present_count+1,line); }
+          if(g_rtseg_on){ fprintf(stderr,"[nvn-vulkan] RENDER_RT_GROUPS frame=%llu world_ops=%.0f world_draws=%.0f ui_ops=%.0f ui_draws=%.0f other_ops=%.0f switches=%.0f\n",
+                (unsigned long long)G.present_count+1,(double)g_rtgrp_ops[0]/fr,(double)g_rtgrp_draws[0]/fr,
+                (double)g_rtgrp_ops[1]/fr,(double)g_rtgrp_draws[1]/fr,(double)g_rtgrp_ops[2]/fr,(double)g_rtgrp_switches/fr);
+            g_rtgrp_ops[0]=g_rtgrp_ops[1]=g_rtgrp_ops[2]=0;g_rtgrp_draws[0]=g_rtgrp_draws[1]=g_rtgrp_draws[2]=0;
+            g_rtgrp_switches=0;g_rtgrp_last=-1; }
           { uint64_t fs[3];nvn_dirty_find_stats(fs);
             fprintf(stderr,"[nvn-vulkan] RENDER_FIND_CACHE frame=%llu miss_scans=%.0f hits=%.0f steps=%.0f\n",
                 (unsigned long long)G.present_count+1,(double)fs[0]/fr,(double)fs[1]/fr,(double)fs[2]/fr); }
@@ -3979,6 +4044,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(rmdir&&*rmdir&&snprintf(rmf,sizeof rmf,"%s/readmemo.txt",rmdir)<(int)sizeof rmf){FILE *fp=fopen(rmf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.read_memo_enabled){G.read_memo_enabled=m;
                 fprintf(stderr,"[nvn-vulkan] READ_MEMO 运行中切换 → %d\n",m);}fclose(fp);}}}
+        /* 分段统计运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 组别 / 2 组别+分段表。
+           RT segment stats runtime A/B: rtseg.txt = 0 off (default) / 1 groups / 2 + segment table. */
+        { static const char *rsdir; if(!rsdir)rsdir=getenv("DM_FRAME_DIR"); char rsf[1300];
+          if(rsdir&&*rsdir&&snprintf(rsf,sizeof rsf,"%s/rtseg.txt",rsdir)<(int)sizeof rsf){FILE *fp=fopen(rsf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=2&&m!=g_rtseg_on){g_rtseg_on=m;
+                fprintf(stderr,"[nvn-vulkan] RT_SEG 运行中切换 → %d\n",m);}fclose(fp);}}}
         /* 有意通道分割器运行时切换：passsplit.txt = 单通道 draw 上限（0=关）。 | Intentional
          * pass splitter: passsplit.txt = draws per pass cap (0 = off). */
         { static const char *psdir; if(!psdir)psdir=getenv("DM_FRAME_DIR"); char psf[1300];
