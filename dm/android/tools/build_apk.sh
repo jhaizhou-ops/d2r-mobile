@@ -51,6 +51,10 @@ mapfile -t CLASSES < <(find "$OUT/classes" -name '*.class')
 cp "$OUT/base.apk" "$OUT/dodola.apk"
 cp "$OUT/dex/classes.dex" "$OUT/stage/classes.dex"
 cp "$CMAKE/libd2r_mobile_android.so" "$OUT/stage/lib/arm64-v8a/"
+# ASan 构建时把运行时库一起打进 APK（否则进程加载会因 NEEDED 缺失而起不来）。缺省没有这个文件，跳过。
+# An ASan build also ships the sanitizer runtime, otherwise the process cannot resolve the NEEDED lib.
+ASAN_RT=$(ls /home/vick/Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/libclang_rt.asan-aarch64-android.so 2>/dev/null | head -1)
+if [ -n "$ASAN_RT" ] && [ "${DM_PACK_ASAN:-0}" = "1" ]; then cp "$ASAN_RT" "$OUT/stage/lib/arm64-v8a/"; echo "packed ASan runtime: $(basename "$ASAN_RT")"; fi
 python3 - "$OUT/dodola.apk" "$OUT/stage" <<'EOF'
 import os, sys, zipfile
 apk, stage = sys.argv[1], sys.argv[2]

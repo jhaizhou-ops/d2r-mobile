@@ -1,6 +1,23 @@
 cmake_minimum_required(VERSION 3.22)
 project(d2r_mobile_android LANGUAGES C ASM)
 add_link_options(-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384)
+# ASan 变体（默认关）：只用于抓内存错误。静态链接运行时，免得再往 APK 里放 libclang_rt.asan 和 wrap.sh。
+# ASan variant (off by default): memory-error hunting only. The runtime is linked statically so the APK
+# does not need libclang_rt.asan plus a wrap.sh.
+option(DM_ASAN "Build with AddressSanitizer (static runtime)" OFF)
+if(DM_ASAN)
+  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+  # 静态 ASan 运行时：NDK 的 clang 不会自动把它链进 SHARED 库（只对可执行文件生效），
+  # 这里显式把归档整段链进来，免得再往 APK 里放 libclang_rt.asan 和 wrap.sh。
+  # The NDK clang does not link the static ASan runtime into a SHARED library automatically, so the
+  # archive is linked whole here; that avoids shipping libclang_rt.asan plus a wrap.sh in the APK.
+  # 共享运行时由 clang 自动加 NEEDED；打包时需要把 libclang_rt.asan-aarch64-android.so 一起放进
+  # APK（build_apk.sh 里 DM_PACK_ASAN=1 会做），否则进程解析不到依赖而起不来。
+  # The shared runtime is added as a NEEDED entry by clang; build_apk.sh packs
+  # libclang_rt.asan-aarch64-android.so into the APK when DM_PACK_ASAN=1, otherwise the process
+  # cannot resolve the dependency and fails to start.
+  add_link_options(-fsanitize=address)
+endif()
 if(NOT ANDROID OR NOT ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_PLATFORM_LEVEL LESS 29)
   message(FATAL_ERROR "The native guest host requires Android 29+ arm64-v8a")
 endif()
