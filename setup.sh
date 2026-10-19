@@ -146,6 +146,9 @@ if ! "$PY" "$T/dmsh_chain.py" --check-tools > /dev/null 2>&1; then
   "$PY" "$T/dmsh_chain.py" --update-lock > /dev/null && "$PY" "$T/dmsh_chain.py" --header > /dev/null || die "翻译链登记没成功"
 fi
 V=$("$PY" "$T/dmsh_chain.py")
+if ! grep -Fq "\"$V\"" "$HERE/dm/gfx/nvn/dmsh_chain.h"; then
+  "$PY" "$T/dmsh_chain.py" --header > /dev/null || die "No se pudo actualizar la identidad de shaders del host"
+fi
 # 翻译这一步做没做全，只认完成标记里的逐个结果：标记 _b_build.json（写在 Mac 侧缓存目录）里每个着色器都是 ok，并且 iOS 库目录里每个都有对应的库文件。
 # 只看「标记在、库目录里至少有一个文件」不够：翻译脚本即使全部失败也会写标记并正常退出，那样会把一个空的或缺了几千个的库当成做完。
 # Whether this step is complete is decided only by the per-shader results in the completion marker: every shader in _b_build.json (in the Mac-side cache directory) is ok, and every one has its library file in the iOS library directory.

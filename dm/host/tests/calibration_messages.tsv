@@ -1,0 +1,14 @@
+# Secuencia sintética de mensajes de calibración; no contiene una captura de usuario.
+PanelManager	OpenExclusivePanel	TitleScreenPanel
+PanelManager	OpenPanel	GammaCalibrationPanel
+PanelManager	ClosePanel	TitleScreenPanel
+OptionsPanelMessage	AcceptChanges	-
+PanelManager	UnloadPanel	GammaCalibrationPanel
+PanelManager	OpenPanel	ScreenSpaceCalibrationPanel
+OptionsPanelMessage	AcceptChanges	-
+PanelManager	UnloadPanel	ScreenSpaceCalibrationPanel
+PanelManager	OpenPanel	ColorBlindCalibrationPanel
+OptionsPanelMessage	AcceptChanges	-
+PanelManager	UnloadPanel	ColorBlindCalibrationPanel
+PanelManager	OpenPanel	TitleScreenPanel
+PanelManager	UnloadPanel	TitleScreenPanel

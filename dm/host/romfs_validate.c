@@ -30,7 +30,8 @@ static int count_files(const char *root) {
 static const char *need[] = {
     "00-00000001.data", "00-00000002.data", "00-00000003.data", "00-00000004.data", "00-00000005.data", "00-00000006.data",
     "01-00000001.data", "01-00000002.data", "02-00000001.data", "02-00000002.data", "03-00000001.data", "03-00000002.data",
-    "04-00000001.data", "04-00000002.data", "05-00000001.data", "05-00000002.data", "17-00000001.data", "17-00000002.data"};
+    "04-00000001.data", "04-00000002.data", "05-00000001.data", "05-00000002.data", "17-00000001.data", "17-00000002.data",
+    "07-00000001.data", "07-00000002.data", "13-00000001.data", "13-00000002.data"};
 // 字节数也核：玩家从「文件」拖进来可能只拷了一半。本构建各文件的原始字节数固定（也就认出了是不是这个版本的资源）；带「.holes」区段表的剔零档案
 // （hle_fs.c）= 原始字节数减去表里各零段长度，表首行的 size 须等于原始字节数。
 // Byte counts are checked too: a player dragging files in from the Files app may have copied only half. The original byte count of each file is fixed
@@ -40,8 +41,18 @@ static const char *need[] = {
 static const long long size[] = {
     1073741824, 1073741821, 1026342790, 3664822, 391990840, 3794407,
     344377972, 37189352, 368762692, 23206186, 251620752, 55071917,
-    118831405, 8915855, 478931036, 92048235, 204495617, 4496514};
+    118831405, 8915855, 478931036, 92048235, 204495617, 4496514,
+    227505280, 7036462, 206331662, 4579633};
 #define NEED_N (sizeof need / sizeof *need)
+static int need_required(size_t i) {
+    if (i < 18) return 1;
+    int language = dm_voice_index();
+    return (language == 2 && i < 20) || (language == 10 && i >= 20);
+}
+static int need_count(void) {
+    int language = dm_voice_index();
+    return language == 2 || language == 10 ? 20 : 18;
+}
 // 第 i 个必需文件此刻的状态：0 齐了，1 没有，2 字节数不对（have / want 写出现有与应有），3 区段表不对。dir = 直接放着档案文件的那个目录
 // Current state of the i-th required file: 0 complete, 1 missing, 2 wrong byte count (have / want receive the actual and expected sizes), 3 wrong extent
 // table. dir = the directory that directly contains the archive files
@@ -58,20 +69,20 @@ static void human(long long b, char *o, size_t n) { if (b < 1000000) snprintf(o,
 // The full list shown to the player (for the resources screen): how many present / how many in total, with each missing or incompletely copied file listed one by one (with its expected size), not just the first one. Returns the number missing / incomplete
 int dm_romfs_report(const char *dir, char *out, size_t out_n) {
     int bad = 0, ok = 0; char miss[1200] = "", part[800] = ""; long long have, want;
-    for (size_t i = 0; i < NEED_N; i++) { int st = need_state(dir, i, &have, &want); char a[40], b[40]; human(want, a, sizeof a); human(have, b, sizeof b);
+    for (size_t i = 0; i < NEED_N; i++) { if (!need_required(i)) continue; int st = need_state(dir, i, &have, &want); char a[40], b[40]; human(want, a, sizeof a); human(have, b, sizeof b);
         if (!st) { ok++; continue; } bad++;
         if (st == 1) { if (strlen(miss) < sizeof miss - 80) snprintf(miss + strlen(miss), sizeof miss - strlen(miss), dm_ui("dmRvItem"), *miss ? dm_ui("dmRvSep") : "", need[i], a); }
         else if (strlen(part) < sizeof part - 100) snprintf(part + strlen(part), sizeof part - strlen(part), dm_ui("dmRvItem2"), *part ? dm_ui("dmRvSep") : "", need[i], st == 3 ? dm_ui("dmRvHolesBad") : b, a); }
     if (!bad) { snprintf(out, out_n, dm_ui("dmRvAllOk"), ok); return 0; }
-    snprintf(out, out_n, dm_ui("dmRvReport"), ok, (int)NEED_N, *miss ? dm_ui("dmRvMissing") : "", miss, *miss ? dm_ui("dmRvPeriod") : "", *part ? dm_ui("dmRvPartial") : "", part, *part ? dm_ui("dmRvPeriod") : "");
+    snprintf(out, out_n, dm_ui("dmRvReport"), ok, need_count(), *miss ? dm_ui("dmRvMissing") : "", miss, *miss ? dm_ui("dmRvPeriod") : "", *part ? dm_ui("dmRvPartial") : "", part, *part ? dm_ui("dmRvPeriod") : "");
     return bad;
 }
 int dm_romfs_validate(const char *dir, char *why, size_t why_n) {
-    for (size_t i = 0; i < NEED_N; i++) { long long have, want; int st = need_state(dir, i, &have, &want);
+    for (size_t i = 0; i < NEED_N; i++) { if (!need_required(i)) continue; long long have, want; int st = need_state(dir, i, &have, &want);
         if (st == 1) { snprintf(why, why_n, dm_ui("dmRvNoFile"), need[i]); return 0; }
         if (st == 3) { snprintf(why, why_n, dm_ui("dmRvHoles"), need[i]); return 0; }
         if (st == 2) { snprintf(why, why_n, dm_ui("dmRvShort"), need[i], have, want); return 0; }
     }
-    snprintf(why, why_n, "档案 %d 个齐、字节数对；目录里共 %d 个文件", (int)NEED_N, count_files(dir));   // 通过时 why 供启动日志记一行 | On success, why gives the startup log one line to record
+    snprintf(why, why_n, "Archivos verificados: %d; archivos en el directorio: %d", need_count(), count_files(dir));
     return 1;
 }

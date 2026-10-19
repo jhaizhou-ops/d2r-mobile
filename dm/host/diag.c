@@ -220,6 +220,11 @@ static void probe_add(module_t *m, uint64_t off, long dump, probe_fn fn) {
 #define UIH_BITS 18
 static struct { uint64_t h; const char *s; } *g_uih;
 static uint64_t fnv1a(const char *p, size_t n) { uint64_t h = 0xcbf29ce484222325ull; for (size_t i = 0; i < n; i++) h = (h ^ (uint8_t)p[i]) * 0x100000001b3ull; return h; }
+static void uih_add(const char *name,size_t length) {
+    uint64_t hash=fnv1a(name,length);unsigned i=(unsigned)(hash>>(64-UIH_BITS));
+    while(g_uih[i].s&&g_uih[i].h!=hash)i=(i+1)&((1u<<UIH_BITS)-1);
+    g_uih[i].h=hash;g_uih[i].s=name;
+}
 static void uih_build(void) {
     module_t *m = &g_mod[0];
     g_uih = calloc(1u << UIH_BITS, sizeof *g_uih);
@@ -227,9 +232,7 @@ static void uih_build(void) {
     while (p < e) {
         const char *q = p; while (q < e && *q >= 0x20 && *q < 0x7f) q++;
         if (q < e && !*q && q - p >= 3) {
-            uint64_t h = fnv1a(p, q - p); unsigned i = (unsigned)(h >> (64 - UIH_BITS));
-            while (g_uih[i].s && g_uih[i].h != h) i = (i + 1) & ((1u << UIH_BITS) - 1);
-            g_uih[i].h = h; g_uih[i].s = p;
+            uih_add(p,(size_t)(q-p));
         }
         p = q + 1;
     }
@@ -336,7 +339,8 @@ void uimsg_subscribe(void (*fn)(const char *cat, const char *act, const char *ar
 #define UIH_MONSTERHEALTH 0xd3a07a5ecad1a9a3ull
 #define UIH_SETINFO       0x40ffba2d98a3ff97ull
 static void monres_on_setinfo(const uint64_t *regs, uint64_t payload) {
-    int dm_custom_get(const char *key); if (!dm_custom_get("item_notes") || dm_lang_index() != 8) return;   // 物品注释一系只有简中版（英文版：别的语言不显示；注释只写进 zhCN 一列） | the item-notes family exists only in Simplified Chinese (English version: not shown in other languages; notes are written only into the zhCN column)
+    int dm_custom_get(const char *key); int es = dm_lang_es();
+    if (!dm_custom_get("item_notes") || (dm_lang_index() != 8 && !es)) return;
     module_t *mm = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) mm = &g_mod[i];
     uint64_t unit = regs[19], name = 0; uint32_t type = 0; vm_size_t got = 0;
     if (!mm || !unit || vm_read_overwrite(mach_task_self(), unit, 4, (vm_address_t)&type, &got) || type != 1) return;   // 只认怪物（单位类型 1） | Monsters only (unit type 1)
@@ -344,9 +348,12 @@ static void monres_on_setinfo(const uint64_t *regs, uint64_t payload) {
     int (*get)(uint64_t, int, int) = (int (*)(uint64_t, int, int))(mm->base + 0x5b9290);
     static const int id[6] = {36, 37, 39, 41, 43, 45};
     static const char *lb[6] = {"物", "魔", "火", "电", "冰", "毒"}, *cc[6] = {"\xee\x81\xbe" "4", "\xee\x81\xbe" "8", "\xee\x81\xbe" "1", "\xee\x81\xbe" "9", "\xee\x81\xbe" "3", "\xee\x81\xbe" "2"};   // 颜色：字符串表加载时把「ÿc<码>」换成私用区 U+E07E + <码>（UTF-8 EE 81 BE，读缓冲区实测），这里直接写换后的形式（暗金 / 橙 / 红 / 黄 / 蓝 / 绿） | Colors: when the string table loads, "ÿc<code>" is replaced by private-use U+E07E + <code> (UTF-8 EE 81 BE, measured by reading the buffer); here we write the replaced form directly (unique gold / orange / red / yellow / blue / green)
+    static const char *const es_lb[6] = { "Fís.", "Mág.", "Fue.", "Ray.", "Frío", "Ven." };
     char add[160] = ""; size_t n = 0;
     for (int i = 0; i < 6; i++) { int v = get(unit, id[i], 0); if (!v) continue;
-        int w = v >= 100 ? snprintf(add + n, sizeof add - n, " %s%s免", cc[i], lb[i]) : snprintf(add + n, sizeof add - n, " %s%s%d", cc[i], lb[i], v);
+        int w;
+        if (es) w = v >= 100 ? snprintf(add + n, sizeof add - n, " %s%s inm.", cc[i], es_lb[i]) : snprintf(add + n, sizeof add - n, " %s%s %d", cc[i], es_lb[i], v);
+        else w = v >= 100 ? snprintf(add + n, sizeof add - n, " %s%s免", cc[i], lb[i]) : snprintf(add + n, sizeof add - n, " %s%s%d", cc[i], lb[i], v);
         if (w < 0 || (size_t)w >= sizeof add - n) return; n += (size_t)w; }
     { static int lg = -1; static uint64_t last; if (lg < 0) lg = getenv("DM_TEST_MONRES_LOG") != NULL;   // 回归判据：单位换了才记一行（拼出的串 + 六项属性原值） | Regression criterion: log a line only when the unit changes (the assembled string + the raw values of the six stats)
       if (lg && unit != last) { last = unit; int v[6]; for (int i = 0; i < 6; i++) v[i] = get(unit, id[i], 0);
@@ -441,6 +448,7 @@ void probe_install(void) {
     if (gate_obs_present(OBS_SETLANG)) gate_obs_set(OBS_SETLANG, setlang_obs);
     if (gate_obs_present(OBS_EVENT_MSG)) gate_obs_set(OBS_EVENT_MSG, event_msg_obs);
     { void dm_ui_tooltip_obs(const uint64_t *regs); if (gate_obs_present(OBS_TOOLTIP)) gate_obs_set(OBS_TOOLTIP, dm_ui_tooltip_obs); }   // 说明框停靠（dm_cursor.c） | tooltip docking (dm_cursor.c)
+    { void dm_ui_pc_grid_draw_obs(const uint64_t *regs); if (gate_obs_present(OBS_PC_GRID_DRAW)) gate_obs_set(OBS_PC_GRID_DRAW, dm_ui_pc_grid_draw_obs); }
     const char *ui = getenv("DM_UIMSG");
     if (ui && strcmp(ui, "1") && !(g_uifp = fopen(ui, "w"))) die("DM_UIMSG 打不开 %s", ui);
     g_ui_print = ui != NULL;

@@ -7,6 +7,7 @@
 #include "dm_cursor.h"
 #include "hle.h"
 #include "dm_uiscreen.h"
+#include <TargetConditionals.h>
 
 // 运行模式是运行时状态（前端可改：iOS 过热降级切掌机）：唯一来源在此，启动时从 DM_OPMODE 取一次，之后不再读环境变量
 // The operation mode is runtime state (the front end can change it: iOS overheat downgrade switches to handheld): the single source is here, taken once from DM_OPMODE at startup, the environment variable is not read again afterwards
@@ -284,7 +285,12 @@ HLE_FORCE("_ZN2nn2oe44SetPerformanceModeChangedNotificationEnabledEb", "性能�
 HLE_FORCE("_ZN2nn2oe18GetDesiredLanguageEv", "系统语言查询；按 DM_LANG 给值", uint64_t, h_oe_GetLang, void) {
     const char *e = getenv("DM_LANG");
     char code[8] = {0};
-    strncpy(code, e ? e : "zh-Hans", sizeof code - 1);
+#if TARGET_OS_IPHONE
+    const char *fallback = "zh-Hans";
+#else
+    const char *fallback = "es";
+#endif
+    strncpy(code, e && *e ? e : fallback, sizeof code - 1);
     uint64_t v; memcpy(&v, code, 8);
     return v;
 }

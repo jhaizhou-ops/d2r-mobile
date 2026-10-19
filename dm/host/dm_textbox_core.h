@@ -11,3 +11,9 @@ int dm_textbox_rewrite(const char *s, size_t n, char **out, size_t *on);
 // 读对照表（只读一次，不挂门；实现在 dm_textbox.c）：返回 1 = 有表，0 = 没有（物品注释关着 / 没有覆盖层）
 // Read the mapping table (read only once, does not hook the gate; implemented in dm_textbox.c): returns 1 = table present, 0 = none (item annotations off / no overlay)
 int dm_textbox_ensure_loaded(void);
+
+// Mapa independiente de nombres oficiales de colección; sólo coincidencia exacta.
+// El consumidor debe comprobar PC/español y el widget vivo antes de usarlo.
+int dm_collection_names_load(const char *path);
+void dm_collection_names_reset(void);
+int dm_collection_names_rewrite(const char *s,size_t n,char **out,size_t *on);

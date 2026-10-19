@@ -331,6 +331,34 @@ for n, (roff, form) in _hreg.items():
         bad(f'分支门 svc #{n:#x} {roff:#x}：块不符模板'); continue
     if gates.get(ks[0] + 12) != ('svc', n, roff): bad(f'分支门 svc #{n:#x} gates.tsv 行不符：{gates.get(ks[0] + 12)}')
     seen.add(ks[0] + 12); nbranch += 1
+# Observación de una llamada sin cambiar su ABI: lector host, restauración y BL original.
+# ADRP/ADD x30=off+4 seguido de B callee reproduce también el LR visible del BL.
+nobserve_call = 0
+for n, (roff, form) in _hreg.items():
+    if not form.startswith('observación BL:'): continue
+    cut = next((c for c in cuts if c[0] == roff), None)
+    if cut is None: continue
+    mt = re.search(r'bl (0x[0-9a-fA-F]+) lr (0x[0-9a-fA-F]+)', form)
+    if not mt or int(mt[2],16) != roff+4:
+        bad(f'Observador BL svc#{n:x}: contrato LR inválido'); continue
+    target = int(mt[1],16); start = btarget(roff)
+    ks = keyseq(start+4) if start is not None and PO <= start < len(pat)-48 else None
+    if len(cut[1]) != 4 or len(cut[2]) != 4 or _bl(W(orig,roff),roff) != target or not ks:
+        bad(f'Observador BL svc#{n:x}: origen/destino/plantilla inválidos'); continue
+    at = ks[0]+16
+    delta = (((roff+4)&~0xfff)-(at&~0xfff))>>12
+    adrp = 0x9000001e | ((delta&3)<<29) | (((delta>>2)&0x7ffff)<<5)
+    add = 0x910003de | (((roff+4)&0xfff)<<10)
+    keydelta = (h['KEY_PAGE_OFF']-((start+8)&~0xfff))>>12
+    keyadrp = 0x9000001d | ((keydelta&3)<<29) | (((keydelta>>2)&0x7ffff)<<5)
+    if W(pat,start) != 0xa9bf7bfd or W(pat,start+4) != 0xd53bd07e or ks[1] != KEY.get('KGATE') \
+        or W(pat,start+8) != keyadrp or W(pat,start+12) != (0xf94003bd | (KEY['KGATE']<<10)) or W(pat,start+16) != 0x8b1d03de \
+        or W(pat,ks[0]) != 0xf94003de or W(pat,ks[0]+4) != LDR_X29_SP or W(pat,ks[0]+8) != 0xd63f03c0 \
+        or W(pat,ks[0]+12) != 0xa8c17bfd or W(pat,at) != adrp or W(pat,at+4) != add or W(pat,at+8) != B(at+8,target):
+        bad(f'Observador BL svc#{n:x}: operandos, LR o B final no coinciden'); continue
+    if gates.get(ks[0]+12) != ('svc',n,roff):
+        bad(f'Observador BL svc#{n:x}: fila gates.tsv incorrecta'); continue
+    seen.add(ks[0]+12); nobserve_call += 1
 if set(gates) != seen: bad(f'gates.tsv 有多余行 {len(set(gates) - seen)}')
 
 # ⑥ 线程槽
@@ -351,7 +379,7 @@ expected = {}
 for kind in sites.values():
     key = {'x18': 'K18', 'W': 'K18', 'tpidr_r': 'KTLS', 'tpidr_w': 'KTLS', 'tpidrro_r': 'KTLR'}.get(kind)
     if key: expected[key] = expected.get(key, 0) + 1
-expected['KGATE'] = len(gsites) + len(obs) + nbranch
+expected['KGATE'] = len(gsites) + len(obs) + nbranch + nobserve_call
 for _, _, _, key in params: expected[key] = expected.get(key, 0) + 1
 if any(nk.get(k, 0) != v for k, v in expected.items()) or any(k not in expected and v for k, v in nk.items()):
     bad(f'键页槽访问计数不符：期望 {expected} 实际 {nk}')
@@ -553,6 +581,6 @@ cnt = {}
 if _hostcall: print(f'剪口引入宿主调用门 {len(_hostcall)} 个：' + ', '.join(f"{a:#x}=svc#{n:#x}" for a, n in _hostcall.items()))
 for k in sites.values(): cnt[k] = cnt.get(k, 0) + 1
 print(f'STRUCT {mod} {"OK" if not fails else "FAIL"} 改写点={len(sites)} {cnt} 跳转表={jumps} 窗口内x18引用={nwin_ref} '
-      f'已登记剪口={len(cuts)}(代码{ncut_code}/数据{ncut_data}) 观测门={len(obs)} 参数门={len(params)} '
+      f'已登记剪口={len(cuts)}(代码{ncut_code}/数据{ncut_data}) 观测门={len(obs)} 观察BL={nobserve_call} 参数门={len(params)} '
       f'独立分母={len(ind)} text改动字={len(diff)} 门={len(gsites)} 槽访问={nk} 失败项={len(fails)}')
 sys.exit(1 if fails else 0)

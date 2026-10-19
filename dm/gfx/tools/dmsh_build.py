@@ -338,6 +338,10 @@ def reflect(key, stage, msl, res):
             d = decode_tex(nm)
             if not d: e.update(kind='?')
             else: e.update(kind='img' if re.match(r'[a-z]+_i', nm) else ('tbuf' if 'texture_buffer' in ty else 'tex'), reg=d[0])
+        # SPIRV-Cross 1.4.363 declara texture<float> y convierte a depth
+        # al comparar. La textura vacía debe conservar esa semántica.
+        if e.get('kind') == 'tex' and re.search(r'\bspvDepthCast\s*\(\s*spvDescriptorSet0\.' + re.escape(nm) + r'\s*\)', msl):
+            e['depth_compare'] = True
         binds.append(e)
     # 存储缓冲：SPIR-V 绑定号 → c0 偏移 → NVN 存储缓冲槽（c0 基址：顶点 0x110、计算 0x310、像素 0x510，每槽 0x10）
     # Storage buffers: SPIR-V binding number → c0 offset → NVN storage buffer slot (c0 base: vertex 0x110, compute 0x310, pixel 0x510, 0x10 per slot)

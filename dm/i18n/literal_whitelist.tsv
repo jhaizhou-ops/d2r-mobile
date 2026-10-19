@@ -86,7 +86,6 @@ host/dm_padmode.c	%s=「%s」	测试日志里拼的串（键 = 值），不上�
 host/dm_padmode.c	=、	同上
 host/dm_padmode.c	=(空)	同上
 ios/tools/gen_romfs_overlay.py	触屏版布局在 layouts/	覆盖层标记文件 ctrl_touch 的内容，不上屏
-host/romfs_validate.c	档案 %d 个齐	校验通过时的摘要，只进启动日志
 host/diag.c	服务端已没有这件	拾取诊断，只进日志（LOG「拾取：物品…」）
 host/diag.c	还在地上（没捡成）	同上
 host/diag.c	容器 %u 页 %u 格	同上

@@ -15,6 +15,7 @@
 #include "dm_uiscreen.h"
 #include "hle.h"
 #include "dm.h"
+#include <TargetConditionals.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +50,11 @@ static _Atomic int g_panel;
 int dm_uiscreen_panel(void) { return atomic_load(&g_panel); }
 void dm_uiscreen_set_panel(int on) { if (atomic_exchange(&g_panel, on != 0) != (on != 0) && atomic_load(&g_ingame) && atomic_load(&g_rw)) LOG("界面画面：%s", on ? "开大面板 → 界面移到正中" : "大面板关了 → 界面回落"); }
 static int yoff(void) { int rh = atomic_load(&g_rh), uh = atomic_load(&g_uh), m = mode(); if (!atomic_load(&g_rw) || rh <= uh || m == DM_UISCREEN_OFF) return 0;
-    if (!atomic_load(&g_ingame) || atomic_load(&g_panel)) m = DM_UISCREEN_CENTER; return m == DM_UISCREEN_CENTER ? (rh - uh) / 2 : m == DM_UISCREEN_BOTTOM ? rh - uh : 0; }
+    int desktop=0;
+#if TARGET_OS_OSX
+    int dm_ui_pc_desktop(void);desktop=dm_ui_pc_desktop();
+#endif
+    if (!atomic_load(&g_ingame) || (atomic_load(&g_panel) && !desktop)) m = DM_UISCREEN_CENTER; return m == DM_UISCREEN_CENTER ? (rh - uh) / 2 : m == DM_UISCREEN_BOTTOM ? rh - uh : 0; }
 
 // 跟着世界走的界面字（地上物品名、NPC 名字牌、血条、飘字）：游戏用镜头的「世界点 → 屏幕」main+0x1237c60(镜头, 点, out) 算出真实画面像素（y = [镜头+0x144] × (0.5 − 0.5·ndc_y)），
 // 直接当界面坐标用（调用方只有 0x90d110 四处与 0xa71bb0）。界面整趟下移 y0 之后这些字就低了 y0（名字牌落到脚下）。

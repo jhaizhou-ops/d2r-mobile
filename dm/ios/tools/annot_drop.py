@@ -68,7 +68,8 @@ def _strings_get(s, key):
 
 class Tables:
     """一次性读好要用的游戏表。 | Read all the game tables that are needed, once."""
-    def __init__(self, romfs):
+    def __init__(self, romfs, spanish=False):
+        self.spanish = spanish
         from annot_strings import excel
         self.misc = {r['code']: r for r in excel(romfs, 'misc.txt') if r.get('code')}
         self.weap = {r['code']: r for r in excel(romfs, 'weapons.txt') if r.get('code')}
@@ -134,7 +135,10 @@ class Tables:
         for c in self.cube:
             if (c.get('input 1', '') or '').split(',')[0] in fam:
                 for k in range(1, 6):
-                    if c.get('mod %d' % k) in CRAFT_GLOVE_MODS: return CRAFT_GLOVE_MODS[c.get('mod %d' % k)]
+                    if c.get('mod %d' % k) in CRAFT_GLOVE_MODS:
+                        code = c.get('mod %d' % k)
+                        return ({'crush': 'golpe triturador', 'mana-kill': 'maná por baja'}
+                                if self.spanish else CRAFT_GLOVE_MODS)[code]
         return None
 
 
@@ -150,28 +154,38 @@ def _rune_line(code, name):
 def misc_rule(T, s, code, name):
     """杂物类一个物品码的掉落名；None = 不改。 | Drop name for one miscellaneous item code; None = no change."""
     row = T.misc[code]; t = row.get('type', '')
-    if code in SHORT: return SHORT[code]
-    if code in STRIP and name.endswith(STRIP[code]): return name[:-len(STRIP[code])]
+    spanish = s.spanish
+    if code in SHORT:
+        return (PURPLE + name if code in ('rvs', 'rvl') else name) if spanish else SHORT[code]
+    if not spanish and code in STRIP and name.endswith(STRIP[code]): return name[:-len(STRIP[code])]
     if t in ('hpot', 'mpot') and code[-1:].isdigit():
-        i = int(code[-1]) - 1; w = SIZE[i] + ('红' if t == 'hpot' else '蓝')
+        i = int(code[-1]) - 1
+        w = name if spanish else SIZE[i] + ('红' if t == 'hpot' else '蓝')
         return (RED if t == 'hpot' else BLUE) + w if i == 4 else w
     if t in GEM_COLOR:
         g = SKULL_GRADE_CH.get(code[2]) if t == 'gemz' else GEM_GRADE_CH.get(code[1])
         if g is None: return None
         word, color = GEM_GRADE[g]
-        base = color + word + '-' + GEM_COLOR[t] if word else name
+        base = color + name if spanish else color + word + '-' + GEM_COLOR[t] if word else name
         n = T.gem_rune(code) if g <= 2 else None
-        return base + (' (合%d)' % n if n else '')
+        return base + ((' (runa #%d)' if spanish else ' (合%d)') % n if n else '')
     if t == 'rune' and re.fullmatch(r'r\d\d', code): return _rune_line(code, name)
     if code in SOURCE_NOTE:
         src = T.sources(code)
         if not src: raise SystemExit('annot_drop：%s 在掉落表里找不到来源首领' % code)
-        who = '或'.join(dict.fromkeys(_strings_get(s, key) or key for _, _, key in src))
+        who = (' o ' if spanish else '或').join(dict.fromkeys(_strings_get(s, key) or key for _, _, key in src))
         act = next((BOSS_ACT[x[1]] for x in src if x[1] in BOSS_ACT), None)
         color = SOURCE_COLOR.get(code, GREEN)
-        return color + '[' + who + ' · ' + SOURCE_NOTE[code] + ']\n' + color + name + (' 第%d幕' % act if act else '')
+        note = ('llave de la antorcha' if code.startswith('pk') else
+                'material de la antorcha' if code in ('dhn', 'bey', 'mbr') else
+                'crear muestra de absolución') if spanish else SOURCE_NOTE[code]
+        detail = '[' + who + ' · ' + note + ']'
+        if spanish:
+            from annot_strings import annotation_lines
+            detail = annotation_lines(detail)
+        return color + detail + '\n' + color + name + (((' · Acto %d' if spanish else ' 第%d幕') % act) if act else '')
     m = re.search(r'Act ?(\d)', row.get('name', ''))
-    if m and t == 'ques' and code.startswith('ua'): return '%s 第%s幕' % (name, m.group(1))
+    if m and t == 'ques' and code.startswith('ua'): return ('%s · Acto %s' if spanish else '%s 第%s幕') % (name, m.group(1))
     return None
 
 
@@ -180,16 +194,16 @@ def base_rule(T, s, code, name):
     parts = []
     w, a = T.weap.get(code), T.armor.get(code)
     if code in CLASS_MAGIC:
-        sk, ias = T.class_magic(code); parts.append('魔法 技能+%d 攻速+%d' % (sk, ias))
+        sk, ias = T.class_magic(code); parts.append(('Mágico: habilidades +%d, vel. ataque +%d' if s.spanish else '魔法 技能+%d 攻速+%d') % (sk, ias))
     vb = VALUE_BASES.get(code) or WEAPON_VALUE.get(code)
     if vb and vb.get('value'):
         k = 1.5 if vb.get('eth') else 1.0
         if w:
             lo, hi = int(w['mindam'] or w['2handmindam']), int(w['maxdam'] or w['2handmaxdam'])
-            parts.append('攻速 %s · 伤害 %d-%d' % (w.get('speed') or '0', lo, math.floor(math.ceil(hi * k) * 1.15)))
+            parts.append(('Vel. ataque %s · Daño %d-%d' if s.spanish else '攻速 %s · 伤害 %d-%d') % (w.get('speed') or '0', lo, math.floor(math.ceil(hi * k) * 1.15)))
         else:
             lo, hi = int(a['minac']), int(a['maxac']); top = math.floor(math.floor((hi + 1) * k) * 1.15)
-            parts.append(('防御 %d-%d' % (lo, top)) if vb['value'] == 'range' else '防御 %d' % top)
+            parts.append((('Defensa %d-%d' if s.spanish else '防御 %d-%d') % (lo, top)) if vb['value'] == 'range' else ('Defensa %d' if s.spanish else '防御 %d') % top)
     if code in TOP_RUNEWORDS:
         names = []
         for rw in TOP_RUNEWORDS[code]:
@@ -197,19 +211,28 @@ def base_rule(T, s, code, name):
             if not (its & T.ancestors((w or a)['type'])): raise SystemExit('annot_drop：%s 做不了 %s' % (code, rw))
             nm = (_strings_get(s, r['Name']) or rw).split('\n')[-1]   # 前面的注释步骤给符文之语名加了范围 / 点评行：只取名字那一行 | Earlier annotation steps added range / review lines to the runeword name: take only the name line
             names.append(re.sub(r'\u00ffc.', '', nm))
-        parts.append('可做 ' + ' / '.join(names))
+        parts.append(('Permite ' if s.spanish else '可做 ') + ' / '.join(names))
     glove = T.craft_glove(code) if a and a.get('type') == 'glov' else None
     out = name
     if code in VALUE_BASES: out = '★' + out
-    if glove: out += ' 〈合成·%s〉' % glove
-    if parts: out = '[' + ' · '.join(parts) + ']\n' + out
+    if glove:
+        if s.spanish:
+            parts.append('Artesanía: ' + glove)
+        else:
+            out += ' 〈合成·%s〉' % glove
+    if parts:
+        detail = '[' + ' · '.join(parts) + ']'
+        if s.spanish:
+            from annot_strings import annotation_lines
+            detail = annotation_lines(detail)
+        out = detail + '\n' + out
     if code in FRAMED: out = '—' * 7 + '\n' + out + '\n' + '—' * 7   # 最顶级的几件上下加框线 | Add frame lines above and below the few top-tier pieces
     return out if out != name else None
 
 
 def ann_drop(s, romfs):
     """s = 已做完前面步骤的 Strings。返回改写条数。 | s = Strings with the earlier steps already applied. Returns the number of rewritten entries."""
-    T = Tables(romfs); n = 0
+    T = Tables(romfs, s.spanish); n = 0
     for tab, rule in ((T.misc, misc_rule), (T.weap, base_rule), (T.armor, base_rule)):
         for code, row in tab.items():
             key = row.get('namestr') or code

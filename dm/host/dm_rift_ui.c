@@ -201,7 +201,7 @@ void dm_rift_ui_pump(void) {
         // 「本层」三行 + 放弃上方的短句，按守护者打倒没有分两套（已打倒时放弃不丢进度：最高通关照记）。已打倒的三句各占一整行，写进左边的标签控件、值留空
         // Guardian defeated: the two sentences each take a full row (written into the label widget on the left, value left empty); writing into the right-aligned value widget would cover the label (Mac screenshot)
         // The three 「本层」(This Level) rows + the short sentence above Abandon come in two sets depending on whether the guardian is defeated (abandoning after it is defeated loses no progress: the highest clear is still recorded). The three sentences for the defeated case each take a full row, written into the label widget on the left with the value left empty
-        { int dm_padmode_current(void); text(find(bw, en ? "TouchRF_AbTE" : "TouchRF_AbT", 0), dm_str(rb(), m.done ? "dmRiftCapResel" : dm_padmode_current() ? "dmRiftCapVoidPad" : "dmRiftCapVoid")); }   // 手柄模式：放弃要按住 X（见上面的手柄段） | Controller mode: abandoning requires holding X (see the controller section above)
+        { int dm_padmode_current(void); text(find(bw, en ? "TouchRF_AbTE" : "TouchRF_AbT", 0), dm_str(rb(), m.done ? "dmRiftCapResel" : dm_padmode_current() && !dm_ui_pc_desktop() ? "dmRiftCapVoidPad" : "dmRiftCapVoid")); }   // 手柄模式：放弃要按住 X（见上面的手柄段） | Controller mode: abandoning requires holding X (see the controller section above)
         // 已完成页：上面一组 = 说明「换一层再打」+ 按钮「重新选层」（进度已记，叫「放弃」不对），下面一组 = 说明「回到守护者处」+ 按钮「继续」；
         // 未完成页 = 「本层作废 / 放弃」「回到离开时的位置 / 继续」。「重新选层」是和「放弃」同位置的另一个按钮，挪进挪出（按钮上的字宿主写不了）
         // Completed page: upper group = description "try another level" + button "Reselect level" (progress is already recorded, so calling it "Abandon" is
@@ -243,6 +243,8 @@ void dm_rift_ui_pump(void) {
     int nxt = -1; for (int i = 0; i < 10; i++) if (!(m.ms & (1u << i))) { nxt = i; break; }
     uint64_t list = find(bw, "TouchRF_List", 4);
     for (int i = 0; i < 10 && list; i++) { char nm[20]; snprintf(nm, sizeof nm, "TouchRF_Row%d", i); uint64_t w = find(list, nm, 0); if (!w) continue;
+        uint64_t spanish_name = find(w, "NameEs", 0);
+        if (spanish_name) { int es = dm_lang_es(); rect(find(w, "Name", 0), es ? 99999 : 330, 0); rect(spanish_name, es ? 330 : 99999, 0); }
         int got = (m.ms >> i) & 1; uint64_t st = find(w, "State", 0);
         text(st, got ? dm_str(rb(), "dmRiftMsGot") : i == nxt ? dm_str(rb(), "dmRiftMsNext") : dm_str(rb(), "dmRiftMsNo"));
         if (got) color(st, 0, 255, 0); else if (i == nxt) color(st, 255, 215, 0); else color(st, 160, 160, 160); }

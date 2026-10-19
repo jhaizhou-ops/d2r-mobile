@@ -1,4 +1,12 @@
+void dm_world_pc_hover(float x,float y,int allowed){(void)x;(void)y;(void)allowed;}
+void dm_world_pc_skill_tick(void){}
+int dm_world_pc_mouse(int side,int phase,float x,float y){(void)side;(void)phase;(void)x;(void)y;return 0;}
+void dm_world_pc_skill_pointer(float x,float y,int allowed){(void)x;(void)y;(void)allowed;}
+void dm_world_pc_skill(int slot,int down){(void)slot;(void)down;}
+void dm_world_pc_skill_cancel(void){}
 #include <stdint.h>
+int dm_ui_pc_desktop(void) { return 0; }
+void dm_custom_pointer_input(void) { }
 
 uint32_t dm_cur_tick(void) { return 0; }
 int dm_loadscreen_down(void) { return 1; }   // 读取画面判定在 diag.c；触点单测当作已撤 | the loading screen check is in diag.c; the touch point unit test treats it as already down
@@ -21,6 +29,8 @@ uint64_t dm_padmode_page_keys(uint64_t m) { (void)m; return 0; } void dm_padmode
 int dm_swapskill_wset(void) { return -1; }
 int dm_pages_cur(void) { return 0; } int dm_pages_count(void) { return 5; } void dm_pages_request_flip(int d) { (void)d; }   // 个人仓库多页（dm_pages.c）桩 | stubs for the multi-page personal stash (dm_pages.c)
 void dm_vault_ui_flip(int dir) { (void)dir; }
+int dm_vault_ui_pointer(int phase,int x,int y) { (void)phase;(void)x;(void)y;return 0; }
+void dm_vault_ui_returning(uint32_t id) { (void)id; }
 int dm_vault_ui_pager_hit(int x, int y) { (void)x; (void)y; return 0; }
 void dm_vault_request_deposit(uint32_t id) { (void)id; }
 uint32_t dm_vault_ui_held(void) { return 0; }
@@ -68,6 +78,7 @@ void dm_belt_fill(void) {}
 void dm_test_identify(int what) { (void)what; }
 uint64_t dm_diag_srv_item(uint32_t id) { (void)id; return 0; }
 void dm_belt_use(int col, int row) { (void)col; (void)row; }
+void dm_belt_use_merc(int col,int row) { (void)col;(void)row; }
 void dm_aim_cone_pump(void) {}
 void dm_item_identify(unsigned id) { (void)id; }
 void dm_item_target_cancel(void) {}
@@ -93,3 +104,5 @@ int dm_runeword_list_open(void) { return 0; }
 void dm_runeword_button(const char *name) { (void)name; }
 void dm_runeword_list_close(void) {}
 uint64_t dm_padmode_legend_click(float nx, float ny) { (void)nx; (void)ny; return 0; } int dm_padmode_hud_click(float nx, float ny, uint64_t *b) { (void)nx; (void)ny; (void)b; return 0; } int dm_padmode_legend_has(uint32_t g) { (void)g; return 0; } int dm_game_paused(void) { return 0; }   // 鼠标点按键提示条（dm_padmode.c）：这些单测不带游戏映像，给空桩 | mouse click on the key-hint bar (dm_padmode.c): these unit tests carry no game image, so an empty stub is given
+
+int dm_world_mouse_aim(float x, float y, int32_t *rx, int32_t *ry) { (void)x; (void)y; (void)rx; (void)ry; return 0; }

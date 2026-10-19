@@ -92,12 +92,78 @@ EN = {
     },
 }
 
+# Español: índices de las columnas originales y sus huellas antes de sustituir
+# las indicaciones de mando por los gestos usados también con el ratón de Mac.
+ES = {
+    'ui-controller.json': {
+        'UseItemController': ('b3c337b6', 'b3c337b6', 'Pulsa dos veces para usar'),
+        'OpenHoradricCubeController': ('316e4f76', '316e4f76', 'Pulsa dos veces para abrir'),
+        'ReadScrollController': ('9f9ebb2f', '9f9ebb2f', 'Pulsa dos veces para leer'),
+        'UsePotionOfLifeController': ('8261013a', 'c7d42535', 'Pulsa dos veces para ganar 20 p. de vida permanentes'),
+        'UseBookOfSkillController': ('9b9ad5b4', '906ec564', 'Pulsa dos veces para aprender una habilidad'),
+        'UseScrollOfResistanceController': ('2347c7a9', '76a87c82', 'Pulsa dos veces para lanzar'),
+        'UseTokenOfAbsolutionController': ('cce00a79', '5f21cbbb', 'Pulsa dos veces para reiniciar estadísticas y habilidades'),
+        'UseTerrorTokenAct1Controller': ('9c7bb697', '37fbf40e', 'Pulsa dos veces para aterrorizar el Acto I'),
+        'UseTerrorTokenAct2Controller': ('f46a3882', 'a23ab72a', 'Pulsa dos veces para aterrorizar el Acto II'),
+        'UseTerrorTokenAct3Controller': ('773c665e', '65e32c9e', 'Pulsa dos veces para aterrorizar el Acto III'),
+        'UseTerrorTokenAct4Controller': ('19ba4849', '0217c37c', 'Pulsa dos veces para aterrorizar el Acto IV'),
+        'UseTerrorTokenAct5Controller': ('7dffa819', '0478c1a6', 'Pulsa dos veces para aterrorizar el Acto V'),
+        'comparisonTooltipController': ('c84875e2', 'c84875e2', ''),
+        'hireComparisonTooltipController': ('c84875e2', 'c84875e2', ''),
+        'StrYouDiedConsole': ('c2b02f82', '0cd61240', 'Has muerto'),
+        'ControllerInteractButton': ('54234e14', '54234e14', ''),
+        'ControllerTitleScreenPrompt': ('885ef015', '3db5d4d5', 'Pulsa la pantalla para empezar'),
+        'EnterCharacterName': ('be6e6664', '53243134', ''),
+        'ControllerCycleComparisonTooltips': ('1b3ed98b', '43363ba3', 'Pulsa de nuevo para comparar con el otro'),
+        'SelectButtonNoteText': ('c037151e', '483ba8e7', ''),
+        'MoviePlaybackHoldToSkip_switch': ('a6b6a532', 'a6b6a532', ''),
+    },
+    'ui.json': {
+        'LevelUpStatsNotificationController': ('cbd9f839', 'c6faf1bb', 'Has subido de nivel.'),
+        'LevelUpNotificationController': ('4b4b08fe', '582b5596', 'Has subido de nivel.'),
+        'QuestLogNotificationController': ('13cf1af4', 'b9ebf5ae', 'Se ha actualizado la búsqueda.'),
+        'MoviePlaybackHoldToSkip': ('a6b6a532', 'a6b6a532', ''),
+    },
+}
+
 # 手柄支持：手柄说法 ↔ 触摸说法按模式切，不再改字符串文件——build_sidecar 出旁路表，宿主触屏模式把串表里这几个键的串换成触摸说法、
 # 手柄模式换回原文（dm/host/dm_padmode.c）。只有下面这两条是排版用的（大字号，两种模式都要），照旧改文件
 # Controller support: controller wording ↔ touch wording is switched by mode and the string files are no longer modified. build_sidecar emits a sidecar table;
 # in touch mode the host swaps the strings of these keys in the string table to the touch wording,
 # and in controller mode swaps the original text back (dm/host/dm_padmode.c). Only the two entries below are for typesetting (large font size, needed in
 # both modes) and still modify the files as before
+# Indicaciones compactas de escritorio: mismo comportamiento, fuente original verificada.
+MAC_ES = {
+    'ui.json': {
+        'ColorBlindMode': ('29db03af', 'df1ce347', 'Modo'),
+        'ColorBlindStrength': ('ebf785de', 'b998e731', 'Intensidad'),
+        'OptionsMenuGameDifficulty': ('cae8a122', '4d473d0d', 'Dificultad'),
+    },
+    'ui-controller.json': {
+        'ControllerPromptItemAssignToBelt': ('3ddb4eae', '56c78930', 'Al cinturón'),
+        'ControllerPromptUseOnHireling': ('28957395', '28957395', 'Usar merc.'),
+        'ControllerPromptHoldToPopulateBelt': ('e3c300bc', 'e3c300bc', 'Al cinturón'),
+        'ControllerPromptAssignStatPoint': ('610713a5', 'b8cb5f53', 'Asignar 1 punto'),
+        'ControllerPromptAssignSkillPoint': ('48818d87', '48818d87', 'Asignar punto(s)'),
+        'ControllerPromptAssignFiveStatPoints': ('3281315e', 'd4979549', 'Asignar 5 puntos'),
+        'ControllerPromptAssignAllStatPoints': ('4ff905af', '92a01a5a', 'Asignar todos'),
+        'ControllerPromptItemEquipOnHireling': ('4adbd11c', '4adbd11c', 'Equipar merc.'),
+        'ControllerPromptItemMoveToInventory': ('1de7c1ee', '13a56646', 'inventario'),
+        'ControllerPromptItemMoveToHoradricCube': ('4ae74338', '8bba8962', 'cubo'),
+        'ControllerPromptItemMoveToSharedStash': ('fcddd059', '05cd4824', 'alijo común'),
+        'ControllerPromptItemMoveToPrivateStash': ('f990598e', '0baf884c', 'alijo propio'),
+        'ControllerPromptItemMoveToAdvancedStash': ('39b29fc5', '8111f210', 'pestaña'),
+        'ControllerPromptItemMoveToBelt': ('2183c98b', '34bf1425', 'cinturón'),
+        'ControllerPromptItemMoveToImbue': ('a97dda10', 'a97dda10', 'imbuir'),
+        'ControllerPromptHoldFormatString': ('20e1a6a6', 'a2e67032', ' (Mantén: %s)'),
+        'ControllerPromptHoldFormatStringStandalone': ('cb301462', 'cb301462', 'Mantén: %s'),
+        'ControllerPromptHoldToSortInventory': ('21815aee', '2356ba43', 'Mantén: ordenar'),
+        'ControllerPromptViewAdvancedStats': ('8fc99e46', '8fc99e46', 'Estadísticas avanzadas'),
+        'ControllerPromptCharacterCreateReturnToMainMenu': ('e72af37e', 'e72af37e', 'Menú principal'),
+        'ControllerPromptItemUnassignFromBelt': ('709ffeab', '05f6200f', 'Retirar'),
+    },
+}
+
 FILE_ONLY = {'strchratr', 'strchrrat'}
 
 def build_sidecar(romfs):
@@ -112,6 +178,17 @@ def build_sidecar(romfs):
             cur = json.loads(m.group(1))
             if hashlib.sha1(cur.encode('utf-8')).hexdigest()[:8] != old: raise SystemExit('touch_strings：%s 的原文变了（校验 %s，现行「%s」）——原包换了版本，核过再改表' % (key, old, cur))
             out.append((key, old, new))
+        for key, (es, mx, new) in ES.get(name, {}).items():
+            for locale, old in (('esES', es), ('esMX', mx)):
+                m = re.search(r'"Key":\s*"%s",.*?"%s":\s*("(?:[^"\\]|\\.)*")' % (re.escape(key), locale), text, re.S)
+                if not m:
+                    raise SystemExit('Falta la cadena %s en %s' % (key, locale))
+                cur = json.loads(m.group(1))
+                if hashlib.sha1(cur.encode('utf-8')).hexdigest()[:8] != old:
+                    raise SystemExit('Ha cambiado la cadena original %s (%s)' % (key, locale))
+                row = (key, old, new)
+                if row not in out:
+                    out.append(row)
         # 英文列（英文版）：同一批键再各出一行，原文校验是 enUS 的原文。宿主按「串表里此刻的原文」认校验（dm_padmode.c str_apply），
         # 游戏语言是英文时中文那行对不上不换、英文这行对上才换，反之亦然；不用宿主另跟语言
         # English column (English version): the same set of keys gets one more row each, whose source-text check is against the enUS source text. The host
@@ -131,7 +208,8 @@ def build(romfs, outdir):
     repl = {}; total = 0
     for name, items in TABLE.items():
         path, text = touch_layout.read_layout(romfs, None, suffix='/lng/strings/' + name)
-        if not any(k in FILE_ONLY for k in items): continue
+        compact = MAC_ES.get(name, {}) if os.environ.get('DM_OVERLAY_MAC') else {}
+        if not any(k in FILE_ONLY for k in items) and not compact: continue
         for key, (old, new) in items.items():
             if key not in FILE_ONLY: continue
             m = re.search(r'"Key":\s*"%s",.*?"zhCN":\s*("(?:[^"\\]|\\.)*")' % re.escape(key), text, re.S)
@@ -139,5 +217,34 @@ def build(romfs, outdir):
             cur = json.loads(m.group(1))
             if hashlib.sha1(cur.encode('utf-8')).hexdigest()[:8] != old: raise SystemExit('touch_strings：%s 的原文变了（校验 %s，现行「%s」）——原包换了版本，核过再改表' % (key, old, cur))
             text = text[:m.start(1)] + json.dumps(new, ensure_ascii=False) + text[m.end(1):]; total += 1
+        for key, (es, mx, new) in compact.items():
+            for locale, old in (('esES', es), ('esMX', mx)):
+                pattern = r'"Key":\s*"%s",.*?"%s":\s*("(?:[^"\\]|\\.)*")' % (re.escape(key), locale)
+                m = re.search(pattern, text, re.S)
+                if not m:
+                    raise SystemExit('Falta la indicación de escritorio %s (%s)' % (key, locale))
+                cur = json.loads(m.group(1))
+                if hashlib.sha1(cur.encode('utf-8')).hexdigest()[:8] != old:
+                    raise SystemExit('Ha cambiado la indicación original %s (%s)' % (key, locale))
+                placeholders = r'%(?:\d+\$)?[-+#0 ]*\d*(?:\.\d+)?[a-zA-Z]'
+                if re.findall(placeholders, cur) != re.findall(placeholders, new):
+                    raise SystemExit('Marcadores incompatibles en %s (%s)' % (key, locale))
+                text = text[:m.start(1)] + json.dumps(new, ensure_ascii=False) + text[m.end(1):]
+                total += 1
         o = os.path.join(outdir, 'str_' + name); open(o, 'w', encoding='utf-8-sig', newline='').write(text); repl[path.lower()] = o
     return repl, total
+
+def mac_legend(text):
+    """Conserva la fuente legible del pie y deja medir cada indicación completa al motor."""
+    style = json.dumps({'fontColor': '$FontColorLightGray', 'pointSize': 28,
+                        'spacing': {'leading': 1.0, 'kerning': 0.95},
+                        'alignment': {'v': 'center'},
+                        'options': {'lineWrap': True, 'newlineHandling': 'standard'}})
+    for i in range(1, 9):
+        pattern = (r'("name":\s*"Legend%d",\s*"rect":\s*\{\s*"x":\s*%d,\s*'
+                   r'"y":\s*0,\s*"width":\s*360,\s*"height":\s*103\s*\},\s*'
+                   r'"style":\s*)"\$StyleButtonLegend"') % (i, (i - 1) * 360)
+        text, count = re.subn(pattern, lambda m: m.group(1) + style, text)
+        if count != 1:
+            raise SystemExit('Ha cambiado la geometría de Legend%d; revisar antes de ajustar' % i)
+    return text

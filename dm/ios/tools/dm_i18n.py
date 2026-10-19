@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""我们自己加的界面文字的中英表（英文版）：唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / 用在哪）。
-做法 = 把每一行作为新条目追加进原版字符串表 ui.json（RomFS 覆盖层，与 touch_strings 同一套机制）：zhCN / zhTW 列 = 中文（繁体玩家读简体比读英文顺），其余 11 种语言列 = English。
-这样布局里写「@键」、宿主用原版取串 main+0x7f5630 取，语言切换由原版自己重装字符串表完成（SetLanguage，r34 起不剪），不用我们另跟语言。
-Chinese-English string table for the UI text we added ourselves (English version): single source dm/i18n/ui_text.tsv (key / Chinese / English / where used).
-Approach = append each row as a new entry to the original string table ui.json (RomFS overlay, same mechanism as touch_strings): zhCN / zhTW columns = Chinese (Traditional Chinese players read Simplified more easily than English), the other 11 language columns = English.
-This way layouts write "@key", the host fetches through the original string lookup at main+0x7f5630, and language switching is done by the original game reloading its string tables itself (SetLanguage, no longer patched out as of r34), so we do not have to follow the language separately."""
+"""Genera las cadenas añadidas a la interfaz desde dm/i18n/ui_text.tsv.
+
+Las columnas originales de chino e inglés se conservan. esES y esMX usan
+Español; los demás idiomas mantienen la política de traducción del upstream.
+rows() conserva sus triples (clave, chino, inglés) para los generadores existentes.
+spanish_rows() expone las traducciones españolas por clave.
+"""
 import csv, json, os, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,20 +43,89 @@ EN_LIMITS = (
 # Keys may only contain letters and digits: the layout's "@key" parsing stops at _ (@dmCustom_auto_mana was shown as "missing string_auto_mana", measured in the iOS package on a Mac)
 # Keys that must show Chinese characters in the English UI as well (the language row of the Custom page: someone who switched to the wrong language has to be able to read it). Only allowed on text controls that specify the global font BlizzardGlobal -- the default font of the English UI has no Chinese characters
 EN_HAS_ZH = {'dmCustomLang', 'dmCustomLangZh', 'dmCustomLangHintZh'}
-def rows():
+# Las cotas españolas heredan las columnas estrechas del upstream. Los tres
+# nombres oficiales más largos necesitan ajuste de fuente en la maquetación.
+ES_LIMITS = (
+    (r'dmRiftMsItem30', 26),
+    (r'dmRiftMsItem60', 24),
+    (r'dmRiftMsItem80', 17),
+    (r'dmRiftHudTitle', 5),
+) + EN_LIMITS
+
+# Igualdad deliberada, nunca un idioma de reserva implícito. La comparación con
+# el valor exacto impide que añadir una clave aquí oculte una frase sin traducir.
+ES_SHARED_TEXT = {
+    'dmBrAndariel': 'Andariel', 'dmBrDuriel': 'Duriel',
+    'dmBrDiablo': 'Diablo', 'dmBrBaal': 'Baal',
+    'dmDlAppFolder': 'D2R Mobile', 'dmRvBytes': '%lld bytes',
+    'dmDlEtc': ' etc.', 'dmRiftMsItem20': 'Annihilus',
+    'dmCustomLangZh': '中文', 'dmCustomLangEnOpt': 'English',
+    'dmCustomLangEs': 'Español',
+    'dmCustomLangHintEs': 'Pulsa Aplicar y reinicia el juego.',
+    'dmCustomLangHintZh': '点「应用」，然后把 App 关掉重开',
+    'dmCustomLangHintEn': 'Tap Apply, then close and reopen the app',
+}
+ES_HAS_ZH = {'dmCustomLangZh', 'dmCustomLangHintZh'}
+
+
+def _localized_rows():
     out = []
-    with open(TABLE, encoding='utf-8') as f:
-        for r in csv.DictReader(f, delimiter='\t'):
-            k, zh, en = r['键'], r['中文'].replace('\\n', '\n'), r['English'].replace('\\n', '\n')
-            if not re.fullmatch(r'dm[A-Za-z0-9]+', k) or not zh or not en: raise SystemExit('dm_i18n：表里这一行不对：%r' % r)
-            if k not in EN_HAS_ZH and re.search(r'[　-鿿＀-￯]', re.sub(PROPER, '', en)): raise SystemExit('dm_i18n：%s 的英文里有中文字符：%r' % (k, en))
-            if FMT.findall(zh) != FMT.findall(en): raise SystemExit('dm_i18n：%s 的中英占位符不一致：%s / %s' % (k, FMT.findall(zh), FMT.findall(en)))
-            lim = next((n for pat, n in EN_LIMITS if re.fullmatch(pat, k)), None)   # 英文字数闸（见 EN_LIMITS） | English length gate (see EN_LIMITS)
-            if lim is not None and len(FMT.sub('000', en).split('\n')[0]) > lim: raise SystemExit('dm_i18n：%s 的英文「%s」%d 个字符，超过这一栏的上限 %d（会顶框 / 被截断；压短，或给这一栏做英文专用的小字号控件后再改上限）' % (k, en, len(FMT.sub('000', en)), lim))
-            out.append((k, zh, en))
-    ks = [k for k, _, _ in out]
-    if len(set(ks)) != len(ks): raise SystemExit('dm_i18n：键重复：%s' % sorted({k for k in ks if ks.count(k) > 1}))
+    with open(TABLE, encoding='utf-8', newline='') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        required = {'键', '中文', 'English', 'Español'}
+        if not required.issubset(reader.fieldnames or ()):
+            raise SystemExit('dm_i18n: faltan columnas obligatorias: %s' %
+                             sorted(required - set(reader.fieldnames or ())))
+        for row in reader:
+            k = row['键']
+            values = [row[name].replace('\\n', '\n') if row.get(name) is not None else ''
+                      for name in ('中文', 'English', 'Español')]
+            zh, en, es = values
+            if (None in row or not re.fullmatch(r'dm[A-Za-z0-9]+', k)
+                    or any(not value.strip() for value in values)):
+                raise SystemExit('dm_i18n: fila incompleta o inválida: %r' % row)
+            for value, label, allowed in ((en, 'inglés', EN_HAS_ZH),
+                                           (es, 'español', ES_HAS_ZH)):
+                if k not in allowed and re.search(r'[　-鿿＀-￯]', re.sub(PROPER, '', value)):
+                    raise SystemExit('dm_i18n: %s contiene caracteres chinos en %s: %r' %
+                                     (k, label, value))
+                if FMT.findall(zh) != FMT.findall(value):
+                    raise SystemExit('dm_i18n: %s cambia el orden o tipo de marcadores en %s: %s / %s' %
+                                     (k, label, FMT.findall(zh), FMT.findall(value)))
+            if '\\\n' in es:
+                raise SystemExit('dm_i18n: %s tiene un salto de línea español con doble barra' % k)
+            # Los nombres, códigos, separadores y formatos puros pueden coincidir.
+            if es == en and re.search(r'[^\W\d_]', FMT.sub('', es), re.UNICODE):
+                if ES_SHARED_TEXT.get(k) != es:
+                    raise SystemExit('dm_i18n: %s conserva el inglés sin traducción española: %r' % (k, es))
+            for value, label, limits in ((en, 'inglés', EN_LIMITS),
+                                         (es, 'español', ES_LIMITS)):
+                limit = next((n for pattern, n in limits if re.fullmatch(pattern, k)), None)
+                # El upstream medía solo la primera línea inglesa. En español
+                # comprobamos todas las líneas que puede mostrar el control.
+                lines = FMT.sub('000', value).split('\n')
+                length = max(map(len, lines if label == 'español' else lines[:1]))
+                if limit is not None and length > limit:
+                    raise SystemExit('dm_i18n: %s, %s: %d caracteres; límite %d: %r' %
+                                     (k, label, length, limit, value))
+            out.append((k, zh, en, es))
+    if not out:
+        raise SystemExit('dm_i18n: la tabla de traducciones está vacía')
+    keys = [r[0] for r in out]
+    if len(set(keys)) != len(keys):
+        raise SystemExit('dm_i18n: claves duplicadas: %s' %
+                         sorted({k for k in keys if keys.count(k) > 1}))
     return out
+
+
+def rows():
+    """Compatibilidad con los generadores que consumen triples chino/inglés."""
+    return [(k, zh, en) for k, zh, en, _ in _localized_rows()]
+
+
+def spanish_rows():
+    """Traducciones españolas completas; un texto ausente es un error."""
+    return {k: es for k, _, _, es in _localized_rows()}
 
 def build(romfs, outdir, repl):
     """repl：前面步骤已换的 {包内逻辑路径: 本地文件}。返回 ({包内逻辑路径: 本地文件}, 条数)。 | repl: {logical path in the package: local file} already replaced by earlier steps. Returns ({logical path in the package: local file}, entry count)."""
@@ -64,10 +134,10 @@ def build(romfs, outdir, repl):
     prev = repl.get(path.lower())
     if prev: text = open(prev, encoding='utf-8-sig').read()
     have = set(re.findall(r'"Key":\s*"((?:[^"\\]|\\.)*)"', text))
-    rs = rows()
-    clash = [k for k, _, _ in rs if k in have]
+    rs = _localized_rows()
+    clash = [k for k, _, _, _ in rs if k in have]
     if clash: raise SystemExit('dm_i18n：键和原版重名：%s' % clash)
-    add = [{'id': ID0 + i, 'Key': k, **{l: (zh if l in ('zhCN', 'zhTW') else en) for l in LANGS}} for i, (k, zh, en) in enumerate(rs)]
+    add = [{'id': ID0 + i, 'Key': k, **{l: (zh if l in ('zhCN', 'zhTW') else es if l in ('esES', 'esMX') else en) for l in LANGS}} for i, (k, zh, en, es) in enumerate(rs)]
     end = text.rstrip().rindex(']')
     body = ',\n'.join('  ' + json.dumps(e, ensure_ascii=False) for e in add)
     text = text[:end].rstrip() + ',\n' + body + '\n' + text[end:]
@@ -78,9 +148,9 @@ def build(romfs, outdir, repl):
 def header():
     """dm/host/dm_i18n_tab.h 的内容（游戏外画的字用的编译期表）。 | Contents of dm/host/dm_i18n_tab.h (the compile-time table for text drawn outside the game)."""
     c = lambda s: json.dumps(s, ensure_ascii=False)   # JSON 串的转义在 C 里同样成立（\n \" \\） | JSON string escapes are equally valid in C (newline, double quote, backslash)
-    out = ['// 生成文件，勿手改：python3 dm/ios/tools/dm_i18n.py --header > dm/host/dm_i18n_tab.h（表 dm/i18n/ui_text.tsv）', '#pragma once',
-           'static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {']
-    out += ['    { %s, %s, %s },' % (c(k), c(zh), c(en)) for k, zh, en in rows()]
+    out = ['// Archivo generado desde dm/i18n/ui_text.tsv: python3 dm/ios/tools/dm_i18n.py --header > dm/host/dm_i18n_tab.h', '#pragma once',
+           'static const struct { const char *k, *zh, *en, *es; } k_dm_i18n[] = {']
+    out += ['    { %s, %s, %s, %s },' % (c(k), c(zh), c(en), c(es)) for k, zh, en, es in _localized_rows()]
     return '\n'.join(out + ['};', ''])
 
 if __name__ == '__main__':
@@ -89,5 +159,5 @@ if __name__ == '__main__':
     elif sys.argv[1:] == ['--check']:   # 单测：表与入库的头文件一致 | unit test: the table matches the checked-in header file
         h = os.path.join(HERE, '..', '..', 'host', 'dm_i18n_tab.h')
         if open(h, encoding='utf-8').read() != header(): raise SystemExit('dm_i18n：dm/host/dm_i18n_tab.h 过期，重跑 python3 dm/ios/tools/dm_i18n.py --header > dm/host/dm_i18n_tab.h')
-        print('dm_i18n OK %d 条' % len(rows()))
+        print('dm_i18n OK: %d/%d cadenas en español; marcadores y longitudes válidos' % (len(spanish_rows()), len(rows())))
     else: raise SystemExit('用法：dm_i18n.py --header | --check')

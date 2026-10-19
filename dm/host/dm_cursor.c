@@ -3,6 +3,7 @@
 #include "dm_custom.h"
 #include "dm.h"
 #include "dm_uiscreen.h"
+#include "dm_widget.h"
 #include "dm_input.h"
 #include "dm_hud.h"
 #include "dm_actions.h"
@@ -16,6 +17,12 @@
 #include <TargetConditionals.h>
 #include <stdatomic.h>
 #include <math.h>
+#include <pthread.h>
+#if TARGET_OS_OSX
+#include <mach/mach.h>
+#endif
+
+static _Atomic int g_load_up = -1;
 
 static module_t *main_module(void) {
     for (int i = 0; i < g_nmod; ++i)
@@ -99,7 +106,9 @@ uint64_t dm_guest_frame(void);
 // and when the game main thread, on its first generation fetch each frame, finds that some top-level panel present in the previous frame is gone (panel unloads and full rebuilds both do this; newly opened panels alone do not count, since that only adds and frees nothing;
 // if it also incremented, pages like the custom page that re-lay out on "widget changed = page just appeared" would wipe out the player's unapplied changes)
 static _Atomic uint32_t g_ui_gen = 1; static _Atomic uint64_t g_ui_gen_fr;   // 最近一次加 1 时的游戏帧 | Game frame of the most recent increment
+static _Atomic uint32_t g_pc_controls_context = 1; // Descargar Crónica es parte de la transición; cambiar modo, idioma o raíz la cancela.
 void dm_ui_gen_bump(int why) { uint32_t g = atomic_fetch_add(&g_ui_gen, 1) + 1; atomic_store(&g_ui_gen_fr, dm_guest_frame());
+    if(why==DM_UIGEN_OPMODE||why==DM_UIGEN_PERFMODE||why==DM_UIGEN_LANG||why==DM_UIGEN_ROOT)atomic_fetch_add(&g_pc_controls_context,1);
     static unsigned n; if (n++ >= 200) return;
     switch (why) { case DM_UIGEN_OPMODE: LOG("界面代号 → %u（游戏取走运行模式通知，要重载布局）", g); break; case DM_UIGEN_PERFMODE: LOG("界面代号 → %u（游戏取走性能模式通知）", g); break;
         case DM_UIGEN_LANG: LOG("界面代号 → %u（切语言）", g); break; case DM_UIGEN_ROOT: LOG("界面代号 → %u（界面根换了）", g); break; default: LOG("界面代号 → %u（有顶层面板被卸掉）", g); } }
@@ -113,6 +122,7 @@ static void ui_gen_scan(void) {   // 游戏主线程：顶层面板集合里少�
 }
 uint32_t dm_ui_gen(void) { ui_gen_scan(); return atomic_load(&g_ui_gen); }   // 只许游戏主线程调（顺带做本帧的顶层面板核对） | Game main thread only (also performs this frame's top-level panel check)
 static int ui_has(uint64_t w, uint64_t want, int dep);
+static int ui_mac_app(void);
 static int ui_alive(uint64_t w) { module_t *m = main_module(); uint64_t root = 0; if (m) memcpy(&root, m->base + 0x2f05458, 8); return w && root && ui_has(root, w, 0); }
 // 不在树上时只给 0、不清 w：游戏重载布局时会把面板（AutoMap 等）先从根上摘下、再挂回同一个对象，摘下的那几帧不在树上但没被释放；
 // 清掉的话挂回来就成了「新控件」——挪位表因此忘了小地图已挪过，又挪一遍（回归 ipadfull top 局小地图被推出屏外）
@@ -288,6 +298,7 @@ static void hand_guard(module_t *m) {
     LOG("手上物品守门：触摸已空闲 0.6 秒、手上还拿着（id %d）→ %s", h, back ? "放回拿起时的原格" : "收进背包");
 }
 static void cursor_apply(uint64_t *buttons, int32_t *lx, int32_t *ly) {
+    if(dm_ui_pc_desktop()) return;
     hand_guard(main_module());
     static uint64_t prev_a;
     uint64_t a_now = *buttons & DM_BTN_A, a_edge = a_now && !prev_a;
@@ -501,6 +512,7 @@ int dm_fe_bliss(void) { return atomic_load(&g_fe_bliss); }
 static _Atomic int g_fe_del_open, g_del_q, g_del_hold;   // 模式页 / 确认框开着；模式页上点了牌子以外 → 返回 | Mode page / confirmation box open; on the mode page a tap landed outside the plaques -> back
 int dm_restart_busy(void);   // 一键重开进行中（定义在下面）：界面触点一律丢掉 | One-key restart in progress (defined below): all UI touch points are dropped
 void dm_ui_touch(int phase, float nx, float ny) { if (phase != 3 && dm_restart_busy()) return;   // phase：0 按下 1 移动 2 抬起 3 作废（按下后改成了滚动：这次不点）；nx / ny = 出图画面归一化坐标 [0,1] | phase: 0 down, 1 move, 2 up, 3 cancelled (turned into a scroll after the press: no click this time); nx / ny = coordinates normalized to the rendered picture [0,1]
+    if (phase == 0) dm_custom_pointer_input();
     if (phase == 3) { atomic_store(&g_ut_phase, 0); atomic_store(&g_del_q, 0); atomic_store(&g_del_hold, 0); return; }
     if (phase != 1) DM_LAT("ui_touch %d", phase);
     nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
@@ -519,14 +531,108 @@ int dm_ui_touch_active(void) { return atomic_load(&g_ut_phase) != 0; }
 // Whether a vertical drag in the front end can count as a scroll: not while the delete-character confirmation box (long-press 「是」(Yes); the long-press is voided as soon as the finger drifts), the mode page (outside the plaques = back), the naming page, or a confirmation box is open; those stay taps as before
 int dm_ui_fe_drag_ok(void) { return !atomic_load(&g_fe_del_open) && !atomic_load(&g_fe_opt_open) && !atomic_load(&g_fe_name_open) && !atomic_load(&g_fe_confirm_open); }
 static uint64_t ui_hash(const char *s) { uint64_t h = 0xcbf29ce484222325ull; for (; *s; s++) h = (h ^ (uint8_t)*s) * 0x100000001b3ull; return h; }
-static void ui_send_mouse_arg(module_t *m, uint64_t root, uint64_t act, int x, int y, int arg) {   // 负载 +4 / +8 = 光标，+0x10 = 滚轮量（120 一格）/ 键码（VK） | Payload +4 / +8 = cursor, +0x10 = wheel amount (120 per notch) / key code (VK)
-    static uint64_t payload[16], msg[8];
-    memset(payload, 0, sizeof payload); payload[0] = (uint64_t)(uint32_t)x << 32; payload[1] = (uint32_t)y; payload[2] = (uint32_t)arg;
-    memset(msg, 0, sizeof msg); msg[0] = ui_hash("InputMessage"); msg[1] = act; msg[2] = (uint64_t)payload;
-    uint64_t vt = 0, fn = 0; memcpy(&vt, (void *)root, 8); memcpy(&fn, (void *)(vt + 0x28), 8);
-    dm_cursor_set(x, y); (void)m;
-    ((void (*)(uint64_t, void *))fn)(root, msg);
+static int pc_mouse_move_abi(module_t *m) {
+    static const struct {size_t offset;uint32_t code[4];} entries[]={
+        {0xb189e0,{0xf81e0ff3,0xa9017bfd,0x910043fd,0xd0010fc8}},
+        {0x2aa480,{0xa9bf7bfd,0x910003fd,0x90015348,0x9123e108}},
+        {0xabd6bc,{0xd10303ff,0xfd002be8,0xa9066ffc,0xa90767fa}}
+    };
+    if(!m||!m->base||m->size<0x2f05460)return 0;
+    for(unsigned i=0;i<sizeof entries/sizeof *entries;i++)if(memcmp(m->base+entries[i].offset,entries[i].code,sizeof entries[i].code))return 0;
+    return 1;
 }
+static int pc_mouse_move_context(module_t *m,uint64_t root,int x,int y) {
+    if(!pc_mouse_move_abi(m)||!root||*(uint64_t*)(m->base+0x2f05458)!=root||!*(uint64_t*)(root+0xd0))return 0;
+    // abd6bc omite MouseMove fuera de este modo; 2aa480 además limita XY al viewport.
+    if(!m->base[0x2d128f0]||m->base[0x2d128ec])return 0;
+    if(*(int32_t*)(m->base+0x2d128f8)==x&&*(int32_t*)(m->base+0x2d128fc)==y)return 0;
+    int hd=*(uint8_t*)(root+0xb9)!=0;
+    int width=*(int32_t*)(m->base+(hd?0x211da38:0x2080c08));
+    int height=*(int32_t*)(m->base+(hd?0x211da3c:0x2080c0c));
+    if(x<0||y<0||x>=width||y>=height)return 0;
+    uint64_t blocking=ui_find(root,"BlockingPanel",0),confirmation=ui_find(root,"ConfirmationModal",0);
+    return !blocking||!*(uint8_t*)(blocking+0x51)||(confirmation&&*(uint8_t*)(confirmation+0x51));
+}
+static void ui_mouse_emit(uint64_t root,uint64_t act,int x,int y,int arg,int (*native_move)(void *),void (*message)(uint64_t,void *),void (*legacy_set)(int,int)) {
+    uint64_t payload[16]={0},msg[8]={0};
+    payload[0]=(uint64_t)(uint32_t)x<<32;payload[1]=(uint32_t)y;payload[2]=(uint32_t)arg;
+    msg[0]=ui_hash("InputMessage");msg[1]=act;msg[2]=(uint64_t)(uintptr_t)payload;
+    if(native_move){
+        // El original compara XY antes de escribirlos y actualiza hover antes de despachar MouseMove.
+        native_move(payload);
+        if(act==ui_hash("MouseMove"))return;
+    }else legacy_set(x,y);
+    message(root,msg);
+}
+static void pc_tabbar_mouse(module_t *m,uint64_t root,uint64_t act,int x,int y,int after);
+static int pc_pointer_hover_refresh(module_t *m,uint64_t root,uint64_t act,int x,int y,int native,void (*select_focus)(uint64_t,uint64_t,uint64_t));
+static int pc_options_event_allowed(void);
+static int pc_options_pointer_begin(module_t *m,uint64_t root,uint64_t act,int x,int y);
+static void pc_options_pointer_end(module_t *m,uint64_t root,uint64_t act,int x,int y,int active);
+static int pc_tooltip_read(uint64_t address,void *out,size_t size);
+static uint64_t pc_skill_pointer_trace(module_t *,uint64_t,uint64_t,int,uint64_t);
+typedef struct {uint64_t root,action;int x,y,valid;} pc_skill_event_scope;
+static pc_skill_event_scope g_pc_skill_event;
+typedef struct {uint64_t root,fm,hover,widget,vt,category,action;unsigned role,valid;uint8_t disabled,pressed,consumed;} pc_personal_button_snapshot;
+typedef int (*pc_personal_button_reader)(uint64_t,void *,size_t);
+static int pc_personal_button_field(pc_personal_button_reader read,uint64_t object,size_t offset,void *out,size_t size) {
+    return object>=0x1000&&object<=UINT64_MAX-offset&&read(object+offset,out,size);
+}
+static int pc_personal_button_capture(int enabled,int desktop,module_t *m,uint64_t root,uint64_t act,uint64_t target,pc_personal_button_reader read,pc_personal_button_snapshot *s) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!s||!read||(act!=ui_hash("LeftMouseButtonDown")&&act!=ui_hash("LeftMouseButtonUp")))return 0;
+    *s=(pc_personal_button_snapshot){.root=root,.widget=target};uint64_t current=0,name=0;char text[16]={0};
+    if(!pc_personal_button_field(read,(uint64_t)m->base,0x2f05458,&current,8)||current!=root||!pc_personal_button_field(read,root,0xd0,&s->fm,8)||!pc_personal_button_field(read,s->fm,0x178,&s->hover,8))return 0;
+    if(!target){
+        s->widget=s->hover;
+        if(!pc_personal_button_field(read,s->widget,8,&name,8)||!pc_personal_button_field(read,name,0,text,sizeof text))return 0;
+        if(!memcmp(text,"TouchStashLeft",15))s->role=1;
+        else if(!memcmp(text,"TouchStashRight",16))s->role=2;
+        else return 0;
+    }
+    s->valid=pc_personal_button_field(read,s->widget,0,&s->vt,8)
+        &&pc_personal_button_field(read,s->widget,0x558,&s->category,8)
+        &&pc_personal_button_field(read,s->widget,0x560,&s->action,8)
+        &&pc_personal_button_field(read,s->widget,0x57a,&s->disabled,1)
+        &&pc_personal_button_field(read,s->widget,0x579,&s->pressed,1)
+        &&pc_personal_button_field(read,root,0xb8,&s->consumed,1);
+    return 1;
+}
+static int pc_personal_button_trace_begin(int enabled,int desktop,module_t *m,uint64_t root,uint64_t act,unsigned *count,pc_personal_button_reader read,pc_personal_button_snapshot *s) {
+    if(!enabled||!desktop||!count||*count>=16)return 0;
+    if(!pc_personal_button_capture(enabled,desktop,m,root,act,0,read,s))return 0;
+    ++*count;return 1;
+}
+static void pc_personal_button_trace_end(module_t *m,uint64_t act,int x,int y,unsigned count,const pc_personal_button_snapshot *before,pc_personal_button_reader read) {
+    pc_personal_button_snapshot after={0};int context=pc_personal_button_capture(1,1,m,before->root,act,before->widget,read,&after);
+    LOG("PC_PERSONAL_BUTTON %u %s %s XY=%d,%d widget=%llx fm=%llx->%llx hover=%llx->%llx valid=%u->%u context=%d vt=%llx->%llx callback=%llx:%llx->%llx:%llx disabled=%u->%u pressed=%u->%u consumed=%u->%u",count,before->role==1?"left":"right",act==ui_hash("LeftMouseButtonDown")?"down":"up",x,y,(unsigned long long)before->widget,(unsigned long long)before->fm,(unsigned long long)after.fm,(unsigned long long)before->hover,(unsigned long long)after.hover,before->valid,after.valid,context,(unsigned long long)before->vt,(unsigned long long)after.vt,(unsigned long long)before->category,(unsigned long long)before->action,(unsigned long long)after.category,(unsigned long long)after.action,before->disabled,after.disabled,before->pressed,after.pressed,before->consumed,after.consumed);
+}
+static void ui_send_mouse_arg(module_t *m,uint64_t root,uint64_t act,int x,int y,int arg) {
+    uint64_t vt=0,fn=0;memcpy(&vt,(void*)root,8);memcpy(&fn,(void*)(vt+0x28),8);
+    int (*move)(void *)=NULL;int pc=dm_ui_pc_desktop();
+    if(pc){
+        if(pc_mouse_move_context(m,root,x,y))move=(int(*)(void*))(m->base+0xb189e0);
+        else if(!pc_mouse_move_abi(m)){static int reported;if(!reported++){LOG("PC: ABI de movimiento de ratón no válida; se conserva la ruta anterior");}}
+    }
+    static unsigned traced;int click=act==ui_hash("LeftMouseButtonDown")||act==ui_hash("LeftMouseButtonUp")||act==ui_hash("RightMouseButtonDown")||act==ui_hash("RightMouseButtonUp");int trace=pc&&click&&getenv("DM_MAC_POINTER_LOG")&&traced<48;
+    int ox=0,oy=0;unsigned f0=0,ec=0;uint64_t fm=0,hover=0;
+    if(trace){traced++;f0=m->base[0x2d128f0];ec=m->base[0x2d128ec];ox=*(int32_t*)(m->base+0x2d128f8);oy=*(int32_t*)(m->base+0x2d128fc);fm=*(uint64_t*)(root+0xd0);if(fm)hover=*(uint64_t*)(fm+0x178);}
+    int refreshed=pc_pointer_hover_refresh(m,root,act,x,y,move!=NULL,(void(*)(uint64_t,uint64_t,uint64_t))(m->base+0xabe064));
+    if(refreshed&&(*(uint64_t*)(m->base+0x2f05458)!=root||!pc_options_event_allowed()))return;
+    int pointer_active=pc_options_pointer_begin(m,root,act,x,y);
+    pc_tabbar_mouse(m,root,act,x,y,0);
+    static unsigned personal_traced;pc_personal_button_snapshot personal_before;const char *personal_env=getenv("DM_MAC_POINTER_LOG");
+    int personal_trace=pc_personal_button_trace_begin(personal_env&&*personal_env,pc,m,root,act,&personal_traced,pc_tooltip_read,&personal_before);
+    uint64_t skill_traced=pc_skill_pointer_trace(m,root,act,0,0);
+    pc_skill_event_scope skill_scope=g_pc_skill_event;g_pc_skill_event=(pc_skill_event_scope){root,act,x,y,pc&&act==ui_hash("LeftMouseButtonUp")};
+    ui_mouse_emit(root,act,x,y,arg,move,(void(*)(uint64_t,void*))fn,dm_cursor_set);
+    g_pc_skill_event=skill_scope;
+    pc_skill_pointer_trace(m,root,act,1,skill_traced);
+    if(personal_trace)pc_personal_button_trace_end(m,act,x,y,personal_traced,&personal_before,pc_tooltip_read);
+    pc_tabbar_mouse(m,root,act,x,y,1);
+    pc_options_pointer_end(m,root,act,x,y,pointer_active);
+    if(trace){uint64_t current_root=*(uint64_t*)(m->base+0x2f05458),current_fm=current_root?*(uint64_t*)(current_root+0xd0):0;uint64_t current_hover=current_fm?*(uint64_t*)(current_fm+0x178):0;const char *hover_name=current_hover&&ui_has(current_root,current_hover,0)?*(const char**)(current_hover+8):"(ninguno)";LOG("PC mouse route=%s act=%llx XY=%d,%d->%d,%d actual=%d,%d f0=%u->%u ec=%u->%u hd=%u fm=%llx hover=%llx->%llx hover_name=%.80s selected=%llx consumed=%u",move?"native":"root",(unsigned long long)act,ox,oy,x,y,*(int32_t*)(m->base+0x2d128f8),*(int32_t*)(m->base+0x2d128fc),f0,m->base[0x2d128f0],ec,m->base[0x2d128ec],current_root?*(uint8_t*)(current_root+0xb9):0,(unsigned long long)fm,(unsigned long long)hover,(unsigned long long)current_hover,hover_name?hover_name:"(sin nombre)",(unsigned long long)(current_fm?*(uint64_t*)(current_fm+0x190):0),current_root?*(uint8_t*)(current_root+0xb8):0);}
+}
+
 static void ui_send_mouse(module_t *m, uint64_t root, uint64_t act, int x, int y) { ui_send_mouse_arg(m, root, act, x, y, 0); }
 // 给某个控件所在的位置发滚轮（游戏主线程；自定义页手柄选行时让原版滚动区自己滚到位，dm_custom.c）：notches > 0 = 内容往下（露出上面的行）。
 // 位置取控件命中区的中心（屏幕上粗扫一遍它的命中函数）；控件不在屏上就不发
@@ -545,12 +651,55 @@ void dm_ui_wheel_on(uint64_t w, int notches) {
 // Generic pointer events (for the gesture layer / probing): while a hover is held, send MouseMove every frame to pin the cursor; the other events are queued, one sent per presented frame (preceded by a Move).
 // The message names are all ones with a comparison site in the main program (found by searching instructions for the hash): Left/RightMouseButtonDown/Up, MouseScroll, KeyDown / KeyUp.
 static _Atomic int g_tab_unhover;   // 点页签切页：下一次指针泵把光标挪到这次点的页签上（g_iq_xy）并收掉悬停保持，见 dm_ui_tab_go | Tapping a tab to switch pages: the next pointer pump moves the cursor onto the tab just tapped (g_iq_xy) and drops the held hover, see dm_ui_tab_go
-static _Atomic int g_up_hold; static _Atomic uint64_t g_up_xy; static struct { int kind, arg; } g_up_q[32]; static _Atomic unsigned g_up_w, g_up_r;
-void dm_ui_ptr(int kind, float nx, float ny, int arg) { if (dm_restart_busy()) return;
-    nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
-    if (kind <= DM_UP_MOVE) { atomic_store(&g_up_xy, ((uint64_t)(uint32_t)(nx * 65535 + .5f) << 16) | (uint32_t)(ny * 65535 + .5f)); if (kind == DM_UP_HOVER) atomic_store(&g_up_hold, 1); return; }
-    unsigned w = atomic_load(&g_up_w); if (w - atomic_load(&g_up_r) >= 32) return;
-    g_up_q[w % 32].kind = kind; g_up_q[w % 32].arg = arg; atomic_store(&g_up_w, w + 1);
+typedef struct {int kind,arg;uint64_t xy,precise_xy;int precise,modifiers;uint32_t tab_epoch;} ui_pointer_event;
+static _Atomic uint32_t g_pc_tabbar_epoch=1;
+static uint64_t g_up_precise_xy;static int g_up_precise,g_up_modifiers;static uint32_t g_up_epoch;
+static _Atomic int g_up_hold;static _Atomic uint64_t g_up_xy;
+static ui_pointer_event g_up_q[256],*g_up_extra;static unsigned g_up_capacity=256;static int g_up_cancel;
+static _Atomic unsigned g_up_w,g_up_r;
+enum {UI_POINTER_CANCEL=10};
+static unsigned char g_up_buttons[2];static int g_up_keys[256];
+static pthread_mutex_t g_up_lock=PTHREAD_MUTEX_INITIALIZER;
+static uint64_t ui_pointer_xy(float nx,float ny){nx=fminf(1,fmaxf(0,nx));ny=fminf(1,fmaxf(0,ny));return (uint64_t)(uint32_t)(nx*65535+.5f)<<16|(uint32_t)(ny*65535+.5f);}
+static void ui_pointer_push(int kind,float nx,float ny,int arg,int explicit_position,int modifiers) {
+    modifiers&=0x7000;
+    if(dm_restart_busy()||!isfinite(nx)||!isfinite(ny)||(explicit_position&&(fabsf(nx)>16||fabsf(ny)>16)))return;
+    if(kind<=DM_UP_SCROLL&&kind!=DM_UP_END)dm_custom_pointer_input();
+    pthread_mutex_lock(&g_up_lock);
+    uint64_t xy=ui_pointer_xy(nx,ny),precise_xy=0;float precise_position[2]={nx,ny};memcpy(&precise_xy,precise_position,sizeof precise_xy);
+    if(kind<=DM_UP_MOVE){atomic_store(&g_up_xy,xy);g_up_precise=explicit_position;g_up_precise_xy=precise_xy;g_up_modifiers=modifiers;g_up_epoch=atomic_load(&g_pc_tabbar_epoch);if(kind==DM_UP_HOVER)atomic_store(&g_up_hold,1);pthread_mutex_unlock(&g_up_lock);return;}
+    unsigned w=atomic_load(&g_up_w),r=atomic_load(&g_up_r),count=w-r;ui_pointer_event *q=g_up_extra?g_up_extra:g_up_q;
+    if(g_up_cancel){pthread_mutex_unlock(&g_up_lock);return;}
+    if(kind==DM_UP_END&&count&&q[(w-1)%g_up_capacity].kind==DM_UP_END){pthread_mutex_unlock(&g_up_lock);return;}
+    if(count==g_up_capacity){
+        unsigned capacity=g_up_capacity<=UINT32_MAX/2?g_up_capacity*2:0;size_t bytes;
+        ui_pointer_event *more=capacity&&!__builtin_mul_overflow((size_t)capacity,sizeof(ui_pointer_event),&bytes)?malloc(bytes):NULL;
+        if(!more){g_up_cancel=1;pthread_mutex_unlock(&g_up_lock);return;}
+        for(unsigned i=0;i<count;i++)more[(r+i)%capacity]=q[(r+i)%g_up_capacity];
+        free(g_up_extra);g_up_extra=more;g_up_capacity=capacity;q=more;
+    }
+    q[w%g_up_capacity]=(ui_pointer_event){.kind=kind,.arg=arg,.xy=explicit_position?xy:atomic_load(&g_up_xy),.precise_xy=explicit_position?precise_xy:g_up_precise_xy,.precise=explicit_position?1:g_up_precise,.modifiers=modifiers,.tab_epoch=atomic_load(&g_pc_tabbar_epoch)};atomic_store(&g_up_w,w+1);
+    pthread_mutex_unlock(&g_up_lock);
+}
+void dm_ui_ptr(int kind,float nx,float ny,int arg){ui_pointer_push(kind,nx,ny,arg,0,0);}
+void dm_ui_ptr_at(int kind,float nx,float ny,int arg){ui_pointer_push(kind,nx,ny,arg,1,0);}
+void dm_ui_ptr_at_mods(int kind,float nx,float ny,int arg,int modifiers){ui_pointer_push(kind,nx,ny,arg,1,modifiers);}
+static int ui_pointer_pop(ui_pointer_event *event) {
+    pthread_mutex_lock(&g_up_lock);unsigned r=atomic_load(&g_up_r);int pending=r!=atomic_load(&g_up_w);
+    if(pending){*event=(g_up_extra?g_up_extra:g_up_q)[r%g_up_capacity];atomic_store(&g_up_r,r+1);}
+    else{*event=(ui_pointer_event){.xy=atomic_load(&g_up_xy),.precise_xy=g_up_precise_xy,.precise=g_up_precise,.modifiers=g_up_modifiers,.tab_epoch=g_up_epoch};if(g_up_cancel){event->kind=UI_POINTER_CANCEL;event->modifiers=0;pending=1;g_up_cancel=0;}}
+    if(atomic_load(&g_up_r)==atomic_load(&g_up_w)){free(g_up_extra);g_up_extra=NULL;g_up_capacity=256;}
+    pthread_mutex_unlock(&g_up_lock);return pending;
+}
+static void ui_pointer_track(int kind,int arg) {
+    if(kind==DM_UP_LDOWN)g_up_buttons[0]=1;else if(kind==DM_UP_LUP)g_up_buttons[0]=0;
+    else if(kind==DM_UP_RDOWN)g_up_buttons[1]=1;else if(kind==DM_UP_RUP)g_up_buttons[1]=0;
+    else if(kind==DM_UP_KEYDOWN)g_up_keys[arg&255]=arg+1;else if(kind==DM_UP_KEYUP)g_up_keys[arg&255]=0;
+}
+static void ui_pointer_cancel_held(void (*send)(int,int,void *),void *context) {
+    for(int side=0;side<2;side++)if(g_up_buttons[side]){send(side?DM_UP_RUP:DM_UP_LUP,0,context);g_up_buttons[side]=0;}
+    for(int key=0;key<256;key++)if(g_up_keys[key]){send(DM_UP_KEYUP,g_up_keys[key]-1,context);g_up_keys[key]=0;}
+    atomic_store(&g_up_hold,0);
 }
 // 物品区命中：触点是否落在物品格 / 装备位 / 腰带 / 箱子格上（手势层据此分「单击 = 只移光标出说明」与「单击 = 点按钮」）。
 // 做法：从界面根控件按名字走控件树（+8 名字、+0x50 可见、+0x58 / +0x60 子控件），对名字是 grid / horadriccube_grid / Belt / slot_* / advancedstash_* / basicstash_container 的可见控件
@@ -828,6 +977,76 @@ static int ui_top_cover(module_t *m, uint64_t root, int x, int y) {
         if (panel_clipped(p, SNAP_XY(x, y))) continue;
         if ((((int (*)(uint64_t, uint64_t))pfn)(p, SNAP_XY(x, y)) & 1 && !(((int (*)(uint64_t, uint64_t))pfn)(p, SNAP_XY(3, 3)) & 1) && has_visible_leaf(p, 1)) || inside_walk(p, SNAP_XY(x, y), 1, base + 0x20c1328)) top = i; }
     return top;
+}
+typedef struct { uint64_t root,widget;uint32_t generation;int index,current; } pc_tabbar_capture;
+static pc_tabbar_capture g_pc_tabbar_capture;
+static _Atomic int g_pc_tabbar_cancel;
+static uint32_t g_pc_tabbar_event_epoch;static int g_pc_tabbar_event_active;
+static void pc_tabbar_event_enter(const ui_pointer_event *event) { g_pc_tabbar_event_epoch=event->tab_epoch;g_pc_tabbar_event_active=1; }
+static void pc_tabbar_event_leave(void) { g_pc_tabbar_event_active=0; }
+static int pc_tabbar_epoch_valid(void) { return !g_pc_tabbar_event_active || g_pc_tabbar_event_epoch==atomic_load(&g_pc_tabbar_epoch); }
+static int pc_controls_tab_index(module_t *m,uint64_t tabs);
+static int pc_profile_ready_now(module_t *m,uint64_t root);
+static int pc_tabbar_target_allowed(module_t *m,uint64_t root,uint64_t tabs,int index) { return pc_controls_tab_index(m,tabs)!=index || pc_profile_ready_now(m,root); }
+static int pc_tabbar_step(pc_tabbar_capture *capture,int kind,int after,uint64_t root,uint64_t widget,int index,int current,uint32_t generation) {
+    if(!pc_tabbar_epoch_valid()){memset(capture,0,sizeof *capture);return -1;}
+    if(kind==DM_UP_END){memset(capture,0,sizeof *capture);return -1;}
+    if(kind==DM_UP_LDOWN && !after) {
+        *capture=(pc_tabbar_capture){root,widget,generation,index,current};
+        if(!widget || index<0)capture->widget=0;
+        return -1;
+    }
+    if(!capture->widget)return -1;
+    if(root!=capture->root || generation!=capture->generation || widget!=capture->widget || index!=capture->index || current!=capture->current){memset(capture,0,sizeof *capture);return -1;}
+    if(kind==DM_UP_LUP && after){int selected=index==current?-1:index;memset(capture,0,sizeof *capture);return selected;}
+    return -1;
+}
+static void pc_tabbar_mouse_cancel(void) { memset(&g_pc_tabbar_capture,0,sizeof g_pc_tabbar_capture); }
+static int pc_tabbar_mouse_abi(module_t *m) {
+    static const uint32_t hit[]={0xa9bb67fa,0xa9015ff8,0xa90257f6,0xa9034ff4},select[]={0xa9be4ff4,0xa9017bfd,0x910043fd,0xb94dc408};
+    return m && m->base && m->size>=0x2f05460 && !memcmp(m->base+0xad9eb8,hit,sizeof hit) && !memcmp(m->base+0xad9b80,select,sizeof select);
+}
+static int pc_tabbar_hit_ready(module_t *m,uint64_t root,uint64_t tabs) {
+    if(!tabs || *(uint64_t *)tabs!=(uint64_t)m->base+0x20ba3a8 || !*(uint8_t *)(tabs+0x50) || !*(uint8_t *)(tabs+0x51))return 0;
+    int count=*(int32_t *)(tabs+0x558);if(count<1 || count>8)return 0;
+    for(int i=0;i<count;i++)if(*(uint8_t *)(tabs+0xe88+i)) {
+        uint64_t image=*(uint64_t *)(tabs+0xdc8+8*i);if(!image)return 0;
+        uint64_t child=*(uint64_t *)(image+(*(uint8_t *)(root+0xb9)?0x130:0x138))?image:*(uint64_t *)(tabs+0xe08+8*i);
+        if(!child)return 0;
+        uint64_t vt=*(uint64_t *)child,base=(uint64_t)m->base;
+        if(vt<base || vt-base>m->size || m->size-(vt-base)<0x50)return 0;
+        uint64_t fn=*(uint64_t *)(vt+0x48);if(fn<base || fn-base>=m->text_end)return 0;
+    }
+    return 1;
+}
+static uint64_t pc_tabbar_hit_walk(module_t *m,uint64_t root,uint64_t w,uint64_t xy,int depth,int *index,uint64_t (*hit)(uint64_t,uint64_t)) {
+    if(!w || depth>14 || !*(uint8_t *)(w+0x50) || !*(uint8_t *)(w+0x51))return 0;
+    if(*(uint64_t *)w==(uint64_t)m->base+0x20ba3a8) {
+        if(!pc_tabbar_hit_ready(m,root,w))return 0;
+        uint64_t result=hit(w,xy);int k=(int32_t)result,count=*(int32_t *)(w+0x558);
+        if(result>>32 || k<0 || k>=count || !*(uint8_t *)(w+0xe88+k))return 0;
+        *index=k;return w;
+    }
+    uint64_t children=*(uint64_t *)(w+0x58),count=*(uint64_t *)(w+0x60);if(!children || count>256)return 0;
+    for(uint64_t i=count;i>0;i--){uint64_t found=pc_tabbar_hit_walk(m,root,*(uint64_t *)(children+8*(i-1)),xy,depth+1,index,hit);if(found)return found;}
+    return 0;
+}
+static void pc_tabbar_mouse(module_t *m,uint64_t root,uint64_t act,int x,int y,int after) {
+    int dm_padmode_busy(void);
+    if(atomic_exchange(&g_pc_tabbar_cancel,0))pc_tabbar_mouse_cancel();
+    if(!pc_tabbar_epoch_valid()){pc_tabbar_mouse_cancel();return;}
+    if(!dm_ui_pc_desktop()){pc_tabbar_mouse_cancel();return;}
+    int kind=act==ui_hash("LeftMouseButtonDown")?DM_UP_LDOWN:act==ui_hash("LeftMouseButtonUp")?DM_UP_LUP:act==ui_hash("MouseMove")?DM_UP_MOVE:0;
+    if(!kind || (after && kind==DM_UP_MOVE) || (!g_pc_tabbar_capture.widget && kind!=DM_UP_LDOWN))return;
+    if(!pc_tabbar_mouse_abi(m) || !root || *(uint64_t *)(m->base+0x2f05458)!=root || dm_padmode_busy() || atomic_load(&g_load_up)>0 || modal_any(root,1,NULL)){pc_tabbar_mouse_cancel();return;}
+    uint32_t generation=dm_ui_gen();
+    if(g_pc_tabbar_capture.widget && (g_pc_tabbar_capture.root!=root || g_pc_tabbar_capture.generation!=generation || !ui_has(root,g_pc_tabbar_capture.widget,0)))pc_tabbar_mouse_cancel();
+    uint64_t children=*(uint64_t *)(root+0x58),count=*(uint64_t *)(root+0x60),widget=0;int index=-1;
+    if(!children || count>256){pc_tabbar_mouse_cancel();return;}
+    int top=ui_top_cover(m,root,x,y);uint64_t xy=(uint64_t)(uint32_t)x | (uint64_t)(uint32_t)y<<32;
+    for(int i=(int)count-1;i>=0 && i>=top;i--){uint64_t panel=*(uint64_t *)(children+8*i);if(!panel || panel_skip(*(const char **)(panel+8)))continue;widget=pc_tabbar_hit_walk(m,root,panel,xy,0,&index,(uint64_t (*)(uint64_t,uint64_t))(m->base+0xad9eb8));if(widget)break;}
+    int selected=pc_tabbar_step(&g_pc_tabbar_capture,kind,after,root,widget,index,widget?TAB_SEL(widget):-1,generation);
+    if(selected>=0 && pc_tabbar_target_allowed(m,root,widget,selected) && pc_tabbar_epoch_valid())((void (*)(uint64_t,int,int))(m->base+0xad9b80))(widget,selected,1);
 }
 // 滑块两端的箭头（每点走 1）：贴图只有 2.8 毫米、没有单独的命中区（由滑块自己按点击位置处理），就近吸附认不到它。
 // 触点落在某个滑块的滑槽左 / 右外侧 7 毫米内（上下各 3.5 毫米）= 点那一端的箭头：把点击挪到箭头中心（滑槽端头外 44 单位，实测音效滑块滑槽 917–1148、箭头 898 / 1165）。
@@ -1177,6 +1396,307 @@ static int imbue_locked(module_t *m, uint64_t root) {
     dm_hud_info hi; dm_hud_get(&hi); if (!hi.valid || !hi.holding) return 0;
     return !(dm_wref_get(&g_slot) && *(uint64_t *)dm_wref_get(&g_slot) == (uint64_t)m->base + 0x20898e8);
 }
+static int pc_native_hit(module_t *m,uint64_t w,uint64_t xy) {
+    uint64_t base=(uint64_t)m->base,vt=*(uint64_t *)w;
+    if(vt<base || vt-base>m->size || m->size-(vt-base)<0x50) return 1;
+    uint64_t fn=*(uint64_t *)(vt+0x48);
+    if(fn<base || fn-base>=m->text_end) return 1;
+    return ((int (*)(uint64_t,uint64_t))fn)(w,xy)&1;
+}
+static int pc_tabbar_prepare(module_t *m,uint64_t widget,int desktop) {
+    static const uint32_t tail[]={0xa9086ffc,0xa90967fa,0xa90a5ff8};
+    if(!desktop || !m || !widget || m->size<0x20ba3f8 || memcmp(m->base+0xad8a58,tail,sizeof tail) || *(uint64_t *)widget!=(uint64_t)m->base+0x20ba3a8)return 0;
+    *(uint8_t *)(widget+0xda1)=0;return 1;
+}
+void dm_ui_pc_tabbar_init(uint64_t *regs) {
+    regs[8]=0;
+    pc_tabbar_prepare(main_module(),regs[0],dm_ui_pc_desktop());
+}
+static const char *pc_belt_label(int desktop,int action,int type,int belt,const char *(*keyboard)(int,int),const char *(*controller)(int,int)) {
+    return (desktop && belt && action>=23 && action<=26 && type==1 ? keyboard : controller)(action,type);
+}
+void dm_ui_pc_belt_label(uint64_t *regs) {
+    module_t *m=main_module();
+    static const uint32_t keyboard_code[]={0x51000828,0x7100111f,0x54000222,0xd000e8c9};
+    static const uint32_t controller_code[]={0xaa1f03e9,0xf000e8a8,0x91280108,0x14000004};
+    if(!m || m->size<0x2089018 || memcmp(m->base+0x36c030,keyboard_code,sizeof keyboard_code) || memcmp(m->base+0x36fe60,controller_code,sizeof controller_code)) { regs[0]=0;return; }
+    uint64_t widget=regs[19];int belt=widget && *(uint64_t *)widget==(uint64_t)m->base+0x2088fc8;
+    regs[0]=(uint64_t)pc_belt_label(dm_ui_pc_desktop(),(int)regs[0],(int)regs[1],belt,(const char *(*)(int,int))(m->base+0x36c030),(const char *(*)(int,int))(m->base+0x36fe60));
+}
+static int pc_skill_label_build(int desktop,int slot,int type,int widget,void *out,const char *(*keyboard)(int,int),void (*construct)(void *,const char *)) {
+    if(!desktop || !widget || !out || slot<0 || slot>=16 || type!=1) return 0;
+    const char *label=keyboard(slot<8?14+slot:46+slot-8,1);
+    construct(out,label?label:"");return 1;
+}
+void dm_ui_pc_skill_label(uint64_t *regs) {
+    module_t *m=main_module();
+    static const uint32_t ctor[]={0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd};
+    static const uint32_t original[]={0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd};
+    static const uint32_t keyboard[]={0x51000828,0x7100111f,0x54000222,0xd000e8c9};
+    if(!m || m->size<0x208a600 || memcmp(m->base+0x134fb4,ctor,sizeof ctor) || memcmp(m->base+0x2b3d68,original,sizeof original) || memcmp(m->base+0x36c030,keyboard,sizeof keyboard)) die("PC: ABI de etiqueta de habilidad no reconocida");
+    uint64_t widget=regs[19];int recognized=widget && *(uint64_t *)widget==(uint64_t)m->base+0x208a5f8;
+    if(pc_skill_label_build(dm_ui_pc_desktop(),(int)regs[0],(int)regs[1],recognized,(void *)regs[8],(const char *(*)(int,int))(m->base+0x36c030),(void (*)(void *,const char *))(m->base+0x134fb4))) { regs[0]=regs[8];return; }
+    register uint64_t x0 __asm__("x0")=regs[0],x1 __asm__("x1")=regs[1],x8 __asm__("x8")=regs[8],x16 __asm__("x16")=(uint64_t)m->base+0x2b3d68;
+    __asm__ volatile("blr x16" : "+r"(x0),"+r"(x1),"+r"(x8),"+r"(x16) : : "x2","x3","x4","x5","x6","x7","x9","x10","x11","x12","x13","x14","x15","x17","x30","v0","v1","v2","v3","v4","v5","v6","v7","v16","v17","v18","v19","v20","v21","v22","v23","v24","v25","v26","v27","v28","v29","v30","v31","cc","memory");
+    regs[0]=x0;
+}
+static int pc_quickcast_visible(int desktop,uint64_t list,int index,uint64_t row,int requested) {
+    if(!desktop || requested || !list || !row || index<0) return requested;
+    uint64_t ch=*(uint64_t *)(list+0x58),n=*(uint64_t *)(list+0x60);
+    if(!ch || n>256 || (unsigned)index>=n || *(uint64_t *)(ch+8*index)!=row) return requested;
+    const char *name=*(const char **)(row+8);
+    return name && !strcmp(name,"Row KeyboardQuickCastEnabled") ? 1 : requested;
+}
+void dm_ui_pc_quickcast_row(uint64_t *regs) {
+    module_t *m=main_module();static const uint32_t code[]={0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd};
+    if(!m || m->size<0xbb6f34 || memcmp(m->base+0xaf3d68,code,sizeof code)) return;
+    int visible=pc_quickcast_visible(dm_ui_pc_desktop(),regs[0],(int)regs[1],regs[23],(int)regs[2]);
+    regs[0]=((uint64_t (*)(uint64_t,int,int))(m->base+0xaf3d68))(regs[0],(int)regs[1],visible);
+}
+typedef struct {const char *name,*event,*row;} pc_option_definition;
+static const pc_option_definition g_pc_option_defs[]={
+    {"DefaultKeyBindings","SetDefaultKeyBindings","Row DefaultKeyBindings"},
+    {"KeyboardQuickCastEnabled","SetKeyboardQuickCastEnabled","Row KeyboardQuickCastEnabled"},
+    {"DisplayActiveSkillBindings","SetDisplayActiveSkillBindings","Row DisplayActiveSkillBindings"}
+};
+static int pc_option_registered(uint64_t panel,const pc_option_definition *definition) {
+    uint64_t descriptors=*(uint64_t*)(panel+0x188),count=*(uint64_t*)(panel+0x190);int found=0;
+    if(count>256||(!descriptors&&count))return -1;
+    size_t length=strlen(definition->name);uint64_t hash=ui_hash(definition->event);
+    for(uint64_t i=0;i<count;i++){
+        uint64_t descriptor=*(uint64_t*)(descriptors+8*i);if(!descriptor)return -1;
+        uint64_t data=*(uint64_t*)(descriptor+0x18),size=*(uint64_t*)(descriptor+0x20);
+        int same_name=data&&size==length&&!memcmp((const void*)data,definition->name,length);
+        if(*(uint64_t*)(descriptor+8)==hash||same_name){
+            if(!same_name||*(uint64_t*)(descriptor+8)!=hash||!*(uint64_t*)(descriptor+0x10)||found)return -1;
+            found=1;
+        }
+    }
+    return found;
+}
+typedef struct {
+    uint64_t allocator;
+    void *(*allocate)(uint64_t,uint64_t,uint32_t);
+    uint64_t (*lookup)(uint64_t,const char *);
+    uint64_t (*get_option[3])(void);
+    void (*construct)(void *,uint64_t,uint64_t,const void *);
+    uint64_t (*append)(uint64_t,void *);
+} pc_options_registration_api;
+static int pc_options_register(uint64_t panel,int desktop,const pc_options_registration_api *api) {
+    if(!desktop)return 0;
+    const char *name=panel?*(const char**)(panel+8):NULL;
+    if(!name||strcmp(name,"GameplayOptionsPanel")||!api||!api->allocate||!api->lookup||!api->construct||!api->append)return -1;
+    int added=0;
+    for(unsigned i=0;i<3;i++){
+        const pc_option_definition *definition=g_pc_option_defs+i;int registered=pc_option_registered(panel,definition);
+        if(registered<0)return -1;if(registered)continue;
+        if(!api->get_option[i]||!api->lookup(panel,definition->name))return -1;
+        uint64_t option=api->get_option[i]();if(!option)return -1;
+        void *descriptor=api->allocate(api->allocator,0x98,0x10);if(!descriptor)return -1;
+        struct {const char *data;uint64_t length,capacity;} text={definition->name,strlen(definition->name),strlen(definition->name)};
+        api->construct(descriptor,ui_hash(definition->event),option,&text);
+        // ae6ca8 transfiere la propiedad al vector original del panel y vincula el modelo del widget.
+        api->append(panel,descriptor);if(pc_option_registered(panel,definition)!=1)return -1;
+        added++;
+    }
+    return added;
+}
+static int pc_options_rows(uint64_t panel,int desktop,void (*set_row)(uint64_t,int,int)) {
+    if(!desktop||!panel||!set_row)return 0;
+    const char *name=*(const char**)(panel+8);int gameplay=name&&!strcmp(name,"GameplayOptionsPanel"),sound=name&&!strcmp(name,"SoundOptionsPanel");
+    if(!gameplay&&!sound)return 0;
+    uint64_t list=*(uint64_t*)(panel+0x180);if(!list)return 0;
+    uint64_t children=*(uint64_t*)(list+0x58),count=*(uint64_t*)(list+0x60);if(count>256||(!children&&count))return 0;
+    static const char *const controller[]={"Row Controller Options","Row ControllerCursorSpeed","Row ControllerWeaponSwapSeparateBindings","Row ControllerRumbleEnabled","Row ControllerSwapThumbsticks","Row Controller Feedback"};
+    int keyboard=0;for(unsigned i=0;i<3;i++)keyboard|=pc_option_registered(panel,g_pc_option_defs+i)==1;
+    int changed=0;
+    for(uint64_t i=0;i<count;i++){
+        if(*(uint64_t*)(list+0x58)!=children||*(uint64_t*)(list+0x60)!=count)break;
+        uint64_t row=*(uint64_t*)(children+8*i);const char *row_name=row?*(const char**)(row+8):NULL;if(!row_name)continue;
+        int visible=-1;
+        for(unsigned j=0;j<sizeof controller/sizeof *controller;j++)if(!strcmp(row_name,controller[j]))visible=0;
+        if(gameplay){
+            if(!strcmp(row_name,"Row Keyboard Options")&&keyboard)visible=1;
+            for(unsigned j=0;j<3;j++)if(!strcmp(row_name,g_pc_option_defs[j].row)&&pc_option_registered(panel,g_pc_option_defs+j)==1)visible=1;
+        }
+        if(visible>=0){set_row(list,(int)i,visible);changed++;}
+    }
+    return changed;
+}
+static int pc_options_native_abi(module_t *m) {
+    static const struct {size_t offset;uint32_t words[4];} functions[]={
+        {0xae5b3c,{0xd10183ff,0xa90357f6,0xa9044ff4,0xa9057bfd}},
+        {0xae6ca8,{0xa9bd57f6,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0xae6d90,{0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd}},
+        {0xaf3d68,{0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd}},
+        {0xb7a6dc,{0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0x310420,{0xd10283ff,0xa9084ff4,0xa9097bfd,0x910243fd}},
+        {0x310f30,{0xd10143ff,0xf9001bf3,0xa9047bfd,0x910103fd}},
+        {0x310c70,{0xd10143ff,0xf9001bf3,0xa9047bfd,0x910103fd}}
+    };
+    if(!m||!m->base||m->size<0x3211701)return 0;
+    for(unsigned i=0;i<sizeof functions/sizeof *functions;i++)if(memcmp(m->base+functions[i].offset,functions[i].words,sizeof functions[i].words))return 0;
+    return 1;
+}
+static int pc_options_init_class(uint64_t base,uint64_t vt) {
+    return vt==base+0x20c1c48;
+}
+static int pc_options_rows_class(uint64_t base,uint64_t panel) {
+    if(!panel)return 0;
+    uint64_t vt=*(uint64_t*)panel;const char *name=*(const char**)(panel+8);
+    return name&&((vt==base+0x20c1c48&&!strcmp(name,"GameplayOptionsPanel"))||(vt==base+0x20c1988&&!strcmp(name,"SoundOptionsPanel")));
+}
+static int pc_options_filter_abi(module_t *m) {
+    static const uint32_t entry[]={0xf81b0ff9,0xa9015ff8,0xa90257f6,0xa9034ff4};
+    static const uint32_t after[]={0xf9406914,0xf940b262,0xb5000082};
+    return m&&m->base&&m->size>=0xae951c&&!memcmp(m->base+0xae9258,entry,sizeof entry)&&!memcmp(m->base+0xae9510,after,sizeof after);
+}
+static int pc_options_panel_owned(uint64_t root,uint64_t panel) {
+    if(!root||!panel)return 0;
+    int pending=0;
+    for(unsigned i=0;i<2;i++){
+        size_t offset=i?0xa0:0x88;
+        uint64_t entries=*(uint64_t*)(root+offset),count=*(uint64_t*)(root+offset+8);
+        if(count>256||(!entries&&count))return 0;
+        for(uint64_t j=0;j<count;j++)if(*(uint64_t*)(entries+8*j)==panel){if(i)return 0;pending=1;}
+    }
+    // OnOpen se ejecuta desde el registro pendiente antes del attach al árbol58.
+    return pending||ui_has(root,panel,0);
+}
+static void pc_options_opened(module_t *m,uint64_t root,uint64_t panel);
+static int pc_options_trace_budget(unsigned *count,unsigned limit) {
+    if(!getenv("DM_MAC_POINTER_LOG")||*count>=limit)return 0;
+    ++*count;return 1;
+}
+static void pc_options_trace(module_t *m,const char *phase,const char *reason,uint64_t panel,uint64_t root,int result) {
+    if(!getenv("DM_MAC_POINTER_LOG"))return;
+    static unsigned init_count,rows_count,other_count;
+    const char *name=panel?*(const char**)(panel+8):NULL;
+    uint64_t vt=panel?*(uint64_t*)panel:0,base=m?(uint64_t)m->base:0;
+    int known=name&&(!strcmp(name,"GameplayOptionsPanel")||!strcmp(name,"SoundOptionsPanel"));
+    uint64_t list=known?*(uint64_t*)(panel+0x180):0,descriptors=known?*(uint64_t*)(panel+0x190):0;
+    unsigned *count=!strcmp(phase,"init")?&init_count:known?&rows_count:&other_count;
+    if(!pc_options_trace_budget(count,known||count==&init_count?48:8))return;
+    uint64_t manager=root?*(uint64_t*)(root+0xd0):0;
+    LOG("PC opciones fase=%s motivo=%s pc=%d panel=%#llx vt=%#llx nombre=%.80s root=%#llx lista=%#llx filas=%llu descriptores=%llu registrados=%d/%d/%d resultado=%d hover=%#llx selección=%#llx",phase,reason,dm_ui_pc_desktop(),(unsigned long long)panel,(unsigned long long)(vt>=base?vt-base:vt),name?name:"(sin nombre)",(unsigned long long)root,(unsigned long long)list,(unsigned long long)(list?*(uint64_t*)(list+0x60):0),(unsigned long long)descriptors,known?pc_option_registered(panel,g_pc_option_defs):0,known?pc_option_registered(panel,g_pc_option_defs+1):0,known?pc_option_registered(panel,g_pc_option_defs+2):0,result,(unsigned long long)(manager?*(uint64_t*)(manager+0x178):0),(unsigned long long)(manager?*(uint64_t*)(manager+0x190):0));
+    uint64_t children=list?*(uint64_t*)(list+0x58):0,n=list?*(uint64_t*)(list+0x60):0;
+    if(known&&children&&n<=256)for(uint64_t i=0;i<n;i++){
+        uint64_t row=*(uint64_t*)(children+8*i);const char *row_name=row?*(const char**)(row+8):NULL;
+        if(row_name&&(!strncmp(row_name,"Row Controller",14)||!strncmp(row_name,"Row Keyboard",12)||!strcmp(row_name,"Row DefaultKeyBindings")||!strcmp(row_name,"Row DisplayActiveSkillBindings")))LOG("PC opciones fila=%llu nombre=%.80s visible=%u activa=%u",(unsigned long long)i,row_name,*(uint8_t*)(row+0x50),*(uint8_t*)(row+0x51));
+    }
+}
+void dm_ui_pc_options_rows(uint64_t *regs) {
+    module_t *m=main_module();uint64_t panel=regs[19];regs[8]=0;
+    if(!dm_ui_pc_desktop()||!pc_options_native_abi(m)||!panel){pc_options_trace(m,"filas","pc/abi/panel",panel,0,-1);return;}
+    if(!pc_options_filter_abi(m)||regs[23]!=(uint64_t)m->base+0x2f05000){pc_options_trace(m,"filas","contexto/filtro distinto",panel,0,-1);return;}
+    uint64_t root=*(uint64_t*)(m->base+0x2f05458);if(!pc_options_panel_owned(root,panel)){pc_options_trace(m,"filas","sin propiedad del PanelManager",panel,root,-1);return;}
+    pc_options_opened(m,root,panel);
+    if(!pc_options_rows_class((uint64_t)m->base,panel)){pc_options_trace(m,"filas","clase distinta",panel,root,-1);return;}
+    static int running;if(running)return;running=1;
+    int changed=pc_options_rows(panel,1,(void(*)(uint64_t,int,int))(m->base+0xaf3d68));running=0;
+    pc_options_trace(m,"filas","política ejecutada",panel,root,changed);
+}
+void dm_ui_pc_options_init(uint64_t *regs) {
+    module_t *m=main_module();uint64_t panel=regs[0];
+    if(!pc_options_native_abi(m))die("PC: ABI de opciones no reconocida");
+    const char *reason=!dm_ui_pc_desktop()?"pc inactivo":!panel?"panel nulo":panel!=regs[19]?"self distinto":!pc_options_init_class((uint64_t)m->base,*(uint64_t*)panel)?"clase distinta":!(m->base[0x3211700]&1)?"asignador sin inicializar":"registro preparado";
+    pc_options_trace(m,"init",reason,panel,*(uint64_t*)(m->base+0x2f05458),-1);
+    if(dm_ui_pc_desktop()&&panel&&panel==regs[19]&&pc_options_init_class((uint64_t)m->base,*(uint64_t*)panel)&&(m->base[0x3211700]&1)){
+        uint64_t allocator=*(uint64_t*)(m->base+0x32116f8),vt=allocator?*(uint64_t*)allocator:0;
+        if(vt){
+            pc_options_registration_api api={.allocator=allocator,.allocate=(void*(*)(uint64_t,uint64_t,uint32_t))*(uint64_t*)(vt+0x10),.lookup=(uint64_t(*)(uint64_t,const char*))(m->base+0xb7a6dc),.construct=(void(*)(void*,uint64_t,uint64_t,const void*))(m->base+0xae6d90),.append=(uint64_t(*)(uint64_t,void*))(m->base+0xae6ca8)};
+            static const size_t getters[]={0x310420,0x310f30,0x310c70};for(unsigned i=0;i<3;i++)api.get_option[i]=(uint64_t(*)(void))(m->base+getters[i]);
+            int registered=pc_options_register(panel,1,&api);
+            if(registered<0)LOG("PC: no se pudieron registrar todas las opciones de teclado");
+            pc_options_trace(m,"init","registro terminado",panel,*(uint64_t*)(m->base+0x2f05458),registered);
+        }else pc_options_trace(m,"init","asignador nulo",panel,*(uint64_t*)(m->base+0x2f05458),-1);
+    }
+    regs[0]=((uint64_t(*)(uint64_t))(m->base+0xae5b3c))(panel);
+    pc_options_trace(m,"init","inicialización original terminada",panel,*(uint64_t*)(m->base+0x2f05458),0);
+}
+static int pc_hud_hit(module_t *m,uint64_t w,uint64_t xy,int depth,int (*hit)(module_t *,uint64_t,uint64_t)) {
+    if(!w || depth>14 || !*(uint8_t *)(w+0x50) || !*(uint8_t *)(w+0x51)) return 0;
+    uint64_t vt=*(uint64_t *)w-(uint64_t)m->base;
+    // Clases originales PC. El ClickCatcher del fondo reenvía al mundo y queda fuera.
+    if((vt==0x208a5f8 || vt==0x2088fc8 || vt==0x20c4008 || vt==0x20c1ff8 || vt==0x20c3c28 || vt==0x20c3d98 || vt==0x20c47d8 || vt==0x20b7b00) && hit(m,w,xy)) return 1;
+    uint64_t ch=*(uint64_t *)(w+0x58),n=*(uint64_t *)(w+0x60);
+    if(n>256 || (n && !ch)) return 1;
+    for(uint64_t i=0;i<n;i++) if(pc_hud_hit(m,*(uint64_t *)(ch+8*i),xy,depth+1,hit)) return 1;
+    return 0;
+}
+static int pc_portrait_hit(module_t *m,uint64_t w,uint64_t xy,int depth,int (*hit)(module_t *,uint64_t,uint64_t)) {
+    if(!w || depth>14 || !*(uint8_t *)(w+0x50) || !*(uint8_t *)(w+0x51)) return 0;
+    uint64_t ch=*(uint64_t *)(w+0x58),n=*(uint64_t *)(w+0x60);
+    if(n>256 || (n && !ch)) return 1;
+    if(!n) return depth>0 && hit(m,w,xy);
+    for(uint64_t i=0;i<n;i++) if(pc_portrait_hit(m,*(uint64_t *)(ch+8*i),xy,depth+1,hit)) return 1;
+    return 0;
+}
+static int pc_real_point(float nx,float ny,int rx,int ry,int rw,int rh,int sw,int sh) {
+    double x=rx+(double)nx*rw,y=ry+(double)ny*rh;
+    return isfinite(nx) && isfinite(ny) && rw>0 && rh>0 && sw>0 && sh>0 && x>=0 && y>=0 && x<sw && y<sh;
+}
+static int pc_world_tree_valid(uint64_t w,int depth,unsigned *budget,int (*read)(uint64_t,void*,size_t),int descendants) {
+    uint8_t node[0xa8];uint64_t children,count,items[256];
+    if(!w||depth>14||!*budget||!read(w,node,sizeof node))return 0;--*budget;
+    if(!node[0x50]||!node[0x51])return 1;
+    memcpy(&children,node+0x58,8);memcpy(&count,node+0x60,8);
+    if(count>256||(count&&(!children||!read(children,items,count*8))))return 0;
+    if(descendants)for(uint64_t i=0;i<count;i++)if(!pc_world_tree_valid(items[i],depth+1,budget,read,1))return 0;
+    return 1;
+}
+static int pc_world_panel_hit(module_t *m,uint64_t w,uint64_t xy,int depth,int (*hit)(module_t*,uint64_t,uint64_t)) {
+    if(depth>14||!*(uint8_t*)(w+0x50)||!*(uint8_t*)(w+0x51))return 0;
+    uint64_t vt=*(uint64_t*)w-(uint64_t)m->base,ch=*(uint64_t*)(w+0x58),n=*(uint64_t*)(w+0x60);
+    if(vt==0x20c1328)return 0;
+    if((!n||vt==0x20b9580||vt==0x20bc048||vt==0x20b8650)&&hit(m,w,xy))return 1;
+    for(uint64_t i=0;i<n;i++)if(pc_world_panel_hit(m,*(uint64_t*)(ch+8*i),xy,depth+1,hit))return 1;
+    return 0;
+}
+static int pc_world_tree(module_t *m,uint64_t root,uint64_t xy,int (*read)(uint64_t,void*,size_t),int (*hit)(module_t*,uint64_t,uint64_t)) {
+    unsigned budget=2048;if(!m||!read||!pc_world_tree_valid(root,0,&budget,read,0))return 0;
+    if(!*(uint8_t*)(root+0x50)||!*(uint8_t*)(root+0x51))return 0;
+    uint64_t children=*(uint64_t*)(root+0x58),count=*(uint64_t*)(root+0x60);int hud=0,inventory=0;
+    for(uint64_t i=0;i<count;i++){
+        uint64_t w=*(uint64_t*)(children+8*i);if(!pc_world_tree_valid(w,1,&budget,read,0))return 0;
+        if(!*(uint8_t*)(w+0x50)||!*(uint8_t*)(w+0x51))continue;
+        uint64_t name=*(uint64_t*)(w+8);char text[96];if(!name||!read(name,text,sizeof text)||!memchr(text,0,sizeof text))return 0;
+        if(!strcmp(text,"HUDPanel"))hud=1;
+        if(!strncmp(text,"HUD",3)||!strcmp(text,"MiniMenuPanel")){if(hit&&(!pc_world_tree_valid(w,1,&budget,read,1)||pc_hud_hit(m,w,xy,0,hit)))return 0;}
+        else if(!strcmp(text,"HireablesPanel")){if(hit&&(!pc_world_tree_valid(w,1,&budget,read,1)||pc_portrait_hit(m,w,xy,0,hit)))return 0;}
+        else if(!strcmp(text,"UISwitcher")){if(!pc_world_tree_valid(w,1,&budget,read,1)||has_visible_leaf(w,1))return 0;}
+        else if(!strcmp(text,"PlayerInventoryExpansionLayout")||!strcmp(text,"PlayerInventoryOriginalLayout")){
+            if(inventory++||*(uint64_t*)w!=(uint64_t)m->base+0x208a398)return 0;
+            if(hit&&(!pc_world_tree_valid(w,1,&budget,read,1)||hit(m,w,xy)||pc_world_panel_hit(m,w,xy,0,hit)))return 0;
+        }else if(!panel_skip(text)&&!dm_ui_panel_resident(text))return 0;
+    }
+    return hud;
+}
+static int pc_world_area_read(module_t *m,float nx,float ny,int enabled,int (*read)(uint64_t,void*,size_t),int (*hit)(module_t*,uint64_t,uint64_t),uint32_t (*generation_read)(void)) {
+    if(!enabled||!read||!generation_read||!isfinite(nx)||!isfinite(ny)||nx<0||nx>1||ny< -1||ny>1||!pc_options_event_allowed())return 0;
+    uint64_t root=0,current=0;int32_t size[2];uint8_t flags[2],ingame;uint32_t generation=generation_read(),epoch=atomic_load(&g_pc_tabbar_epoch);
+    if(!m||!m->base||m->size<0x2f05460||(uint64_t)m->base>UINT64_MAX-0x2f05460||!read((uint64_t)m->base+0x2f05458,&root,8)||!root||root>UINT64_MAX-0xda||
+       !read(root+0x50,flags,2)||!flags[0]||!flags[1]||!read(root+0xd9,&ingame,1)||!ingame||
+       !read((uint64_t)m->base+0x211da38,size,sizeof size)||size[0]<=0||size[1]<=0||size[0]>16384||size[1]>16384)return 0;
+    // Inventario no modal: sólo el punto descubierto comparte la proyección original del mundo.
+    uint64_t xy=(uint32_t)(int)(nx*size[0])|((uint64_t)(uint32_t)(int)(ny*size[1])<<32);
+    if(!pc_world_tree(m,root,xy,read,hit))return 0;
+    return read((uint64_t)m->base+0x2f05458,&current,8)&&current==root&&read(root+0x50,flags,2)&&flags[0]&&flags[1]&&read(root+0xd9,&ingame,1)&&ingame&&generation==generation_read()&&epoch==atomic_load(&g_pc_tabbar_epoch)&&pc_options_event_allowed();
+}
+static uint32_t pc_world_generation(void){return atomic_load(&g_ui_gen);}
+int dm_ui_pc_world_active(void) {
+    int dm_loadscreen_down(void),dm_padmode_busy(void);
+    if(!dm_ui_pc_desktop()||!pc_options_event_allowed()||!dm_uiscreen_ingame()||!dm_loadscreen_down()||dm_padmode_busy())return 0;
+    return pc_world_area_read(main_module(),0,0,1,pc_tooltip_read,NULL,pc_world_generation);
+}
+int dm_ui_pc_world_at(float nx,float ny) {
+    int dm_loadscreen_down(void),dm_padmode_busy(void);
+    if(!dm_ui_pc_desktop()||!pc_options_event_allowed()||!dm_uiscreen_ingame()||!dm_loadscreen_down()||dm_padmode_busy())return 0;
+    int rx,ry,rw,rh,sw,sh;dm_ui_rect(&rx,&ry,&rw,&rh);dm_screen_real(&sw,&sh);
+    if(!pc_real_point(nx,ny,rx,ry,rw,rh,sw,sh))return 0;
+    return pc_world_area_read(main_module(),nx,ny,1,pc_tooltip_read,pc_native_hit,pc_world_generation);
+}
+
 int dm_ui_item_at_now(float nx, float ny) {   // 只许游戏主线程调（Mac 宿主触点脚本在取手柄处跑） | Callable only from the game main thread (the Mac host touch point script runs where the controller is polled)
     module_t *m = main_module(); if (!m) return 0; uint64_t root = 0; memcpy(&root, m->base + 0x2f05458, 8);
     int32_t w = *(int32_t *)(m->base + 0x211da38), h = *(int32_t *)(m->base + 0x211da3c); if (!root || w <= 0 || h <= 0) return 0;
@@ -1227,6 +1747,7 @@ int dm_ui_drop_bag(void) { return atomic_load(&g_drop_bag); }
 static int g_press_stack;   // 最近一次按下命中的是高级仓库的成叠格（只在游戏主线程读写） | The most recent press hit a stack cell of the advanced stash (read and written only on the game main thread)
 static _Atomic int g_vault_drop;   // 最后一次落点查询落在编年史页上时手上那件的 id（否则 0） | id of the held item when the last drop-point query landed on the chronicle page (otherwise 0)
 int dm_ui_vault_drop(void) { return atomic_load(&g_vault_drop); }
+void dm_vault_ui_returning(uint32_t id);
 // 视口像素点在物品栏背包格（PlayerInventoryExpansionLayout 的 grid）上：给出它在格里的位置（格为单位 × 100）与格子的列数、行数（编年史拖回背包用）。
 // 边界用格子控件自己的命中函数二分探（同 slot_center），格距 112.5 单位（按 2160 高折算）
 // A viewport pixel point on the inventory grid of the inventory panel (the grid of PlayerInventoryExpansionLayout): gives its position within the grid (in cells × 100) and the grid's column and row counts (used for dragging from the chronicle back to the inventory).
@@ -1543,17 +2064,259 @@ static void ui_item_pump(uint64_t root, int width, int height) {
     if (r == 1) merc_lock_hit(hit);
     if (hit_log_ok(hit)) { LOG("界面命中：(%d,%d) → %s%s", x, y, r == 1 ? "物品区 " : r == 10 ? "物品区（单件槽占用，不动）" : r == 8 ? "成叠格 " : r == 7 ? "货架 " : r == 2 ? "" : r == 3 ? "面板外" : r == 6 ? "" : "面板内控件", hit); }
 }
+static int options_focus_clear(module_t *m,uint64_t root,const char *const *panels,unsigned count,void (*select_focus)(uint64_t,uint64_t,uint64_t)) {
+    if(!m||!root||!select_focus)return 0;
+    uint64_t manager=ui_panel(root,"FocusManager");
+    if(!manager||!*(uint8_t*)(manager+0x50)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88||!*(uint8_t*)(manager+0x180))return 0;
+    uint64_t container=*(uint64_t*)(manager+0x188),selected=*(uint64_t*)(manager+0x190);
+    if(!container||!selected||!ui_has(root,container,0))return 0;
+    for(unsigned i=0;i<count;i++){
+        uint64_t panel=ui_panel(root,panels[i]);
+        if(panel&&*(uint8_t*)(panel+0x50)&&ui_has(panel,selected,0)){select_focus(manager+0x180,container,0);return 1;}
+    }
+    return 0;
+}
+static int audio_focus_clear(module_t *m,uint64_t root,void (*select_focus)(uint64_t,uint64_t,uint64_t)) {
+    static const char *const panels[]={"SoundOptionsPanel"};
+    return options_focus_clear(m,root,panels,1,select_focus);
+}
+typedef struct {uint64_t root;int x,y,valid;} pc_options_pointer_state;
+static pc_options_pointer_state g_pc_options_pointer;
+typedef struct {int pointer,pending_kind;uint32_t generation,input_epoch,pending_epoch;uint64_t deadline;} pc_options_open_state;
+static pc_options_open_state g_pc_options_open;
+typedef struct {uint32_t epoch;int active,modifiers;} pc_options_event_scope;
+static pc_options_event_scope g_pc_options_event_scope;
+static pc_options_event_scope pc_options_event_begin(const ui_pointer_event *event) {
+    pc_options_event_scope previous=g_pc_options_event_scope;
+    int blocked=event->kind==DM_UP_END||event->kind==UI_POINTER_CANCEL||event->kind==DM_UP_KEYDOWN;
+    g_pc_options_event_scope=(pc_options_event_scope){.epoch=event->tab_epoch,.active=blocked?2:1,.modifiers=blocked?0:event->modifiers};return previous;
+}
+static int pc_options_event_allowed(void) {
+    return (!g_pc_options_event_scope.active||(g_pc_options_event_scope.active==1&&g_pc_options_event_scope.epoch==atomic_load(&g_pc_tabbar_epoch)))&&pc_tabbar_epoch_valid();
+}
+typedef struct {uint64_t root;int x,y,valid;uint32_t generation,epoch;} pc_pointer_hover_state;
+static pc_pointer_hover_state g_pc_pointer_hover;
+static int pc_pointer_hover_refresh(module_t *m,uint64_t root,uint64_t act,int x,int y,int native,void (*select_focus)(uint64_t,uint64_t,uint64_t)) {
+    if(!dm_ui_pc_desktop()){g_pc_pointer_hover.valid=0;return 0;}
+    if(act!=ui_hash("MouseMove")||!pc_options_event_allowed())return 0;
+    uint32_t generation=atomic_load(&g_ui_gen),epoch=atomic_load(&g_pc_tabbar_epoch);
+    int changed=!g_pc_pointer_hover.valid||g_pc_pointer_hover.root!=root||g_pc_pointer_hover.x!=x||g_pc_pointer_hover.y!=y||g_pc_pointer_hover.generation!=generation||g_pc_pointer_hover.epoch!=epoch;
+    g_pc_pointer_hover=(pc_pointer_hover_state){root,x,y,1,generation,epoch};
+    if(!changed||native||!select_focus||!m||!m->base||m->size<0x2f05460||!root||*(uint64_t*)(m->base+0x2f05458)!=root)return 0;
+    static const uint32_t code[]={0xf81c0ff7,0xa90157f6,0xa9024ff4,0xa9037bfd};
+    if(memcmp(m->base+0xabe064,code,sizeof code))return 0;
+    uint64_t manager=*(uint64_t*)(root+0xd0);if(!manager||!ui_has(root,manager,0)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88)return 0;
+    uint64_t container=*(uint64_t*)(manager+0x170),hover=*(uint64_t*)(manager+0x178);
+    if((!container&&!hover)||(container&&!ui_has(root,container,0))||(hover&&!ui_has(root,hover,0)))return 0;
+    // Igual que abd6bc antes de MouseMove: salir del hover anterior y dejar que el hit original encuentre el nuevo.
+    select_focus(manager+0x168,0,0);return 1;
+}
+static void pc_options_focus_input(pc_options_open_state *state,int pointer) {
+    if(pointer&&!pc_options_event_allowed())pointer=0;
+    state->pointer=pointer;
+    if(!pointer)state->pending_kind=0;
+    else{state->input_epoch=atomic_load(&g_pc_tabbar_epoch);if(state->pending_epoch!=state->input_epoch)state->pending_kind=0;}
+}
+static void pc_options_open_mark(pc_options_open_state *state,int kind,uint32_t generation,uint64_t frame) {
+    uint32_t epoch=atomic_load(&g_pc_tabbar_epoch);
+    if(state->pointer&&kind&&state->input_epoch==epoch&&pc_options_event_allowed())*state=(pc_options_open_state){.pointer=1,.pending_kind=kind,.generation=generation,.input_epoch=epoch,.pending_epoch=epoch,.deadline=frame+4};
+}
+static int pc_options_open_take(pc_options_open_state *state,int kind,uint32_t generation,uint64_t frame) {
+    if(!state->pending_kind)return 0;
+    if(!state->pointer||state->generation!=generation||state->pending_epoch!=atomic_load(&g_pc_tabbar_epoch)||frame>state->deadline){state->pending_kind=0;return 0;}
+    if(state->pending_kind!=kind)return 0;
+    state->pending_kind=0;return 1;
+}
+static int pc_options_focus_kind(module_t *m,uint64_t panel) {
+    if(!m||!panel)return 0;
+    uint64_t vt=*(uint64_t*)panel-(uint64_t)m->base;const char *name=*(const char**)(panel+8);
+    if(!name)return 0;
+    if(vt==0x20c1b10&&!strcmp(name,"VideoOptionsPanel"))return 1;
+    if(vt==0x20c1c48&&!strcmp(name,"GameplayOptionsPanel"))return 2;
+    return vt==0x20c1988&&!strcmp(name,"SoundOptionsPanel")?3:0;
+}
+static void pc_options_opened(module_t *m,uint64_t root,uint64_t panel) {
+    if(!g_pc_options_pointer.valid||g_pc_options_pointer.root!=root)return;
+    pc_options_open_mark(&g_pc_options_open,pc_options_focus_kind(m,panel),atomic_load(&g_ui_gen),dm_guest_frame());
+}
+static int pc_options_pointer_activity(pc_options_pointer_state *state,uint64_t root,uint64_t act,int x,int y) {
+    int move=act==ui_hash("MouseMove");
+    if(!move && act!=ui_hash("MouseScroll") && act!=ui_hash("LeftMouseButtonDown") && act!=ui_hash("LeftMouseButtonUp") && act!=ui_hash("RightMouseButtonDown") && act!=ui_hash("RightMouseButtonUp"))return 0;
+    int changed=!state->valid||state->root!=root||state->x!=x||state->y!=y;
+    *state=(pc_options_pointer_state){root,x,y,1};
+    return !move||changed;
+}
+static int pc_options_focus_clear(module_t *m,uint64_t root,int desktop,void (*select_focus)(uint64_t,uint64_t,uint64_t)) {
+    static const char *const panels[]={"SoundOptionsPanel","GameplayOptionsPanel","VideoOptionsPanel"};
+    if(!desktop||!root||*(uint64_t*)(root+0xd0)!=ui_panel(root,"FocusManager"))return 0;
+    return options_focus_clear(m,root,panels,3,select_focus);
+}
+static uint64_t pc_options_focus_panel(uint64_t root,uint64_t widget) {
+    static const char *const names[]={"SoundOptionsPanel","GameplayOptionsPanel","VideoOptionsPanel"};
+    for(unsigned i=0;i<3;i++){uint64_t panel=ui_panel(root,names[i]);if(panel&&*(uint8_t*)(panel+0x50)&&*(uint8_t*)(panel+0x51)&&(!widget||ui_has(panel,widget,0)))return panel;}
+    return 0;
+}
+static int pc_options_hover_clear(module_t *m,uint64_t root,void (*select_focus)(uint64_t,uint64_t,uint64_t)) {
+    uint64_t manager=ui_panel(root,"FocusManager");
+    if(!m||!manager||manager!=*(uint64_t*)(root+0xd0)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88||!pc_options_focus_panel(root,0))return 0;
+    uint64_t container=*(uint64_t*)(manager+0x170),hover=*(uint64_t*)(manager+0x178);
+    if(!hover||!ui_has(root,hover,0)||(container&&!ui_has(root,container,0)))return 0;
+    select_focus(manager+0x168,container,0);return 1;
+}
+static int pc_options_focus_transfer(module_t *m,uint64_t root,int desktop,uint64_t xy,int (*promote)(module_t*,uint64_t,uint64_t,uint64_t),void (*select_focus)(uint64_t,uint64_t,uint64_t)) {
+    if(!desktop||!root)return 0;
+    uint64_t manager=ui_panel(root,"FocusManager");
+    if(!m||!manager||manager!=*(uint64_t*)(root+0xd0)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88)return 0;
+    uint64_t hover=*(uint64_t*)(manager+0x178);
+    if(hover&&pc_options_focus_panel(root,hover)&&promote&&promote(m,root,hover,xy))return 1;
+    return pc_options_focus_clear(m,root,desktop,select_focus);
+}
+static int pc_options_clip_chain(module_t *m,uint64_t widget,uint64_t panel,uint64_t xy,int (*within_clip)(module_t*,uint64_t,uint64_t)) {
+    for(int depth=0;widget&&depth<16;depth++,widget=*(uint64_t*)(widget+0x30)){
+        if(!*(uint8_t*)(widget+0x50)||!*(uint8_t*)(widget+0x51)||!within_clip(m,widget,xy))return 0;
+        if(widget==panel)return 1;
+    }
+    return 0;
+}
+static int pc_options_native_clip(module_t *m,uint64_t widget,uint64_t xy) {
+    uint64_t base=(uint64_t)m->base,vt=*(uint64_t*)widget;
+    if(vt<base||vt-base>m->size||m->size-(vt-base)<0x50)return 0;
+    uint64_t fn=*(uint64_t*)(vt+0x48);
+    return fn>=base&&fn-base<m->text_end&&!panel_clipped(widget,xy);
+}
+static int pc_options_native_promote(module_t *m,uint64_t root,uint64_t widget,uint64_t xy) {
+    static const uint32_t code[]={0xa9bd57f6,0xa9014ff4,0xa9027bfd,0x910083fd};
+    if(memcmp(m->base+0xabfee8,code,sizeof code))return 0;
+    uint64_t base=(uint64_t)m->base,vt=*(uint64_t*)widget;
+    if(vt<base||vt-base>m->size||m->size-(vt-base)<0xa8||*(uint64_t*)(vt+0xa0)!=base+0xabfee8)return 0;
+    uint64_t panel=pc_options_focus_panel(root,widget),container=*(uint64_t*)(widget+0x550);
+    if(!panel||!container||!ui_has(root,container,0))return 0;
+    uint64_t fn[3]={*(uint64_t*)(vt+0x48),*(uint64_t*)(vt+0x98),*(uint64_t*)(vt+0x90)};
+    for(unsigned i=0;i<3;i++)if(fn[i]<base||fn[i]-base>=m->text_end)return 0;
+    if(!(((int(*)(uint64_t,uint64_t))fn[0])(widget,xy)&1))return 0;
+    if(!pc_options_clip_chain(m,widget,panel,xy,pc_options_native_clip))return 0;
+    uint64_t grid=((uint64_t(*)(uint64_t,uint64_t))fn[1])(widget,xy);
+    if(!(((int(*)(uint64_t,uint64_t))fn[2])(widget,grid)&1))return 0;
+    ((void(*)(uint64_t,uint64_t))(base+0xabfee8))(widget,grid);
+    uint64_t manager=*(uint64_t*)(root+0xd0);return manager&&*(uint64_t*)(manager+0x190)==widget;
+}
+static int pc_options_pointer_abi(module_t *m,uint64_t root) {
+    static const uint32_t code[]={0xf81c0ff7,0xa90157f6,0xa9024ff4,0xa9037bfd};
+    return m&&m->base&&m->size>=0x2f05460&&*(uint64_t*)(m->base+0x2f05458)==root&&!memcmp(m->base+0xabe064,code,sizeof code);
+}
+static void pc_options_root_move(uint64_t root,int x,int y) {
+    uint64_t fn=*(uint64_t*)(*(uint64_t*)root+0x28);
+    if(fn)ui_mouse_emit(root,ui_hash("MouseMove"),x,y,0,NULL,(void(*)(uint64_t,void*))fn,dm_cursor_set);
+}
+static int pc_options_pointer_begin(module_t *m,uint64_t root,uint64_t act,int x,int y) {
+#if TARGET_OS_OSX
+    if(!dm_ui_pc_desktop()){g_pc_options_pointer.valid=0;pc_options_focus_input(&g_pc_options_open,0);return 0;}
+    if(!pc_options_event_allowed()){pc_options_focus_input(&g_pc_options_open,0);return 0;}
+    if(act==ui_hash("KeyDown"))pc_options_focus_input(&g_pc_options_open,0);
+    int changed=!g_pc_options_pointer.valid||g_pc_options_pointer.root!=root||g_pc_options_pointer.x!=x||g_pc_options_pointer.y!=y;
+    int activity=pc_options_pointer_activity(&g_pc_options_pointer,root,act,x,y);
+    if(activity)pc_options_focus_input(&g_pc_options_open,1);
+    if(!activity||!pc_options_pointer_abi(m,root)||!pc_options_focus_panel(root,0))return 0;
+    int wheel=act==ui_hash("MouseScroll"),move=act==ui_hash("MouseMove");
+    if(changed||wheel)pc_options_hover_clear(m,root,(void(*)(uint64_t,uint64_t,uint64_t))(m->base+0xabe064));
+    if(changed&&!wheel&&!move)pc_options_root_move(root,x,y);
+    return 1;
+#else
+    (void)m;(void)root;(void)act;(void)x;(void)y;return 0;
+#endif
+}
+static void pc_options_pointer_end(module_t *m,uint64_t root,uint64_t act,int x,int y,int active) {
+#if TARGET_OS_OSX
+    if(!pc_options_event_allowed()||g_pc_options_open.input_epoch!=atomic_load(&g_pc_tabbar_epoch)){pc_options_focus_input(&g_pc_options_open,0);return;}
+    static unsigned traced;
+    int trace=act!=ui_hash("MouseMove")&&pc_options_pointer_abi(m,root)&&(active||pc_options_focus_panel(root,0))&&pc_options_trace_budget(&traced,20);
+    uint64_t manager=trace?*(uint64_t*)(root+0xd0):0;
+    if(trace)LOG("PC foco físico fase=antes activo=%d evento=%#llx xy=%d,%d panel=%#llx hover=%#llx selección=%#llx",active,(unsigned long long)act,x,y,(unsigned long long)pc_options_focus_panel(root,0),(unsigned long long)(manager?*(uint64_t*)(manager+0x178):0),(unsigned long long)(manager?*(uint64_t*)(manager+0x190):0));
+    if(!active||!pc_options_pointer_abi(m,root))return;
+    if(act==ui_hash("MouseScroll"))pc_options_root_move(root,x,y);
+    uint64_t xy=(uint64_t)(uint32_t)x|((uint64_t)(uint32_t)y<<32);
+    pc_options_focus_transfer(m,root,1,xy,pc_options_native_promote,(void(*)(uint64_t,uint64_t,uint64_t))(m->base+0xabe064));
+    if(trace)LOG("PC foco físico fase=después hover=%#llx selección=%#llx",(unsigned long long)(manager?*(uint64_t*)(manager+0x178):0),(unsigned long long)(manager?*(uint64_t*)(manager+0x190):0));
+#else
+    (void)m;(void)root;(void)act;(void)x;(void)y;(void)active;
+#endif
+}
+static void pc_options_open_handoff(module_t *m,uint64_t root) {
+#if TARGET_OS_OSX
+    if(!g_pc_options_open.pending_kind)return;
+    if(!dm_ui_pc_desktop()||!g_pc_options_pointer.valid||g_pc_options_pointer.root!=root||!pc_options_pointer_abi(m,root)){pc_options_focus_input(&g_pc_options_open,0);return;}
+    uint64_t panel=pc_options_focus_panel(root,0);
+    if(!pc_options_open_take(&g_pc_options_open,pc_options_focus_kind(m,panel),atomic_load(&g_ui_gen),dm_guest_frame()))return;
+    // OnOpen y los callbacks de sus hijos ya han retornado; ahora el hit físico sustituye el foco inicial.
+    int x=g_pc_options_pointer.x,y=g_pc_options_pointer.y;
+    pc_options_hover_clear(m,root,(void(*)(uint64_t,uint64_t,uint64_t))(m->base+0xabe064));
+    pc_options_root_move(root,x,y);
+    if(g_pc_options_open.pending_epoch!=atomic_load(&g_pc_tabbar_epoch))return;
+    uint64_t xy=(uint64_t)(uint32_t)x|((uint64_t)(uint32_t)y<<32);
+    pc_options_focus_transfer(m,root,1,xy,pc_options_native_promote,(void(*)(uint64_t,uint64_t,uint64_t))(m->base+0xabe064));
+    static unsigned traced;if(pc_options_trace_budget(&traced,12))LOG("PC foco físico fase=postOnOpen panel=%.80s xy=%d,%d",*(const char**)(panel+8),x,y);
+#else
+    (void)m;(void)root;
+#endif
+}
+static void audio_wheel_focus(module_t *m,uint64_t root) {
+#if TARGET_OS_OSX
+    if(dm_ui_pc_desktop())return;
+    static const uint32_t code[]={0xf81c0ff7,0xa90157f6,0xa9024ff4,0xa9037bfd};
+    if (!ui_mac_app() || !m || m->size<0xabe074 || memcmp(m->base+0xabe064,code,sizeof code)) return;
+    if (audio_focus_clear(m,root,(void (*)(uint64_t,uint64_t,uint64_t))(m->base+0xabe064))) { static int logged; if (logged++<4) LOG("Audio: rueda cede el foco visual al ratón; selección de mando conservada"); }
+#else
+    (void)m; (void)root;
+#endif
+}
+static int pc_item_pointer_before(module_t *,uint64_t,int,int,int);
+static void pc_item_pointer_after(module_t *,uint64_t,int,int,int);
+static void pc_item_drag_pump(module_t *,uint64_t);
+typedef struct {uint64_t root;float nx,ny;uint32_t epoch,generation;int width,height,classic_width,classic_height,hd,geometry[6],valid;} pc_held_pointer_state;
+static pc_held_pointer_state g_pc_held_pointer;static pthread_mutex_t g_pc_held_pointer_lock=PTHREAD_MUTEX_INITIALIZER;
+static void pc_held_pointer_invalidate(void){pthread_mutex_lock(&g_pc_held_pointer_lock);g_pc_held_pointer.valid=0;pthread_mutex_unlock(&g_pc_held_pointer_lock);}
+static int pc_held_geometry(int out[6]) {
+    dm_ui_rect(&out[0],&out[1],&out[2],&out[3]);
+    return dm_screen_real(&out[4],&out[5])&&out[2]>0&&out[3]>0&&out[4]>0&&out[5]>0;
+}
+static void pc_held_pointer_capture(module_t *m,uint64_t root,const ui_pointer_event *event,int width,int height) {
+    pc_held_pointer_state state={0};
+    if(!dm_ui_pc_desktop()||!event||!event->precise||event->kind==DM_UP_END||event->kind==UI_POINTER_CANCEL||event->kind>=DM_UP_KEYDOWN||!pc_options_event_allowed()||!m||!m->base||m->size<0x2f05460||!root||*(uint64_t*)(m->base+0x2f05458)!=root||width<=0||height<=0)goto publish;
+    float point[2];memcpy(point,&event->precise_xy,sizeof point);int geometry[6];
+    if(!pc_held_geometry(geometry)||!pc_real_point(point[0],point[1],geometry[0],geometry[1],geometry[2],geometry[3],geometry[4],geometry[5]))goto publish;
+    state=(pc_held_pointer_state){.root=root,.nx=point[0],.ny=point[1],.epoch=event->tab_epoch,.generation=atomic_load(&g_ui_gen),.width=width,.height=height,.classic_width=*(int32_t*)(m->base+0x2080c08),.classic_height=*(int32_t*)(m->base+0x2080c0c),.hd=*(uint8_t*)(root+0xb9)!=0,.valid=1};
+    memcpy(state.geometry,geometry,sizeof geometry);
+publish:
+    pthread_mutex_lock(&g_pc_held_pointer_lock);g_pc_held_pointer=state;pthread_mutex_unlock(&g_pc_held_pointer_lock);
+}
+typedef struct {module_t *module;uint64_t root;int x,y;} ui_pointer_cancel_context;
+static void ui_pointer_cancel_send(int kind,int arg,void *opaque) {
+    ui_pointer_cancel_context *c=opaque;const char *name=kind==DM_UP_LUP?"LeftMouseButtonUp":kind==DM_UP_RUP?"RightMouseButtonUp":"KeyUp";
+    ui_send_mouse_arg(c->module,c->root,ui_hash(name),c->x,c->y,arg);
+}
 static void ui_ptr_pump(module_t *m, uint64_t root, int width, int height) {
-    unsigned r = atomic_load(&g_up_r); int pend = r != atomic_load(&g_up_w), unhover = atomic_exchange(&g_tab_unhover, 0);
-    if (unhover) { atomic_store(&g_up_xy, atomic_load(&g_iq_xy)); atomic_store(&g_up_hold, 0); }
+    pc_item_drag_pump(m,root);
+    ui_pointer_event event={0};int pend=ui_pointer_pop(&event),unhover=atomic_exchange(&g_tab_unhover,0);
+    if(event.kind==DM_UP_END||event.kind==UI_POINTER_CANCEL||event.kind==DM_UP_KEYDOWN)pc_options_focus_input(&g_pc_options_open,0);
+    if (unhover) {pthread_mutex_lock(&g_up_lock);atomic_store(&g_up_xy,atomic_load(&g_iq_xy));g_up_precise=0;atomic_store(&g_up_hold,0);if(!pend){event.xy=atomic_load(&g_up_xy);event.precise=0;}pthread_mutex_unlock(&g_up_lock);}
     if (!atomic_load(&g_up_hold) && !pend && !unhover) return;
     static uint64_t hs[10]; if (!hs[0]) { static const char *nm[10] = { "MouseMove", "", "", "LeftMouseButtonDown", "LeftMouseButtonUp", "RightMouseButtonDown", "RightMouseButtonUp", "MouseScroll", "KeyDown", "KeyUp" }; for (int i = 0; i < 10; i++) hs[i] = ui_hash(nm[i]); }
-    uint64_t v = atomic_load(&g_up_xy); int x = (int)(((v >> 16) & 0xffff) / 65535.0 * width), y = (int)((v & 0xffff) / 65535.0 * height); if (x >= width) x = width - 1; if (y >= height) y = height - 1;
+    uint64_t v=event.xy;int x,y;if(event.precise){float position[2];memcpy(position,&event.precise_xy,sizeof position);x=(int)(position[0]*width);y=(int)(position[1]*height);}else{x=(int)(((v>>16)&0xffff)/65535.0*width);y=(int)((v&0xffff)/65535.0*height);if(x>=width)x=width-1;if(y>=height)y=height-1;}
     int dm_vault_ui_blocks(int, int), vb = (dm_ui_panel_state() & DM_PS_VAULT) && dm_vault_ui_blocks(x, y);   // 编年史页上（我们的控件除外）：悬停与按键都不发，见 dm_vault_ui.c | On the chronicle page (except our own widgets): neither hover nor key presses are sent, see dm_vault_ui.c
-    if (!vb) ui_send_mouse(m, root, hs[0], x, y);
-    if (!pend) return;
-    int k = g_up_q[r % 32].kind, a = g_up_q[r % 32].arg; atomic_store(&g_up_r, r + 1);
-    if (k == DM_UP_END) atomic_store(&g_up_hold, 0); else if (k >= DM_UP_LDOWN && k <= DM_UP_KEYUP && !vb) { ui_send_mouse_arg(m, root, hs[k], x, y, a); LOG("界面指针：事件 %d 参数 %d @(%d,%d)", k, a, x, y); }
+    pc_options_event_scope focus_scope=pc_options_event_begin(&event);
+    pc_held_pointer_capture(m,root,&event,width,height);
+    int vault_pointer=pc_item_pointer_before(m,root,pend?event.kind:DM_UP_MOVE,x,y);
+    if(dm_ui_pc_desktop()&&!vault_pointer) {
+        int dm_vault_ui_pointer(int,int,int);
+        int phase=event.kind==DM_UP_END||event.kind==UI_POINTER_CANCEL||!pc_options_event_allowed()?-1:pend?event.kind:DM_UP_MOVE;
+        vault_pointer=dm_vault_ui_pointer(phase,x,y);
+    }
+    if (!vb&&!vault_pointer) ui_send_mouse(m, root, hs[0], x, y);
+    if (!pend) {g_pc_options_event_scope=focus_scope;return;}
+    int k=event.kind,a=event.arg;
+    if(k==UI_POINTER_CANCEL){pc_tabbar_mouse_cancel();ui_pointer_cancel_context c={m,root,x,y};ui_pointer_cancel_held(ui_pointer_cancel_send,&c);g_pc_options_event_scope=focus_scope;return;}
+    if (k == DM_UP_END) {pc_tabbar_mouse_cancel();atomic_store(&g_up_hold, 0);} else if (k >= DM_UP_LDOWN && k <= DM_UP_KEYUP && !vb&&!vault_pointer) { pc_tabbar_event_enter(&event);ui_send_mouse_arg(m, root, hs[k], x, y, a);pc_tabbar_event_leave();ui_pointer_track(k,a); if (k==DM_UP_SCROLL) audio_wheel_focus(m,root);pc_item_pointer_after(m,root,k,x,y); LOG("界面指针：事件 %d 参数 %d @(%d,%d)", k, a, x, y); }
+    g_pc_options_event_scope=focus_scope;
 }
 // ---------- 界面连续手势：上下拖 = 滚动、按住滑块横拖 = 值跟手 ----------
 // 读码 + 实测（Mac 宿主，选项页）：
@@ -1981,7 +2744,6 @@ int dm_ui_minimap_rect(float r[4]) { if (!atomic_load(&g_mm_have)) return 0; uin
 // The original value is recorded; if the game has re-laid it out itself (the value is not what we last wrote) the current value is taken as the original; when y0 returns to 0 / on leaving the run the original value is written back. Reconciled once every 6 frames.
 // In the in-run / out-of-run signal, "whether the loading screen is present" goes by the panel message, flips at the very moment the message arrives, and reconciles the top lift on the spot: within one frame the game processes messages before laying out the UI,
 // and if the flip waited for the per-frame check of the panel tree in the next frame, the UI would still be laid out centered in the frame the loading screen is removed (in that frame the health globe is at the centered position and the area name is not lifted). -1 = no message received yet, go by the panel tree.
-static _Atomic int g_load_up = -1;
 static uint64_t g_lift_next;
 // 系统提示框（NotificationPanel）的停靠高度分两态。布局里写的是没开面板时的高度（gen_romfs_overlay.py：上提到让开底栏上方的生命 / 法力数值）；
 // 开着大面板时那行数值被面板盖住，上提后的框反而压在背包格子上，所以面板态改停到 NOTE_PANEL_Y（布局单位，同 json 的 y）：大面板底边框那一带，在金币 / 存放那排下面。
@@ -2075,6 +2837,7 @@ static void ui_lift_pump(uint64_t root, uint64_t fr) {
     // Polling waits for the widget tree to settle so the next layout cannot inherit lifted coordinates; loading messages (fr=0) still update immediately. Both paths avoid mode-switch transactions
     // Polling waits for the widget tree to settle so the next layout cannot inherit lifted coordinates; loading messages (fr=0) still update immediately. Both paths avoid mode-switch transactions
     int dm_padmode_busy(void); if (dm_ui_unstable() && (fr || dm_padmode_busy())) return;
+    if(dm_ui_pc_desktop()) { g_mv_want[MV_LIFT]=0;mv_restore(root,MV_LIFT);return; }
     if (fr < g_lift_next) return; g_lift_next = fr + 6;
     int x, y, w, h; dm_ui_rect(&x, &y, &w, &h); int lift = h > 0 && dm_uiscreen_ingame() ? (int)((long)y * 2160 / h) : 0;
     g_mv_want[MV_LIFT] = lift != 0; if (!lift) { mv_restore(root, MV_LIFT); return; }   // 不上提（不在局内 / 不是真全屏）：全部写回原值 | No lift (not in-game / not true fullscreen): write everything back to the original values
@@ -2653,7 +3416,7 @@ static void ui_panel_state_pump(uint64_t root) {   // 游戏主线程，每帧 |
 // 每帧泵按模式分两类（下面 dm_ui_mouse_pump 里那一长行；tests/mode_scan.py 核：那一行里每个泵要么带 if (tm)、要么在这张「两种模式都跑」的单子上，新加的泵两边都不在就红）。
 //   触屏专属（带 if (tm)）：请求全部来自触摸手势——点世界 / 佣兵头像、长按取物、双击使用、点货买、拖放、点技能绑定、副手组页签、开佣兵页。
 //     手柄模式与切换事务进行中不跑；在途的请求由切换清理作废（dm_ui_cache_mode_leave）。
-//   两种模式都跑：ui_target_pump（鉴定目标，含手柄按住 A）、ui_item_pump（命中查询，宿主自己也问）、ui_ptr_pump（指针事件，宿主合成的点击也走）、
+//   两种模式都跑：pc_item_drag_pump (sólo PC; ui_ptr_pump conserva UP y espera acuse antes de remapear),pc_frontend_pump (sólo PC; una apertura diferida por transición, cancelada en dm_ui_auto_mode_leave),ui_calibration_pump（Mac: guarda la calibración aceptada）,pc_panel_pump（atajos PC; cancela al cambiar de modo）,ui_target_pump（鉴定目标，含手柄按住 A）、ui_item_pump（命中查询，宿主自己也问）、ui_ptr_pump（指针事件，宿主合成的点击也走）、
 //     ui_safe_pump / ui_lift_pump / ui_note_dock_pump / ui_trove_tabs_pump / ui_minimap_pump / ui_map_pump / ui_map_geom_pump / ui_map_center（屏幕几何，与输入方式无关）、ui_boss_pct_pump、ui_npcdlg_pump、
 //     ui_widestash_pump、mv_audit_pump、ui_pages_pump（含手柄 L / R 翻页）、ui_watch_pump、ui_panel_heal、ui_panel_state_pump、rs_pump（一键重开，在前端泵里调）
 // 物品说明框停靠（观测门 OBS_TOOLTIP，挂在说明框面板的「提交一条说明」函数入口 main+0xb0d560(面板, 文字, 目标矩形左上 x2, 目标矩形宽高 x3, 样式, 文字 2)）。
@@ -2670,7 +3433,7 @@ static void ui_panel_state_pump(uint64_t root) {   // 游戏主线程，每帧 |
 // The per-frame pumps fall into two classes by mode (the long line in dm_ui_mouse_pump below; tests/mode_scan.py checks that every pump on that line either has if (tm) or is on this "runs in both modes" list; a newly added pump that is in neither is red).
 //   Touch only (with if (tm)): requests all come from touch gestures: tapping the world / mercenary portrait, long-press to pick up, double-tap to use, tap to buy, drag and drop, tapping to bind a skill, the off-hand set tab, opening the mercenary page.
 //     Not run in gamepad mode or while a switch transaction is in progress; requests in flight are cancelled by the switch cleanup (dm_ui_cache_mode_leave).
-//   Run in both modes: ui_target_pump (identify target, including holding A on the gamepad), ui_item_pump (hit queries, the host asks too), ui_ptr_pump (pointer events, host-synthesized clicks go through it as well),
+//   Run in both modes: pc_frontend_pump (PC only; deferred composition after native callbacks, cleared on mode leave), ui_target_pump (identify target, including holding A on the gamepad), ui_item_pump (hit queries, the host asks too), ui_ptr_pump (pointer events, host-synthesized clicks go through it as well),
 //     ui_safe_pump / ui_lift_pump / ui_note_dock_pump / ui_trove_tabs_pump / ui_minimap_pump / ui_map_pump / ui_map_geom_pump / ui_map_center (screen geometry, independent of input method), ui_boss_pct_pump, ui_npcdlg_pump,
 //     ui_widestash_pump, mv_audit_pump, ui_pages_pump (including L / R page turning on the gamepad), ui_watch_pump, ui_panel_heal, ui_panel_state_pump, rs_pump (one-tap restart, called from the front end pump)
 // Item description box docking (observation gate OBS_TOOLTIP, on the entry of the description panel's "submit one description" function main+0xb0d560(panel, text, target rect top-left x2, target rect size x3, style, text 2)).
@@ -2699,7 +3462,93 @@ static void tip_note(const uint64_t *regs) {
     g_tip_box[0] = cx - hw; g_tip_box[1] = y0; g_tip_box[2] = cx + hw; g_tip_box[3] = y0 + bh; atomic_store(&g_tip_fr, dm_guest_frame());
 }
 static void tip_dock(const uint64_t *regs);
-void dm_ui_tooltip_obs(const uint64_t *regs) { tip_dock(regs); tip_note(regs); }   // 先按触屏规则改停靠目标，再按最终目标记占位 | First change the dock target by touch rules, then record the occupied area by the final target
+typedef int (*pc_tooltip_reader)(uint64_t,void *,size_t);
+typedef struct {uint64_t root,hover,selected,text_length,held;uint32_t type,owner,id,held_id;int slot,id_valid,held_valid,model,f0,ec,first;} pc_tooltip_snapshot;
+static uint64_t g_pc_tooltip_submits,g_pc_tooltip_submit_frame;
+static int pc_tooltip_read(uint64_t address,void *out,size_t size) {
+#if TARGET_OS_OSX
+    vm_size_t got=0;return address>=0x1000&&size&&address<=UINT64_MAX-size&&!vm_read_overwrite(mach_task_self(),address,size,(vm_address_t)out,&got)&&got==size;
+#else
+    (void)address;(void)out;(void)size;return 0;
+#endif
+}
+static int pc_tooltip_field(pc_tooltip_reader read,uint64_t object,uint64_t offset,void *out,size_t size) {return object>=0x1000&&object<=UINT64_MAX-offset&&read(object+offset,out,size);}
+static int pc_tooltip_owned(pc_tooltip_reader read,uint64_t node,uint64_t wanted,int depth,unsigned *budget) {
+    if(!node||depth>14||!*budget)return 0;if(node==wanted)return 1;--*budget;
+    uint64_t children[2];if(!pc_tooltip_field(read,node,0x58,children,sizeof children)||children[1]>256||(!children[0]&&children[1]))return 0;
+    for(uint64_t i=0;i<children[1];i++){uint64_t child=0;if(!pc_tooltip_field(read,children[0],8*i,&child,8))return 0;if(pc_tooltip_owned(read,child,wanted,depth+1,budget))return 1;}return 0;
+}
+static uint64_t pc_tooltip_unit(pc_tooltip_reader read,uint64_t base,uint32_t type,uint32_t id) {
+    uint64_t unit=0;if(type>=6||!pc_tooltip_field(read,base,0x2d603a0+((uint64_t)type<<10)+8*(id&127),&unit,8))return 0;
+    for(unsigned i=0;unit&&i<128;i++){uint32_t fields[3];if(!pc_tooltip_field(read,unit,0,fields,sizeof fields))return 0;if(fields[0]==type&&fields[2]==id)return unit;uint64_t next;if(!pc_tooltip_field(read,unit,0x158,&next,8)||next==unit)return 0;unit=next;}return 0;
+}
+static uint64_t pc_tooltip_local_player(pc_tooltip_reader read,uint64_t base,uint32_t index) {
+    uint32_t id;if(index>7||!pc_tooltip_field(read,base,0x2d60380+4*index,&id,4)||id==UINT32_MAX)return 0;
+    return pc_tooltip_unit(read,base,0,id);
+}
+static uint64_t pc_tooltip_inventory(pc_tooltip_reader read,uint64_t player) {
+    uint64_t shared=0,inventory=0;uint32_t refs=0,magic=0;
+    if(!pc_tooltip_field(read,player,0xa0,&shared,8))return 0;
+    if(shared&&!pc_tooltip_field(read,shared,8,&refs,4))return 0;
+    if(shared&&refs){if(!pc_tooltip_field(read,player,0x98,&inventory,8))return 0;}
+    if(!inventory&&!pc_tooltip_field(read,player,0x90,&inventory,8))return 0;
+    return pc_tooltip_field(read,inventory,0,&magic,4)&&magic==0x01020304?inventory:0;
+}
+static int pc_tooltip_capture(int enabled,int desktop,module_t *m,pc_tooltip_reader read,pc_tooltip_snapshot *out) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!read||!out)return 0;
+    pc_tooltip_snapshot s={.model=-1,.slot=-1,.first=-1};uint64_t base=(uint64_t)m->base,manager=0,vt=0;uint8_t flags[2];
+    if(!pc_tooltip_field(read,base,0x2f05458,&s.root,8)||!pc_tooltip_field(read,s.root,0xd0,&manager,8)||!pc_tooltip_field(read,manager,0,&vt,8)||vt!=base+0x20b7f88||!pc_tooltip_field(read,manager,0x178,&s.hover,8)||!pc_tooltip_field(read,manager,0x190,&s.selected,8)||!s.hover)return 0;
+    unsigned budget=2048;if(!pc_tooltip_owned(read,s.root,s.hover,0,&budget)||!pc_tooltip_field(read,s.hover,0,&vt,8)||(vt!=base+DM_VT_SLOT&&vt!=base+DM_VT_SLOT_B)||!pc_tooltip_field(read,s.hover,0x50,flags,2)||!flags[0]||!flags[1])return 0;
+    s.type=(uint32_t)(vt-base);uint64_t text=0;uint8_t byte;
+    if(!pc_tooltip_field(read,s.hover,0x558,&text,8)||!pc_tooltip_field(read,s.hover,0x560,&s.text_length,8)||!pc_tooltip_field(read,s.hover,0x5c4,&s.owner,4))return 0;
+    if(pc_tooltip_field(read,text,0,&byte,1))s.first=byte;
+    if(pc_tooltip_field(read,base,0x2d128f0,&byte,1))s.f0=byte;
+    if(pc_tooltip_field(read,base,0x2d128ec,&byte,1))s.ec=byte;
+    uint64_t map=0,head[2],node=0;
+    if(pc_tooltip_field(read,base,0x2f05450,&map,8)&&pc_tooltip_field(read,map,0,head,sizeof head)&&head[0]&&head[0]<=1048576&&pc_tooltip_field(read,head[1],8*((head[0]-1)&0xf171426dc91f2d97ull),&node,8)){
+        for(unsigned i=0;node&&i<128;i++){uint64_t record[3];if(!pc_tooltip_field(read,node,0,record,sizeof record))break;
+            if(record[1]==0x825996a80be4b12eull){uint64_t value=record[2];if(pc_tooltip_field(read,value,0x10,&value,8)&&pc_tooltip_field(read,value,0,&value,8)&&pc_tooltip_field(read,value,8,&byte,1))s.model=!!byte;break;}
+            if(record[0]==node)break;node=record[0];
+        }
+    }
+    uint32_t local=0;if(pc_tooltip_field(read,base,0x2d20e4c,&local,4)){
+        uint64_t player=pc_tooltip_local_player(read,base,local),inventory=pc_tooltip_inventory(read,player);
+        if(inventory&&pc_tooltip_field(read,inventory,0x40,&s.held,8)){s.held_valid=1;if(s.held&&!pc_tooltip_field(read,s.held,8,&s.held_id,4))s.held_valid=0;}
+    }
+    if(s.type==DM_VT_SLOT&&pc_tooltip_field(read,s.hover,0x5d8,&s.slot,4)&&s.slot>=0&&s.slot<=12){
+        uint32_t owner_type=0;if(pc_tooltip_field(read,s.hover,0x5c8,&owner_type,4)){
+            uint64_t owner=pc_tooltip_unit(read,base,owner_type,s.owner),inventory=pc_tooltip_inventory(read,owner),rows[2],array=0,item=0;
+            if(pc_tooltip_field(read,inventory,0x20,rows,sizeof rows)&&rows[1]&&pc_tooltip_field(read,rows[0],0x18,&array,8)&&pc_tooltip_field(read,array,8*s.slot,&item,8)&&item&&pc_tooltip_field(read,item,8,&s.id,4))s.id_valid=1;
+        }
+    }
+    *out=s;return 1;
+}
+static int pc_tooltip_trace_take(unsigned *count,uint64_t *last,unsigned *repeats,uint64_t signature) {
+    if(*count>=48)return 0;
+    if(*last==signature){if(*repeats>=3)return 0;(*repeats)++;}else{*last=signature;*repeats=1;}
+    (*count)++;return 1;
+}
+typedef struct {uint64_t widget,frame;pc_pointer_hover_state pointer;int valid;} pc_grid_draw_watch;
+static pc_grid_draw_watch g_pc_grid_draw_watch;
+static void pc_grid_draw_watch_update(module_t *m,uint64_t frame,pc_tooltip_reader read,const pc_tooltip_snapshot *s) {
+    g_pc_grid_draw_watch.valid=0;
+    if(!m||!s||s->type!=DM_VT_SLOT_B||!g_pc_options_open.pointer||!g_pc_pointer_hover.valid||g_pc_pointer_hover.root!=s->root||
+       g_pc_pointer_hover.generation!=atomic_load(&g_ui_gen)||g_pc_pointer_hover.epoch!=atomic_load(&g_pc_tabbar_epoch)||g_pc_options_open.input_epoch!=g_pc_pointer_hover.epoch)return;
+    int xy[2];if(!pc_tooltip_field(read,(uint64_t)m->base,0x2d128f8,xy,sizeof xy)||xy[0]!=g_pc_pointer_hover.x||xy[1]!=g_pc_pointer_hover.y)return;
+    g_pc_grid_draw_watch=(pc_grid_draw_watch){s->hover,frame,g_pc_pointer_hover,1};
+}
+static void pc_tooltip_trace_tick(module_t *m,uint64_t frame) {
+    const char *path=getenv("DM_MAC_POINTER_LOG");if(!path||!*path)return;
+    static unsigned count,repeats;static uint64_t next,last;if(count>=48||frame<next)return;next=frame+30;
+    pc_tooltip_snapshot s;if(!pc_tooltip_capture(1,dm_ui_pc_desktop(),m,pc_tooltip_read,&s))return;
+    pc_grid_draw_watch_update(m,frame,pc_tooltip_read,&s);
+    uint64_t signature=14695981039346656037ull,fields[]={s.type,s.owner,s.id,s.id_valid,s.slot,s.text_length,s.first,s.model,s.f0,s.ec,s.held_valid,s.held_id,s.held!=0,atomic_load(&g_ui_gen)};
+    for(unsigned i=0;i<sizeof fields/sizeof *fields;i++)signature=(signature^fields[i])*1099511628211ull;
+    if(!pc_tooltip_trace_take(&count,&last,&repeats,signature))return;
+    LOG("PC_TOOLTIP %u frame=%llu root=%#llx hover=%#llx selected=%#llx vt=%#x owner=%u slot=%d idValid=%d id=%u textlen=%llu first=%d f0=%d ec=%d model8259=%d heldValid=%d held=%#llx heldId=%u submits=%llu lastSubmitFrame=%llu",count,(unsigned long long)frame,(unsigned long long)s.root,(unsigned long long)s.hover,(unsigned long long)s.selected,s.type,s.owner,s.slot,s.id_valid,s.id,(unsigned long long)s.text_length,s.first,s.f0,s.ec,s.model,s.held_valid,(unsigned long long)s.held,s.held_id,(unsigned long long)g_pc_tooltip_submits,(unsigned long long)g_pc_tooltip_submit_frame);
+}
+static void pc_tooltip_trace_submit(int enabled,uint64_t frame) {if(enabled){g_pc_tooltip_submits++;g_pc_tooltip_submit_frame=frame;}}
+void dm_ui_tooltip_obs(const uint64_t *regs) { const char *path=getenv("DM_MAC_POINTER_LOG");if(path&&*path&&dm_ui_pc_desktop())pc_tooltip_trace_submit(1,dm_guest_frame());tip_dock(regs); tip_note(regs); }   // 先按触屏规则改停靠目标，再按最终目标记占位 | First change the dock target by touch rules, then record the occupied area by the final target
 static void tip_dock(const uint64_t *regs) {
     static int force = -2; if (force == -2) { const char *e = getenv("DM_TEST_TIPDOCK"); force = e ? atoi(e) : -1; }
     if (force == 0 || (force < 0 && !ui_touch_mode())) return;
@@ -2724,12 +3573,1676 @@ static int ui_touch_mode(void) { int dm_padmode_current(void), dm_padmode_busy(v
 #else
 #define UI_MOUSE_ITEM_PUMPS(pm, proot, pw, phh) do { } while (0)
 #endif
+static struct { _Atomic unsigned seen,active,accepted,pending,done; uint64_t next; } g_calibration;
+static int ui_mac_app(void) {
+#if TARGET_OS_OSX
+    static _Atomic int cached=-1; int enabled=atomic_load(&cached); if (enabled<0) { enabled=getenv("DM_APP")!=NULL; atomic_store(&cached,enabled); } return enabled;
+#else
+    return 0;
+#endif
+}
+static void calibration_note(const char *cat,const char *act,const char *arg) {
+    if (!cat || !act || !arg) return;
+    if (!strcmp(cat,"PanelManager")) {
+        if (!strcmp(act,"OpenPanel")) {
+            if (!strcmp(arg,"GammaCalibrationPanel")) { atomic_store(&g_calibration.seen,1); atomic_store(&g_calibration.active,1); atomic_store(&g_calibration.accepted,0); atomic_store(&g_calibration.pending,0); atomic_store(&g_calibration.done,0); }
+            else if (!strcmp(arg,"ScreenSpaceCalibrationPanel") && atomic_load(&g_calibration.seen)==1) { atomic_store(&g_calibration.seen,3); atomic_store(&g_calibration.active,2); }
+            else if (!strcmp(arg,"ColorBlindCalibrationPanel") && atomic_load(&g_calibration.seen)==3) { atomic_store(&g_calibration.seen,7); atomic_store(&g_calibration.active,3); }
+        } else if (!strcmp(act,"UnloadPanel") && !strcmp(arg,"ColorBlindCalibrationPanel")) {
+            if (atomic_load(&g_calibration.seen)==7 && atomic_load(&g_calibration.accepted)) atomic_store(&g_calibration.pending,1);
+            atomic_store(&g_calibration.active,0);
+        }
+    } else if (!strcmp(cat,"OptionsPanelMessage") && atomic_load(&g_calibration.active)==3) {
+        if (!strcmp(act,"AcceptChanges")) atomic_store(&g_calibration.accepted,1);
+        else if (!strcmp(act,"CancelChanges")) atomic_store(&g_calibration.accepted,0);
+    }
+}
+static void calibration_flush(uint64_t frame,int (*read_setting)(const char *,int *),int (*save_settings)(int)) {
+    if (!atomic_load(&g_calibration.pending) || atomic_load(&g_calibration.done) || frame<g_calibration.next) return;
+    g_calibration.next=frame+60;
+    int complete=0; if (!read_setting("First Time",&complete) || complete!=1) return;
+    // El juego marca First Time después del último Aplicar. Se guarda su JSON completo, sin setters ni edición del archivo.
+    if (save_settings(1)) { atomic_store(&g_calibration.done,1); atomic_store(&g_calibration.pending,0); LOG("Calibración: First Time=1 establecido por el juego; guardado original solicitado"); }
+    else LOG("Calibración: el guardado original falló; se reintentará");
+}
+static void ui_calibration_pump(module_t *m,uint64_t frame) {
+#if TARGET_OS_OSX
+    if (!atomic_load(&g_calibration.pending) || atomic_load(&g_calibration.done) || !m || !ui_mac_app()) return;
+    static const uint32_t read_code[]={0xf81a0ffb,0xa90167fa,0xa9025ff8,0xa90357f6};
+    static const uint32_t save_code[]={0xd10403ff,0xf9005bf9,0xa90c5ff8,0xa90d57f6};
+    if (m->size<0xdf58b0 || memcmp(m->base+0xdf58a0,read_code,sizeof read_code) || memcmp(m->base+0xdf4710,save_code,sizeof save_code)) { atomic_store(&g_calibration.pending,0); LOG("Calibración: ABI original no reconocida; no se llaman ajustes"); return; }
+    calibration_flush(frame,(int (*)(const char *,int *))(m->base+0xdf58a0),(int (*)(int))(m->base+0xdf4710));
+#else
+    (void)m; (void)frame;
+#endif
+}
+typedef struct __attribute__((packed)) { uint32_t action; int16_t key; uint32_t type; } pc_binding_record;
+_Static_assert(sizeof(pc_binding_record)==10,"Descriptor nativo de binding de diez bytes");
+typedef struct { uint16_t vk,modifiers; uint8_t down,wheel,momentum;int steps;float nx,ny; } pc_key_event;
+static pthread_mutex_t g_pc_key_lock=PTHREAD_MUTEX_INITIALIZER;
+static pc_key_event g_pc_keys[512];static unsigned g_pc_key_read,g_pc_key_write;
+static _Atomic unsigned g_pc_mouse_reserved;
+static _Atomic uint64_t g_pc_controls_request;
+static _Atomic int g_pc_controls_active;
+static _Atomic int g_pc_profile_ready;
+static _Atomic int g_pc_key_reset;
+static uint64_t g_pc_key_actions[0x105][2];static uint8_t g_pc_key_down[0x105],g_pc_key_counts[69];
+int dm_ui_pc_key(int vk,int modifiers,int down) {
+    if(!dm_ui_pc_desktop() || vk<=0 || vk>0x104 || (modifiers&~0x7000)) return 0;
+    pthread_mutex_lock(&g_pc_key_lock);
+    if(g_pc_key_write-g_pc_key_read>=512) { g_pc_key_read=g_pc_key_write;dm_ui_pc_bindings_cancel(); }
+    g_pc_keys[g_pc_key_write++%512]=(pc_key_event){.vk=vk,.modifiers=modifiers,.down=!!down};
+    pthread_mutex_unlock(&g_pc_key_lock);return 1;
+}
+int dm_ui_pc_wheel(int steps,int modifiers,int momentum,float nx,float ny) {
+    if(!dm_ui_pc_desktop() || !steps || steps>32 || steps< -32 || (modifiers&~0x7000) || !isfinite(nx) || !isfinite(ny))return 0;
+    pthread_mutex_lock(&g_pc_key_lock);
+    if(g_pc_key_write-g_pc_key_read>=512){g_pc_key_read=g_pc_key_write;dm_ui_pc_bindings_cancel();}
+    g_pc_keys[g_pc_key_write++%512]=(pc_key_event){.modifiers=modifiers,.wheel=1,.momentum=!!momentum,.steps=steps,.nx=nx,.ny=ny};
+    pthread_mutex_unlock(&g_pc_key_lock);return 1;
+}
+int dm_ui_pc_profile_ready(void) { return dm_ui_pc_desktop() && atomic_load(&g_pc_profile_ready) && dm_uiscreen_ingame(); }
+int dm_ui_pc_controls(void) { if(!dm_ui_pc_profile_ready())return 0;uint64_t token=(uint64_t)atomic_load(&g_pc_controls_context)<<32|atomic_load(&g_pc_tabbar_epoch);atomic_store(&g_pc_controls_request,token);return 1; }
+int dm_ui_pc_controls_active(void) { return dm_ui_pc_desktop() && atomic_load(&g_pc_controls_active); }
+int dm_ui_pc_mouse_reserved(int button) { return button>=2 && button<=4 && !!(atomic_load(&g_pc_mouse_reserved)&(1u<<(button-2))); }
+static void pc_mouse_reserved_refresh(const pc_binding_record *records) {
+    unsigned mask=0;
+    for(int i=0;i<138;i++) { int key=records[i].key&0xfff;if(records[i].action<69 && records[i].type<=1 && key>=0x100 && key<=0x102)mask|=1u<<(key-0x100); }
+    atomic_store(&g_pc_mouse_reserved,mask);
+}
+static int pc_profile_ready_state(int desktop,int ingame,int to_game,int loading,const pc_binding_record *records) {
+    if(!desktop || !ingame || !to_game || loading || !records)return 0;
+    uint8_t seen[69]={0};
+    for(int i=0;i<138;i++) {
+        uint32_t action=records[i].action,type=records[i].type;
+        if(action>=69 || type>1 || (seen[action]&(1u<<type)))return 0;
+        seen[action]|=1u<<type;
+    }
+    for(int i=0;i<69;i++)if(seen[i]!=3)return 0;
+    return 1;
+}
+static int pc_profile_ready_now(module_t *m,uint64_t root) {
+    return m && m->size>=0x2f05460 && root && pc_profile_ready_state(dm_ui_pc_desktop(),dm_uiscreen_ingame(),*(uint8_t *)(root+0xd9),atomic_load(&g_load_up)>0,(const pc_binding_record *)(m->base+0x2086f64));
+}
+static int pc_inventory_abi(module_t *m) {
+    static const uint32_t callback[]={0xd10103ff,0xa9024ff4,0xa9037bfd,0x9100c3fd},toggle[]={0xd10183ff,0xa9025ff8,0xa90357f6,0xa9044ff4};
+    return m && m->size>=0x2f05460 && !memcmp(m->base+0x368d20,callback,sizeof callback) && !memcmp(m->base+0x459ad0,toggle,sizeof toggle);
+}
+static int pc_inventory_route(int desktop,int ready,void (*toggle)(int,int)) {
+    if(!desktop)return 0;
+    if(ready && toggle)toggle(1,1);
+    return 1;
+}
+void dm_ui_pc_inventory(uint64_t *regs) {
+    module_t *m=main_module();int valid=pc_inventory_abi(m);uint64_t root=valid?*(uint64_t *)(m->base+0x2f05458):0;
+    regs[8]=pc_inventory_route(dm_ui_pc_desktop(),valid && pc_profile_ready_now(m,root),valid?(void (*)(int,int))(m->base+0x459ad0):NULL);
+}
+static int pc_controls_tab_index(module_t *m,uint64_t tabs) {
+    if(!m || !tabs || *(uint64_t *)tabs!=(uint64_t)m->base+0x20ba3a8)return -1;
+    int count=*(int32_t *)(tabs+0x558);if(count<1 || count>8)return -1;
+    for(int i=0;i<count;i++) {
+        uint64_t entry=tabs+0xb50+32*i;const char *arg=*(const char **)(entry+0x10);
+        if(*(uint64_t *)entry==ui_hash("SettingsPanelMessage") && *(uint64_t *)(entry+8)==ui_hash("CheckChanges") && *(uint8_t *)(entry+0x18) && arg && !strcmp(arg,"KeyBindingMenu"))return i;
+    }
+    return -1;
+}
+static int pc_controls_tab_visible(module_t *m,uint64_t tabs,int index,int ready,int requested) {
+    return dm_ui_pc_desktop() && index>=0 && pc_controls_tab_index(m,tabs)==index ? ready : requested;
+}
+static int pc_controls_tab_abi(module_t *m) {
+    static const uint32_t show[]={0xa9ba6ffc,0xa90167fa,0xa9025ff8,0xa90357f6},select[]={0xa9be4ff4,0xa9017bfd,0x910043fd,0xb94dc408};
+    return m && m->size>=0x2f05460 && !memcmp(m->base+0xada890,show,sizeof show) && !memcmp(m->base+0xad9b80,select,sizeof select);
+}
+void dm_ui_pc_controls_tab(uint64_t *regs) {
+    module_t *m=main_module();if(!pc_controls_tab_abi(m))return;
+    uint64_t root=*(uint64_t *)(m->base+0x2f05458);
+    int visible=pc_controls_tab_visible(m,regs[0],(int)regs[1],pc_profile_ready_now(m,root),(int)regs[2]);
+    regs[0]=((uint64_t (*)(uint64_t,int,int))(m->base+0xada890))(regs[0],(int)regs[1],visible);
+}
+static void pc_controls_check(void) { fe_send("SettingsPanelMessage","CheckChanges","KeyBindingMenu"); }
+static int pc_controls_tab_apply(module_t *m,uint64_t tabs,int ready,int select,void (*show)(uint64_t,int,int),void (*choose)(uint64_t,int,int),void (*check)(void)) {
+    int index=pc_controls_tab_index(m,tabs);if(index<0)return 0;
+    if(!!*(uint8_t *)(tabs+0xe88+index)!=!!ready)show(tabs,index,ready);
+    if(select && ready) {
+        if(*(int32_t *)(tabs+0xdc4)!=index)choose(tabs,index,0);
+        else check();
+    }
+    return 1;
+}
+static int pc_controls_tab_refresh(module_t *m,uint64_t settings,int ready,int select) {
+    if(!pc_controls_tab_abi(m) || !settings || *(uint64_t *)settings!=(uint64_t)m->base+0x20bac80 || !*(uint8_t *)(settings+0x50) || !*(uint8_t *)(settings+0x51))return 0;
+    return pc_controls_tab_apply(m,ui_find(settings,"OptionsTabs",0),ready,select,(void (*)(uint64_t,int,int))(m->base+0xada890),(void (*)(uint64_t,int,int))(m->base+0xad9b80),pc_controls_check);
+}
+static struct { uint8_t action,down,force; } g_pc_binding_queue[256];
+static unsigned g_pc_binding_read,g_pc_binding_write;
+typedef struct { uint64_t press,release; uint8_t allow_unforced,allow_mode2,latched,padding[5]; } pc_binding_entry;
+_Static_assert(sizeof(pc_binding_entry)==24,"Registro nativo de callbacks de veinticuatro bytes");
+static pc_binding_entry g_pc_binding_table[69];
+static uint8_t *g_pc_binding_base;
+static int g_pc_binding_table_valid;
+typedef struct {uint8_t *base;uint64_t root;uint32_t generation,epoch;} pc_binding_held_context;
+static pc_binding_held_context g_pc_binding_held[69];
+static uint8_t g_pc_skill_started[16];
+static _Atomic int g_pc_binding_cancel;
+#if TARGET_OS_OSX
+void dm_world_pc_skill(int,int) __attribute__((weak_import));
+void dm_world_pc_skill_cancel(void) __attribute__((weak_import));
+static void pc_binding_skill(int slot,int down) {
+    if (dm_world_pc_skill) { g_pc_skill_started[slot]=!!down; dm_world_pc_skill(slot,down); }
+}
+#else
+static void pc_binding_skill(int slot,int down) { (void)slot;(void)down; }
+#endif
+#define PC_SKILL_CALLBACK(n) static void pc_skill_##n##_down(void){pc_binding_skill(n,1);} static void pc_skill_##n##_up(void){pc_binding_skill(n,0);}
+PC_SKILL_CALLBACK(0) PC_SKILL_CALLBACK(1) PC_SKILL_CALLBACK(2) PC_SKILL_CALLBACK(3) PC_SKILL_CALLBACK(4) PC_SKILL_CALLBACK(5) PC_SKILL_CALLBACK(6) PC_SKILL_CALLBACK(7) PC_SKILL_CALLBACK(8) PC_SKILL_CALLBACK(9) PC_SKILL_CALLBACK(10) PC_SKILL_CALLBACK(11) PC_SKILL_CALLBACK(12) PC_SKILL_CALLBACK(13) PC_SKILL_CALLBACK(14) PC_SKILL_CALLBACK(15)
+#undef PC_SKILL_CALLBACK
+static int pc_escape_abi(module_t *m) {
+    static const uint32_t escape[]={0xd10143ff,0xa90257f6,0xa9034ff4,0xa9047bfd},close[]={0xd10403ff,0xa90a6ffc,0xa90b67fa,0xa90c5ff8},special[]={0x7100311f,0x54ffff40},toggle[]={0xd10183ff,0xa9025ff8,0xa90357f6,0xa9044ff4};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0x36a260,escape,sizeof escape)&&!memcmp(m->base+0x459f60,close,sizeof close)&&!memcmp(m->base+0x459fe4,special,sizeof special)&&!memcmp(m->base+0x459ad0,toggle,sizeof toggle);
+}
+static void pc_escape_trace(module_t *m,const char *stage,int detail,int latch) {
+    static unsigned count;const char *enabled=getenv("DM_MAC_POINTER_LOG");
+    if(!enabled||!*enabled||count>=96)return;
+    count++;uint32_t panels=0,busy=0;uint64_t root=0;int consumed=-1,mode=-1;
+    if(m&&m->base&&m->size>=0x2f05460){
+        for(unsigned i=0;i<32;i++)if(m->base[0x2d5ff48+i])panels|=1u<<i;
+        for(unsigned i=0;i<8;i++)if(*(uint64_t *)(m->base+0x2d5ec38+8*i))busy|=1u<<i;
+        if(*(uint64_t *)(m->base+0x2d5f788))busy|=1u<<8;
+        memcpy(&root,m->base+0x2f05458,8);if(root)consumed=*(uint8_t *)(root+0xb8);
+        mode=*(int32_t *)(m->base+0x2d584d8);
+    }
+    LOG("PC_ESCAPE %u stage=%s detail=%d panels=%08x busy=%03x root=%llx consumed=%d mode=%d latch=%d",count,stage,detail,panels,busy,(unsigned long long)root,consumed,mode,latch);
+}
+static void pc_escape_dispatch_trace(module_t *m,void *table,const char *stage,int detail) {
+    const char *enabled=getenv("DM_MAC_POINTER_LOG");if(!enabled||!*enabled)return;
+    int latch=m&&m->base&&m->size>=0x2f05460?((pc_binding_entry *)table)[56].latched:-1;
+    pc_escape_trace(m,stage,detail,latch);
+}
+static int pc_escape_native(module_t *m,uint64_t root,int desktop,int ready,void (*original)(void),void (*close_panels)(int,int),int (*toggle)(int,int)) {
+    if(!pc_escape_abi(m)||!original){pc_escape_trace(m,"abi",0,-1);return 0;}
+    if(!desktop){pc_escape_trace(m,"legacy",0,-1);original();return 1;}
+    if(!ready||!root||*(uint64_t *)(m->base+0x2f05458)!=root||!close_panels||!toggle){pc_escape_trace(m,"context",ready,-1);return 0;}
+    for(unsigned i=0;i<8;i++)if(*(uint64_t *)(m->base+0x2d5ec38+8*i)){pc_escape_trace(m,"busy",(int)i,-1);return 0;}
+    if(*(uint64_t *)(m->base+0x2d5f788)){pc_escape_trace(m,"busy",8,-1);return 0;}
+    uint64_t switcher=ui_panel(root,"UISwitcher");
+    if(m->base[0x2d5ff51]||(switcher&&*(uint8_t *)(switcher+0x51))){pc_escape_trace(m,"original-close",m->base[0x2d5ff51]!=0,-1);original();return 1;}
+    int open=0;
+    //459f60 excluye ID12 del vector de paneles y ejecuta45a350 como limpieza especial.
+    for(unsigned i=0;i<21;i++){int id=*(int32_t *)(m->base+0x1da70b4+4*i);if(id<0||id>=32){pc_escape_trace(m,"panel-id",id,-1);return 0;}if(id!=12)open|=m->base[0x2d5ff48+id]!=0;}
+    pc_escape_trace(m,"close-panels",open,-1);close_panels(0,1);
+    uint64_t current=0;memcpy(&current,m->base+0x2f05458,8);
+    if(!open&&current==root&&pc_profile_ready_now(m,current)){int result=toggle(9,1);pc_escape_trace(m,"pause-toggle",result,-1);}
+    else pc_escape_trace(m,"close-only",open?1:current!=root?2:3,-1);
+    return 1;
+}
+static void pc_binding_escape(void) {
+    module_t *m=main_module();pc_escape_trace(m,"callback",0,-1);if(!pc_escape_abi(m))return;
+    uint64_t root=*(uint64_t *)(m->base+0x2f05458);
+    pc_escape_native(m,root,dm_ui_pc_desktop(),pc_profile_ready_now(m,root),(void(*)(void))(m->base+0x36a260),(void(*)(int,int))(m->base+0x459f60),(int(*)(int,int))(m->base+0x459ad0));
+}
+typedef struct {
+    int (*hit)(uint64_t,uint64_t);
+    uint64_t (*cell)(uint64_t,uint64_t);
+    int (*accept)(uint64_t,uint64_t);
+    void (*activate)(uint64_t,uint64_t);
+    int (*live)(module_t *,uint64_t);
+    int (*modified)(module_t *,uint64_t,uint64_t,int,int);
+    void (*remember)(module_t *,uint64_t,uint64_t,uint64_t,uint64_t);
+} pc_item_left_api;
+static int pc_item_left_abi(module_t *m) {
+    static const uint32_t entry[]={0xa9ba6ffc,0xa90167fa,0xa9025ff8,0xa90357f6},action[]={0xd28ccde8,0xf2a5c888,0xf2db5fe8,0xf2f7bf08},consume[]={0xf9422f68,0xb4000068,0x52800029,0x3902e109};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0x3ca3b0,entry,sizeof entry)&&!memcmp(m->base+0x3ca468,action,sizeof action)&&!memcmp(m->base+0x3ca590,consume,sizeof consume);
+}
+static int pc_item_actor_live(module_t *m,uint64_t widget,uint64_t (*find)(uint64_t,uint32_t,uint32_t,uint32_t)) {
+    static const uint32_t lookup[]={0xf861d800,0xb5000080,0x14000009,0xf940ac00};
+    if(!m||!widget||!find||m->size<0x2f05460||memcmp(m->base+0x45f5f0,lookup,sizeof lookup))return 0;
+    uint64_t base=(uint64_t)m->base,vt=*(uint64_t*)widget;
+    if(vt<base||vt-base>m->size||m->size-(vt-base)<0x100)return 0;
+    uint64_t activate=*(uint64_t*)(vt+0xf8);if(activate!=base+0x3d710c&&activate!=base+0x3b3a64)return 1;
+    uint32_t id=*(uint32_t*)(widget+0x5c4),type=*(uint32_t*)(widget+0x5c8);
+    // Slot F8 desreferencia el actor sin guarda: resolverlo de nuevo antes de entrar a su dominio.
+    return type<6&&id!=UINT32_MAX&&find(base+0x2d603a0+((uint64_t)type<<10),id&0x7f,id,type)!=0;
+}
+static int pc_item_native_live(module_t *m,uint64_t widget) {
+    static const uint32_t player[]={0x71001c1f,0x54000168,0xb0014808,0x910e0108};
+    if(!pc_item_actor_live(m,widget,(uint64_t(*)(uint64_t,uint32_t,uint32_t,uint32_t))(m->base+0x45f5f0))||memcmp(m->base+0x45f9d0,player,sizeof player))return 0;
+    return ((uint64_t(*)(uint32_t))(m->base+0x45f9d0))(*(uint32_t*)(m->base+0x2d20e4c))!=0;
+}
+enum {PC_ITEM_NORMAL,PC_ITEM_BELT,PC_ITEM_SELL,PC_ITEM_BUY_BULK,PC_ITEM_MERC,PC_ITEM_TO_BAG,PC_ITEM_TO_CUBE,PC_ITEM_TO_BANK,PC_ITEM_TO_VAULT};
+static int pc_item_modifier_plan(int right,int modifiers,int held,int page,int owner,int panels) {
+    if(held)return PC_ITEM_NORMAL;
+    if(right){if(!(modifiers&0x1000))return PC_ITEM_NORMAL;if(owner==1&&(panels&DM_PS_VENDOR))return PC_ITEM_BUY_BULK;return page==2?PC_ITEM_MERC:PC_ITEM_NORMAL;}
+    if(modifiers&0x2000){
+        if(owner==0&&page==0&&(panels&DM_PS_VENDOR))return PC_ITEM_SELL;
+        if(page==3||page==4)return PC_ITEM_TO_BAG;
+        if(owner==0&&page==0){if(panels&DM_PS_VAULT)return PC_ITEM_TO_VAULT;if(panels&DM_PS_CUBE)return PC_ITEM_TO_CUBE;if(panels&DM_PS_BANK)return PC_ITEM_TO_BANK;}
+    }
+    return (modifiers&0x1000)&&owner==0&&page==0?PC_ITEM_BELT:PC_ITEM_NORMAL;
+}
+static int pc_item_modifier_abi(module_t *m) {
+    static const struct{uint32_t at,words[4];} code[]={
+        {0x45f9d0,{0x71001c1f,0x54000168,0xb0014808,0x910e0108}},
+        {0x433e50,{0xd10283ff,0xa9046ffc,0xa90567fa,0xa9065ff8}},
+        {0x3c1b28,{0xd10103ff,0xa90157f6,0xa9024ff4,0xa9037bfd}},
+        {0x3c1cd0,{0xd101c3ff,0xa90267fa,0xa9035ff8,0xa90457f6}},
+        {0x3bf794,{0xf81e0ff3,0xa9017bfd,0x910043fd,0x528009a1}},
+        {0x3bf860,{0xd10143ff,0xf90013f5,0xa9034ff4,0xa9047bfd}},
+        {0x3b5b14,{0xd10103ff,0xf9000bf5,0xa9024ff4,0xa9037bfd}},
+        {0x2aa7c0,{0x90015348,0xf9449100,0xd65f03c0,0}}
+    };
+    if(!m||m->size<0x2f05460)return 0;
+    for(unsigned i=0;i<sizeof code/sizeof *code;i++)if(memcmp(m->base+code[i].at,code[i].words,16))return 0;
+    return 1;
+}
+static void pc_item_trace(const char *stage,uint64_t widget,uint64_t cell,int modifiers) {
+    static unsigned count;const char *enabled=getenv("DM_MAC_POINTER_LOG");if(!enabled||!*enabled||count>=64)return;
+    const char *name=*(const char**)(widget+8);LOG("PC_ITEM %u stage=%s widget=%.80s cell=%d,%d mods=%04x",++count,stage,name?name:"(sin nombre)",(int32_t)cell,(int32_t)(cell>>32),modifiers);
+}
+typedef struct {
+    uint64_t (*player)(uint32_t),(*held)(void),(*query)(uint64_t,uint64_t*);
+    int (*trade)(uint64_t,uint64_t,int,int,int,int),(*can_belt)(uint64_t),(*can_merc)(uint64_t);
+    void (*put_belt)(uint64_t,uint64_t,uint8_t,int,void*),(*transfer)(uint64_t,uint64_t*,int),(*deposit)(uint32_t);
+} pc_item_modifier_api;
+static int pc_item_modifier_run(module_t *m,uint64_t widget,uint64_t cell,int right,int modifiers,const pc_item_modifier_api *api) {
+    if(!(modifiers&0x3000)||!api||!api->player||!api->held||!api->query)return 0;
+    uint64_t player=api->player(*(uint32_t*)(m->base+0x2d20e4c));
+    if(!player)return 1;
+    uint64_t held=api->held();if(held)return 0;
+    uint64_t item=api->query(widget,&cell);if(!item)return 0;
+    uint64_t data=*(uint64_t*)(item+0x10);int page=*(uint32_t*)(item+0xc)==2?2:data?*(uint8_t*)(data+0x55):-1;
+    int owner=*(uint32_t*)(widget+0x5c8),panels=dm_ui_panel_state();
+    if(owner==1&&*(uint32_t*)(widget+0x5c4)!=*(uint32_t*)(m->base+0x2d5ebfc))panels&=~DM_PS_VENDOR;
+    int action=pc_item_modifier_plan(right,modifiers,0,page,owner,panels);
+    if(!action)return 0;
+    if(!pc_options_event_allowed())return 1;
+    pc_item_trace(right?"modifier-right":"modifier-left",widget,cell,modifiers);
+    if(action==PC_ITEM_SELL||action==PC_ITEM_BUY_BULK){if(!api->trade)return 1;api->trade(player,item,action==PC_ITEM_SELL,action==PC_ITEM_BUY_BULK,1,0);}
+    else if(action==PC_ITEM_BELT){if(!api->can_belt||!api->put_belt)return 1;if(api->can_belt(item)&1){struct{uint32_t slot;uint8_t fixed;} target={0,0};api->put_belt(item,player,(uint8_t)page,1,&target);}}
+    else if(action==PC_ITEM_MERC){if(!api->can_merc)return 1;if(api->can_merc(item)&1){int index=(int)(uint32_t)cell,col=index&3,row=index>>2;if(col>=0&&col<4&&row>=0&&row<4)dm_belt_use_merc(col,row);}}
+    else if(action==PC_ITEM_TO_VAULT){if(api->deposit)api->deposit(*(uint32_t*)(item+8));}
+    else if(api->transfer)api->transfer(widget,&cell,action==PC_ITEM_TO_CUBE?3:action==PC_ITEM_TO_BANK?4:0);
+    return 1;
+}
+static int pc_item_modifier(module_t *m,uint64_t widget,uint64_t cell,int right,int modifiers) {
+    if(!(modifiers&0x3000)||!pc_item_modifier_abi(m))return 0;
+    uint64_t base=(uint64_t)m->base,vt=*(uint64_t*)widget,query=*(uint64_t*)(vt+0xc8),transfer=*(uint64_t*)(vt+0xd8);
+    if(query<base||query-base>=m->text_end)return 0;
+    if(transfer<base||transfer-base>=m->text_end)transfer=0;
+    void dm_vault_request_deposit(uint32_t);
+    pc_item_modifier_api api={.player=(void*)(m->base+0x45f9d0),.held=(void*)(m->base+0x2aa7c0),.query=(void*)query,.trade=(void*)(m->base+0x433e50),.can_belt=(void*)(m->base+0x3c1b28),.can_merc=(void*)(m->base+0x3bf794),.put_belt=(void*)(m->base+0x3c1cd0),.transfer=(void*)transfer,.deposit=dm_vault_request_deposit};
+    return pc_item_modifier_run(m,widget,cell,right,modifiers,&api);
+}
+static int pc_item_left_functions(module_t *,uint64_t,pc_item_left_api *);
+typedef struct {uint64_t root,source,cell,target,target_cell,release_xy;uint32_t id,epoch,generation;int x,y,pressed,pending,vault,wait,consume_up;} pc_item_drag;
+static pc_item_drag g_pc_item_drag;
+static void pc_item_remember(module_t *m,uint64_t root,uint64_t widget,uint64_t cell,uint64_t xy) {
+    if(!pc_item_modifier_abi(m)||!pc_options_event_allowed())return;
+    uint64_t held=((uint64_t(*)(void))(m->base+0x2aa7c0))();if(held)return;
+    uint64_t base=(uint64_t)m->base,query=*(uint64_t*)(*(uint64_t*)widget+0xc8);if(query<base||query-base>=m->text_end)return;
+    uint64_t item=((uint64_t(*)(uint64_t,uint64_t*))query)(widget,&cell);if(!item)return;
+    uint64_t fn=*(uint64_t*)(*(uint64_t*)widget+0xf8),path=*(uint64_t*)(item+0x38);
+    if(fn==base+0x3b3a64&&path)cell=*(uint32_t*)(path+0x10)|((uint64_t)*(uint32_t*)(path+0x14)<<32);
+    g_pc_item_drag=(pc_item_drag){.root=root,.source=widget,.cell=cell,.id=*(uint32_t*)(item+8),.epoch=atomic_load(&g_pc_tabbar_epoch),.generation=atomic_load(&g_ui_gen),.x=(int32_t)xy,.y=(int32_t)(xy>>32),.pressed=1};
+}
+static int pc_item_drag_context(module_t *m,uint64_t root) {
+    return dm_ui_pc_desktop()&&pc_item_modifier_abi(m)&&root&&root==g_pc_item_drag.root&&*(uint64_t*)(m->base+0x2f05458)==root&&g_pc_item_drag.epoch==atomic_load(&g_pc_tabbar_epoch)&&g_pc_item_drag.generation==atomic_load(&g_ui_gen)&&dm_uiscreen_ingame()&&*(uint8_t*)(root+0xd9)&&!atomic_load(&g_load_up)&&!modal_any(root,1,NULL)&&ui_has(root,g_pc_item_drag.source,0);
+}
+static int pc_item_drag_take(pc_item_drag *state,int context,uint32_t held) {
+    if(!context){memset(state,0,sizeof *state);return 0;}
+    if(!state->pending)return 0;
+    if(!held){if(state->wait>0&&!--state->wait)state->pending=0;return 0;}
+    if(held!=state->id){memset(state,0,sizeof *state);return 0;}
+    state->pending=0;return 1;
+}
+static int pc_item_family(module_t *m,uint64_t widget) {
+    uint64_t base=(uint64_t)m->base,vt=*(uint64_t*)widget;
+    if(vt<base||vt-base>m->size||m->size-(vt-base)<0x100)return 0;
+    uint64_t fn=*(uint64_t*)(vt+0xf8);
+    return fn==base+0x3b3a64||fn==base+0x3d710c||fn==base+0x3925a0||fn==base+0x3afdd4||fn==base+0x39db7c;
+}
+static int pc_item_drag_target(const pc_item_left_api *api,uint64_t target,uint64_t xy,uint64_t *cell) {
+    if(!(api->hit(target,xy)&1))return 0;
+    *cell=api->cell(target,xy);
+    return *cell!=UINT64_MAX&&(api->accept(target,*cell)&1);
+}
+static void pc_item_drag_dispatch(module_t *m,uint64_t root,uint64_t held,int (*functions)(module_t*,uint64_t,pc_item_left_api*)) {
+    if(!g_pc_item_drag.id)return;
+    if(!pc_item_drag_context(m,root)){atomic_store(&g_vault_drop,0);dm_vault_ui_returning(0);memset(&g_pc_item_drag,0,sizeof g_pc_item_drag);return;}
+    if(!g_pc_item_drag.pending)return;
+    if(!pc_item_drag_take(&g_pc_item_drag,1,held?*(uint32_t*)(held+8):0))return;
+    uint64_t target=g_pc_item_drag.target,cell=g_pc_item_drag.target_cell;int vault=g_pc_item_drag.vault;
+    if(!target||!ui_has(root,target,0)||!pc_item_family(m,target)||!*(uint8_t*)(target+0x50)||!*(uint8_t*)(target+0x51))return;
+    pc_item_left_api api;if(!functions(m,target,&api)||!api.live(m,target)||!pc_item_drag_context(m,root)||!ui_has(root,target,0))return;
+    if(vault){if(!(api.accept(target,cell)&1))return;}
+    else if(!pc_item_drag_target(&api,target,g_pc_item_drag.release_xy,&cell))return;
+    if(!pc_item_drag_context(m,root)||!ui_has(root,target,0))return;
+    if(vault){atomic_store(&g_vault_drop,(int)g_pc_item_drag.id);dm_vault_ui_returning(g_pc_item_drag.id);}
+    pc_item_trace(vault?"vault-putback":"drag-release",target,cell,0);
+    api.activate(target,cell);
+}
+static void pc_item_drag_pump(module_t *m,uint64_t root) {
+    uint64_t held=g_pc_item_drag.id&&g_pc_item_drag.pending&&pc_item_drag_context(m,root)?((uint64_t(*)(void))(m->base+0x2aa7c0))():0;
+    pc_item_drag_dispatch(m,root,held,pc_item_left_functions);
+}
+static int pc_item_pointer_before(module_t *m,uint64_t root,int kind,int x,int y) {
+    if(!dm_ui_pc_desktop())return 0;
+    if(kind==DM_UP_END||kind==UI_POINTER_CANCEL||!pc_options_event_allowed()){atomic_store(&g_vault_drop,0);dm_vault_ui_returning(0);memset(&g_pc_item_drag,0,sizeof g_pc_item_drag);return 0;}
+    if(kind==DM_UP_LDOWN||kind==DM_UP_RDOWN){atomic_store(&g_vault_drop,0);dm_vault_ui_returning(0);}
+    if(kind==DM_UP_LUP&&g_pc_item_drag.consume_up){g_pc_item_drag.consume_up=0;return 1;}
+    if(!g_pc_item_drag.id||!pc_item_drag_context(m,root))return 0;
+    int dm_vault_ui_over(int,int);
+    if((kind!=DM_UP_LDOWN&&kind!=DM_UP_LUP)||!(dm_ui_panel_state()&DM_PS_VAULT)||!dm_vault_ui_over(x,y))return 0;
+    if(kind==DM_UP_LUP&&!g_pc_item_drag.pressed)return 0;
+    g_pc_item_drag.pending=1;g_pc_item_drag.target=g_pc_item_drag.source;g_pc_item_drag.target_cell=g_pc_item_drag.cell;g_pc_item_drag.vault=1;g_pc_item_drag.wait=90;
+    if(kind==DM_UP_LDOWN)g_pc_item_drag.consume_up=1;
+    else {ui_send_mouse_arg(m,root,ui_hash("LeftMouseButtonUp"),g_pc_item_drag.x,g_pc_item_drag.y,0);ui_pointer_track(DM_UP_LUP,0);}
+    g_pc_item_drag.pressed=0;pc_item_drag_pump(m,root);return 1;
+}
+static void pc_item_pointer_after(module_t *m,uint64_t root,int kind,int x,int y) {
+    if(kind!=DM_UP_LUP||!g_pc_item_drag.pressed)return;
+    g_pc_item_drag.pressed=0;
+    if(!pc_item_drag_context(m,root)||!pc_options_event_allowed())return;
+    int64_t dx=(int64_t)x-g_pc_item_drag.x,dy=(int64_t)y-g_pc_item_drag.y;if(dx*dx+dy*dy<16)return;
+    uint64_t manager=*(uint64_t*)(root+0xd0),target=manager&&ui_has(root,manager,0)?*(uint64_t*)(manager+0x178):0;
+    if(!target||!ui_has(root,target,0)||!pc_item_family(m,target))return;
+    pc_item_left_api api;if(!pc_item_left_functions(m,target,&api)||!api.live(m,target))return;
+    uint64_t xy=(uint32_t)x|((uint64_t)(uint32_t)y<<32);if(!(api.hit(target,xy)&1))return;
+    // El mapper98 depende de la huella del objeto sostenido: se evalúa sólo después de su acuse.
+    g_pc_item_drag.pending=1;g_pc_item_drag.target=target;g_pc_item_drag.release_xy=xy;g_pc_item_drag.vault=0;g_pc_item_drag.wait=90;pc_item_drag_pump(m,root);
+}
+static int pc_item_context(module_t *m,uint64_t root,uint64_t widget) {
+    if(!pc_options_event_allowed()||!root||*(uint64_t*)(m->base+0x2f05458)!=root||!ui_has(root,widget,0)||*(uint8_t*)(root+0xb8)||!*(uint8_t*)(widget+0x50)||!*(uint8_t*)(widget+0x51))return 0;
+    uint64_t manager=*(uint64_t*)(root+0xd0);
+    return manager&&ui_has(root,manager,0)&&*(uint64_t*)manager==(uint64_t)m->base+0x20b7f88&&*(uint64_t*)(manager+0x178)==widget;
+}
+static int pc_item_tooltip_abi(module_t *m) {
+    static const uint32_t getter[]={0xf81c0ff7,0xa90157f6,0xa9024ff4,0xa9037bfd},cursor[]={0xd0014a29,0x3963c129},equipped[]={0xd10203ff,0xa9045ff8,0xa90557f6,0xa9064ff4},grid[]={0xd104c3ff,0x6d093bef,0x6d0a33ed,0x6d0b2beb};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0x3cc87c,getter,sizeof getter)&&!memcmp(m->base+0x3cc974,cursor,sizeof cursor)&&!memcmp(m->base+0x3d4f80,equipped,sizeof equipped)&&!memcmp(m->base+0x3b06c8,grid,sizeof grid);
+}
+static int pc_item_tooltip_draw_trace_capture(int enabled,int desktop,module_t *m,const uint64_t *regs,pc_tooltip_reader read,pc_tooltip_snapshot *out) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!regs||!read||!out)return 0;
+    uint64_t base=(uint64_t)m->base;uint32_t call,cursor[2];
+    if(regs[8]!=base+0x3b1d28||!pc_tooltip_field(read,base,0x3b1d24,&call,4)||call!=0x94006ad6||
+       !pc_tooltip_field(read,base,0x3cc974,cursor,sizeof cursor)||cursor[0]!=0xd0014a29||cursor[1]!=0x3963c129)return 0;
+    pc_tooltip_snapshot s;if(!pc_tooltip_capture(1,1,m,read,&s)||s.type!=DM_VT_SLOT_B||s.hover!=regs[20])return 0;
+    *out=s;return 1;
+}
+static int pc_item_tooltip_draw_trace_take(unsigned *count,uint64_t *last,unsigned *repeats,uint64_t signature) {
+    return *count<12&&pc_tooltip_trace_take(count,last,repeats,signature);
+}
+typedef struct {unsigned attempts,count,repeats;uint64_t last;} pc_tooltip_draw_trace_state;
+static int pc_item_tooltip_draw_trace_collect(int enabled,int desktop,module_t *m,const uint64_t *regs,pc_tooltip_reader read,pc_tooltip_draw_trace_state *state,pc_tooltip_snapshot *out) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!regs||!read||!state||!out||state->attempts>=12||regs[8]!=(uint64_t)m->base+0x3b1d28)return 0;
+    uint64_t root,manager,hover;
+    if(!pc_tooltip_field(read,(uint64_t)m->base,0x2f05458,&root,8)||!pc_tooltip_field(read,root,0xd0,&manager,8)||
+       !pc_tooltip_field(read,manager,0x178,&hover,8)||!hover||hover!=regs[20])return 0;
+    state->attempts++;
+    if(!pc_item_tooltip_draw_trace_capture(1,1,m,regs,read,out))return 0;
+    uint64_t signature=out->root^out->hover^out->selected^out->text_length^(regs[9]<<48)^((uint64_t)out->f0<<40);
+    return pc_item_tooltip_draw_trace_take(&state->count,&state->last,&state->repeats,signature);
+}
+static void pc_item_tooltip_draw_trace(const uint64_t *regs) {
+    static pc_tooltip_draw_trace_state state;
+    const char *path=getenv("DM_MAC_POINTER_LOG");if(!path||!*path||state.attempts>=12)return;
+    module_t *m=main_module();pc_tooltip_snapshot s;
+    if(!pc_item_tooltip_draw_trace_collect(1,dm_ui_pc_desktop(),m,regs,pc_tooltip_read,&state,&s))return;
+    LOG("PC_TOOLTIP_DRAW %u frame=%llu caller=3b1d28 entryF0=%llu globalF0=%d root=%#llx widget=%#llx hover=%#llx selected=%#llx vt=%#x owner=%u textlen=%llu first=%d ec=%d model8259=%d heldValid=%d held=%#llx heldId=%u submits=%llu lastSubmitFrame=%llu",state.count,(unsigned long long)dm_guest_frame(),(unsigned long long)regs[9],s.f0,(unsigned long long)s.root,(unsigned long long)regs[20],(unsigned long long)s.hover,(unsigned long long)s.selected,s.type,s.owner,(unsigned long long)s.text_length,s.first,s.ec,s.model,s.held_valid,(unsigned long long)s.held,s.held_id,(unsigned long long)g_pc_tooltip_submits,(unsigned long long)g_pc_tooltip_submit_frame);
+}
+typedef struct {unsigned count[6][3][2],total;} pc_tooltip_a2_raw_state;
+typedef struct {uint64_t caller,widget,root,manager,hover,selected,vt,entry_f0;int global_f0,group,kind,same,snapshot;const char *reason;pc_tooltip_snapshot data;} pc_tooltip_a2_raw;
+static int pc_item_tooltip_a2_raw_collect(int enabled,int desktop,module_t *m,const uint64_t *regs,pc_tooltip_reader read,pc_tooltip_a2_raw_state *state,pc_tooltip_a2_raw *out) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!regs||!read||!state||!out||state->total>=72)return 0;
+    uint64_t base=(uint64_t)m->base;pc_tooltip_a2_raw s={.caller=regs[8],.widget=regs[20],.entry_f0=regs[9],.global_f0=-1,.group=5,.kind=2,.reason="entry"};
+    static const size_t callers[]={0x3b1d28,0x3b0910,0x3b0b68,0x3b0fa4,0x3d4fe4};
+    for(unsigned i=0;i<5;i++)if(s.caller==base+callers[i]){s.group=i;break;}
+    uint8_t byte,flags[2];uint64_t manager_vt=0;uint32_t call,cursor[2];
+    if(pc_tooltip_field(read,base,0x2d128f0,&byte,1))s.global_f0=byte;
+    if(pc_tooltip_field(read,s.widget,0,&s.vt,8))s.kind=s.vt==base+DM_VT_SLOT_B?0:s.vt==base+DM_VT_SLOT?1:2;
+    if(!pc_tooltip_field(read,base,0x2f05458,&s.root,8))s.reason="root_read";
+    else if(!pc_tooltip_field(read,s.root,0xd0,&s.manager,8))s.reason="manager_read";
+    else if(!pc_tooltip_field(read,s.manager,0x178,&s.hover,8)||!pc_tooltip_field(read,s.manager,0x190,&s.selected,8))s.reason="focus_read";
+    else if(!pc_tooltip_field(read,s.manager,0,&manager_vt,8)||manager_vt!=base+0x20b7f88)s.reason="manager_class";
+    else if(s.kind==2)s.reason="widget_class";
+    else if(!pc_tooltip_field(read,s.widget,0x50,flags,2)||!flags[0]||!flags[1])s.reason="widget_flags";
+    else if(!s.hover||s.hover!=s.widget)s.reason="hover_diff";
+    s.same=s.hover&&s.hover==s.widget;
+    if(state->count[s.group][s.kind][s.same]>=2)return 0;
+    state->count[s.group][s.kind][s.same]++;state->total++;
+    if(!strcmp(s.reason,"entry")){
+        if(s.group==0&&(!pc_tooltip_field(read,base,0x3b1d24,&call,4)||call!=0x94006ad6))s.reason="draw_bl";
+        else if(!pc_tooltip_field(read,base,0x3cc974,cursor,sizeof cursor)||cursor[0]!=0xd0014a29||cursor[1]!=0x3963c129)s.reason="f0_bytes";
+        else {s.snapshot=pc_tooltip_capture(1,1,m,read,&s.data);s.reason=s.snapshot?"snapshot_ok":"snapshot_rejected";}
+    }
+    *out=s;return 1;
+}
+static void pc_item_tooltip_a2_raw_trace(const uint64_t *regs) {
+    static pc_tooltip_a2_raw_state state;const char *path=getenv("DM_MAC_POINTER_LOG");if(!path||!*path||state.total>=72)return;
+    module_t *m=main_module();pc_tooltip_a2_raw s;
+    if(!pc_item_tooltip_a2_raw_collect(1,dm_ui_pc_desktop(),m,regs,pc_tooltip_read,&state,&s))return;
+    LOG("PC_TOOLTIP_A2_RAW %u frame=%llu caller=%#llx relative=%#llx group=%d widget=%#llx vt=%#llx kind=%d entryF0=%llu globalF0=%d root=%#llx fm=%#llx hover=%#llx selected=%#llx same=%d reason=%s snapshot=%d textlen=%llu model8259=%d heldValid=%d held=%#llx",state.total,(unsigned long long)dm_guest_frame(),(unsigned long long)s.caller,(unsigned long long)(s.caller-(uint64_t)m->base),s.group,(unsigned long long)s.widget,(unsigned long long)s.vt,s.kind,(unsigned long long)s.entry_f0,s.global_f0,(unsigned long long)s.root,(unsigned long long)s.manager,(unsigned long long)s.hover,(unsigned long long)s.selected,s.same,s.reason,s.snapshot,(unsigned long long)s.data.text_length,s.snapshot?s.data.model:-1,s.data.held_valid,(unsigned long long)s.data.held);
+}
+typedef struct {uint64_t node,vt,parent;uint8_t flags[2];} pc_grid_draw_ancestor;
+typedef struct {
+    uint64_t self,root,manager,container,hover,selected,owner_unit,player,text_length,draw;
+    uint32_t owner[2],local_index,local_id;int f0,ec,chain_complete;unsigned ancestors;
+    pc_grid_draw_ancestor chain[16];
+} pc_grid_draw_entry;
+static int pc_grid_draw_context(const pc_grid_draw_watch *watch,uint64_t frame) {
+    return watch&&watch->valid&&frame>=watch->frame&&frame-watch->frame<=60&&g_pc_options_open.pointer&&g_pc_pointer_hover.valid&&
+        watch->pointer.root==g_pc_pointer_hover.root&&watch->pointer.x==g_pc_pointer_hover.x&&watch->pointer.y==g_pc_pointer_hover.y&&
+        watch->pointer.generation==atomic_load(&g_ui_gen)&&watch->pointer.generation==g_pc_pointer_hover.generation&&
+        watch->pointer.epoch==atomic_load(&g_pc_tabbar_epoch)&&watch->pointer.epoch==g_pc_pointer_hover.epoch&&g_pc_options_open.input_epoch==watch->pointer.epoch;
+}
+static int pc_grid_draw_entry_capture(int enabled,int desktop,module_t *m,const uint64_t *regs,pc_tooltip_reader read,const pc_grid_draw_watch *watch,uint64_t frame,pc_grid_draw_entry *out) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!regs||!read||!out||!pc_grid_draw_context(watch,frame)||regs[0]!=watch->widget)return 0;
+    uint64_t base=(uint64_t)m->base,vt;uint32_t code[3];int xy[2];
+    if(!pc_tooltip_field(read,base,0x3b1cb8,code,sizeof code)||code[0]!=0xa90167fa||code[1]!=0xa9025ff8||code[2]!=0xa90357f6||
+       !pc_tooltip_field(read,regs[0],0,&vt,8)||vt!=base+DM_VT_SLOT_B)return 0;
+    pc_grid_draw_entry s={.self=regs[0],.local_index=UINT32_MAX,.local_id=UINT32_MAX,.f0=-1,.ec=-1};uint8_t byte;
+    if(!pc_tooltip_field(read,base,0x2f05458,&s.root,8)||s.root!=watch->pointer.root||
+       !pc_tooltip_field(read,base,0x2d128f8,xy,sizeof xy)||xy[0]!=watch->pointer.x||xy[1]!=watch->pointer.y||
+       !pc_tooltip_field(read,s.root,0xd0,&s.manager,8)||!pc_tooltip_field(read,s.manager,0,&vt,8)||vt!=base+0x20b7f88||
+       !pc_tooltip_field(read,s.manager,0x170,&s.container,8)||!pc_tooltip_field(read,s.manager,0x178,&s.hover,8)||
+       !pc_tooltip_field(read,s.manager,0x190,&s.selected,8)||!pc_tooltip_field(read,s.self,0x5c4,s.owner,sizeof s.owner)||
+       !pc_tooltip_field(read,s.self,0x560,&s.text_length,8))return 0;
+    pc_tooltip_field(read,base+DM_VT_SLOT_B,0x20,&s.draw,8);
+    if(pc_tooltip_field(read,base,0x2d128f0,&byte,1))s.f0=byte;
+    if(pc_tooltip_field(read,base,0x2d128ec,&byte,1))s.ec=byte;
+    s.owner_unit=pc_tooltip_unit(read,base,s.owner[1],s.owner[0]);
+    if(pc_tooltip_field(read,base,0x2d20e4c,&s.local_index,4)){
+        if(s.local_index<=7)pc_tooltip_field(read,base,0x2d60380+4*s.local_index,&s.local_id,4);
+        s.player=pc_tooltip_local_player(read,base,s.local_index);
+    }
+    uint64_t node=s.self;
+    for(unsigned i=0;node&&i<16;i++){
+        pc_grid_draw_ancestor *a=&s.chain[s.ancestors];a->node=node;
+        if(!pc_tooltip_field(read,node,0,&a->vt,8)||!pc_tooltip_field(read,node,0x30,&a->parent,8)||!pc_tooltip_field(read,node,0x50,a->flags,2))break;
+        s.ancestors++;if(!a->parent){s.chain_complete=1;break;}if(a->parent==node)break;node=a->parent;
+    }
+    uint64_t current_root=0;if(!pc_grid_draw_context(watch,frame)||!pc_tooltip_field(read,base,0x2f05458,&current_root,8)||current_root!=s.root)return 0;
+    *out=s;return 1;
+}
+static int pc_grid_draw_entry_collect(int enabled,int desktop,module_t *m,const uint64_t *regs,pc_tooltip_reader read,const pc_grid_draw_watch *watch,uint64_t frame,pc_tooltip_draw_trace_state *state,pc_grid_draw_entry *out) {
+    if(!state||state->attempts>=12||!pc_grid_draw_entry_capture(enabled,desktop,m,regs,read,watch,frame,out))return 0;
+    state->attempts++;uint64_t signature=out->self^out->hover^out->selected^out->text_length^((uint64_t)out->f0<<48)^((uint64_t)out->ec<<40)^out->owner_unit^out->player;
+    return pc_item_tooltip_draw_trace_take(&state->count,&state->last,&state->repeats,signature);
+}
+void dm_ui_pc_grid_draw_obs(const uint64_t *regs) {
+    static pc_tooltip_draw_trace_state state;const char *path=getenv("DM_MAC_POINTER_LOG");if(!path||!*path||state.attempts>=12)return;
+    module_t *m=main_module();pc_grid_draw_entry s;uint64_t frame=dm_guest_frame();
+    if(!pc_grid_draw_entry_collect(1,dm_ui_pc_desktop(),m,regs,pc_tooltip_read,&g_pc_grid_draw_watch,frame,&state,&s))return;
+    char chain[2048];size_t used=0;chain[0]=0;
+    for(unsigned i=0;i<s.ancestors;i++){const pc_grid_draw_ancestor *a=&s.chain[i];int n=snprintf(chain+used,sizeof chain-used,"%s%#llx:%#llx:%u/%u",i?",":"",(unsigned long long)a->node,(unsigned long long)a->vt,a->flags[0],a->flags[1]);if(n<0||(size_t)n>=sizeof chain-used)break;used+=(size_t)n;}
+    LOG("PC_GRID_DRAW_ENTRY %u frame=%llu watchFrame=%llu self=%#llx root=%#llx fm=%#llx container=%#llx hover=%#llx selected=%#llx f0=%d ec=%d owner=%u/%u ownerUnit=%#llx local=%u/%u player=%#llx textlen=%llu draw=%#llx chainComplete=%d chain=%s",state.count,(unsigned long long)frame,(unsigned long long)g_pc_grid_draw_watch.frame,(unsigned long long)s.self,(unsigned long long)s.root,(unsigned long long)s.manager,(unsigned long long)s.container,(unsigned long long)s.hover,(unsigned long long)s.selected,s.f0,s.ec,s.owner[0],s.owner[1],(unsigned long long)s.owner_unit,s.local_index,s.local_id,(unsigned long long)s.player,(unsigned long long)s.text_length,(unsigned long long)s.draw,s.chain_complete,chain);
+}
+enum {PC_TIP_INVENTORY=1,PC_TIP_BANK,PC_TIP_VENDOR};
+static int pc_tooltip_name(pc_tooltip_reader read,uint64_t widget,char name[96]) {
+    uint64_t text=0;if(!pc_tooltip_field(read,widget,8,&text,8))return 0;
+    name[0]=0;if(!text)return 1;
+    for(unsigned i=0;i<96;i+=16){
+        if(pc_tooltip_field(read,text,i,name+i,16)){if(memchr(name+i,0,16))return 1;continue;}
+        // Una cadena puede terminar junto al borde de una página legible.
+        for(unsigned j=0;j<16;j++){if(!pc_tooltip_field(read,text,i+j,name+i+j,1))return 0;if(!name[i+j])return 1;}
+    }
+    return 0;
+}
+static int pc_tooltip_domain(pc_tooltip_reader read,uint64_t root,uint64_t widget) {
+    uint64_t node=widget,panel=0;
+    for(unsigned i=0;node&&i<64;i++){
+        uint8_t flags[2];uint64_t parent=0;
+        if(!pc_tooltip_field(read,node,0x50,flags,2)||!flags[0]||!flags[1])return 0;
+        if(node==root){
+            char name[96];unsigned budget=2048;
+            if(!panel||!pc_tooltip_owned(read,root,widget,0,&budget)||!pc_tooltip_name(read,panel,name))return 0;
+            if(!strcmp(name,"PlayerInventoryExpansionLayout")||!strcmp(name,"PlayerInventoryOriginalLayout"))return PC_TIP_INVENTORY;
+            if(!strcmp(name,"BankExpansionLayout")||!strcmp(name,"BankOriginalLayout"))return PC_TIP_BANK;
+            return !strcmp(name,"VendorPanelLayout")?PC_TIP_VENDOR:0;
+        }
+        if(!pc_tooltip_field(read,node,0x30,&parent,8)||parent==node)return 0;
+        panel=node;node=parent;
+    }
+    return 0;
+}
+static int pc_tooltip_visible_leaf(pc_tooltip_reader read,uint64_t widget,unsigned depth,unsigned *budget) {
+    if(!widget)return 0;if(depth>14||!*budget)return -1;--*budget;
+    uint8_t flags[2];uint64_t children[2];
+    if(!pc_tooltip_field(read,widget,0x50,flags,2))return -1;
+    if(!flags[0]||!flags[1])return 0;
+    if(!pc_tooltip_field(read,widget,0x58,children,sizeof children)||children[1]>256||(!children[0]&&children[1]))return -1;
+    if(!children[1])return depth>1;
+    for(uint64_t i=0;i<children[1];i++){
+        uint64_t child;if(!pc_tooltip_field(read,children[0],8*i,&child,8))return -1;
+        int visible=pc_tooltip_visible_leaf(read,child,depth+1,budget);if(visible)return visible;
+    }
+    return 0;
+}
+static int pc_tooltip_no_modal(pc_tooltip_reader read,uint64_t root) {
+    uint64_t children[2];if(!pc_tooltip_field(read,root,0x58,children,sizeof children)||children[1]>256||(!children[0]&&children[1]))return 0;
+    for(uint64_t i=0;i<children[1];i++){
+        uint64_t panel;uint8_t visible;char name[96];
+        if(!pc_tooltip_field(read,children[0],8*i,&panel,8))return 0;
+        if(!panel)continue;
+        if(!pc_tooltip_field(read,panel,0x50,&visible,1))return 0;
+        if(!visible)continue;
+        if(!pc_tooltip_name(read,panel,name))return 0;
+        size_t length=strlen(name);if(length<5||strcmp(name+length-5,"Modal"))continue;
+        unsigned budget=2048;if(pc_tooltip_visible_leaf(read,panel,1,&budget)!=0)return 0;
+    }
+    return 1;
+}
+static int pc_tooltip_shared_id(module_t *m,pc_tooltip_reader read,uint32_t *id) {
+    // Mismo modelo que 3b589c..3b5938 y dm_runeword.c: unidad de la página compartida actual.
+    static const uint32_t hash[]={0xd292b9aa,0xf2a0024a,0xf2c9d72a,0xf2e3f0ca};
+    static const uint32_t keycode[]={0xd2857a89,0xf2aea629,0xf2c314c9,0xf2f1a9a9};
+    static const uint32_t chain[]={0xf9400908,0xf9400908,0xb9400108};
+    if(memcmp(m->base+0x3b58b4,hash,sizeof hash)||memcmp(m->base+0x3b58d8,keycode,sizeof keycode)||memcmp(m->base+0x3b5930,chain,sizeof chain))return 0;
+    uint64_t map,head[2],node;
+    if(!pc_tooltip_field(read,(uint64_t)m->base,0x2f05450,&map,8)||!pc_tooltip_field(read,map,0,head,sizeof head)||!head[0]||head[0]>1048576||!pc_tooltip_field(read,head[1],8*((head[0]-1)&0x1f864eb9001295cdull),&node,8))return 0;
+    for(unsigned i=0;node&&i<64;i++){
+        uint64_t record[3];if(!pc_tooltip_field(read,node,0,record,sizeof record))return 0;
+        if(record[1]==0x8d4d18a675312bd4ull){uint64_t value;return pc_tooltip_field(read,record[2],0x10,&value,8)&&pc_tooltip_field(read,value,0,id,4)&&*id!=UINT32_MAX;}
+        if(record[0]==node)return 0;node=record[0];
+    }
+    return 0;
+}
+static int pc_tooltip_domain_owner(module_t *m,pc_tooltip_reader read,uint64_t widget,int domain,uint64_t player) {
+    uint64_t vt;uint32_t owner[2];
+    if(!pc_tooltip_field(read,widget,0,&vt,8)||(vt!=(uint64_t)m->base+DM_VT_SLOT&&vt!=(uint64_t)m->base+DM_VT_SLOT_B)||
+       (domain!=PC_TIP_INVENTORY&&vt!=(uint64_t)m->base+DM_VT_SLOT_B)||
+       !pc_tooltip_field(read,widget,0x5c4,owner,sizeof owner)||owner[0]==UINT32_MAX)return 0;
+    uint64_t actor=pc_tooltip_unit(read,(uint64_t)m->base,owner[1],owner[0]);if(!actor)return 0;
+    if(domain==PC_TIP_INVENTORY)return owner[1]==0&&actor==player;
+    if(domain==PC_TIP_BANK){uint32_t id;uint8_t page;return owner[1]==0&&pc_tooltip_field(read,widget,0x630,&page,1)&&page==4&&
+        (actor==player||(pc_tooltip_shared_id(m,read,&id)&&id==owner[0]));}
+    uint32_t npc,interacting;
+    return domain==PC_TIP_VENDOR&&owner[1]==1&&pc_tooltip_field(read,(uint64_t)m->base,0x2d5ebfc,&npc,4)&&npc==owner[0]&&
+        pc_tooltip_field(read,(uint64_t)m->base,0x2d5ec00,&interacting,4)&&interacting;
+}
+static int pc_item_tooltip_context(module_t *m,uint64_t root,uint64_t widget,pc_tooltip_reader read) {
+    int dm_padmode_busy(void);
+    if(!m||!m->base||m->size<0x2f05460||!root||!widget||!read||!dm_uiscreen_ingame()||dm_padmode_busy()||atomic_load(&g_load_up)>0)return 0;
+    uint32_t generation=atomic_load(&g_ui_gen),epoch=atomic_load(&g_pc_tabbar_epoch);pc_pointer_hover_state pointer=g_pc_pointer_hover;
+    if(!g_pc_options_open.pointer||g_pc_options_open.input_epoch!=epoch||!pointer.valid||pointer.root!=root||pointer.generation!=generation||pointer.epoch!=epoch)return 0;
+    uint64_t base=(uint64_t)m->base,current_root,manager,vt,hover;uint8_t ingame,native_ec;int xy[2];unsigned budget=2048;
+    if(!pc_tooltip_field(read,base,0x2f05458,&current_root,8)||current_root!=root||!pc_tooltip_field(read,root,0xd9,&ingame,1)||!ingame||
+       !pc_tooltip_field(read,root,0xd0,&manager,8)||!pc_tooltip_field(read,manager,0,&vt,8)||vt!=base+0x20b7f88||
+       !pc_tooltip_field(read,manager,0x178,&hover,8)||hover!=widget||!pc_tooltip_owned(read,root,manager,0,&budget)||
+       !pc_tooltip_field(read,base,0x2d128ec,&native_ec,1)||native_ec||
+       !pc_tooltip_field(read,base,0x2d128f8,xy,sizeof xy)||xy[0]!=pointer.x||xy[1]!=pointer.y)return 0;
+    int domain=pc_tooltip_domain(read,root,widget);if(!domain||!pc_tooltip_no_modal(read,root))return 0;
+    uint32_t local;uint64_t held;
+    if(!pc_tooltip_field(read,base,0x2d20e4c,&local,4))return 0;
+    uint64_t player=pc_tooltip_local_player(read,base,local),inventory=pc_tooltip_inventory(read,player);
+    if(!inventory||!pc_tooltip_field(read,inventory,0x40,&held,8)||held||!pc_tooltip_domain_owner(m,read,widget,domain,player))return 0;
+    uint64_t current_manager,current_hover;
+    if(!pc_tooltip_field(read,base,0x2f05458,&current_root,8)||current_root!=root||!pc_tooltip_field(read,root,0xd0,&current_manager,8)||current_manager!=manager||
+       !pc_tooltip_field(read,manager,0x178,&current_hover,8)||current_hover!=widget||!pc_tooltip_field(read,base,0x2d128f8,xy,sizeof xy)||xy[0]!=pointer.x||xy[1]!=pointer.y||
+       !pc_tooltip_field(read,base,0x2d128ec,&native_ec,1)||native_ec)return 0;
+    return !dm_padmode_busy()&&dm_uiscreen_ingame()&&atomic_load(&g_load_up)<=0&&epoch==atomic_load(&g_pc_tabbar_epoch)&&generation==atomic_load(&g_ui_gen)&&
+        g_pc_options_open.pointer&&g_pc_options_open.input_epoch==epoch&&g_pc_pointer_hover.valid&&g_pc_pointer_hover.root==root&&
+        g_pc_pointer_hover.epoch==epoch&&g_pc_pointer_hover.generation==generation&&g_pc_pointer_hover.x==pointer.x&&g_pc_pointer_hover.y==pointer.y;
+}
+static int pc_item_tooltip_route(module_t *m,uint64_t root,uint64_t widget,uint64_t caller,int desktop,uint64_t f0,pc_tooltip_reader read) {
+    if(!desktop||!f0||!pc_item_tooltip_abi(m)||!pc_item_tooltip_context(m,root,widget,read))return 0;
+    uint64_t base=(uint64_t)m->base,vt;uint32_t call_word=0;size_t call=0;
+    if(!pc_tooltip_field(read,widget,0,&vt,8))return 0;
+    if(vt==base+DM_VT_SLOT&&caller==base+0x3d4fe4){call=0x3d4fe0;call_word=0x97ffde27;}
+    if(vt==base+DM_VT_SLOT_B){if(caller==base+0x3b0910){call=0x3b090c;call_word=0x94006fdc;}else if(caller==base+0x3b0b68){call=0x3b0b64;call_word=0x94006f46;}else if(caller==base+0x3b0fa4){call=0x3b0fa0;call_word=0x94006e37;}else if(caller==base+0x3b1d28){
+        static const uint32_t draw[]={0xa90167fa,0xa9025ff8,0xa90357f6};
+        if(memcmp(m->base+0x3b1cb8,draw,sizeof draw))return 0;call=0x3b1d24;call_word=0x94006ad6;
+    }}
+    if(caller==base+0x3dd184||caller==base+0x407c38||caller==base+0x409490||caller==base+0x4094a0||caller==base+0x40b08c){
+        // Precio y compra consultan el mismo getter desde callers posteriores verificados.
+        static const uint32_t selling[]={0xaa1303e0,0xaa1f03e1,0x91156274,0x97ffbdbf,0xaa0003e1,0xaa1403e0,0x52800022,0x97fe4fb4};
+        static const uint32_t buying[]={0xaa1303e0,0xaa1f03e1,0x91156274,0x97ff1312,0xaa0003e1,0xaa1403e0,0x2a1f03e2,0x97fda507};
+        static const uint32_t right[]={0xaa1503e0,0xaa1f03e1,0x97ff0cfc,0xb4ffed00,0xaa1503e0,0xaa1f03e1,0x97ff0cf8,0xb4ffed80,0xaa0003e1,0xaa1603e0,0x2a1f03e2,0x2a1f03e3,0x52800024,0x2a1f03e5,0x9400aa65};
+        static const uint32_t left[]={0xaa1503e0,0xaa1f03e1,0x97ff05fd,0x71000a9f,0x1a9f17e4,0xaa1603e1,0xaa0003e2,0x2a1f03e3,0x2a1f03e5,0x97ffff14};
+        int sell=caller==base+0x3dd184,price=sell||caller==base+0x407c38,domain=pc_tooltip_domain(read,root,widget);uint8_t trading;uint32_t npc,interacting;
+        if(price){if(memcmp(m->base+(sell?0x3dd174:0x407c28),sell?selling:buying,sizeof selling))return 0;}
+        else if(vt!=base+DM_VT_SLOT_B||
+                (caller==base+0x40b08c?memcmp(m->base+0x40b080,left,sizeof left):memcmp(m->base+0x409484,right,sizeof right)))return 0;
+        if(domain!=(sell?PC_TIP_INVENTORY:PC_TIP_VENDOR)||
+           !pc_tooltip_field(read,base,0x2d5ff53,&trading,1)||!trading||
+           !pc_tooltip_field(read,base,0x2d5ec00,&interacting,4)||!interacting||
+           !pc_tooltip_field(read,base,0x2d5ebfc,&npc,4)||npc==UINT32_MAX||!pc_tooltip_unit(read,base,1,npc))return 0;
+        return pc_item_tooltip_context(m,root,widget,read);
+    }
+    if(!call||*(uint32_t*)(m->base+call)!=call_word)return 0;
+    return 1;
+}
+void dm_ui_pc_item_tooltip(uint64_t *regs) {
+    pc_item_tooltip_a2_raw_trace(regs);
+    pc_item_tooltip_draw_trace(regs);
+    if(!regs||!regs[9]||!dm_ui_pc_desktop())return;
+    module_t *m=main_module();if(!m||m->size<0x2f05460)return;
+    uint64_t root=*(uint64_t*)(m->base+0x2f05458);
+    if(pc_item_tooltip_route(m,root,regs[20],regs[8],1,regs[9],pc_tooltip_read))regs[9]=0;
+}
+static int pc_grid_hover_abi(module_t *m) {
+    static const uint32_t prologue[]={0xf81b0ff9,0xa9015ff8,0xa90257f6,0xa9034ff4};
+    static const uint32_t before[]={0xd00112a8,0x3963c108,0x34000088,0xd00112a8,0x3963b108,0x340001e8,0xf940ba74};
+    static const uint32_t after[]={0x3945a268,0x34000168,0xf9400008,0x9105c275};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0xabcc50,prologue,sizeof prologue)&&
+        !memcmp(m->base+0xabcc88,before,sizeof before)&&!memcmp(m->base+0xabcca8,after,sizeof after)&&
+        *(uint32_t*)(m->base+0xabccd4)==0xa9007ebf&&*(uint32_t*)(m->base+0xabccd8)==0xf940ca69;
+}
+static int pc_grid_hover_ancestors(uint64_t root,uint64_t widget,pc_tooltip_reader read) {
+    uint64_t node=widget;
+    for(unsigned i=0;node&&i<64;i++){
+        uint8_t flags[2];uint64_t parent;
+        if(!pc_tooltip_field(read,node,0x50,flags,2)||!flags[0]||!flags[1])return 0;
+        if(node==root)return 1;
+        if(!pc_tooltip_field(read,node,0x30,&parent,8)||parent==node)return 0;
+        node=parent;
+    }
+    return 0;
+}
+static int pc_grid_hover_route(module_t *m,const uint64_t *regs,int desktop,pc_tooltip_reader read) {
+    if(!desktop||!regs||!read||!pc_grid_hover_abi(m))return 0;
+    uint32_t generation=atomic_load(&g_ui_gen),epoch=atomic_load(&g_pc_tabbar_epoch);
+    uint64_t base=(uint64_t)m->base,root,manager,hover,container,vt;uint8_t f0,ec;
+    if(!pc_tooltip_field(read,base,0x2f05458,&root,8)||!root||
+       !pc_tooltip_field(read,root,0xd0,&manager,8)||manager!=regs[19]||
+       !pc_tooltip_field(read,manager,0,&vt,8)||vt!=base+0x20b7f88||
+       !pc_tooltip_field(read,manager,0x178,&hover,8)||!hover||hover!=regs[0]||
+       !pc_tooltip_field(read,manager,0x170,&container,8)||container!=regs[20]||
+       !pc_tooltip_field(read,hover,0,&vt,8)||vt!=base+DM_VT_SLOT_B||
+       !pc_tooltip_field(read,base,0x2d128f0,&f0,1)||f0||
+       !pc_tooltip_field(read,base,0x2d128ec,&ec,1)||ec)return 0;
+    if(!pc_options_event_allowed()||!pc_grid_hover_ancestors(root,hover,read)||!pc_item_tooltip_context(m,root,hover,read))return 0;
+    unsigned budget=2048;
+    if(container&&(!pc_tooltip_owned(read,root,container,0,&budget)||!pc_grid_hover_ancestors(root,container,read)))return 0;
+    uint64_t current_container=0;uint8_t current_f0=1,current_ec=1;
+    return pc_options_event_allowed()&&pc_grid_hover_ancestors(root,hover,read)&&
+        pc_tooltip_field(read,manager,0x170,&current_container,8)&&current_container==container&&
+        pc_tooltip_field(read,base,0x2d128f0,&current_f0,1)&&!current_f0&&
+        pc_tooltip_field(read,base,0x2d128ec,&current_ec,1)&&!current_ec&&
+        generation==atomic_load(&g_ui_gen)&&epoch==atomic_load(&g_pc_tabbar_epoch)&&
+        pc_item_tooltip_context(m,root,hover,read)&&!m->base[0x2d128f0]&&!m->base[0x2d128ec]&&
+        generation==atomic_load(&g_ui_gen)&&epoch==atomic_load(&g_pc_tabbar_epoch);
+}
+static void pc_skill_clear_trace(const uint64_t *regs);
+static int pc_skill_hover_route(module_t *m,const uint64_t *regs,int desktop,pc_tooltip_reader read);
+void dm_ui_pc_grid_hover(uint64_t *regs) {
+    if(!regs)return;
+    pc_skill_clear_trace(regs);
+    regs[8]=pc_grid_hover_route(main_module(),regs,dm_ui_pc_desktop(),pc_tooltip_read)||
+        pc_skill_hover_route(main_module(),regs,dm_ui_pc_desktop(),pc_tooltip_read);
+}
+// Frontera PC: conserva las primitivas nativas de modelo, selección y dibujo.
+#define DM_PC_SKILL_BOUNDARY 1
+typedef struct {uint64_t root,manager,hover,selected,widget,player,model;int side,skill,assoc,binding;uint32_t generation,epoch;} pc_skill_widget;
+typedef struct {void (*model)(uint64_t,uint64_t,const int *);int (*toggle)(int,int);int (*select)(int,int,int);void (*close)(int,int);} pc_skill_widget_api;
+static int pc_skill_widget_abi(module_t *m) {
+    static const struct {size_t at;uint32_t code[4];} entries[]={
+        {0x3e4594,{0xa9bd57f6,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0x3e4764,{0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0x3e2dd4,{0xf81a0ffb,0xa90167fa,0xa9025ff8,0xa90357f6}},
+        {0x3703ec,{0xd10203ff,0xa90367fa,0xa9045ff8,0xa90557f6}},
+        {0x459ad0,{0xd10183ff,0xa9025ff8,0xa90357f6,0xa9044ff4}},
+        {0x454f40,{0xd101c3ff,0xf90013f9,0xa9035ff8,0xa90457f6}},
+        {0x43f170,{0xd10183ff,0xf9000bf9,0xa9025ff8,0xa90357f6}}
+    };
+    static const uint32_t getters[]={0x94016f10,0x2a0003f5,0x2a1703e0,0x94016fe5};
+    if(!m||!m->base||m->size<0x2f05460)return 0;
+    for(unsigned i=0;i<sizeof entries/sizeof *entries;i++)if(memcmp(m->base+entries[i].at,entries[i].code,sizeof entries[i].code))return 0;
+    return !memcmp(m->base+0x3e2f70,getters,sizeof getters);
+}
+static int pc_skill_side_model(pc_tooltip_reader read,uint64_t base,uint64_t *model,int *side) {
+    uint64_t head[2],node;*side=0;
+    if(!pc_tooltip_field(read,base,0x2f05450,model,8)||!pc_tooltip_field(read,*model,0,head,sizeof head)||!head[0]||head[0]>1048576||!head[1]||
+       !pc_tooltip_field(read,head[1],8*((head[0]-1)&0x10a009ffb490064aull),&node,8))return 0;
+    for(unsigned i=0;node&&i<64;i++){
+        uint64_t entry[3];if(!pc_tooltip_field(read,node,0,entry,sizeof entry))return 0;
+        if(entry[1]==0x7d8f57e3857c067dull){uint64_t value;return pc_tooltip_field(read,entry[2],0x10,&value,8)&&pc_tooltip_field(read,value,0,side,4)&&*side>=0&&*side<=2;}
+        if(entry[0]==node)return 0;node=entry[0];
+    }
+    return !node;
+}
+static int pc_skill_panel(pc_tooltip_reader read,uint64_t root,uint64_t widget,int side) {
+    uint64_t node=widget,panel=0;
+    for(unsigned i=0;node&&i<64;i++){
+        uint8_t flags[2];uint64_t parent;
+        if(!pc_tooltip_field(read,node,0x50,flags,2)||!flags[0]||!flags[1])return 0;
+        if(node==root){char name[96];unsigned budget=2048;return panel&&pc_tooltip_owned(read,root,widget,0,&budget)&&pc_tooltip_name(read,panel,name)&&!strcmp(name,side?"HUDPanel":"SkillSelect");}
+        if(!pc_tooltip_field(read,node,0x30,&parent,8)||parent==node)return 0;panel=node;node=parent;
+    }
+    return 0;
+}
+static int pc_skill_actor(pc_tooltip_reader read,uint64_t base,uint64_t player) {
+    uint8_t kind;uint64_t table,cap;int maximum;
+    return pc_tooltip_field(read,player,0x1bd,&kind,1)&&kind>=1&&kind<=4&&
+        pc_tooltip_field(read,base,0x2d64a18+16*kind,&table,8)&&pc_tooltip_field(read,table,0x1500,&cap,8)&&pc_tooltip_field(read,cap,0,&maximum,4)&&maximum>0;
+}
+static int pc_skill_widget_context(module_t *m,uint64_t widget,int desktop,int action,pc_tooltip_reader read,pc_skill_widget *out) {
+    int dm_padmode_busy(void);
+    if(!desktop||!read||!out||!pc_skill_widget_abi(m)||!widget||!dm_uiscreen_ingame()||dm_padmode_busy()||atomic_load(&g_load_up)>0||!pc_options_event_allowed())return 0;
+    uint64_t base=(uint64_t)m->base,vt;uint8_t ingame,ec;uint32_t index;pc_skill_widget s={.widget=widget};
+    uint32_t generation=atomic_load(&g_ui_gen),epoch=atomic_load(&g_pc_tabbar_epoch);pc_pointer_hover_state pointer=g_pc_pointer_hover;
+    if(!pc_tooltip_field(read,widget,0,&vt,8)||vt!=base+0x208a5f8||!pc_tooltip_field(read,widget,0xa88,&s.side,4)||s.side<0||s.side>2||
+       !pc_tooltip_field(read,widget,0xb08,&s.skill,4)||!pc_tooltip_field(read,widget,0xb0c,&s.assoc,4)||!pc_tooltip_field(read,widget,0xb18,&s.binding,4)||
+       !pc_tooltip_field(read,base,0x2f05458,&s.root,8)||!pc_tooltip_field(read,s.root,0xd9,&ingame,1)||!ingame||
+       !pc_tooltip_field(read,s.root,0xd0,&s.manager,8)||!pc_tooltip_field(read,s.manager,0,&vt,8)||vt!=base+0x20b7f88||
+       !pc_tooltip_field(read,s.manager,0x178,&s.hover,8)||!pc_tooltip_field(read,s.manager,0x190,&s.selected,8)||
+       !pc_skill_panel(read,s.root,widget,s.side)||!pc_tooltip_no_modal(read,s.root)||!pc_tooltip_field(read,base,0x2d20e4c,&index,4))return 0;
+    unsigned budget=2048;if(!pc_tooltip_owned(read,s.root,s.manager,0,&budget))return 0;
+    s.player=pc_tooltip_local_player(read,base,index);if(!s.player||!pc_skill_actor(read,base,s.player))return 0;
+    if(action){
+        uint64_t inventory=pc_tooltip_inventory(read,s.player),held;int xy[2],model_side;
+        if(!g_pc_skill_event.valid||g_pc_skill_event.root!=s.root||g_pc_skill_event.action!=ui_hash("LeftMouseButtonUp")||g_pc_skill_event.x!=pointer.x||g_pc_skill_event.y!=pointer.y||
+           !pointer.valid||pointer.root!=s.root||pointer.generation!=generation||pointer.epoch!=epoch||!g_pc_options_open.pointer||g_pc_options_open.input_epoch!=epoch||s.hover!=widget||
+           !pc_tooltip_field(read,base,0x2d128f8,xy,sizeof xy)||xy[0]!=pointer.x||xy[1]!=pointer.y||!pc_tooltip_field(read,base,0x2d128ec,&ec,1)||ec||
+           !inventory||!pc_tooltip_field(read,inventory,0x40,&held,8)||held||!pc_skill_side_model(read,base,&s.model,&model_side)||(!s.side&&!model_side))return 0;
+    }
+    uint64_t current,player;uint32_t current_index;
+    if(!pc_tooltip_field(read,base,0x2f05458,&current,8)||current!=s.root||!pc_tooltip_field(read,base,0x2d20e4c,&current_index,4)||current_index!=index||
+       !(player=pc_tooltip_local_player(read,base,current_index))||player!=s.player||!pc_skill_panel(read,s.root,widget,s.side)||
+       generation!=atomic_load(&g_ui_gen)||epoch!=atomic_load(&g_pc_tabbar_epoch)||!dm_uiscreen_ingame()||dm_padmode_busy()||atomic_load(&g_load_up)>0||!pc_options_event_allowed())return 0;
+    if(action){
+        uint64_t manager,hover,held;int xy[2];
+        if(!pc_tooltip_field(read,s.root,0xd0,&manager,8)||manager!=s.manager||!pc_tooltip_field(read,manager,0x178,&hover,8)||hover!=widget||
+           !pc_tooltip_field(read,base,0x2d128f8,xy,sizeof xy)||xy[0]!=pointer.x||xy[1]!=pointer.y||
+           !pc_tooltip_field(read,pc_tooltip_inventory(read,s.player),0x40,&held,8)||held||!pc_tooltip_field(read,base,0x2d128ec,&ec,1)||ec||
+           !g_pc_options_open.pointer||g_pc_options_open.input_epoch!=epoch||!g_pc_pointer_hover.valid||g_pc_pointer_hover.root!=s.root||
+           g_pc_pointer_hover.generation!=generation||g_pc_pointer_hover.epoch!=epoch||g_pc_pointer_hover.x!=pointer.x||g_pc_pointer_hover.y!=pointer.y)return 0;
+    }
+    s.generation=generation;s.epoch=epoch;*out=s;return 1;
+}
+static int pc_skill_selected_read(pc_tooltip_reader read,uint64_t player,int side,int *skill,int *assoc) {
+    uint64_t list,node,record;int16_t id;
+    if((side!=1&&side!=2)||!pc_tooltip_field(read,player,0x100,&list,8)||!pc_tooltip_field(read,list,side==1?8:16,&node,8))return 0;
+    if(!node){*skill=-1;*assoc=-1;return 1;}
+    if(!pc_tooltip_field(read,node,0,&record,8)||!pc_tooltip_field(read,record,0,&id,2)||id<0||!pc_tooltip_field(read,node,0x44,assoc,4))return 0;
+    *skill=id;return 1;
+}
+static int pc_skill_member(pc_tooltip_reader read,uint64_t player,int skill,int assoc) {
+    uint64_t list,node,record;if(skill<0||!pc_tooltip_field(read,player,0x100,&list,8)||!pc_tooltip_field(read,list,0,&node,8))return 0;
+    for(unsigned i=0;node&&i<512;i++){
+        int16_t id;int association;uint64_t next;
+        if(!pc_tooltip_field(read,node,0,&record,8)||!pc_tooltip_field(read,record,0,&id,2)||!pc_tooltip_field(read,node,0x44,&association,4))return 0;
+        if(id==skill&&association==assoc)return 1;
+        if(!pc_tooltip_field(read,node,8,&next,8)||next==node)return 0;node=next;
+    }
+    return 0;
+}
+static int pc_skill_click_route(module_t *m,uint64_t widget,int desktop,pc_tooltip_reader read,const pc_skill_widget_api *api) {
+    pc_skill_widget s,check;if(!api||!api->model||!api->toggle||!api->select||!api->close||!pc_skill_widget_context(m,widget,desktop,1,read,&s))return 0;
+    if(s.side){
+        int side=s.side,actual=0;uint64_t model;
+        api->model(s.model,0x7d8f57e3857c067dull,&side);
+        if(!pc_skill_widget_context(m,widget,desktop,1,read,&check)||check.root!=s.root||check.player!=s.player||check.side!=s.side||check.generation!=s.generation||check.epoch!=s.epoch||
+           !pc_skill_side_model(read,(uint64_t)m->base,&model,&actual)||model!=s.model||actual!=side)return 0;
+        api->toggle(3,0);return 1;
+    }
+    int side=0;uint64_t model;
+    if(!pc_skill_side_model(read,(uint64_t)m->base,&model,&side)||model!=s.model||!side||!pc_skill_member(read,s.player,s.skill,s.assoc)||
+       !pc_skill_widget_context(m,widget,desktop,1,read,&check)||check.player!=s.player||check.skill!=s.skill||check.assoc!=s.assoc||check.side||check.generation!=s.generation||check.epoch!=s.epoch)return 0;
+    if(!api->select(s.skill,side==1,s.assoc))return 0;
+    if(pc_skill_widget_context(m,widget,desktop,1,read,&check)&&check.root==s.root&&check.player==s.player&&!check.side&&check.generation==s.generation&&check.epoch==s.epoch)api->close(3,0);
+    return 2;
+}
+static int pc_skill_hud_route(module_t *m,uint64_t *regs,int desktop,pc_tooltip_reader read) {
+    pc_skill_widget s,check;int skill,assoc;
+    if(!regs||!pc_skill_widget_context(m,regs[19],desktop,0,read,&s)||!s.side||
+       !pc_skill_selected_read(read,s.player,s.side,&skill,&assoc)||!pc_skill_widget_context(m,regs[19],desktop,0,read,&check)||
+       check.root!=s.root||check.player!=s.player||check.side!=s.side||check.generation!=s.generation||check.epoch!=s.epoch)return 0;
+    int current_skill,current_assoc;if(!pc_skill_selected_read(read,s.player,s.side,&current_skill,&current_assoc)||current_skill!=skill||current_assoc!=assoc)return 0;
+    regs[21]=(uint32_t)skill;regs[0]=(uint32_t)assoc;return 1;
+}
+typedef struct {unsigned total,stage[3];uint64_t last[3];} pc_skill_trace_state;
+static pc_skill_trace_state g_pc_skill_trace;
+static int pc_skill_trace_take(pc_skill_trace_state *s,int stage,uint64_t signature) {
+    if(stage<0||stage>2||s->total>=16||s->stage[stage]>=(stage==0?8:4))return 0;
+    int emit=stage==1||s->last[stage]!=signature;
+    s->last[stage]=signature;s->stage[stage]++;s->total++;return emit;
+}
+typedef struct {uint64_t root,widget,hover,selected;int side,skill,assoc,binding;uint8_t f0,ec;} pc_skill_trace_snapshot;
+static int pc_skill_trace_capture(int enabled,int desktop,module_t *m,uint64_t root,uint64_t widget,pc_tooltip_reader read,pc_skill_trace_snapshot *out) {
+    if(!enabled||!desktop||!read||!out||!m||!m->base||m->size<0x2f05460)return 0;
+    uint64_t base=(uint64_t)m->base,current,manager,vt;pc_skill_trace_snapshot s={0};
+    if(!pc_tooltip_field(read,base,0x2f05458,&current,8)||(root&&current!=root))return 0;s.root=current;
+    if(!pc_tooltip_field(read,s.root,0xd0,&manager,8)||!pc_tooltip_field(read,manager,0,&vt,8)||vt!=base+0x20b7f88||
+       !pc_tooltip_field(read,manager,0x178,&s.hover,8)||!pc_tooltip_field(read,manager,0x190,&s.selected,8))return 0;
+    s.widget=widget?widget:s.hover;
+    if(!pc_tooltip_field(read,s.widget,0,&vt,8)||vt!=base+0x208a5f8||!pc_tooltip_field(read,s.widget,0xa88,&s.side,4)||s.side<0||s.side>3||
+       !pc_tooltip_field(read,s.widget,0xb08,&s.skill,4)||!pc_tooltip_field(read,s.widget,0xb0c,&s.assoc,4)||!pc_tooltip_field(read,s.widget,0xb18,&s.binding,4)||
+       !pc_tooltip_field(read,base,0x2d128f0,&s.f0,1)||!pc_tooltip_field(read,base,0x2d128ec,&s.ec,1))return 0;
+    unsigned budget=2048;if(!pc_tooltip_owned(read,s.root,s.widget,0,&budget))return 0;
+    *out=s;return 1;
+}
+static uint64_t pc_skill_trace(module_t *m,uint64_t root,uint64_t widget,int stage,int phase,uint64_t action,int result) {
+    const char *env=getenv("DM_MAC_POINTER_LOG");
+    if(!env||!*env||stage<0||stage>2||g_pc_skill_trace.total>=16||g_pc_skill_trace.stage[stage]>=(stage==0?8:4))return 0;
+    pc_skill_trace_snapshot s;if(!pc_skill_trace_capture(1,dm_ui_pc_desktop(),m,root,widget,pc_tooltip_read,&s))return 0;
+    uint64_t fields[]={s.root,s.widget,s.hover,s.selected,(uint32_t)s.side,(uint32_t)s.skill,(uint32_t)s.assoc,(uint32_t)s.binding,(uint32_t)phase,action,(uint32_t)result,atomic_load(&g_pc_tabbar_epoch)};
+    uint64_t signature=14695981039346656037ull;for(unsigned i=0;i<sizeof fields/sizeof *fields;i++)signature=(signature^fields[i])*1099511628211ull;
+    if(pc_skill_trace_take(&g_pc_skill_trace,stage,signature))LOG("PC_SKILL %u frame=%llu stage=%s phase=%d action=%#llx result=%d root=%#llx self=%#llx hover=%#llx selected=%#llx side=%d b08=%d b0c=%d b18=%d f0=%u ec=%u epoch=%u gen=%u xy=%d,%d",g_pc_skill_trace.total,(unsigned long long)dm_guest_frame(),stage==0?"mouse":stage==1?"C0":"HUD",phase,(unsigned long long)action,result,(unsigned long long)s.root,(unsigned long long)s.widget,(unsigned long long)s.hover,(unsigned long long)s.selected,s.side,s.skill,s.assoc,s.binding,s.f0,s.ec,atomic_load(&g_pc_tabbar_epoch),atomic_load(&g_ui_gen),g_pc_pointer_hover.x,g_pc_pointer_hover.y);
+    return s.widget;
+}
+typedef struct {uint64_t root,widget;pc_pointer_hover_state pointer;} pc_skill_pointer_watch;
+static pc_skill_pointer_watch g_pc_skill_watch;
+static void pc_skill_pointer_watch_update(int enabled,int desktop,module_t *m,uint64_t root,pc_tooltip_reader read) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!read)return;
+    g_pc_skill_watch=(pc_skill_pointer_watch){0};uint64_t current,manager,widget,vt;
+    if(!g_pc_pointer_hover.valid||g_pc_pointer_hover.root!=root||!pc_tooltip_field(read,(uint64_t)m->base,0x2f05458,&current,8)||current!=root||
+       !pc_tooltip_field(read,root,0xd0,&manager,8)||!pc_tooltip_field(read,manager,0x178,&widget,8)||
+       !pc_tooltip_field(read,widget,0,&vt,8)||vt!=(uint64_t)m->base+0x208a5f8)return;
+    g_pc_skill_watch=(pc_skill_pointer_watch){root,widget,g_pc_pointer_hover};
+}
+static uint64_t pc_skill_pointer_watch_take(uint64_t root) {
+    pc_pointer_hover_state p=g_pc_skill_watch.pointer;
+    return g_pc_skill_watch.root==root&&p.valid&&g_pc_pointer_hover.valid&&p.generation==atomic_load(&g_ui_gen)&&p.epoch==atomic_load(&g_pc_tabbar_epoch)&&
+        p.root==g_pc_pointer_hover.root&&p.x==g_pc_pointer_hover.x&&p.y==g_pc_pointer_hover.y&&p.generation==g_pc_pointer_hover.generation&&p.epoch==g_pc_pointer_hover.epoch?g_pc_skill_watch.widget:0;
+}
+static uint64_t pc_skill_pointer_trace(module_t *m,uint64_t root,uint64_t act,int phase,uint64_t widget) {
+    const char *env=getenv("DM_MAC_POINTER_LOG");if(!env||!*env||g_pc_skill_trace.total>=16||g_pc_skill_trace.stage[0]>=8)return 0;
+    if(act==ui_hash("MouseMove")||act==ui_hash("LeftMouseButtonDown")){if(phase)pc_skill_pointer_watch_update(1,dm_ui_pc_desktop(),m,root,pc_tooltip_read);return 0;}
+    if(act!=ui_hash("LeftMouseButtonUp"))return 0;
+    if(!widget)widget=pc_skill_pointer_watch_take(root);
+    return pc_skill_trace(m,root,widget,0,phase,act,-1);
+}
+void dm_ui_pc_skill_click(uint64_t *regs) {
+    if(!regs||!dm_ui_pc_desktop())return;module_t *m=main_module();if(!pc_skill_widget_abi(m))return;
+    pc_skill_widget_api api={(void(*)(uint64_t,uint64_t,const int*))(m->base+0x3703ec),(int(*)(int,int))(m->base+0x459ad0),(int(*)(int,int,int))(m->base+0x43f170),(void(*)(int,int))(m->base+0x454f40)};
+    pc_skill_trace(m,0,regs[0],1,0,0,-1);
+    pc_skill_click_route(m,regs[0],1,pc_tooltip_read,&api);
+}
+int dm_ui_pc_skill_hud(uint64_t *regs) {
+    if(!regs||!dm_ui_pc_desktop())return 0;module_t *m=main_module();
+    int result=pc_skill_hud_route(m,regs,1,pc_tooltip_read);pc_skill_trace(m,0,regs[19],2,0,0,result);return result;
+}
+
+typedef struct {pc_skill_widget widget;uint64_t container,node;uint32_t player_id;int level,found,xy[2];uint8_t active,f0,ec;} pc_skill_clear_snapshot;
+typedef struct {unsigned attempts,emitted;} pc_skill_clear_state;
+static pc_skill_clear_state g_pc_skill_clear;
+static int pc_skill_clear_node(pc_tooltip_reader read,uint64_t player,int skill,int assoc,uint64_t *found,int *level) {
+    uint64_t list,node;if(!pc_tooltip_field(read,player,0x100,&list,8)||!pc_tooltip_field(read,list,0,&node,8))return -1;
+    for(unsigned i=0;node&&i<512;i++){
+        uint64_t record,next;int16_t id;int association;
+        if(!pc_tooltip_field(read,node,0,&record,8)||!pc_tooltip_field(read,record,0,&id,2)||!pc_tooltip_field(read,node,0x44,&association,4))return -1;
+        if(id==skill&&association==assoc){if(!pc_tooltip_field(read,node,0x38,level,4))return -1;*found=node;return 1;}
+        if(!pc_tooltip_field(read,node,8,&next,8)||next==node)return -1;node=next;
+    }
+    return node?-1:0;
+}
+static int pc_skill_clear_collect(int enabled,int desktop,module_t *m,const uint64_t *regs,pc_tooltip_reader read,pc_skill_clear_state *state,pc_skill_clear_snapshot *out) {
+    if(!enabled||!desktop||!m||!m->base||m->size<0x2f05460||!regs||!read||!state||!out||state->attempts>=6)return 0;
+    uint64_t vt;int side,skill;
+    if(!pc_tooltip_field(read,regs[0],0,&vt,8)||vt!=(uint64_t)m->base+0x208a5f8||!pc_tooltip_field(read,regs[0],0xa88,&side,4)||side||
+       !pc_tooltip_field(read,regs[0],0xb08,&skill,4)||skill<0||skill>INT16_MAX)return 0;
+    // Limita también los fallos caros: la clase/side ajena sólo usa el preflight.
+    state->attempts++;pc_skill_clear_snapshot s={.level=-1};pc_pointer_hover_state pointer=g_pc_pointer_hover;
+    if(!pc_grid_hover_abi(m)||!pc_skill_widget_context(m,regs[0],1,0,read,&s.widget)||s.widget.skill!=skill||s.widget.manager!=regs[19]||s.widget.hover!=regs[0]||
+       !pointer.valid||pointer.root!=s.widget.root||pointer.generation!=s.widget.generation||pointer.epoch!=s.widget.epoch||
+       !g_pc_options_open.pointer||g_pc_options_open.input_epoch!=pointer.epoch||
+       !pc_tooltip_field(read,s.widget.manager,0x170,&s.container,8)||s.container!=regs[20]||!pc_tooltip_field(read,s.widget.manager,0x168,&s.active,1)||
+       !pc_tooltip_field(read,(uint64_t)m->base,0x2d128f0,&s.f0,1)||!pc_tooltip_field(read,(uint64_t)m->base,0x2d128ec,&s.ec,1)||
+       !pc_tooltip_field(read,(uint64_t)m->base,0x2d128f8,s.xy,sizeof s.xy)||s.xy[0]!=pointer.x||s.xy[1]!=pointer.y||
+       !pc_tooltip_field(read,s.widget.player,8,&s.player_id,4))return 0;
+    s.found=pc_skill_clear_node(read,s.widget.player,s.widget.skill,s.widget.assoc,&s.node,&s.level);if(s.found<0)return 0;
+    pc_skill_widget current;
+    if(!pc_skill_widget_context(m,regs[0],1,0,read,&current)||current.root!=s.widget.root||current.manager!=s.widget.manager||current.player!=s.widget.player||
+       current.hover!=s.widget.hover||current.selected!=s.widget.selected||current.skill!=s.widget.skill||current.assoc!=s.widget.assoc||
+       current.generation!=s.widget.generation||current.epoch!=s.widget.epoch||!g_pc_pointer_hover.valid||g_pc_pointer_hover.root!=pointer.root||
+       g_pc_pointer_hover.x!=pointer.x||g_pc_pointer_hover.y!=pointer.y||g_pc_pointer_hover.generation!=pointer.generation||g_pc_pointer_hover.epoch!=pointer.epoch)return 0;
+    *out=s;state->emitted++;return 1;
+}
+static void pc_skill_clear_trace(const uint64_t *regs) {
+    const char *env=getenv("DM_MAC_POINTER_LOG");if(!env||!*env||g_pc_skill_clear.attempts>=6)return;
+    pc_skill_clear_snapshot s;
+    if(!pc_skill_clear_collect(1,dm_ui_pc_desktop(),main_module(),regs,pc_tooltip_read,&g_pc_skill_clear,&s))return;
+    LOG("PC_SKILL_CLEAR %u attempt=%u frame=%llu self=%#llx root=%#llx fm=%#llx container=%#llx hover=%#llx selected=%#llx active=%u f0=%u ec=%u side=%d skill=%d assoc=%d player=%#llx playerId=%u nodeFound=%d node=%#llx levelBase=%d xy=%d,%d epoch=%u gen=%u originalClear=1",g_pc_skill_clear.emitted,g_pc_skill_clear.attempts,(unsigned long long)dm_guest_frame(),(unsigned long long)s.widget.widget,(unsigned long long)s.widget.root,(unsigned long long)s.widget.manager,(unsigned long long)s.container,(unsigned long long)s.widget.hover,(unsigned long long)s.widget.selected,s.active,s.f0,s.ec,s.widget.side,s.widget.skill,s.widget.assoc,(unsigned long long)s.widget.player,s.player_id,s.found,(unsigned long long)s.node,s.level,s.xy[0],s.xy[1],s.widget.epoch,s.widget.generation);
+}
+
+typedef struct {uint64_t root,panel,player,model,records,count;int side;uint32_t index;} pc_skill_filter_context;
+static int pc_skill_filter_abi(module_t *m) {
+    static const struct {size_t at;uint32_t code[4];} e[]={
+        {0xc065a8,{0x7100057f,0x54000061,0x39409d0b,0x363007eb}},
+        {0xc066b0,{0xf85203a8,0xb4000fc8,0xf9400514,0xf81203b4}},
+        {0xc068c8,{0x52802ca8,0xd10383a1,0xf900073f,0xaa1903e0}},
+        {0xc068e4,{0xf900373f,0xf900433f,0xf9004f3f,0xb81203a8}},
+        {0xc068f8,{0x52802cc8,0xd10383a1,0xb81203a8,0xaa1903e0}},
+        {0xc0690c,{0x52802e48,0xd10383a1,0xb81203a8,0xaa1903e0}},
+        {0xc08cc8,{0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd}}
+    };
+    static const uint32_t frame[]={0x6db923e9,0xa9016ffc,0xa90267fa,0xa9035ff8,0xa90457f6,0xa9054ff4,0xa9067bfd,0x910183fd,0xd10683ff};
+    static const uint32_t exclusions[]={0x3940910b,0x372007ab};
+    static const uint32_t producer[]={0xf94082c8,0xb90087f3,0xb4001e48,0xf9400114};
+    static const uint32_t left[]={0x39409d08,0x53061908,0x35fffd48},right[]={0x3940a108,0x53077d08,0x35fffc68};
+    if(!m||!m->base||m->size<0x2f12d38)return 0;
+    for(unsigned i=0;i<sizeof e/sizeof *e;i++)if(memcmp(m->base+e[i].at,e[i].code,sizeof e[i].code))return 0;
+    return !memcmp(m->base+0xc06378,frame,sizeof frame)&&!memcmp(m->base+0xc064dc,producer,sizeof producer)&&!memcmp(m->base+0xc065b8,exclusions,sizeof exclusions)&&
+        !memcmp(m->base+0x6db98c,left,sizeof left)&&!memcmp(m->base+0x6db9a8,right,sizeof right);
+}
+static int pc_skill_filter_capture(module_t *m,const uint64_t *regs,pc_tooltip_reader read,pc_skill_filter_context *out) {
+    uint64_t base=(uint64_t)m->base,vt,table;uint8_t ingame,kind;char name[96];pc_skill_filter_context s={.panel=regs[23]};int model_side;
+    if(regs[29]<0x117c||!pc_tooltip_field(read,regs[29]-0x17c,0,&s.side,4)||(s.side!=1&&s.side!=2)||
+       !pc_tooltip_field(read,base,0x2f05458,&s.root,8)||!pc_tooltip_field(read,s.root,0xd9,&ingame,1)||!ingame||
+       !pc_tooltip_field(read,s.panel,0,&vt,8)||vt!=base+0x20c5480||!pc_tooltip_name(read,s.panel,name)||strcmp(name,"SkillSelect"))return 0;
+    // OnOpen puede poblar un panel todavía oculto; su propiedad basta, no el foco.
+    unsigned budget=2048;if(!pc_tooltip_owned(read,s.root,s.panel,0,&budget)||!pc_skill_side_model(read,base,&s.model,&model_side)||model_side!=s.side||
+       !pc_tooltip_field(read,base,0x2d20e4c,&s.index,4))return 0;
+    s.player=pc_tooltip_local_player(read,base,s.index);
+    if(!s.player||!pc_tooltip_field(read,s.player,0x1bd,&kind,1)||kind<1||kind>4||
+       !pc_tooltip_field(read,base,0x2d64a18+16*kind,&table,8)||!pc_tooltip_field(read,table,0x11e8,&s.records,8)||
+       !pc_tooltip_field(read,table,0x11f0,&s.count,8)||!s.count||s.count>1048576||s.records<0x1000||s.records>UINT64_MAX-s.count*0x2ec)return 0;
+    uint64_t current_root;uint32_t current_index;
+    if(!pc_tooltip_field(read,base,0x2f05458,&current_root,8)||current_root!=s.root||
+       !pc_tooltip_field(read,base,0x2d20e4c,&current_index,4)||current_index!=s.index||pc_tooltip_local_player(read,base,current_index)!=s.player)return 0;
+    *out=s;return 1;
+}
+static int pc_skill_filter_record(pc_tooltip_reader read,const pc_skill_filter_context *c,int id,uint64_t *record,int *allowed) {
+    int16_t stored;uint8_t flag;
+    if(id<0||id>INT16_MAX||(uint64_t)id>=c->count)return 0;
+    *record=c->records+(uint64_t)id*0x2ec;
+    if(!pc_tooltip_field(read,*record,0,&stored,2)||stored!=id||!pc_tooltip_field(read,*record,c->side==1?0x27:0x28,&flag,1))return 0;
+    *allowed=!!(flag&(c->side==1?0x40:0x80));return 1;
+}
+static int pc_skill_filter_node(pc_tooltip_reader read,uint64_t player,uint64_t wanted) {
+    uint64_t list,node;if(!wanted||!pc_tooltip_field(read,player,0x100,&list,8)||!pc_tooltip_field(read,list,0,&node,8))return 0;
+    for(unsigned i=0;node&&i<512;i++){if(node==wanted)return 1;uint64_t next;if(!pc_tooltip_field(read,node,8,&next,8)||next==node)return 0;node=next;}return 0;
+}
+static int pc_skill_filter_route(module_t *m,const uint64_t *regs,int desktop,int common,pc_tooltip_reader read) {
+    if(!desktop||!regs||!read||!pc_skill_filter_abi(m))return 0;
+    pc_skill_filter_context c,check;if(!pc_skill_filter_capture(m,regs,read,&c))return 0;
+    int id,allowed;uint64_t record;
+    if(common){
+        if(regs[0]!=(uint64_t)m->base+0x2f12d20||regs[25]!=regs[0]||regs[29]<0x10e0||regs[1]!=regs[29]-0xe0||
+           !pc_tooltip_field(read,regs[1],0,&id,4)||(uint32_t)id!=regs[8])return 0;
+    }else{
+        int16_t stored;uint64_t native_record;
+        if(!pc_skill_filter_node(read,c.player,regs[20])||!pc_tooltip_field(read,regs[20],0,&native_record,8)||native_record!=regs[8]||
+           !pc_tooltip_field(read,native_record,0,&stored,2))return 0;
+        id=stored;
+    }
+    if(!pc_skill_filter_record(read,&c,id,&record,&allowed)||(!common&&record!=regs[8])||allowed||
+       !pc_skill_filter_capture(m,regs,read,&check)||check.root!=c.root||check.panel!=c.panel||check.player!=c.player||check.index!=c.index||
+       check.model!=c.model||check.side!=c.side||check.records!=c.records||check.count!=c.count)return 0;
+    uint64_t current_record;int current_allowed;
+    if(!pc_skill_filter_record(read,&check,id,&current_record,&current_allowed)||current_record!=record||current_allowed)return 0;
+    if(common){int current_id;if(!pc_tooltip_field(read,regs[1],0,&current_id,4)||current_id!=id)return 0;}
+    else {uint64_t current_node;if(!pc_skill_filter_node(read,c.player,regs[20])||!pc_tooltip_field(read,regs[20],0,&current_node,8)||current_node!=record)return 0;}
+    return pc_skill_filter_capture(m,regs,read,&check)&&check.root==c.root&&check.player==c.player&&check.index==c.index&&check.model==c.model&&
+        check.side==c.side&&check.records==c.records&&check.count==c.count;
+}
+int dm_ui_pc_skill_candidate(uint64_t *regs) {return pc_skill_filter_route(main_module(),regs,dm_ui_pc_desktop(),0,pc_tooltip_read);}
+int dm_ui_pc_skill_common(uint64_t *regs) {return pc_skill_filter_route(main_module(),regs,dm_ui_pc_desktop(),1,pc_tooltip_read);}
+
+typedef struct {pc_skill_widget widget;pc_pointer_hover_state pointer;uint64_t container,inventory,model,node,record,records,count;uint32_t index;int model_side;} pc_skill_hover_snapshot;
+static int pc_skill_hover_capture(module_t *m,const uint64_t *regs,int desktop,pc_tooltip_reader read,pc_skill_hover_snapshot *out) {
+    int dm_padmode_busy(void);
+    if(!desktop||!regs||!read||!out||!pc_grid_hover_abi(m))return 0;
+    pc_skill_hover_snapshot s={0};uint64_t base=(uint64_t)m->base;uint8_t f0,ec,kind;uint64_t held,table;int allowed;
+    if(!pc_skill_widget_context(m,regs[0],desktop,0,read,&s.widget)||s.widget.side||s.widget.skill<0||s.widget.skill>INT16_MAX||
+       s.widget.manager!=regs[19]||s.widget.hover!=regs[0])return 0;
+    s.pointer=g_pc_pointer_hover;
+    if(!s.pointer.valid||s.pointer.root!=s.widget.root||s.pointer.generation!=s.widget.generation||s.pointer.epoch!=s.widget.epoch||
+       !g_pc_options_open.pointer||g_pc_options_open.input_epoch!=s.pointer.epoch)return 0;
+    int xy[2];unsigned budget=2048;
+    if(!pc_tooltip_field(read,base,0x2d128f8,xy,sizeof xy)||xy[0]!=s.pointer.x||xy[1]!=s.pointer.y||
+       !pc_tooltip_field(read,base,0x2d128f0,&f0,1)||f0||!pc_tooltip_field(read,base,0x2d128ec,&ec,1)||ec||
+       !pc_tooltip_field(read,s.widget.manager,0x170,&s.container,8)||s.container!=regs[20]||
+       (s.container&&(!pc_tooltip_owned(read,s.widget.root,s.container,0,&budget)||!pc_grid_hover_ancestors(s.widget.root,s.container,read)))||
+       !pc_skill_side_model(read,base,&s.model,&s.model_side)||(s.model_side!=1&&s.model_side!=2)||
+       !pc_tooltip_field(read,base,0x2d20e4c,&s.index,4)||pc_tooltip_local_player(read,base,s.index)!=s.widget.player||
+       !pc_tooltip_field(read,s.widget.player,0x1bd,&kind,1)||kind<1||kind>4||
+       !pc_tooltip_field(read,base,0x2d64a18+16*kind,&table,8)||!pc_tooltip_field(read,table,0x11e8,&s.records,8)||
+       !pc_tooltip_field(read,table,0x11f0,&s.count,8)||!s.count||s.count>1048576||s.records<0x1000||s.records>UINT64_MAX-s.count*0x2ec)return 0;
+    pc_skill_filter_context capability={.side=s.model_side,.records=s.records,.count=s.count};uint64_t node_record;int base_level;
+    // El nivel base 0 es legítimo para habilidades concedidas por equipo; Draw calcula su bonificación.
+    if(!pc_skill_filter_record(read,&capability,s.widget.skill,&s.record,&allowed)||!allowed||
+       pc_skill_clear_node(read,s.widget.player,s.widget.skill,s.widget.assoc,&s.node,&base_level)!=1||
+       !pc_tooltip_field(read,s.node,0,&node_record,8)||node_record!=s.record||
+       !(s.inventory=pc_tooltip_inventory(read,s.widget.player))||!pc_tooltip_field(read,s.inventory,0x40,&held,8)||held)return 0;
+    uint64_t root,manager,hover;uint32_t index;
+    if(!pc_tooltip_field(read,base,0x2f05458,&root,8)||root!=s.widget.root||!pc_tooltip_field(read,root,0xd0,&manager,8)||manager!=s.widget.manager||
+       !pc_tooltip_field(read,manager,0x178,&hover,8)||hover!=s.widget.widget||!pc_tooltip_field(read,base,0x2d20e4c,&index,4)||index!=s.index||
+       pc_tooltip_local_player(read,base,index)!=s.widget.player||!pc_tooltip_field(read,base,0x2d128f8,xy,sizeof xy)||xy[0]!=s.pointer.x||xy[1]!=s.pointer.y||
+       !pc_tooltip_field(read,base,0x2d128f0,&f0,1)||f0||!pc_tooltip_field(read,base,0x2d128ec,&ec,1)||ec)return 0;
+    if(!dm_uiscreen_ingame()||dm_padmode_busy()||atomic_load(&g_load_up)>0||!pc_options_event_allowed()||
+       s.widget.generation!=atomic_load(&g_ui_gen)||s.widget.epoch!=atomic_load(&g_pc_tabbar_epoch)||
+       !g_pc_options_open.pointer||g_pc_options_open.input_epoch!=s.pointer.epoch||!g_pc_pointer_hover.valid||g_pc_pointer_hover.root!=s.pointer.root||
+       g_pc_pointer_hover.x!=s.pointer.x||g_pc_pointer_hover.y!=s.pointer.y||g_pc_pointer_hover.generation!=s.pointer.generation||g_pc_pointer_hover.epoch!=s.pointer.epoch)return 0;
+    *out=s;return 1;
+}
+static int pc_skill_hover_route(module_t *m,const uint64_t *regs,int desktop,pc_tooltip_reader read) {
+    pc_skill_hover_snapshot s,check;
+    if(!pc_skill_hover_capture(m,regs,desktop,read,&s)||!pc_skill_hover_capture(m,regs,desktop,read,&check))return 0;
+    return check.widget.root==s.widget.root&&check.widget.manager==s.widget.manager&&check.widget.player==s.widget.player&&
+        check.widget.hover==s.widget.hover&&check.widget.selected==s.widget.selected&&check.widget.skill==s.widget.skill&&check.widget.assoc==s.widget.assoc&&
+        check.widget.generation==s.widget.generation&&check.widget.epoch==s.widget.epoch&&check.container==s.container&&check.inventory==s.inventory&&
+        check.model==s.model&&check.model_side==s.model_side&&check.index==s.index&&check.node==s.node&&check.record==s.record&&check.records==s.records&&check.count==s.count&&
+        check.pointer.x==s.pointer.x&&check.pointer.y==s.pointer.y;
+}
+
+static int pc_item_left_route(module_t *m,uint64_t root,uint64_t widget,const uint64_t *message,int desktop,const pc_item_left_api *api) {
+    int dm_padmode_busy(void);
+    if(!desktop||!pc_options_event_allowed()||!pc_item_left_abi(m)||!root||!widget||!message||!api||!api->hit||!api->cell||!api->accept||!api->activate||!api->live)return 0;
+    if(message[0]!=ui_hash("InputMessage")||message[1]!=ui_hash("LeftMouseButtonDown")||!message[2]||*(uint64_t*)(m->base+0x2f05458)!=root)return 0;
+    if(!dm_uiscreen_ingame()||!*(uint8_t*)(root+0xd9)||atomic_load(&g_load_up)||dm_padmode_busy()||*(uint8_t*)(root+0xb8)||!ui_has(root,widget,0))return 0;
+    if(!*(uint8_t*)(widget+0x50)||!*(uint8_t*)(widget+0x51))return 0;
+    uint64_t manager=*(uint64_t*)(root+0xd0);if(!manager||!ui_has(root,manager,0)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88||*(uint64_t*)(manager+0x178)!=widget)return 0;
+    if(!api->live(m,widget)||!pc_item_context(m,root,widget))return 0;
+    uint64_t xy;memcpy(&xy,(const uint8_t*)(uintptr_t)message[2]+4,8);
+    if(!(api->hit(widget,xy)&1)||!pc_item_context(m,root,widget))return 0;
+    uint64_t cell=api->cell(widget,xy);if(cell==UINT64_MAX||!pc_item_context(m,root,widget)||!(api->accept(widget,cell)&1))return 0;
+    if(!pc_options_event_allowed()||*(uint64_t*)(m->base+0x2f05458)!=root||!ui_has(root,widget,0)||*(uint8_t*)(root+0xb8))return 0;
+    manager=*(uint64_t*)(root+0xd0);if(!manager||!ui_has(root,manager,0)||*(uint64_t*)(manager+0x178)!=widget)return 0;
+    if(!api->live(m,widget)||!pc_item_context(m,root,widget))return 0;
+    // El handler común ya tipó self como familia ItemSlot; F8 conserva su política de dominio por clase.
+    if(api->modified&&api->modified(m,widget,cell,0,g_pc_options_event_scope.modifiers))return 1;
+    if(!pc_item_context(m,root,widget))return 0;
+    if(api->remember)api->remember(m,root,widget,cell,xy);
+    if(!pc_item_context(m,root,widget))return 0;
+    if(api->remember)pc_item_trace("primary",widget,cell,g_pc_options_event_scope.modifiers);
+    api->activate(widget,cell);return 1;
+}
+static int pc_item_left_functions(module_t *m,uint64_t widget,pc_item_left_api *api) {
+    if(!m||!m->base||!widget||!api)return 0;
+    uint64_t base=(uint64_t)m->base,vt=*(uint64_t*)widget;
+    if(vt<base||vt-base>m->size||m->size-(vt-base)<0x100)return 0;
+    uint64_t fn[4]={*(uint64_t*)(vt+0x48),*(uint64_t*)(vt+0x98),*(uint64_t*)(vt+0x90),*(uint64_t*)(vt+0xf8)};
+    for(unsigned i=0;i<4;i++)if(fn[i]<base||fn[i]-base>=m->text_end)return 0;
+    *api=(pc_item_left_api){(int(*)(uint64_t,uint64_t))fn[0],(uint64_t(*)(uint64_t,uint64_t))fn[1],(int(*)(uint64_t,uint64_t))fn[2],(void(*)(uint64_t,uint64_t))fn[3],pc_item_native_live,pc_item_modifier,pc_item_remember};return 1;
+}
+void dm_ui_pc_item_left(uint64_t *regs) {
+    module_t *m=main_module();uint64_t widget=regs[20],root=pc_item_left_abi(m)?*(uint64_t*)(m->base+0x2f05458):0;pc_item_left_api api;
+    regs[8]=0;
+    if(!dm_ui_pc_desktop()||!root||!widget||!ui_has(root,widget,0)||!pc_item_left_functions(m,widget,&api))return;
+    regs[8]=pc_item_left_route(m,root,widget,(const uint64_t*)(uintptr_t)regs[22],1,&api);
+}
+static int pc_item_right_route(module_t *m,uint64_t root,uint64_t widget,const uint64_t *message,uint64_t cell,int desktop,const pc_item_left_api *api) {
+    if(!desktop||!pc_options_event_allowed()||!(g_pc_options_event_scope.modifiers&0x1000)||!pc_item_left_abi(m)||!root||!widget||!message||!api||!api->modified||!api->live||!api->hit||!api->accept)return 0;
+    if(*(uint64_t*)(m->base+0x2f05458)!=root||!ui_has(root,widget,0)||message[0]!=ui_hash("InputMessage")||message[1]!=ui_hash("RightMouseButtonDown")||!message[2]||cell==UINT64_MAX)return 0;
+    if(!dm_uiscreen_ingame()||!*(uint8_t*)(root+0xd9)||atomic_load(&g_load_up)||*(uint8_t*)(root+0xb8)||!*(uint8_t*)(widget+0x50)||!*(uint8_t*)(widget+0x51))return 0;
+    uint64_t manager=*(uint64_t*)(root+0xd0);if(!manager||!ui_has(root,manager,0)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88||*(uint64_t*)(manager+0x178)!=widget)return 0;
+    if(!api->live(m,widget)||!pc_item_context(m,root,widget))return 0;
+    uint64_t xy;memcpy(&xy,(const uint8_t*)(uintptr_t)message[2]+4,8);
+    if(!(api->hit(widget,xy)&1)||!pc_item_context(m,root,widget)||!(api->accept(widget,cell)&1)||!pc_item_context(m,root,widget))return 0;
+    if(*(uint64_t*)(m->base+0x2f05458)!=root||!ui_has(root,widget,0)||*(uint8_t*)(root+0xb8))return 0;
+    manager=*(uint64_t*)(root+0xd0);if(!manager||!ui_has(root,manager,0)||*(uint64_t*)(manager+0x178)!=widget)return 0;
+    return api->modified(m,widget,cell,1,g_pc_options_event_scope.modifiers);
+}
+void dm_ui_pc_item_right(uint64_t *regs) {
+    module_t *m=main_module();uint64_t widget=regs[20],cell=regs[1],root=pc_item_left_abi(m)?*(uint64_t*)(m->base+0x2f05458):0;
+    regs[8]=0;pc_item_left_api api;
+    if(dm_ui_pc_desktop()&&root&&widget&&ui_has(root,widget,0)&&pc_item_left_functions(m,widget,&api))regs[8]=pc_item_right_route(m,root,widget,(const uint64_t*)(uintptr_t)regs[22],cell,1,&api);
+}
+static int pc_held_draw_abi(module_t *m) {
+    static const uint32_t draw[]={0xd104c3ff,0xa90d6ffc,0xa90e67fa,0xa90f5ff8},item[]={0xd10403ff,0xfd005be8,0xa90c5ff8,0xa90d57f6},project[]={0xf000f6e8,0x9128e108,0x2d400500,0xf0016628},before[]={0xb40000a0,0x97e34dc6,0x14000004};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0xabcf34,draw,sizeof draw)&&!memcmp(m->base+0x2ab480,item,sizeof item)&&!memcmp(m->base+0xabd41c,before,sizeof before)&&!memcmp(m->base+0x23e760,project,sizeof project);
+}
+static int pc_held_pointer_point(module_t *m,uint64_t root,const pc_held_pointer_state *state,uint64_t *point,int desktop) {
+    int dm_padmode_busy(void);
+    if(!desktop||!state||!state->valid||!point||!pc_held_draw_abi(m)||!root||state->root!=root||*(uint64_t*)(m->base+0x2f05458)!=root||state->epoch!=atomic_load(&g_pc_tabbar_epoch)||state->generation!=atomic_load(&g_ui_gen))return 0;
+    if(!dm_uiscreen_ingame()||!*(uint8_t*)(root+0xd9)||atomic_load(&g_load_up)||dm_padmode_busy())return 0;
+    uint64_t manager=*(uint64_t*)(root+0xd0),held=*(uint64_t*)(m->base+0x2d12920);if(!manager||!ui_has(root,manager,0)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88||!held||*(uint32_t*)held!=4)return 0;
+    int hd=*(uint8_t*)(root+0xb9)!=0,width=*(int32_t*)(m->base+0x211da38),height=*(int32_t*)(m->base+0x211da3c),geometry[6];
+    if(!hd&&(state->classic_width<=0||state->classic_height<=0||state->classic_width!=*(int32_t*)(m->base+0x2080c08)||state->classic_height!=*(int32_t*)(m->base+0x2080c0c)))return 0;
+    if(hd!=state->hd||width!=state->width||height!=state->height||!pc_held_geometry(geometry)||memcmp(geometry,state->geometry,sizeof geometry)||!pc_real_point(state->nx,state->ny,geometry[0],geometry[1],geometry[2],geometry[3],geometry[4],geometry[5]))return 0;
+    double x=(double)state->nx*width,y=(double)state->ny*height;if(x<INT32_MIN||x>INT32_MAX||y<INT32_MIN||y>INT32_MAX)return 0;
+    if(state->epoch!=atomic_load(&g_pc_tabbar_epoch)||state->generation!=atomic_load(&g_ui_gen)||*(uint64_t*)(m->base+0x2f05458)!=root)return 0;
+    *point=(uint32_t)(int32_t)x|((uint64_t)(uint32_t)(int32_t)y<<32);return 1;
+}
+static int pc_held_draw_point(module_t *m,uint64_t root,const pc_held_pointer_state *state,uint64_t *point,int desktop,uint64_t (*project)(uint64_t)) {
+    uint64_t xy;if(!pc_held_pointer_point(m,root,state,&xy,desktop))return 0;
+    if(!state->hd){if(!project)return 0;xy=project(xy);}
+    if(state->epoch!=atomic_load(&g_pc_tabbar_epoch)||state->generation!=atomic_load(&g_ui_gen)||*(uint64_t*)(m->base+0x2f05458)!=root)return 0;
+    *point=xy;return 1;
+}
+void dm_ui_pc_held_draw(uint64_t *regs) {
+    module_t *m=main_module();uint64_t root=pc_held_draw_abi(m)?*(uint64_t*)(m->base+0x2f05458):0,point;
+    pc_held_pointer_state state;pthread_mutex_lock(&g_pc_held_pointer_lock);state=g_pc_held_pointer;pthread_mutex_unlock(&g_pc_held_pointer_lock);
+    if(pc_held_draw_point(m,root,&state,&point,dm_ui_pc_desktop(),root?(uint64_t(*)(uint64_t))(m->base+0x23e760):NULL))regs[0]=point;
+}
+static int pc_npc_click_abi(module_t *m) {
+    static const uint32_t panel[]={0xd10103ff,0xa90157f6,0xa9024ff4,0xa9037bfd},hit[]={0xf9400268,0xf9402508,0xd63f0100},children[]={0x39414268,0x34000968,0xf9403269,0xb4000929},row[]={0xa9bd57f6,0xa9014ff4,0xa9027bfd,0x910083fd};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0x3dadc8,panel,sizeof panel)&&!memcmp(m->base+0x3db0a8,hit,sizeof hit)&&!memcmp(m->base+0x3db198,children,sizeof children)&&!memcmp(m->base+0xaca6e8,row,sizeof row);
+}
+static int pc_npc_click_guard(module_t *m,uint64_t root,uint64_t panel,const uint64_t *message,int inside,int desktop) {
+    int dm_padmode_busy(void);
+    if(!desktop||!(inside&1)||!pc_options_event_allowed()||!pc_npc_click_abi(m)||!root||!panel||!message||*(uint64_t*)(m->base+0x2f05458)!=root)return 0;
+    if(message[0]!=ui_hash("InputMessage")||message[1]!=ui_hash("LeftMouseButtonDown")||!message[2]||*(uint8_t*)(root+0xb8)||!dm_uiscreen_ingame()||!*(uint8_t*)(root+0xd9)||atomic_load(&g_load_up)||dm_padmode_busy())return 0;
+    if(!ui_has(root,panel,0)||*(uint64_t*)panel!=(uint64_t)m->base+0x208a2b0||!*(uint8_t*)(panel+0x50)||!*(uint8_t*)(panel+0x51))return 0;
+    uint64_t manager=*(uint64_t*)(root+0xd0);if(!manager||!ui_has(root,manager,0)||*(uint64_t*)manager!=(uint64_t)m->base+0x20b7f88)return 0;
+    uint64_t row=*(uint64_t*)(manager+0x178);if(!row||!ui_has(panel,row,0)||*(uint64_t*)row!=(uint64_t)m->base+0x20b84d0||!*(uint8_t*)(row+0x50)||!*(uint8_t*)(row+0x51))return 0;
+    uint64_t list=*(uint64_t*)(panel+0x248),callback=*(uint64_t*)(row+0x568);
+    if(!list||!ui_has(panel,list,0)||!ui_has(list,row,0)||*(uint64_t*)(row+0x598)!=list||!callback)return 0;
+    // Sólo las filas con acción nativa pasan a los hijos; el fondo conserva el consumo modal original.
+    return *(uint64_t*)callback==ui_hash("DialogMessage")&&*(uint64_t*)(callback+8)==ui_hash("ListItemClicked");
+}
+void dm_ui_pc_npc_click(uint64_t *regs) {
+    module_t *m=main_module();uint64_t root=pc_npc_click_abi(m)?*(uint64_t*)(m->base+0x2f05458):0;
+    int bridge=pc_npc_click_guard(m,root,regs[19],(const uint64_t*)(uintptr_t)regs[20],(int)regs[0],dm_ui_pc_desktop());
+    static unsigned traced;static int trace_enabled=-1;if(trace_enabled<0){const char *enabled=getenv("DM_MAC_POINTER_LOG");trace_enabled=enabled&&*enabled;}if(trace_enabled&&traced<24&&root){
+        uint64_t panel=regs[19],manager=*(uint64_t*)(root+0xd0),row=0,callback=0,list=0,vt=0;unsigned clickmode=0;int index=-1;
+        if(manager&&ui_has(root,manager,0)&&*(uint64_t*)manager==(uint64_t)m->base+0x20b7f88)row=*(uint64_t*)(manager+0x178);
+        if(row&&ui_has(root,row,0)){vt=*(uint64_t*)row;if(vt==(uint64_t)m->base+0x20b84d0){callback=*(uint64_t*)(row+0x568);clickmode=*(uint8_t*)(row+0x558);index=*(int32_t*)(row+0x55c);list=*(uint64_t*)(row+0x598);}}
+        traced++;LOG("PC_NPC_CLICK %u children=%d inside=%u b8=%u panel=%#llx hover=%#llx vt=%#llx callback568=%#llx mode558=%u row=%d list=%#llx",traced,bridge,(unsigned)regs[0]&1,*(uint8_t*)(root+0xb8),(unsigned long long)panel,(unsigned long long)row,(unsigned long long)vt,(unsigned long long)callback,clickmode,index,(unsigned long long)list);
+    }
+    regs[8]=bridge;
+}
+static int pc_item_hold_abi(module_t *m) {
+    static const uint32_t entry[]={0xd10203ff,0xf90023f7,0xa90557f6,0xa9064ff4};
+    static const uint32_t after[]={0x911dc108,0x08dffd08,0x36002468,0xd0014ac8};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0x3b855c,entry,sizeof entry)&&!memcmp(m->base+0x3b864c,after,sizeof after);
+}
+static int pc_item_hold_tree(module_t *m,uint64_t widget,int depth) {
+    if(!widget||depth>16||!*(uint8_t*)(widget+0x50)||!*(uint8_t*)(widget+0x51))return 0;
+    if(pc_item_family(m,widget))return 1;
+    uint64_t count=*(uint64_t*)(widget+0x60),children=*(uint64_t*)(widget+0x58);if(!children||count>256)return 0;
+    for(uint64_t i=0;i<count;i++)if(pc_item_hold_tree(m,*(uint64_t*)(children+8*i),depth+1))return 1;
+    return 0;
+}
+static int pc_item_hold_guard(module_t *m,uint64_t root,uint64_t queue,uint64_t inventory,uint64_t held,int desktop) {
+    int dm_padmode_busy(void);
+    if(!desktop||!pc_item_hold_abi(m)||!root||queue!=(uint64_t)m->base+0x2d5b740||!inventory||!held||*(uint64_t*)(m->base+0x2f05458)!=root)return 0;
+    // El original ya resolvió jugador/inventario y comprobó esta misma identidad antes de llegar a la puerta.
+    if(*(uint32_t*)inventory!=0x1020304||*(uint64_t*)(inventory+0x40)!=held||*(uint32_t*)held!=4||!dm_uiscreen_ingame()||!*(uint8_t*)(root+0xd9)||atomic_load(&g_load_up)||dm_padmode_busy())return 0;
+    uint64_t count=*(uint64_t*)(root+0x60),children=*(uint64_t*)(root+0x58);if(!children||count>256)return 0;
+    for(uint64_t i=0;i<count;i++){
+        uint64_t panel=*(uint64_t*)(children+8*i);if(!panel)continue;
+        const char *name=*(const char**)(panel+8);if(name&&!strcmp(name,"HUDPanel"))continue;
+        if(pc_item_hold_tree(m,panel,0))return 1;
+    }
+    return 0;
+}
+void dm_ui_pc_item_hold(uint64_t *regs) {
+    module_t *m=main_module();uint64_t root=pc_item_hold_abi(m)?*(uint64_t*)(m->base+0x2f05458):0,held=regs[8];
+    int protect=pc_item_hold_guard(m,root,regs[19],regs[23],held,dm_ui_pc_desktop());
+    static unsigned traced;static int trace_enabled=-1;if(trace_enabled<0){const char *enabled=getenv("DM_MAC_POINTER_LOG");trace_enabled=enabled&&*enabled;}if(trace_enabled&&traced<16&&root){traced++;LOG("PC_ITEM_HOLD %u protect=%d held=%#llx queue=%#llx modalcount=%u",traced,protect,(unsigned long long)held,(unsigned long long)regs[19],*(uint32_t*)(m->base+0x2d12740));}
+    regs[8]=protect;
+}
+static int pc_pause_close_abi(module_t *m) {
+    static const uint32_t handler[]={0xd10103ff,0xa9024ff4,0xa9037bfd,0x9100c3fd},close[]={0xd101c3ff,0xf90013f9,0xa9035ff8,0xa90457f6},epilogue[]={0xa9437bfd,0xa9424ff4,0x910103ff,0xd65f03c0};
+    return m&&m->base&&m->size>=0x2f05460&&!memcmp(m->base+0xae50cc,handler,sizeof handler)&&!memcmp(m->base+0x454f40,close,sizeof close)&&!memcmp(m->base+0xae53d0,epilogue,sizeof epilogue);
+}
+static int pc_pause_close_route(module_t *m,uint64_t root,uint64_t panel,int desktop,int (*close)(int,int)) {
+    if(!desktop||!pc_pause_close_abi(m)||!root||!panel||!close||*(uint64_t *)(m->base+0x2f05458)!=root)return 0;
+    if(!dm_uiscreen_ingame()||atomic_load(&g_load_up)||!*(uint8_t *)(root+0xd9)||!m->base[0x2d5ff51]||!ui_has(root,panel,0))return 0;
+    if(*(uint64_t *)panel!=(uint64_t)m->base+0x20ba830||!*(uint8_t *)(panel+0x50)||!*(uint8_t *)(panel+0x51))return 0;
+    if(ui_panel(root,"PauseLayout")!=panel&&ui_panel(root,"PauseLayoutGarden")!=panel)return 0;
+    uint64_t switcher=ui_panel(root,"UISwitcher");if(switcher&&*(uint8_t *)(switcher+0x51))return 0;
+    // El cierre original ID9 emite ClosePanel del layout vigente y conserva OnClose/despausa.
+    int result=close(9,1);pc_escape_trace(m,"pause-close",result,-1);return 1;
+}
+void dm_ui_pc_pause_close(uint64_t *regs) {
+    module_t *m=main_module();uint64_t root=pc_pause_close_abi(m)?*(uint64_t *)(m->base+0x2f05458):0;
+    regs[8]=pc_pause_close_route(m,root,regs[0],dm_ui_pc_desktop(),root?(int (*)(int,int))(m->base+0x454f40):NULL);
+}
+static int pc_binding_table_refresh(module_t *m,const pc_binding_entry *original) {
+    static const uint32_t press[]={0x3693c0,0x3693e0,0x369400,0x369420,0x369440,0x369460,0x369480,0x3694a0,0x36a090,0x36a0b0,0x36a0d0,0x36a0f0,0x36a110,0x36a130,0x36a150,0x36a170};
+    static const uint32_t release[]={0x3693d0,0x3693f0,0x369410,0x369430,0x369450,0x369470,0x369490,0x3694b0,0x36a0a0,0x36a0c0,0x36a0e0,0x36a100,0x36a120,0x36a140,0x36a160,0x36a180};
+    static void (*const down[])(void)={pc_skill_0_down,pc_skill_1_down,pc_skill_2_down,pc_skill_3_down,pc_skill_4_down,pc_skill_5_down,pc_skill_6_down,pc_skill_7_down,pc_skill_8_down,pc_skill_9_down,pc_skill_10_down,pc_skill_11_down,pc_skill_12_down,pc_skill_13_down,pc_skill_14_down,pc_skill_15_down};
+    static void (*const up[])(void)={pc_skill_0_up,pc_skill_1_up,pc_skill_2_up,pc_skill_3_up,pc_skill_4_up,pc_skill_5_up,pc_skill_6_up,pc_skill_7_up,pc_skill_8_up,pc_skill_9_up,pc_skill_10_up,pc_skill_11_up,pc_skill_12_up,pc_skill_13_up,pc_skill_14_up,pc_skill_15_up};
+    if (!m || !original || !m->text_end) return 0;
+    for (int i=0;i<69;i++) {
+        uint64_t p=original[i].press,r=original[i].release,base=(uint64_t)m->base;
+        if ((p && (p<base || p-base>=m->text_end)) || (r && (r<base || r-base>=m->text_end))) return 0;
+    }
+    for (int i=0;i<16;i++) { int a=i<8?14+i:46+i-8; if (original[a].press!=(uint64_t)m->base+press[i] || original[a].release!=(uint64_t)m->base+release[i]) return 0; }
+    if(original[56].press!=(uint64_t)m->base+0x36a260||original[56].release)return 0;
+    int preserve=g_pc_binding_table_valid && g_pc_binding_base==m->base;
+    for (int i=0;i<69;i++) { uint8_t latch=preserve ? g_pc_binding_table[i].latched : original[i].latched; g_pc_binding_table[i]=original[i];g_pc_binding_table[i].latched=latch; }
+    for (int i=0;i<16;i++) { int a=i<8?14+i:46+i-8;g_pc_binding_table[a].press=(uint64_t)(uintptr_t)down[i];g_pc_binding_table[a].release=(uint64_t)(uintptr_t)up[i]; }
+    g_pc_binding_table[56].press=(uint64_t)(uintptr_t)pc_binding_escape;
+    g_pc_binding_base=m->base;g_pc_binding_table_valid=1;return 1;
+}
+static uint32_t pc_bindings_cancel_input(void) { uint32_t epoch=atomic_fetch_add(&g_pc_tabbar_epoch,1)+1;atomic_store(&g_pc_tabbar_cancel,1);atomic_store(&g_pc_key_reset,1);atomic_store(&g_pc_binding_cancel,1);return epoch; }
+void dm_ui_pc_bindings_cancel(void) { (void)pc_bindings_cancel_input(); }
+static void pc_binding_skill_cancel(void) {
+#if TARGET_OS_OSX
+    if (dm_world_pc_skill_cancel) dm_world_pc_skill_cancel();
+#endif
+    memset(g_pc_skill_started,0,sizeof g_pc_skill_started);
+}
+static uint8_t g_pc_binding_desired[69],g_pc_binding_force[69],g_pc_binding_release[69];
+static int pc_binding_enqueue(int action,int down,int ingame) {
+    if (!dm_ui_pc_desktop() || action<0 || action>=69) return 0;
+    down=!!down; if (g_pc_binding_desired[action]==down) return 1;
+    g_pc_binding_desired[action]=down;
+    if (down) g_pc_binding_force[action]=!!ingame;
+    if (g_pc_binding_write-g_pc_binding_read>=256) { if (!down) g_pc_binding_release[action]=1; return 1; }
+    unsigned index=g_pc_binding_write++%256;
+    g_pc_binding_queue[index].action=action; g_pc_binding_queue[index].down=down; g_pc_binding_queue[index].force=g_pc_binding_force[action];
+    return 1;
+}
+int dm_ui_pc_binding(int action,int down) { return pc_binding_enqueue(action,down,dm_uiscreen_ingame()); }
+static void pc_key_process(const pc_key_event *event,const pc_binding_record *records,int (*matches)(const void *,const void *,int),int (*raw_ui)(const pc_key_event *,void *),void *context) {
+    int vk=event->vk;if(vk<=0 || vk>0x104) return;
+    int consumed=raw_ui(event,context);
+    if(!event->down) {
+        for(int action=0;action<69;action++) if(g_pc_key_actions[vk][action/64]&(1ull<<(action%64))) {
+            if(g_pc_key_counts[action] && !--g_pc_key_counts[action]) dm_ui_pc_binding(action,0);
+        }
+        g_pc_key_actions[vk][0]=g_pc_key_actions[vk][1]=0;g_pc_key_down[vk]=0;return;
+    }
+    if(g_pc_key_down[vk]) return;
+    g_pc_key_down[vk]=1;
+    if(consumed) return;
+    uint32_t payload[8]={0};payload[4]=vk;
+    int modifiers=event->modifiers;
+    if(vk==0x10)modifiers&=~0x1000;else if(vk==0x11)modifiers&=~0x2000;else if(vk==0x12)modifiers&=~0x4000;
+    for(int i=0;i<138;i++) {
+        const pc_binding_record *record=records+i;if(record->action>=69 || record->type>1 || !matches(record,payload,modifiers))continue;
+        int action=(int)record->action;
+        uint64_t bit=1ull<<(action%64);if(g_pc_key_actions[vk][action/64]&bit)continue;
+        g_pc_key_actions[vk][action/64]|=bit;
+        if(!g_pc_key_counts[action]++)dm_ui_pc_binding(action,1);
+    }
+}
+typedef struct { module_t *module;uint64_t root; } pc_key_context;
+static int g_pc_death_escape;
+static int pc_death_escape_event(const pc_key_event *event,int visible,void (*continue_original)(void)) {
+    if(event->wheel || event->vk!=0x1b)return 0;
+    if(g_pc_death_escape){if(!event->down)g_pc_death_escape=0;return 1;}
+    if(event->down && visible){g_pc_death_escape=1;continue_original();return 1;}
+    return 0;
+}
+static int pc_death_visible(module_t *m,uint64_t root) {
+    uint64_t modal=ui_panel(root,"YouDiedModal");
+    return modal && *(uint8_t *)(modal+0x50) && *(uint8_t *)(modal+0x51) && *(uint64_t *)modal==(uint64_t)m->base+0x208e8d0;
+}
+static void pc_death_continue(void){fe_send("YouDiedModalMessage","Continue","");}
+static int pc_native_capture_active(module_t *m,uint64_t root) {
+    uint64_t menu=ui_panel(root,"KeyBindingMenu");
+    if(!menu || !*(uint8_t *)(menu+0x50) || !*(uint8_t *)(menu+0x51) || *(uint64_t *)menu!=(uint64_t)m->base+0x20c3680)return 0;
+    int action=*(int32_t *)(menu+0x194),type=*(uint8_t *)(menu+0x190);
+    return action>=0 && action<69 && (type==0 || type==1);
+}
+static int pc_key_native_ui(const pc_key_event *event,void *context) {
+    pc_key_context *ctx=context;module_t *m=ctx->module;uint64_t root=ctx->root,vt=*(uint64_t *)root,base=(uint64_t)m->base;
+    if(!event->wheel&&event->down)pc_options_focus_input(&g_pc_options_open,0);
+    if(g_pc_death_escape && pc_death_escape_event(event,0,pc_death_continue))return 1;
+    if(vt<base || vt-base>m->size || m->size-(vt-base)<0x30)return 1;
+    uint64_t fn=*(uint64_t *)(vt+0x28);if(fn<base || fn-base>=m->text_end)return 1;
+    int32_t x=*(int32_t *)(m->base+0x2d128f8),y=*(int32_t *)(m->base+0x2d128fc),arg=event->vk;
+    if(event->wheel) {
+        int rx,ry,rw,rh,sw,sh;dm_ui_rect(&rx,&ry,&rw,&rh);dm_screen_real(&sw,&sh);
+        if(!pc_real_point(event->nx,event->ny,rx,ry,rw,rh,sw,sh))return 1;
+        x=(int)(event->nx* *(int32_t *)(m->base+0x211da38));y=(int)(event->ny* *(int32_t *)(m->base+0x211da3c));arg=event->steps*120;
+    }
+    int capture=pc_native_capture_active(m,root);
+    uint32_t payload[32]={0};payload[1]=x;payload[2]=y;payload[4]=arg;
+    if(!event->wheel && event->down && g_pc_key_down[event->vk])((uint8_t *)payload)[0x15]=1;
+    uint64_t message[8]={ui_hash("InputMessage"),ui_hash(event->wheel?"MouseScroll":event->down?"KeyDown":"KeyUp"),(uint64_t)payload};
+    int pointer_active=event->wheel?pc_options_pointer_begin(m,root,ui_hash("MouseScroll"),x,y):0;
+    ((void (*)(uint64_t,void *))fn)(root,message);
+    int consumed=*(uint8_t *)(root+0xb8)!=0 || capture || pc_native_capture_active(m,root);
+    if(event->wheel)pc_options_pointer_end(m,root,ui_hash("MouseScroll"),x,y,pointer_active);
+    if(!consumed && pc_death_escape_event(event,pc_death_visible(m,root),pc_death_continue))return 1;
+    return consumed;
+}
+static int pc_key_no_ui(const pc_key_event *event,void *context) {(void)event;(void)context;return 0;}
+static struct { int phase;uint64_t deadline,root;uint32_t epoch,generation; } g_pc_controls_open;
+static int pc_controls_step(int request,int settings,int menu,int blocked,uint64_t frame) {
+    if(request){g_pc_controls_open.phase=1;g_pc_controls_open.deadline=frame+180;}
+    if(!g_pc_controls_open.phase)return 0;
+    if(menu || frame>g_pc_controls_open.deadline){g_pc_controls_open.phase=0;return 0;}
+    if(blocked)return 0;
+    if(g_pc_controls_open.phase==1 && !settings){g_pc_controls_open.phase=2;return 1;}
+    if(g_pc_controls_open.phase<=2 && settings){g_pc_controls_open.phase=3;return 2;}
+    return 0;
+}
+typedef struct {
+    uint64_t root,frame;uint32_t epoch,generation;
+    int ready,blocked,settings,menu,chronicle,pages,pause_ready;
+} pc_controls_context;
+static int pc_controls_transition(uint64_t request,const pc_controls_context *context) {
+    if(request){
+        memset(&g_pc_controls_open,0,sizeof g_pc_controls_open);
+        if((uint32_t)request!=context->epoch||(uint32_t)(request>>32)!=context->generation)return 0;
+        g_pc_controls_open.phase=context->chronicle||context->pages?4:1;
+        g_pc_controls_open.deadline=context->frame+180;g_pc_controls_open.root=context->root;
+        g_pc_controls_open.epoch=context->epoch;g_pc_controls_open.generation=context->generation;
+    }
+    if(!g_pc_controls_open.phase)return 0;
+    if(!context->ready||context->blocked||!context->root||context->root!=g_pc_controls_open.root||context->epoch!=g_pc_controls_open.epoch||context->generation!=g_pc_controls_open.generation||context->frame>g_pc_controls_open.deadline||context->menu){
+        memset(&g_pc_controls_open,0,sizeof g_pc_controls_open);return 0;
+    }
+    if(g_pc_controls_open.phase==4){
+        if(context->chronicle){g_pc_controls_open.phase=5;return 3;}
+        if(context->pages||!context->pause_ready)return 0;
+        g_pc_controls_open.phase=1;
+    }
+    if(g_pc_controls_open.phase==5){
+        if(context->chronicle||context->pages||!context->pause_ready)return 0;
+        g_pc_controls_open.phase=1;
+    }
+    // Crónica que se abre durante la construcción de Settings invalida la solicitud anterior.
+    if(context->chronicle||context->pages){memset(&g_pc_controls_open,0,sizeof g_pc_controls_open);return 0;}
+    return pc_controls_step(0,context->settings,context->menu,0,context->frame);
+}
+static int pc_controls_release_input(void) {
+    if(g_pc_controls_open.generation!=atomic_load(&g_pc_controls_context)){memset(&g_pc_controls_open,0,sizeof g_pc_controls_open);return 0;}
+    uint32_t epoch=g_pc_controls_open.epoch;
+    if(!atomic_compare_exchange_strong(&g_pc_tabbar_epoch,&epoch,epoch+1)){memset(&g_pc_controls_open,0,sizeof g_pc_controls_open);return 0;}
+    g_pc_controls_open.epoch=epoch+1;atomic_store(&g_pc_tabbar_cancel,1);atomic_store(&g_pc_key_reset,1);atomic_store(&g_pc_binding_cancel,1);return 1;
+}
+static int pc_controls_modal(uint64_t root) {
+    if(!root)return 1;
+    for(unsigned i=0;i<2;i++){
+        size_t offset=i?0x88:0x58;uint64_t array=*(uint64_t*)(root+offset),count=*(uint64_t*)(root+offset+8);
+        if(count>256||(!array&&count))return 1;
+        for(uint64_t j=0;j<count;j++){
+            uint64_t panel=*(uint64_t*)(array+8*j);if(!panel||!*(uint8_t*)(panel+0x50)||!*(uint8_t*)(panel+0x51))continue;
+            const char *name=*(const char**)(panel+8);size_t length=name?strlen(name):0;
+            if(length>=5&&!strcmp(name+length-5,"Modal"))return 1;
+        }
+    }
+    return 0;
+}
+static uint64_t pc_controls_current_root(module_t *m,uint64_t root) {
+    uint64_t current=0;if(!m||!m->base||m->size<0x2f05460||!root)return 0;
+    memcpy(&current,m->base+0x2f05458,sizeof current);return current==root?root:0;
+}
+static int pc_controls_chronicle_name(const char *name) {
+    if(!name)return 0;
+    static const char *const pages[]={"ChroniclePanel","ChronicleUniquesListPanel","ChronicleSetsListPanel","ChronicleRunewordsListPanel","ChronicleRewardsPanel"};
+    for(unsigned i=0;i<sizeof pages/sizeof *pages;i++)if(!strcmp(name,pages[i]))return 1;
+    for(unsigned i=0;i<8;i++)if(g_chr_child[i][0]&&!strcmp(name,g_chr_child[i]))return 1;
+    return 0;
+}
+static void pc_controls_chronicle_state(module_t *m,uint64_t root,int *chronicle,int *pages,int *pause_ready) {
+    *chronicle=*pages=0;*pause_ready=!m->base[0x2d5ff51];
+    // El registro pendiente88 es propietario antes del attach58; A0 ya está retirado.
+    for(unsigned i=0;i<2;i++){
+        size_t offset=i?0x88:0x58;uint64_t array=*(uint64_t*)(root+offset),count=*(uint64_t*)(root+offset+8);
+        if(count>256||(!array&&count)){*pages=1;return;}
+        for(uint64_t j=0;j<count;j++){
+            uint64_t panel=*(uint64_t*)(array+8*j);if(!panel||!*(uint8_t*)(panel+0x50)||!*(uint8_t*)(panel+0x51))continue;
+            const char *name=*(const char**)(panel+8);
+            if(pc_controls_chronicle_name(name)){
+                if(!strcmp(name,"ChroniclePanel")&&*(uint64_t*)panel==(uint64_t)m->base+0x20ba740)*chronicle=1;
+                else *pages=1;
+            }
+            if(name&&(!strcmp(name,"PauseLayout")||!strcmp(name,"PauseLayoutGarden"))&&*(uint64_t*)panel==(uint64_t)m->base+0x20ba830&&has_visible_leaf(panel,1))*pause_ready=1;
+        }
+    }
+}
+static int pc_controls_close_chronicle(module_t *m,uint64_t root,void (*send)(const char *,const char *,const char *)) {
+    static const uint32_t close[]={0xd10203ff,0xa9026ffc,0xa90367fa,0xa9045ff8};
+    if(!pc_controls_current_root(m,root)||memcmp(m->base+0xae390c,close,sizeof close)||!send||pc_controls_modal(root))return 0;
+    int chronicle,pages,pause;pc_controls_chronicle_state(m,root,&chronicle,&pages,&pause);
+    if(!chronicle)return 0;
+    send("PanelManager","ClosePanel","ChroniclePanel");return 1;
+}
+static void pc_key_wheel_process(const pc_key_event *event,const pc_binding_record *records,int (*matches)(const void *,const void *,int),int (*raw_ui)(const pc_key_event *,void *),void *context) {
+    if(raw_ui(event,context) || event->momentum)return;
+    pc_key_event key={.vk=event->steps>0?0x103:0x104,.modifiers=event->modifiers};
+    int n=abs(event->steps);for(int i=0;i<n;i++){key.down=1;pc_key_process(&key,records,matches,pc_key_no_ui,NULL);key.down=0;pc_key_process(&key,records,matches,pc_key_no_ui,NULL);}
+}
+static void pc_key_deliver(module_t *m,uint64_t root) {
+    // Registro de modo PC: dos mensajes originales de Controles y Continue de YouDied; nunca se emiten fuera de pc_desktop.
+    int dm_padmode_busy(void);
+    static const uint32_t matcher[]={0xb8406008,0x7100191f,0x54000b48,0x9000d1a9};
+    if(!dm_ui_pc_desktop() || !m || m->size<0x2f05460 || memcmp(m->base+0x370248,matcher,sizeof matcher)){atomic_store(&g_pc_controls_request,0);memset(&g_pc_controls_open,0,sizeof g_pc_controls_open);return;}
+    const pc_binding_record *records=(const pc_binding_record *)(m->base+0x2086f64);pc_mouse_reserved_refresh(records);
+    uint64_t controls_root=pc_controls_current_root(m,root);
+    int ready=controls_root&&pc_profile_ready_now(m,controls_root);atomic_store(&g_pc_profile_ready,ready);
+    uint64_t menu=controls_root?ui_panel(controls_root,"KeyBindingMenu"):0;atomic_store(&g_pc_controls_active,menu && *(uint8_t *)(menu+0x50) && *(uint8_t *)(menu+0x51));
+    uint64_t settings=controls_root?ui_panel(controls_root,"SettingsPanel"):0;
+    pc_controls_tab_refresh(m,settings,ready,0);
+    uint64_t request=atomic_exchange(&g_pc_controls_request,0);
+    pc_controls_context controls_context={.root=controls_root,.frame=dm_guest_frame(),.epoch=atomic_load(&g_pc_tabbar_epoch),.generation=atomic_load(&g_pc_controls_context),.ready=ready,
+        .blocked=dm_padmode_busy()||pc_controls_modal(controls_root),.settings=settings&&*(uint8_t*)(settings+0x50)&&*(uint8_t*)(settings+0x51)&&*(uint64_t*)settings==(uint64_t)m->base+0x20bac80,.menu=atomic_load(&g_pc_controls_active)};
+    if(ready)pc_controls_chronicle_state(m,root,&controls_context.chronicle,&controls_context.pages,&controls_context.pause_ready);
+    int controls=pc_controls_transition(request,&controls_context);
+    if(controls&&pc_controls_release_input()){
+        if(controls==3){if(!pc_controls_close_chronicle(m,root,fe_send))memset(&g_pc_controls_open,0,sizeof g_pc_controls_open);}
+        else if(controls==1)fe_send("PanelManager","OpenPanel","SettingsPanel");
+        else pc_controls_tab_refresh(m,settings,ready,1);
+    }
+    int reset=atomic_exchange(&g_pc_key_reset,0) || dm_padmode_busy() || !root;
+    pc_key_event events[512];unsigned count=0;
+    pthread_mutex_lock(&g_pc_key_lock);
+    while(g_pc_key_read!=g_pc_key_write && count<512)events[count++]=g_pc_keys[g_pc_key_read++%512];
+    pthread_mutex_unlock(&g_pc_key_lock);
+    pc_key_context ctx={m,root};
+    if(reset) {
+        if(root && !dm_padmode_busy())for(int vk=1;vk<=0x104;vk++)if(g_pc_key_down[vk]){pc_key_event up={.vk=vk};pc_key_native_ui(&up,&ctx);}
+        memset(g_pc_key_down,0,sizeof g_pc_key_down);memset(g_pc_key_actions,0,sizeof g_pc_key_actions);memset(g_pc_key_counts,0,sizeof g_pc_key_counts);g_pc_death_escape=0;atomic_store(&g_pc_binding_cancel,1);return;
+    }
+    int (*matches)(const void *,const void *,int)=(int (*)(const void *,const void *,int))(m->base+0x370248);
+    for(unsigned i=0;i<count;i++)if(events[i].wheel)pc_key_wheel_process(events+i,records,matches,pc_key_native_ui,&ctx);else pc_key_process(events+i,records,matches,pc_key_native_ui,&ctx);
+}
+static int pc_binding_skill_index(int action) { return action>=14 && action<=21 ? action-14 : action>=46 && action<=53 ? action-46+8 : -1; }
+static void pc_binding_release_skills(void *table,int (*release)(const void *,void *,int)) {
+    pc_binding_entry *entries=table;
+    for(int slot=0;slot<16;slot++) { int action=slot<8?14+slot:46+slot-8;if(entries[action].latched){pc_binding_record record={(uint32_t)action,-1,1};release(&record,table,g_pc_binding_force[action]);}g_pc_binding_desired[action]=0;g_pc_binding_release[action]=0;if(table==g_pc_binding_table)memset(&g_pc_binding_held[action],0,sizeof g_pc_binding_held[action]); }
+    pc_binding_skill_cancel();
+}
+static void pc_binding_flush(module_t *m,void *table,int (*press)(const void *,void *,int),int (*release)(const void *,void *,int)) {
+    int dm_padmode_busy(void);
+    if (!m || !table || !press || !release) return;
+    if (!dm_ui_pc_desktop()) { g_pc_binding_read=g_pc_binding_write; memset(g_pc_binding_desired,0,sizeof g_pc_binding_desired); memset(g_pc_binding_release,0,sizeof g_pc_binding_release); return; }
+    while (g_pc_binding_read!=g_pc_binding_write) {
+        unsigned index=g_pc_binding_read++%256; int action=g_pc_binding_queue[index].action,down=g_pc_binding_queue[index].down,force=g_pc_binding_queue[index].force;
+        if (down && (dm_padmode_busy() || force!=!!dm_uiscreen_ingame())) { if(action==56)pc_escape_dispatch_trace(m,table,"flush-blocked",dm_padmode_busy()?1:2);continue; }
+        if (down && (action==44 || action==0 || action==1 || action==4 || action==12 || action==56)) { int active=0;for(int i=0;i<16;i++)active|=g_pc_skill_started[i];if(active)pc_binding_release_skills(table,release); }
+        pc_binding_record record={(uint32_t)action,-1,1};
+        if(action==56)pc_escape_dispatch_trace(m,table,down?"dispatch-down":"dispatch-up",force);
+        pc_binding_held_context context={0};int observe=table==g_pc_binding_table&&g_pc_binding_table_valid&&g_pc_binding_base==m->base;
+        int was_latched=observe?g_pc_binding_table[action].latched:0;
+        if(observe&&down&&!was_latched&&!atomic_load(&g_pc_binding_cancel)&&!atomic_load(&g_pc_key_reset)&&m->size>=0x2f05460&&pc_tooltip_field(pc_tooltip_read,(uint64_t)m->base,0x2f05458,&context.root,8)){
+            context.base=m->base;context.generation=atomic_load(&g_ui_gen);context.epoch=atomic_load(&g_pc_tabbar_epoch);
+        }
+        int result=(down ? press : release)(&record,table,force);
+        if(observe){if(!down)memset(&g_pc_binding_held[action],0,sizeof g_pc_binding_held[action]);else if(!was_latched&&g_pc_binding_table[action].latched)g_pc_binding_held[action]=context;}
+        if(action==56)pc_escape_dispatch_trace(m,table,"dispatch-result",result);
+        if (!down && pc_binding_skill_index(action)>=0 && g_pc_skill_started[pc_binding_skill_index(action)]) pc_binding_skill_cancel();
+    }
+    for (int action=0;action<69;action++) if (g_pc_binding_release[action]) {
+        pc_binding_record record={(uint32_t)action,-1,1}; g_pc_binding_release[action]=0;
+        release(&record,table,g_pc_binding_force[action]);
+        if(table==g_pc_binding_table)memset(&g_pc_binding_held[action],0,sizeof g_pc_binding_held[action]);
+        if (pc_binding_skill_index(action)>=0 && g_pc_skill_started[pc_binding_skill_index(action)]) pc_binding_skill_cancel();
+    }
+}
+static int pc_binding_skills_active(void) { for(int i=0;i<16;i++)if(g_pc_skill_started[i])return 1;return 0; }
+static void pc_binding_release_all(int (*release)(const void *,void *,int)) {
+    for (int action=0;action<69;action++) if (g_pc_binding_table[action].latched) {
+        pc_binding_record record={(uint32_t)action,-1,1}; release(&record,g_pc_binding_table,g_pc_binding_force[action]);
+    }
+    memset(g_pc_binding_desired,0,sizeof g_pc_binding_desired); memset(g_pc_binding_release,0,sizeof g_pc_binding_release);
+    memset(g_pc_binding_held,0,sizeof g_pc_binding_held);
+    pc_binding_skill_cancel();
+}
+#if TARGET_OS_OSX
+int dm_touch_host_world_active(void) __attribute__((weak_import));
+#endif
+static int pc_binding_abi(module_t *m) {
+    static const uint32_t down[]={0xd10183ff,0xf90013f7,0xa90357f6,0xa9044ff4};
+    static const uint32_t up[]={0xd10183ff,0xa9025ff8,0xa90357f6,0xa9044ff4};
+    return m && m->size>=0x2086388+69*24 && !memcmp(m->base+0x3700e0,down,sizeof down) && !memcmp(m->base+0x36ff90,up,sizeof up);
+}
+static int pc_binding_held_read(module_t *m,int action,int desktop,pc_tooltip_reader read) {
+    int dm_padmode_busy(void);
+    if(!desktop||action<0||action>=69||!read||!m||!m->base||m->size<0x2f05460||!pc_binding_abi(m)||!g_pc_binding_table_valid||g_pc_binding_base!=m->base||
+       !g_pc_binding_table[action].latched||atomic_load(&g_pc_binding_cancel)||atomic_load(&g_pc_key_reset)||
+       !dm_uiscreen_ingame()||dm_padmode_busy()||atomic_load(&g_load_up)>0)return 0;
+#if TARGET_OS_OSX
+    if(!dm_touch_host_world_active||!dm_touch_host_world_active())return 0;
+#else
+    return 0;
+#endif
+    pc_binding_held_context context=g_pc_binding_held[action];uint64_t root,current;uint8_t flags[2],ingame;
+    if(context.base!=m->base||context.generation!=atomic_load(&g_ui_gen)||context.epoch!=atomic_load(&g_pc_tabbar_epoch)||
+       !pc_tooltip_field(read,(uint64_t)m->base,0x2f05458,&root,8)||!root||root!=context.root||
+       !pc_tooltip_field(read,root,0xd9,&ingame,1)||!ingame||!pc_tooltip_field(read,root,0x50,flags,2)||!flags[0]||!flags[1]||
+       !pc_tooltip_no_modal(read,root)||!pc_tooltip_field(read,(uint64_t)m->base,0x2f05458,&current,8)||current!=root)return 0;
+    return g_pc_binding_table_valid&&g_pc_binding_base==context.base&&g_pc_binding_table[action].latched&&
+        g_pc_binding_held[action].base==context.base&&g_pc_binding_held[action].root==root&&
+        g_pc_binding_held[action].generation==context.generation&&g_pc_binding_held[action].epoch==context.epoch&&
+        context.generation==atomic_load(&g_ui_gen)&&context.epoch==atomic_load(&g_pc_tabbar_epoch)&&
+        !atomic_load(&g_pc_binding_cancel)&&!atomic_load(&g_pc_key_reset)&&!dm_padmode_busy()&&dm_uiscreen_ingame()&&atomic_load(&g_load_up)<=0
+#if TARGET_OS_OSX
+        &&dm_touch_host_world_active&&dm_touch_host_world_active()
+#endif
+        ;
+}
+int dm_ui_pc_binding_held(int action) {return pc_binding_held_read(main_module(),action,dm_ui_pc_desktop(),pc_tooltip_read);}
+static void pc_binding_deliver(module_t *m) {
+    int dm_padmode_busy(void);
+    int cancel=atomic_exchange(&g_pc_binding_cancel,0),pending=g_pc_binding_read!=g_pc_binding_write;
+    for(int i=0;i<69;i++)pending|=g_pc_binding_release[i];
+    int active=pc_binding_skills_active();
+    if (!pending && !cancel && !active) return;
+    if (!pc_binding_abi(m)) { g_pc_binding_read=g_pc_binding_write; memset(g_pc_binding_release,0,sizeof g_pc_binding_release); pc_binding_skill_cancel(); LOG("PC: ABI del dispatcher de bindings no reconocida; entrada descartada"); return; }
+    if (!pc_binding_table_refresh(m,(const pc_binding_entry *)(m->base+0x2086388))) { g_pc_binding_read=g_pc_binding_write;pc_binding_skill_cancel();LOG("PC: tabla original de 69 bindings no reconocida; entrada descartada");return; }
+    int (*press)(const void *,void *,int)=(int (*)(const void *,void *,int))(m->base+0x3700e0);
+    int (*release)(const void *,void *,int)=(int (*)(const void *,void *,int))(m->base+0x36ff90);
+    if (cancel || dm_padmode_busy()) { g_pc_binding_read=g_pc_binding_write;pc_binding_release_all(release);return; }
+    pc_binding_flush(m,g_pc_binding_table,press,release);
+#if TARGET_OS_OSX
+    if (pc_binding_skills_active() && (!dm_uiscreen_ingame() || (dm_touch_host_world_active && !dm_touch_host_world_active()))) pc_binding_release_all(release);
+#endif
+}
+// El callback CharacterCreate:Upsell original sólo admite la clase 7 (Brujo).
+// El mapa guarda clases; no es un estado de cuenta ni de licencia.
+static int pc_create_class(module_t *m,pc_tooltip_reader read) {
+    if(!m||!m->base||m->size<0x2f142e8||!read)return -2;
+    uint64_t base=(uint64_t)m->base,name=0,length=0,node=0;
+    if(!pc_tooltip_field(read,base,0x2f14248,&length,8))return -2;
+    if(!length)return -1;
+    char selected[32];
+    if(length>sizeof selected||!pc_tooltip_field(read,base,0x2f14240,&name,8)||!name||!read(name,selected,(size_t)length)||!pc_tooltip_field(read,base,0x2f142c0,&node,8))return -2;
+    for(unsigned i=0;node&&i<64;i++){
+        uint64_t text=0,size=0;char key[32];uint8_t value=0;
+        if(!pc_tooltip_field(read,node,0x20,&text,8)||!pc_tooltip_field(read,node,0x28,&size,8)||!text||!size||size>sizeof key||!read(text,key,(size_t)size))return -2;
+        int order=memcmp(key,selected,(size_t)(size<length?size:length));
+        if(!order)order=size<length?-1:size>length?1:0;
+        if(!order)return pc_tooltip_field(read,node,0x38,&value,1)&&value<8?(int)value:-2;
+        if(!pc_tooltip_field(read,node,order<0?0x10:8,&node,8))return -2;
+    }
+    return -2;
+}
+static int pc_create_context(module_t *m,uint64_t root,int desktop,uint64_t panel) {
+    int dm_padmode_busy(void);
+    if(!desktop||!m||!m->base||m->size<0x2f142e8||!root||*(uint64_t*)(m->base+0x2f05458)!=root||!*(uint8_t*)(root+0xd8)||*(uint8_t*)(root+0xd9)||dm_uiscreen_ingame()||dm_padmode_busy()||atomic_load(&g_load_up)>0)return 0;
+    return !panel||(ui_has(root,panel,0)&&*(uint64_t*)panel==(uint64_t)m->base+0x20c6e40&&*(uint8_t*)(panel+0x50)&&*(uint8_t*)(panel+0x51));
+}
+static int pc_create_commit_abi(module_t *m) {
+    static const uint32_t handler[]={0xa9ba6ffc,0xa90167fa,0xa9025ff8,0xa90357f6};
+    static const uint32_t call[]={0xaa1303e0,0x97fffa24,0x39414268,0x35ffe7e8};
+    static const uint32_t create[]={0xa9ba6ffc,0xa90167fa,0xa9025ff8,0xa90357f6};
+    return m&&m->base&&m->size>=0x2f142e8&&!memcmp(m->base+0xc267c8,handler,sizeof handler)
+        &&!memcmp(m->base+0xc26e08,call,4)&&!memcmp(m->base+0xc26e10,call+2,8)
+        &&!memcmp(m->base+0xc2569c,create,sizeof create);
+}
+// Switch sólo copia/valida el nombre mediante TryCreateCharacter; Create lo da por confirmado.
+static int pc_create_commit_dispatch(module_t *m,uint64_t panel,uint64_t message,int desktop,pc_tooltip_reader read,void(*dispatch)(uint64_t,void*)) {
+    if(!desktop||!message||!read||!dispatch)return 0;
+    uint32_t generation=atomic_load(&g_ui_gen),epoch=atomic_load(&g_pc_tabbar_epoch);
+    uint64_t type=0,action=0;
+    if(!read(message,&type,8)||!read(message+8,&action,8))return 1;
+    if(type!=ui_hash("CharacterCreate")||action!=ui_hash("Create"))return 0;
+    if(!pc_create_commit_abi(m))return 1;
+    uint64_t root=*(uint64_t*)(m->base+0x2f05458);
+    if(!pc_create_context(m,root,desktop,panel))return 1;
+    uint64_t box=ui_find(panel,"InputText",0),text=0,length=0;char name[64];
+    if(!box||!ui_has(panel,box,0)||*(uint64_t*)box!=(uint64_t)m->base+0x20b8718||!*(uint8_t*)(box+0x50)||!*(uint8_t*)(box+0x51)
+        ||!pc_tooltip_field(read,box,0x558,&text,8)||!pc_tooltip_field(read,box,0x560,&length,8)||!text||length>=sizeof name
+        ||!read(text,name,(size_t)length+1)||name[length]||memchr(name,0,(size_t)length))return 1;
+    uint64_t current_text=0,current_length=0;
+    if(!pc_tooltip_field(read,box,0x558,&current_text,8)||!pc_tooltip_field(read,box,0x560,&current_length,8)
+        ||current_text!=text||current_length!=length||generation!=atomic_load(&g_ui_gen)||epoch!=atomic_load(&g_pc_tabbar_epoch)
+        ||!pc_create_context(m,root,desktop,panel)||!ui_has(panel,box,0))return 1;
+    uint64_t native_message[5]={ui_hash("ConsoleCharacterCreate"),ui_hash("TryCreateCharacter"),(uint64_t)name,1,1};
+    dispatch(panel,native_message);
+    return 1;
+}
+void dm_ui_pc_create_commit(uint64_t *regs) {
+    if(!regs)return;
+    module_t *m=main_module();
+    if(!pc_create_commit_abi(m))die("PC: ABI de creación no reconocida");
+    uint64_t panel=regs[0];
+    if(panel!=regs[19])die("PC: contexto de creación no reconocido");
+    if(!pc_create_commit_dispatch(m,panel,regs[20],dm_ui_pc_desktop(),pc_tooltip_read,(void(*)(uint64_t,void*))(m->base+0xc267c8)))
+        ((void(*)(uint64_t))(m->base+0xc2569c))(panel);
+}
+static int pc_create_native_toggle(module_t *m,uint64_t w,int on,int slot) {
+    uint64_t vt=*(uint64_t*)w,base=(uint64_t)m->base;
+    if(vt<base||vt>base+m->size-0x60)return 0;
+    uint64_t fn=*(uint64_t*)(vt+slot);if(fn<base||fn>=base+m->size)return 0;
+    ((void(*)(uint64_t,int))fn)(w,on);return 1;
+}
+static int pc_create_refresh(module_t *m,uint64_t root,int desktop,pc_tooltip_reader read,int(*toggle)(module_t*,uint64_t,int,int)) {
+    if(!read||!toggle||!pc_create_context(m,root,desktop,0))return 0;
+    uint64_t panel=ui_panel(root,"CharacterCreatePanel");if(!panel||!pc_create_context(m,root,desktop,panel))return 0;
+    uint32_t generation=atomic_load(&g_ui_gen),epoch=atomic_load(&g_pc_tabbar_epoch);
+    int selected=pc_create_class(m,read);if(selected< -1)return 0;int on=selected==7;
+    const char *names[]={"UpsellDescription","UpsellButton"};
+    for(unsigned i=0;i<2;i++)for(int slot=0x50;slot<=0x58;slot+=8){
+        if(generation!=atomic_load(&g_ui_gen)||epoch!=atomic_load(&g_pc_tabbar_epoch)||!pc_create_context(m,root,desktop,panel))return 0;
+        uint64_t w=ui_find(panel,names[i],0);if(!w||!ui_has(panel,w,0))return 0;
+        if(*(uint8_t*)(w+(slot==0x50?0x50:0x51))!=(uint8_t)on&&!toggle(m,w,on,slot))return 0;
+    }
+    return 1;
+}
+static void pc_bliss_read(module_t *m,uint64_t root) {
+    if (!m || !root || !dm_ui_pc_desktop()) return;
+    uint64_t panel=ui_find(root,"CharacterCreatePanel",0),box=panel ? ui_find(panel,"TouchBliss",0) : 0;
+    if (!box || !*(uint8_t *)(panel+0x50) || !*(uint8_t *)(box+0x50) || *(uint64_t *)box!=(uint64_t)m->base+DM_VT_TOGGLE) return;
+    int on=*(int32_t *)(box+0x6e8)==4;
+    if (atomic_exchange(&g_fe_bliss,on)!=on) { dm_elysium_arm(on); LOG("PC: selección de Elíseo %d",on); }
+}
+static _Atomic int g_pc_request;
+static int pc_cancel_binding(uint64_t root) {
+    uint64_t modal=root ? ui_find(root,"ButtonBindingModal",0) : 0;
+    if (!modal || !*(uint8_t *)(modal+0x50)) return 0;
+    dm_ui_send_queue("PanelManager:ClosePanel:ButtonBindingModal");
+    LOG("Controles PC: cancelar asignación sin pulsar una casilla"); return 1;
+}
+int dm_ui_pc_cancel_binding(void) {
+    module_t *m=main_module(); uint64_t root=0;
+    if (!m || m->size<0x2f05460) return 0;
+    memcpy(&root,m->base+0x2f05458,8); return pc_cancel_binding(root);
+}
+void dm_ui_pc_panel(int panel) { if (panel >= DM_PC_QUESTS && panel <= DM_PC_OPTIONS) atomic_store(&g_pc_request, panel + 1); }
+static int pc_panel_native(int target, int (*toggle)(int,int)) {
+    static const int ids[]={14,2,1,4,9};
+    return target>=DM_PC_QUESTS && target<=DM_PC_OPTIONS && toggle ? toggle(ids[target],0) : 0;
+}
+static void pc_panel_pump(module_t *m, uint64_t root, uint64_t frame) {
+    int dm_loadscreen_down(void), dm_padmode_busy(void);
+    static int target = -1, opening; static uint64_t deadline, next;
+    static const char *const panels[] = { "QuestLogPanelExpansion", "CharacterStatsPanel", "PlayerInventoryExpansionLayout", "SkillsTreePanel", "PauseLayout" };
+    int request = atomic_exchange(&g_pc_request, 0);
+    if (request) { target = request - 1; opening = 0; deadline = frame + 120; next = frame; LOG("Controles PC: solicitud %s", panels[target]); }
+    if (target < 0) return;
+    if (!m || !root || !dm_uiscreen_ingame() || !dm_loadscreen_down() || dm_padmode_busy() || modal_any(root, 1, NULL) || frame > deadline) { LOG("Controles PC: cancelar %s (partida %d, carga retirada %d, reconstrucción %d, límite %d)", panels[target], dm_uiscreen_ingame(), dm_loadscreen_down(), dm_padmode_busy(), frame > deadline); target = -1; return; }
+    if (dm_ui_pc_desktop()) {
+        static const uint32_t toggle_code[]={0xd10183ff,0xa9025ff8,0xa90357f6,0xa9044ff4};
+        if (m->size>=0x459ae0 && !memcmp(m->base+0x459ad0,toggle_code,sizeof toggle_code)) {
+            int result=pc_panel_native(target,(int (*)(int,int))(m->base+0x459ad0));
+            LOG("PC: toggle original de %s, resultado %d",panels[target],result);
+        } else LOG("PC: ABI de paneles no reconocida; no se llama al juego");
+        target=-1; return;
+    }
+    uint64_t us = ui_find(root, "UISwitcher", 0);
+    if (!us || !*(uint8_t *)(us + 0x50)) {
+        if (frame >= next) { ui_auto_key(dm_ui_panel_state() ? DM_BTN_B : DM_BTN_PLUS); opening = 1; next = frame + 24; }
+        return;
+    }
+    if (*(uint64_t *)(*(uint64_t *)us + 0x28) != (uint64_t)m->base + 0x404fd8) { LOG("Controles PC: cancelar, clase de UISwitcher no reconocida"); target = -1; return; }
+    // 405898 lee la lista original de IDs en +168; 4533e0 identifica estos cinco paneles.
+    static const int panel_ids[] = {14, 2, 1, 4, 9};
+    int count = *(int32_t *)(us + 0x188), current = *(int32_t *)(us + 0x1b8), page = -1;
+    if (count > 0 && count <= 8) for (int i = 0; i < count; i++) if (*(int32_t *)(us + 0x168 + i * 4) == panel_ids[target]) { page = i; break; }
+    if (page < 0) { LOG("Controles PC: cancelar %s, ID %d ausente en %d páginas", panels[target], panel_ids[target], count); target = -1; return; }
+    if (!opening && current == page) { LOG("Controles PC: cerrar página activa %s (ID %d)", panels[target], panel_ids[target]); ui_auto_key(DM_BTN_B); target = -1; return; }
+    uint64_t tabs = ui_find(root, "UISwitcherTabs", 0);
+    dm_wref_set(&g_tab_ref, tabs); g_tab_k = page; strlcpy(g_tab_name, "UISwitcherTabs", sizeof g_tab_name);
+    atomic_store(&g_tab_have, 1); atomic_store(&g_tab_delta, page - current); atomic_store(&g_tab_top, 1); atomic_store(&g_tab_left, 0); atomic_store(&g_tab_direct, 1);
+    LOG("Controles PC: abrir %s mediante la pestaña original %d", panels[target], page); target = -1;
+}
 void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线程）；每个出图帧做一次 | called where the game fetches the controller (hle_hid fill, main thread); done once per presented frame
     static uint64_t last_frame = UINT64_MAX; uint64_t fr = dm_guest_frame();
     if (fr == last_frame) return;
     (void)dm_ui_gen();   // 每帧核一次顶层面板（界面代号）：卸掉又在同一地址建出新面板的那种，隔帧才核会漏 | Check the top-level panels (UI generation) once per frame: a panel unloaded and rebuilt at the same address would be missed by checking every other frame
     ui_watch_pump();
-    { module_t *pm0 = main_module(); uint64_t pr = 0; if (pm0) memcpy(&pr, pm0->base + 0x2f05458, 8); if (pr) { ui_panel_heal(pr, fr); ui_panel_state_pump(pr); } }
+    { module_t *pm0 = main_module(); uint64_t pr = 0; if (pm0) memcpy(&pr, pm0->base + 0x2f05458, 8); if (pr) { ui_panel_heal(pr, fr); ui_panel_state_pump(pr); } pc_bliss_read(pm0,pr); if(pr)pc_create_refresh(pm0,pr,dm_ui_pc_desktop(),pc_tooltip_read,pc_create_native_toggle); pc_panel_pump(pm0, pr, fr); ui_calibration_pump(pm0,fr); }
     // 设置页盖在功能页上面：点顶部页签要先按返回键退出设置页，再切页签（否则底下的页在换、设置页一直盖着）。
     // 有未应用的改动时返回键会弹「是否应用」的确认框——0.6 秒后设置页还在，就不切了，留给玩家答确认框
     // The settings page covers the function pages: tapping a top tab must first press back to exit the settings page and then switch tabs (otherwise the page underneath changes while the settings page stays on top).
@@ -2766,7 +5279,8 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
                 else fix = 0; }
             if (th) { ui_auto_key(th); tnext = fr + 8; } } } }
     { module_t *pm = main_module(); uint64_t proot = 0; if (pm) { memcpy(&proot, pm->base + 0x2f05458, 8); int32_t pw = *(int32_t *)(pm->base + 0x211da38), phh = *(int32_t *)(pm->base + 0x211da3c);
-        static uint64_t pf = UINT64_MAX; if (proot && pw > 0 && phh > 0 && pf != fr) { pf = fr; { static int dd; const char *dn; if (!dd && (dn = getenv("DM_UI_DUMP")) && atomic_load(&g_taps_base) && fr >= atomic_load(&g_taps_base) + (getenv("DM_UI_DUMP_AT") ? atoi(getenv("DM_UI_DUMP_AT")) : 45)) { dd = 1; ui_dump(proot, 0, dn, 0, pm); } } int tm = ui_touch_mode(); if (tm) ui_wtap_pump(pm, proot, pw, phh); if (tm) ui_long_pump(); ui_target_pump(pm, fr); if (tm) ui_use_pump(); if (tm) ui_buy_pump(pw, phh); ui_item_pump(proot, pw, phh); ui_ptr_pump(pm, proot, pw, phh); if (tm) ui_drag_pump(pm, proot, pw, phh); UI_MOUSE_ITEM_PUMPS(pm, proot, pw, phh); { int lu = atomic_load(&g_load_up); dm_uiscreen_set_ingame(ui_panel(proot, "HUDPanel") && !(lu < 0 ? ui_find(proot, "LoadScreenPanel", 0) != 0 : lu)); } ui_safe_pump(pm, proot, fr); ui_lift_pump(proot, fr); ui_note_dock_pump(proot); ui_trove_tabs_pump(pm, proot, fr); ui_minimap_pump(pm, proot, pw, phh, fr); ui_map_pump(pm); ui_map_geom_pump(pm, proot); ui_boss_pct_pump(pm, proot); ui_npcdlg_pump(proot); ui_map_center(pm, proot, *(volatile int32_t *)(pm->base + 0x2d5c748)); if (tm) ui_bind_pump(proot, fr); if (tm) swaptab_pump(proot); if (tm) ui_mercpg_pump(pm, proot, fr); ui_widestash_pump(proot); mv_audit_pump(proot, fr); ui_pages_pump(pm, proot); } } }
+        static uint64_t pf = UINT64_MAX; if (proot && pw > 0 && phh > 0 && pf != fr) { pf = fr; { static int dd; const char *dn; if (!dd && (dn = getenv("DM_UI_DUMP")) && atomic_load(&g_taps_base) && fr >= atomic_load(&g_taps_base) + (getenv("DM_UI_DUMP_AT") ? atoi(getenv("DM_UI_DUMP_AT")) : 45)) { dd = 1; ui_dump(proot, 0, dn, 0, pm); } } int tm = ui_touch_mode(); if (tm) ui_wtap_pump(pm, proot, pw, phh); if (tm) ui_long_pump(); ui_target_pump(pm, fr); if (tm) ui_use_pump(); if (tm) ui_buy_pump(pw, phh); ui_item_pump(proot, pw, phh); ui_ptr_pump(pm, proot, pw, phh); pc_tooltip_trace_tick(pm,fr); pc_key_deliver(pm,proot); pc_binding_deliver(pm); pc_options_open_handoff(pm,proot); if (tm) ui_drag_pump(pm, proot, pw, phh); UI_MOUSE_ITEM_PUMPS(pm, proot, pw, phh); { int lu = atomic_load(&g_load_up); dm_uiscreen_set_ingame(ui_panel(proot, "HUDPanel") && !(lu < 0 ? ui_find(proot, "LoadScreenPanel", 0) != 0 : lu)); } ui_safe_pump(pm, proot, fr); ui_lift_pump(proot, fr); ui_note_dock_pump(proot); ui_trove_tabs_pump(pm, proot, fr); ui_minimap_pump(pm, proot, pw, phh, fr); ui_map_pump(pm); ui_map_geom_pump(pm, proot); ui_boss_pct_pump(pm, proot); ui_npcdlg_pump(proot); ui_map_center(pm, proot, *(volatile int32_t *)(pm->base + 0x2d5c748)); if (tm) ui_bind_pump(proot, fr); if (tm) swaptab_pump(proot); if (tm) ui_mercpg_pump(pm, proot, fr); ui_widestash_pump(proot); mv_audit_pump(proot, fr); ui_pages_pump(pm, proot); } } }
+    if(dm_ui_pc_desktop()) return;
     if (atomic_load(&g_fe_name_open) && atomic_load(&g_ut_phase) == 2) {   // 起名页：点输入框（底板 / 文本框）= 重新弹系统键盘，不发鼠标点击 | naming page: tapping the input box (backplate / text box) = pop up the system keyboard again, no mouse click is sent
         module_t *nm = main_module(); uint64_t nroot = 0; if (nm) memcpy(&nroot, nm->base + 0x2f05458, 8); uint64_t pn = nroot ? ui_find(nroot, "CharacterCreateNamePanel", 0) : 0;
         if (pn && nm) { int32_t w = *(int32_t *)(nm->base + 0x211da38), h = *(int32_t *)(nm->base + 0x211da3c); uint64_t v = atomic_load(&g_ut_xy);
@@ -2876,6 +5390,98 @@ void dm_ui_mouse_pump(void) {   // 游戏取手柄处调（hle_hid fill，主线
 #include <dirent.h>
 #include <sys/stat.h>
 static _Atomic int g_fe_ribbon, g_fe_list, g_fe_name_key; static _Atomic int g_fe_skip_tut, g_fe_menu, g_fe_mode_modal, g_fe_options; static _Atomic int g_fe_name, g_fe_name_done; static _Atomic uint64_t g_fe_key_until, g_fe_key_mask;
+static const char *sel_cur(uint8_t *b,const char *want,int64_t *at);
+// Composición PC: 807640 abre el selector junto al menú; 82a1c8 conserva cierre, guardado y ordenación.
+// Se observa la transición y se abre una vez en un frame posterior, fuera del despacho nativo.
+typedef struct { int phase, opening; uint64_t at, root; uint32_t generation; } pc_frontend_composition;
+static pc_frontend_composition g_pc_frontend;
+static void pc_frontend_cancel(void){g_pc_frontend.phase=0;if(g_pc_frontend.opening)g_pc_frontend.opening=-1;}
+static int pc_frontend_base(const char *name) {
+    static const char *names[]={"GlobalData","FocusManager","CursorScreen","MainMenuPanel","MainMenuButtonRibbon","MainMenuLinks","CharacterSelectPanel","TooltipsPanel","NotificationPanel","SaveIndicatorPanel"};
+    for(unsigned i=0;i<sizeof names/sizeof *names;i++)if(!strcmp(name,names[i]))return 1;
+    return 0;
+}
+static void pc_frontend_note(const char *cat,const char *act,const char *arg) {
+    if(!dm_ui_pc_desktop()){pc_frontend_cancel();return;}
+    if(!arg)arg="";
+    int manager=!strcmp(cat,"PanelManager"),navigation=!strcmp(cat,"FrontEndNavigation");
+    int open=manager&&(!strcmp(act,"OpenPanel")||!strcmp(act,"OpenExclusivePanel"));
+    if((navigation&&strcmp(act,"ToMainMenu")&&strcmp(act,"ToFrontEnd")) ||
+       (manager&&(!strcmp(act,"UnloadAll") || ((!strcmp(act,"UnloadPanel")||!strcmp(act,"ClosePanel"))&&(!strcmp(arg,"MainMenuPanel")||!strcmp(arg,"MainMenuButtonRibbon"))))) ||
+       (open&&!pc_frontend_base(arg))) {pc_frontend_cancel();return;}
+    int arm=(open&&!strcmp(arg,"MainMenuButtonRibbon")) ||
+        (!strcmp(cat,"CharacterSelect")&&!strcmp(act,"SelectCharacter")) ||
+        (navigation&&(!strcmp(act,"ToMainMenu")||!strcmp(act,"ToFrontEnd")));
+    if(!arm||g_pc_frontend.opening)return;
+    module_t *m=main_module();uint64_t root=0;if(m&&m->size>=0x2f05460)memcpy(&root,m->base+0x2f05458,8);
+    g_pc_frontend=(pc_frontend_composition){.phase=root?1:0,.at=dm_guest_frame(),.root=root};
+}
+static int pc_frontend_context(uint64_t root) {
+    int dm_padmode_busy(void);
+    if(!root||!*(uint8_t *)(root+0xd8)||*(uint8_t *)(root+0xd9)||dm_uiscreen_ingame()||atomic_load(&g_load_up)>0||dm_padmode_busy())return 0;
+    uint64_t children=*(uint64_t *)(root+0x58),count=*(uint64_t *)(root+0x60);if(!children||count>256)return 0;
+    int menu=0,ribbon=0;
+    for(uint64_t i=0;i<count;i++){
+        uint64_t panel=*(uint64_t *)(children+8*i);if(!panel||!*(uint8_t *)(panel+0x50)||!*(uint8_t *)(panel+0x51))continue;
+        const char *name=*(const char **)(panel+8);if(!name)return 0;
+        if(!strcmp(name,"MainMenuPanel"))menu=1;
+        if(!strcmp(name,"MainMenuButtonRibbon"))ribbon=1;
+        if(!pc_frontend_base(name)&&has_visible_leaf(panel,1))return 0;
+    }
+    return menu&&ribbon;
+}
+static uint64_t pc_frontend_focus_ready(module_t *m,uint64_t root) {
+    static const uint32_t code[]={0xb40007c1,0xa9bc5ff8,0xa90157f6,0xa9024ff4};
+    if(!m||m->size<0x2f05460||!root||memcmp(m->base+0xabce38,code,sizeof code))return 0;
+    uint64_t panel=ui_panel(root,"CharacterSelectPanel"),manager=*(uint64_t *)(root+0xd0);
+    if(!panel||*(uint64_t *)panel!=(uint64_t)m->base+0x20af548||!manager||!ui_has(root,manager,0)||*(uint64_t *)manager!=(uint64_t)m->base+0x20b7f88||!*(uint8_t *)(panel+0x50)||!*(uint8_t *)(panel+0x51))return 0;
+    uint64_t cached=*(uint64_t *)(panel+0x160);if(cached&&!ui_has(panel,cached,0))return 0;
+    return panel;
+}
+static int pc_frontend_restore(module_t *m,uint64_t root,const char *name,int mode,void (*select)(uint64_t,int,int,int),void (*refresh)(uint64_t)) {
+    static const uint32_t select_code[]={0xf81c0ff7,0xa90157f6,0xa9024ff4,0xa9037bfd};
+    static const uint32_t refresh_code[]={0xd10203ff,0xf90013fb,0xa90367fa,0xa9045ff8};
+    if(!name[0]||!m||m->size<0x2f05460||!root||!select||!refresh||*(int32_t *)(m->base+0x2d7badc)!=mode||memcmp(m->base+0xacbf3c,select_code,sizeof select_code)||memcmp(m->base+0x82a448,refresh_code,sizeof refresh_code))return 0;
+    int64_t index=-1;const char *current=sel_cur((uint8_t *)m->base,name,&index);if(index<0)return 0;
+    uint64_t panel=ui_panel(root,"CharacterSelectPanel");if(!panel||*(uint64_t *)panel!=(uint64_t)m->base+0x20af548||!*(uint8_t *)(panel+0x50)||!*(uint8_t *)(panel+0x51))return 0;
+    uint64_t list=*(uint64_t *)(panel+0x178);if(!list||!ui_has(panel,list,0)||*(uint64_t *)list!=(uint64_t)m->base+0x20b8df0||!*(uint8_t *)(list+0x108))return 0;
+    uint64_t container=*(uint64_t *)(list+0xd0),highlight=*(uint64_t *)(list+0x138);
+    if(!container||!highlight||!ui_has(list,container,0)||!ui_has(list,highlight,0))return 0;
+    uint64_t count=*(uint64_t *)(container+0x60),rows=*(uint64_t *)(container+0x58);if(!rows||count>256||(uint64_t)index>=count)return 0;
+    uint64_t row=*(uint64_t *)(rows+8*index),manager=*(uint64_t *)(root+0xd0);
+    if(!row||!ui_has(list,row,0)||!manager||!ui_has(root,manager,0)||*(uint64_t *)manager!=(uint64_t)m->base+0x20b7f88)return 0;
+    if(current&&!strncmp(current,name,16)&&*(int32_t *)(list+0x140)==index)return 0;
+    // Restaurar la fila sin ejecutar su virtual +a0; el foco se delega después al gestor original.
+    select(list,(int)index,1,0);
+    uint64_t now=0;memcpy(&now,m->base+0x2f05458,8);
+    if(now!=root||!ui_has(root,panel,0)||!ui_has(panel,list,0)||*(int32_t *)(m->base+0x2d7badc)!=mode)return 0;
+    refresh(panel);
+    return 1;
+}
+static void pc_frontend_pump(void) {
+    if(!g_pc_frontend.phase)return;
+    if(!dm_ui_pc_desktop()){pc_frontend_cancel();return;}
+    uint64_t frame=dm_guest_frame();if(frame<=g_pc_frontend.at)return;
+    module_t *m=main_module();uint64_t root=0;if(m&&m->size>=0x2f05460)memcpy(&root,m->base+0x2f05458,8);
+    if(root!=g_pc_frontend.root||!pc_frontend_context(root)){g_pc_frontend.phase=0;return;}
+    uint32_t generation=dm_ui_gen();
+    if(g_pc_frontend.phase==1){g_pc_frontend.phase=2;g_pc_frontend.generation=generation;g_pc_frontend.at=frame;return;}
+    g_pc_frontend.phase=0;
+    if(generation!=g_pc_frontend.generation)return;
+    uint64_t list=ui_panel(root,"CharacterSelectPanel");if(list&&*(uint8_t *)(list+0x50)&&*(uint8_t *)(list+0x51))return;
+    char selected_name[17]={0};const char *selected=sel_cur((uint8_t *)m->base,NULL,NULL);if(selected)memcpy(selected_name,selected,16);
+    int mode=*(int32_t *)(m->base+0x2d7badc);
+    g_pc_frontend.opening=1;
+    fe_send("PanelManager","OpenPanel","CharacterSelectPanel");
+    uint64_t current=0;memcpy(&current,m->base+0x2f05458,8);
+    if(g_pc_frontend.opening==1 && current==root && pc_frontend_context(current)){
+        pc_frontend_restore(m,current,selected_name,mode,(void (*)(uint64_t,int,int,int))(m->base+0xacbf3c),(void (*)(uint64_t))(m->base+0x82a448));
+        memcpy(&current,m->base+0x2f05458,8);
+        uint64_t panel=g_pc_frontend.opening==1&&current==root&&pc_frontend_context(current)?pc_frontend_focus_ready(m,current):0;
+        if(panel)((void (*)(uint64_t,uint64_t))(m->base+0xabce38))(*(uint64_t *)(current+0xd0),panel);
+    }
+    g_pc_frontend.opening=0;
+}
 static int has_character(const char *dir, int depth) {
     DIR *d = opendir(dir); if (!d) return 0; struct dirent *e; int found = 0;
     while (!found && (e = readdir(d))) { if (e->d_name[0] == '.') continue; char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
@@ -2913,8 +5519,38 @@ static void sel_keep(const char *cat, const char *act) {
     ((void (*)(int))(b + 0x7fe32c))((int)at); fe_send("MainMenuHD", "UpdateCharacterInfo", "");
     LOG("选角：确认的是「%s」，原版重排后当前成了「%s」（被选者没排到第一行）→ 已按名字设回第 %lld 行", want, nm ? nm : "", (long long)at);
 }
+static int pc_personal_page_direction(const char *category,const char *action,const char *arg) {
+    // El parser tipo6 sólo acepta categorías registradas. Como TouchKey/TouchUpdate,
+    // el botón usa un mensaje nativo con un argumento que no nombra ningún panel.
+    if(!category||strcmp(category,"PanelManager")||!action||strcmp(action,"ClosePanel")||!arg)return 0;
+    return !strcmp(arg,"TouchPersonalStashPrevious")?-1:!strcmp(arg,"TouchPersonalStashNext")?1:0;
+}
+static int pc_personal_page_route(module_t *m,uint64_t root,const char *category,const char *action,const char *arg,int desktop,pc_tooltip_reader read,void (*flip)(int)) {
+    int dm_padmode_busy(void);
+    if(!desktop||!read||!flip)return 0;
+    int direction=pc_personal_page_direction(category,action,arg);
+    if(!direction||!m||!m->base||m->size<0x2f05460||!root||*(uint64_t*)(m->base+0x2f05458)!=root||!dm_uiscreen_ingame()||dm_padmode_busy()||atomic_load(&g_load_up)>0||!pc_options_event_allowed())return 0;
+    uint32_t generation=atomic_load(&g_ui_gen),epoch=atomic_load(&g_pc_tabbar_epoch);
+    uint64_t bank=ui_panel(root,"BankExpansionLayout"),tabs=bank?ui_find(bank,"BankTabs",0):0;
+    if(!*(uint8_t*)(root+0xd9)||!bank||!*(uint8_t*)(bank+0x50)||!*(uint8_t*)(bank+0x51)||!tabs||!*(uint8_t*)(tabs+0x50)||!*(uint8_t*)(tabs+0x51)||*(uint64_t*)tabs!=(uint64_t)m->base+0x20ba3a8||TAB_SEL(tabs)!=0||modal_any(root,1,NULL))return 0;
+    uint64_t player=pc_tooltip_local_player(read,(uint64_t)m->base,*(uint32_t*)(m->base+0x2d20e4c)),inventory=pc_tooltip_inventory(read,player),held=0;
+    if(!inventory||!pc_tooltip_field(read,inventory,0x40,&held,8)||held)return 0;
+    if(epoch!=atomic_load(&g_pc_tabbar_epoch)||generation!=atomic_load(&g_ui_gen)||*(uint64_t*)(m->base+0x2f05458)!=root||!pc_options_event_allowed()||dm_padmode_busy()||!dm_uiscreen_ingame()||atomic_load(&g_load_up)>0||!ui_has(root,bank,0)||!ui_has(bank,tabs,0)||TAB_SEL(tabs)!=0)return 0;
+    flip(direction);return 1;
+}
+static void pc_personal_page_message(const char *category,const char *action,const char *arg) {
+    if(!pc_personal_page_direction(category,action,arg)||!dm_ui_pc_desktop())return;
+    module_t *m=main_module();if(!m||m->size<0x2f05460)return;
+    void dm_pages_request_flip(int);
+    pc_personal_page_route(m,*(uint64_t*)(m->base+0x2f05458),category,action,arg,1,pc_tooltip_read,dm_pages_request_flip);
+}
 void dm_ui_on_uimsg(const char *cat, const char *act, const char *arg) {
+#if TARGET_OS_OSX
+    if (ui_mac_app()) calibration_note(cat,act,arg);
+#endif
     sel_keep(cat, act);
+    pc_frontend_note(cat,act,arg);
+    pc_personal_page_message(cat,act,arg);
     // 位置守卫自检的四条路：关面板 / 切页签 / 退出到前端（切后台由前端 dm_ui_lifecycle 报）
     // The four paths of the position guard self-check: closing a panel / switching tabs / exiting to the front end (going to the background is reported by the front end's dm_ui_lifecycle)
     if (!strcmp(cat, "PanelManager") && !strcmp(act, "ClosePanel") && arg && strncmp(arg, "Touch", 5)) mv_audit_arm("关面板");
@@ -3093,7 +5729,9 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
     { static struct { uint64_t fr; char c[48], a[48], g[48]; int done; } ds[8]; static int nd = -1; if (nd < 0) { nd = 0; const char *e = getenv("DM_DBG_FE_SEND"); char buf[512]; if (e) { strlcpy(buf, e, sizeof buf);
           for (char *t = strtok(buf, ";"); t && nd < 8; t = strtok(NULL, ";")) { unsigned long long f; ds[nd].g[0] = 0; if (sscanf(t, "%llu:%47[^:]:%47[^:]:%47s", &f, ds[nd].c, ds[nd].a, ds[nd].g) >= 3) { ds[nd].fr = f; nd++; } } } }
       uint64_t b = atomic_load(&g_taps_base), f0 = dm_guest_frame(); if (nd > 0 && b) for (int i = 0; i < nd; i++) if (!ds[i].done && f0 >= b + ds[i].fr) { ds[i].done = 1; if (ds[i].c[0] == '!') { void uimsg_emit(const char *, const char *, const char *); LOG("前端路径：只给订阅者补发 %s:%s %s（不进游戏）", ds[i].c + 1, ds[i].a, ds[i].g); uimsg_emit(ds[i].c + 1, ds[i].a, ds[i].g); } else fe_send(ds[i].c, ds[i].a, ds[i].g); } }   // 类别前加 ! = 只发给订阅者、不进游戏（造「消息上开着、游戏里没有」的现场用） | a ! before the category = sent only to subscribers, not into the game (for setting up the "open according to messages, absent in the game" scenario)
-    rs_pump(); if (atomic_load(&g_rs) != RS_IDLE) return;   // 一键重开进行中：主菜单 / 选角页由它走，前端自动化不插手（不然主菜单上会按两次 X） | one-tap restart in progress: it handles the main menu / character select page and the front-end automation stays out (otherwise X would be pressed twice on the main menu)
+    rs_pump(); if (atomic_load(&g_rs) != RS_IDLE) { pc_frontend_cancel(); return; }   // 一键重开进行中：主菜单 / 选角页由它走，前端自动化不插手（不然主菜单上会按两次 X） | one-tap restart in progress: it handles the main menu / character select page and the front-end automation stays out (otherwise X would be pressed twice on the main menu)
+    pc_frontend_pump();
+    if(dm_ui_pc_desktop())return;
     static uint64_t next; uint64_t fr = dm_guest_frame(); if (fr < next) return;
     if (atomic_load(&g_cc_open)) {   // 职业选择页的「返回」只在有存档（从选角页进来）时出现；无存档时这页就是首页 | 「返回」(Back) on the class selection page appears only when there are saves (entered from the character select page); with no saves this page is the home page
         module_t *m = main_module(); uint64_t root = 0; if (m) memcpy(&root, m->base + 0x2f05458, 8);
@@ -3231,6 +5869,7 @@ void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几
 // Front-end path straightening and the various key presses made on the player's behalf: all in-flight requests are voided. These requests are all queued by touch taps (tapping a tab presses L / R, tapping a settings page button presses Back, tapping a dialog menu row presses up / down and then confirm...),
 // and the whole UI is about to be rebuilt, so leaving them would make them land on the new UI
 void dm_ui_auto_mode_leave(void) {
+    pc_frontend_cancel();
     atomic_store(&g_fe_skip_tut, 0); atomic_store(&g_fe_back, 0); atomic_store(&g_fe_options, 0); atomic_store(&g_fe_name, 0); atomic_store(&g_fe_name_done, 0); atomic_store(&g_fe_name_key, 0); atomic_store(&g_fe_name_tap, 0);
     atomic_store(&g_fe_key_until, 0); atomic_store(&g_fe_key_mask, 0); atomic_store(&g_pulse_until, 0);   // 「独占的一下」（g_alone_*：进局常态替按一次显示物品键）不在此列：它不是触摸点击排下的，两种模式都要发，由它自己等切换完成（dm_ui_alone_take） | "The exclusive press" (g_alone_*: the one show-items key press made routinely on entering a run) is not among these: it is not queued by a touch tap and must be sent in both modes; it waits for the switch to finish by itself (dm_ui_alone_take)
     atomic_store(&g_set_back_at, 0); atomic_store(&g_speech_back_at, 0); atomic_store(&g_tab_left, 0); atomic_store(&g_tab_direct, 0); atomic_store(&g_tab_then, 0); atomic_store(&g_del_q, 0); atomic_store(&g_del_hold, 0);
@@ -3238,6 +5877,7 @@ void dm_ui_auto_mode_leave(void) {
 // 界面触摸这一层记着的控件地址与挪位表：挪过的原版控件先写回原值（重建后有的面板原样留着），再把记的地址清掉（重建后旧地址是悬空的，新控件正好分配在旧地址上时认不出）
 // Widget addresses and the move table remembered by this UI touch layer: moved original widgets are first written back to their original values (after a rebuild some panels are kept as they were), then the remembered addresses are cleared (after a rebuild the old addresses are dangling, and when a new widget happens to be allocated at an old address the two cannot be told apart)
 void dm_ui_cache_mode_leave(void) {
+    pc_tabbar_mouse_cancel();pc_held_pointer_invalidate();
     module_t *m = main_module(); uint64_t root = 0; if (m) memcpy(&root, m->base + 0x2f05458, 8);
     { uint64_t bk = root ? ui_panel(root, "BankExpansionLayout") : 0, tabs = bk && *(uint8_t *)(bk + 0x50) ? ui_find(bk, "BankTabs", 0) : 0;   // 储藏箱开着：记下页签，重建后选回去（ui_pages_pump） | Stash is open: remember the tab and select it again after the rebuild (ui_pages_pump)
       g_bank_tab_keep = tabs ? TAB_SEL(tabs) : -1; g_bank_tab_until = dm_guest_frame() + 120; }
@@ -3247,5 +5887,5 @@ void dm_ui_cache_mode_leave(void) {
     // In-flight touch requests (the touch-only pumps no longer run after switching to the controller, and leaving them would make them land suddenly on switching back to touch) plus a held hover / pointer events not yet fully sent
     atomic_store(&g_wtap, 0); atomic_store(&g_buy_at, 0); atomic_store(&g_tap_req, 0); atomic_store(&g_use_req, 0); atomic_store(&g_long_req, 0); atomic_store(&g_ident_req, 0);
     atomic_store(&g_dg_kind, 0); atomic_store(&g_bd_state, 0); atomic_store(&g_swaptab_tap, 0); atomic_store(&g_mercpg, 0);
-    atomic_store(&g_up_hold, 0); atomic_store(&g_up_r, atomic_load(&g_up_w));
+    pthread_mutex_lock(&g_up_lock);atomic_store(&g_up_hold,0);atomic_store(&g_up_r,atomic_load(&g_up_w));free(g_up_extra);g_up_extra=NULL;g_up_capacity=256;g_up_cancel=0;g_up_modifiers=0;memset(g_up_buttons,0,sizeof g_up_buttons);memset(g_up_keys,0,sizeof g_up_keys);pthread_mutex_unlock(&g_up_lock);
 }

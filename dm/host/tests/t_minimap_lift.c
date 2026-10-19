@@ -2,8 +2,11 @@
 // Replay layout replacement through the production move guard and lift pump; verify loading messages and move-table compaction.
 // Replay layout replacement through the production move guard and lift pump; verify loading messages and move-table compaction.
 #include "../dm_cursor.c"
+static int page_requests;
+void dm_pages_request_flip(int direction){(void)direction;page_requests++;}
 module_t g_mod[MAX_MOD]; int g_nmod;
-static int busy, ingame=1, uy=314; static uint64_t frame=100;
+static int busy, ingame=1, uy=314,desktop; static uint64_t frame=100;
+int dm_ui_pc_desktop(void){return desktop;}
 uint64_t dm_guest_frame(void) { return frame; }
 uint64_t now_ns(void) { return frame*16666667; }
 int dm_padmode_busy(void) { return busy; }
@@ -122,5 +125,12 @@ int main(void) {
  mv_offset(MV_LIFT,ptr(incoming),1,-511,0); CHECK(*y(incoming)==-499);
  mv_restore(ptr(root),MV_LIFT); CHECK(*y(incoming)==12 && g_nmv==0);
  for(int i=1;i<96;i++) CHECK(*y(old[i])==100+i);
+ *(uint64_t *)(root+0x60)=1;children[0]=ptr(incoming);widget(incoming,"HUDMonsterHealth",63);
+ mv_offset(MV_LIFT,ptr(incoming),1,-127,0);CHECK(*y(incoming)==-64);
+ desktop=1;tick();tick();CHECK(*y(incoming)==63 && mv_count(MV_LIFT)==0 && !g_mv_want[MV_LIFT]);
+ for(int i=0;i<10;i++)tick();CHECK(*y(incoming)==63 && !g_nmv);
+ desktop=0;mv_offset(MV_LIFT,ptr(incoming),1,-127,0);*y(incoming)=200;desktop=1;tick();CHECK(*y(incoming)==200 && !g_nmv);
+ desktop=0;mv_offset(MV_LIFT,ptr(incoming),1,-127,0);*(uint64_t *)(root+0x60)=0;desktop=1;tick();tick();CHECK(*y(incoming)==73 && !g_nmv);
+ CHECK(page_requests==0);
  free(base); printf("t_minimap_lift: %d checks, %d failures\n",checks,fails); return fails!=0;
 }

@@ -19,12 +19,18 @@ OUT=${1:-$ROOT/out/macapp}; KIND=${DM_MAC_PRODUCT:-touch}; BID=${DM_MAC_BUNDLE_I
 P=$(bash "$HERE/product.sh" path "$KIND"); [ -f "$P/main.patched.bin" ] || { echo "🔴 没有产物 ${P}（先跑 product.sh build）"; exit 2; }
 # DM_MAC_M3=1：老接口版（图形后端不用 Metal 4，最低系统 host/Makefile 的 MACOS_MIN_M3）。包名、显示名、包标识都带 M3，能和正式包并存；存档与日志目录也是另一个
 # DM_MAC_M3=1: older-API build (the graphics backend does not use Metal 4; minimum system is MACOS_MIN_M3 in host/Makefile). Package name, display name and bundle identifier all carry M3 so it can coexist with the regular package; the save and log directory is a separate one as well
-M3=${DM_MAC_M3:-}; NAME="D2R Mobile${M3:+ M3}"; [ -z "$M3" ] || BID=${DM_MAC_BUNDLE_ID:-org.d2rmobile.mac.m3}
+M3=${DM_MAC_M3:-}; NAME="${DM_MAC_NAME:-D2R Mobile}${M3:+ M3}"; [ -z "$M3" ] || BID=${DM_MAC_BUNDLE_ID:-org.d2rmobile.mac.m3}
 make -C "$DM/host" ${M3:+dmhost_m3} > /dev/null
 MIN=$(make -s -C "$DM/host" print-macos-min${M3:+-m3})   # 最低系统版本：与编译宿主用的是同一个数（host/Makefile 的 MACOS_MIN / MACOS_MIN_M3） | minimum system version: the same number the host is compiled with (MACOS_MIN / MACOS_MIN_M3 in host/Makefile)
-APP="$OUT/$NAME.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+APP="$OUT/$NAME.app"
+[ ! -e "$APP" ] || { echo "La app de salida ya existe; conserva esa compilación antes de repetir: $APP"; exit 2; }
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$DM/host/dmhost${M3:+_m3}" "$APP/Contents/MacOS/D2RMobile"
 LINK=${DM_MAC_LINK-1}; [ "$LINK" != 0 ] || LINK=; RES="$APP/Contents/Resources"; : > "$RES/paths.txt"
+CUR="$ROOT/build/cache/mac-cursors"
+python3 "$DM/ios/tools/gen_mac_cursors.py" "${DM_ROMFS_SRC:-$ROOT/data/switch/3.3.94012/Update/RomFS}" "$CUR"
+if [ -n "$LINK" ]; then echo "cursors=$CUR" >> "$RES/paths.txt"
+else mkdir -p "$RES/cursors"; cp "$CUR/normal.png" "$CUR/pressed.png" "$RES/cursors/"; fi
 if [ -n "$LINK" ]; then echo "product=$P" >> "$RES/paths.txt"; else cp -R "$P" "$RES/product"; fi
 cp "$DM/gfx/nvn/shader_map.tsv" "$APP/Contents/Resources/shader_map.tsv"
 cp "$DM/gfx/nvn/pso_manifest.tsv" "$APP/Contents/Resources/pso_manifest.tsv"   # 管线预热的种子清单：图形后端按「与映射表同目录」找它（两种出法都带；漏带的包开局边画边现编管线——的日志里现编了 102 条） | seed list for pipeline warm-up: the graphics backend looks for it "in the same directory as the mapping table" (both ways of building carry it; a package without it compiles pipelines on the fly while drawing at the start of a game - 102 of them in one log)
@@ -43,12 +49,32 @@ else mkdir -p "$RES/msl/b-$V"; rsync -a --include='*.metallib' --include='*.json
 # UI overlay (the Custom page, the trove, rifts and our other pages all live in it): generated on the spot from the game resources (about 3 seconds); DM_MAC_OVERLAY=<dir> uses an existing one, =none leaves it out (original UI)
 if [ "${DM_MAC_OVERLAY:-}" != none ]; then
   OVD="$RES/romfs_overlay"; [ -z "$LINK" ] || { OVD="$OUT/romfs_overlay.local"; rm -rf "$OVD"; echo "romfs_overlay=$OVD" >> "$RES/paths.txt"; }
-  if [ -n "${DM_MAC_OVERLAY:-}" ]; then cp -R "$DM_MAC_OVERLAY" "$OVD"
+  if [ -n "${DM_MAC_OVERLAY:-}" ]; then
+    cp -R "$DM_MAC_OVERLAY" "$OVD"
+    [ ! -d "${DM_MAC_OVERLAY}_variants" ] || cp -R "${DM_MAC_OVERLAY}_variants" "${OVD}_variants"
   else DM_OVERLAY_MAC=1 python3 "$DM/ios/tools/gen_romfs_overlay.py" "${DM_ROMFS_SRC:-$ROOT/data/switch/3.3.94012/Update/RomFS}" "$OVD" > /dev/null || { echo "🔴 界面覆盖层生成失败"; exit 2; }; fi
+  if [ -n "$LINK" ] && [ -d "${OVD}_variants" ]; then
+    echo "romfs_overlay_variants=${OVD}_variants" >> "$RES/paths.txt"
+  fi
+fi
+if [ "${DM_MAC_ROMFS_COPY:-0}" = 1 ]; then
+  ROM=${DM_ROMFS_SRC:-$ROOT/data/switch/3.3.94012/Update/RomFS}
+  [ -f "$ROM/data/build_manifest.psv" ] || { echo "Faltan los recursos originales del juego: $ROM"; exit 2; }
+  ditto "$ROM" "$RES/romfs"
+fi
+if [ -n "${DM_MAC_ICON_SOURCE:-}" ]; then
+  [ -f "$DM_MAC_ICON_SOURCE" ] || { echo "No existe el icono: $DM_MAC_ICON_SOURCE"; exit 2; }
+  ICONSET="$OUT/AppIcon.iconset"; mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -s format png -z "$size" "$size" "$DM_MAC_ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}.png" > /dev/null
+    twice=$((size * 2))
+    sips -s format png -z "$twice" "$twice" "$DM_MAC_ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}@2x.png" > /dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$RES/AppIcon.icns"
 fi
 [ -s "$RES/paths.txt" ] || rm -f "$RES/paths.txt"
 VER=${DM_MAC_VERSION:-1.0}; BUILD=${DM_MAC_BUILD:-$(date +%m%d%H%M)}
-echo "版本 ${VER} 构建 ${BUILD} 产物 $(basename "$P") 提交 $(git -C "$DM" rev-parse --short HEAD 2>/dev/null || echo 未知)" > "$RES/build.txt"
+echo "Versión ${VER}; compilación ${BUILD}; producto $(basename "$P"); revisión $(git -C "$DM" rev-parse --short HEAD 2>/dev/null || echo desconocida)" > "$RES/build.txt"
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -57,7 +83,10 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleDisplayName</key><string>$NAME</string>
 <key>CFBundleIdentifier</key><string>$BID</string>
 <key>CFBundleExecutable</key><string>D2RMobile</string>
+${DM_MAC_ICON_SOURCE:+<key>CFBundleIconFile</key><string>AppIcon</string>}
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleDevelopmentRegion</key><string>${DM_MAC_REGION:-en}</string>
+<key>CFBundleLocalizations</key><array><string>es</string><string>en</string><string>zh-Hans</string></array>
 <key>CFBundleShortVersionString</key><string>$VER</string>
 <key>CFBundleVersion</key><string>$BUILD</string>
 <key>LSMinimumSystemVersion</key><string>$MIN</string>
@@ -67,6 +96,24 @@ ${DM_MAC_UPDATE_URL:+<key>SWUpdateURL</key><string>$DM_MAC_UPDATE_URL</string>
 <key>GCSupportsControllerUserInteraction</key><true/>
 </dict></plist>
 PL
+if [ -n "${DM_MAC_AUDIO_DIAG_DIR:-}" ]; then
+  python3 - "$APP/Contents/Info.plist" "$DM_MAC_AUDIO_DIAG_DIR" <<'PY'
+from pathlib import Path
+import plistlib
+import sys
+plist = Path(sys.argv[1])
+output = Path(sys.argv[2]).resolve()
+output.mkdir(parents=True, exist_ok=True)
+info = plistlib.loads(plist.read_bytes())
+info['LSEnvironment'] = {'DM_AUDIO_DUMP': str(output / 'entrada-6-canales.pcm'),
+                         'DM_AUDIO_OUT_DUMP': str(output / 'salida-estereo.pcm'),
+                         'DM_HID_RECEIPT_LOG': str(output / 'controles.jsonl'),
+                         'DM_UIMSG': str(output / 'interfaz.jsonl'),
+                         'DM_MAC_POINTER_LOG': str(output / 'raton.jsonl'),
+                         'DM_WORLD_DUMP': '1'}
+plist.write_bytes(plistlib.dumps(info, sort_keys=False))
+PY
+fi
 # 自检：管线预热的种子清单在包里、与映射表同目录、不是空的
 # Self-check: the seed list for pipeline warm-up is in the package, in the same directory as the mapping table, and not empty
 [ -s "$RES/pso_manifest.tsv" ] && [ -s "$RES/shader_map.tsv" ] || { echo "🔴 包里缺管线预热种子清单或着色器映射表（Resources/pso_manifest.tsv、shader_map.tsv）"; exit 3; }
@@ -84,5 +131,8 @@ done ) || exit 3; fi
 BIN_MIN=$(otool -l "$APP/Contents/MacOS/D2RMobile" | awk '$1=="minos"{print $2; exit}'); PL_MIN=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist")
 [ -n "$BIN_MIN" ] && [ "$BIN_MIN" = "$PL_MIN" ] || { echo "🔴 最低系统版本对不上：程序本体 ${BIN_MIN:-读不到}，Info.plist ${PL_MIN}"; exit 3; }
 ARCHS=$(lipo -archs "$APP/Contents/MacOS/D2RMobile"); [ "$ARCHS" = arm64 ] || { echo "🔴 程序本体的架构不是只有 arm64：${ARCHS}"; exit 3; }
-codesign --force -s - "$APP" > /dev/null 2>&1 || { echo "🔴 本地签名失败"; exit 3; }
+command -v dylibbundler > /dev/null || { echo "Falta dylibbundler para incluir las bibliotecas de vídeo"; exit 3; }
+dylibbundler -b -ns -x "$APP/Contents/MacOS/D2RMobile" -d "$APP/Contents/Frameworks" -p '@executable_path/../Frameworks/' -cd > "$OUT/bibliotecas.log" 2>&1 || { echo "Error al empaquetar bibliotecas; consulta $OUT/bibliotecas.log"; exit 3; }
+codesign --force --deep -s - "$APP" > /dev/null 2>&1 || { echo "🔴 本地签名失败"; exit 3; }
+codesign --verify --deep --strict "$APP" || exit 3
 echo "MACAPP ${APP}（${M3:+老接口版，}版本 ${VER} 构建 ${BUILD}，最低系统 macOS ${MIN}，产物 $(basename "$P")，$(du -sh "$APP" | cut -f1)${LINK:+，不带派生物：只能在本机跑}）"

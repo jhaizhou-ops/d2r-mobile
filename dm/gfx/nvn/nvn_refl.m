@@ -35,7 +35,7 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             if ([k isEqualToString:@"cbuf"]) r->kind = NVN_RB_CBUF;
             else if ([k isEqualToString:@"samp"]) r->kind = NVN_RB_SAMP;
             else if ([k isEqualToString:@"samp_tex"]) r->kind = NVN_RB_SAMPT;
-            else if ([k isEqualToString:@"tex"]) { r->kind = NVN_RB_TEX; dummy_kind(b[@"msl_type"], &r->dtt, &r->dpf); }
+            else if ([k isEqualToString:@"tex"]) { r->kind = NVN_RB_TEX; dummy_kind(b[@"msl_type"], &r->dtt, &r->dpf); if ([b[@"depth_compare"] boolValue]) r->dpf = NVN_DPF_DEPTH; }
             else if ([k isEqualToString:@"img"]) { r->kind = NVN_RB_IMG; dummy_kind(b[@"msl_type"], &r->dtt, &r->dpf); }
             else if ([k isEqualToString:@"tbuf"]) { r->kind = NVN_RB_TBUF; uint8_t tt; dummy_kind(b[@"msl_type"], &tt, &r->dpf); }
             else if ([k isEqualToString:@"sbuf"]) { r->kind = NVN_RB_SBUFP; r->rw = [b[@"rw"] boolValue]; }

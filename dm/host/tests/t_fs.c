@@ -182,18 +182,25 @@ int main(void) {
     CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "去掉注入重新挂载：事务式照常，写 a=ok3 提交成功");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "已提交 a = ok3");
 
-    // 语言开关改写设置文件（settings_lang_apply）：期望值按规则手算——只在「与开关不符」时把 Language / VoiceLanguage 改成 0（英文）或 8（简中），别的键和别的语言不动
-    // Language switch rewriting the settings file (settings_lang_apply): expected values computed by hand from the rule -- only when it "does not match the switch" are Language / VoiceLanguage changed to 0 (English) or 8 (Simplified Chinese); other keys and other languages are untouched
+    // Montar aplica el índice exacto a textos y voces; los demás ajustes se conservan.
     { extern int g_t_lang; char sd[1200], sf[1300], gotj[512]; snprintf(sd, sizeof sd, "%s/langt", root); mkdir(sd, 0755); snprintf(sf, sizeof sf, "%s/Settings", sd); mkdir(sf, 0755); snprintf(sf, sizeof sf, "%s/Settings/Settings.json", sd);
-      #define LANGCASE(dm, in, want, what) do { g_t_lang = (dm); put(sf, (in)); settings_lang_apply(sd); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "语言开关：%s", (what)); } while (0)
-      LANGCASE(-1, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "没点过应用：一个字不动");
-      LANGCASE(1, "{ \"A\": 1, \"Language\": 8, \"VoiceLanguage\": 8, \"B\": 2 }", "{ \"A\": 1, \"Language\": 0, \"VoiceLanguage\": 0, \"B\": 2 }", "开关 = 英文、文件是简中：文字和语音都改成 0，别的键不动");
-      LANGCASE(0, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "开关 = 中文、文件是英文：都改成 8");
-      LANGCASE(0, "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "开关 = 中文、玩家在原版里选了繁中：不改回简中");
-      LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文件已是英文：不动");
-      LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 8 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文字已英文但语音还是中文：语音跟上");
-      LANGCASE(1, "{ \"Language\": 12 }", "{\n    \"VoiceLanguage\": 0, \"Language\": 0 }", "开关 = 英文、两位数的语言号且没有语音键：改写并补上语音键");
-      g_t_lang = -1; }
+      unsetenv("DM_LANG");
+      #define LANGCASE(dm, in, want, what) do { g_t_lang = (dm); put(sf, (in)); settings_lang_apply(sd); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "Idioma: %s", (what)); } while (0)
+      LANGCASE(-1, "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "sin selección explícita se conserva otro idioma upstream");
+      LANGCASE(-1, "{ \"Language\": 9, \"VoiceLanguage\": 2 }", "{ \"Language\": 9, \"VoiceLanguage\": 2 }", "legado implícito conserva texto chino y voz española");
+      LANGCASE(-1, "{ \"Language\": 2, \"VoiceLanguage\": 9 }", "{ \"Language\": 2, \"VoiceLanguage\": 9 }", "legado implícito conserva texto español y voz china");
+      LANGCASE(2, "{ \"A\": 1, \"Language\": 8, \"VoiceLanguage\": 8, \"B\": 2 }", "{ \"A\": 1, \"Language\": 2, \"VoiceLanguage\": 2, \"B\": 2 }", "español actualiza textos y voces, sin alterar otros ajustes");
+      LANGCASE(2, "{ \"Language\": 2, \"VoiceLanguage\": 8 }", "{ \"Language\": 2, \"VoiceLanguage\": 2 }", "la voz china cambia aunque los textos ya estén en español");
+      LANGCASE(2, "{ \"Language\": 2, \"VoiceLanguage\": 2 }", "{ \"Language\": 2, \"VoiceLanguage\": 2 }", "español persistente no cambia al remontar");
+      LANGCASE(9, "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "la selección china tradicional migrada conserva textos y voces");
+      LANGCASE(0, "{ \"Language\": 2, \"VoiceLanguage\": 2 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "seleccionar inglés sigue funcionando");
+      LANGCASE(8, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "seleccionar chino sigue funcionando");
+      LANGCASE(2, "{ \"Language\": 12 }", "{\n    \"VoiceLanguage\": 2, \"Language\": 2 }", "índice de dos cifras y voz ausente");
+      setenv("DM_LANG", "en-US", 1);
+      LANGCASE(2, "{ \"Language\": 2, \"VoiceLanguage\": 2 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "DM_LANG explícita prevalece sobre Custom español");
+      setenv("DM_LANG", "es-MX", 1);
+      LANGCASE(-1, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 10, \"VoiceLanguage\": 10 }", "DM_LANG conserva el índice esMX original");
+      unsetenv("DM_LANG"); g_t_lang = -1; }
 
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);
     printf("== %d 项，失败 %d ==\n", checks, fails);

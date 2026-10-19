@@ -34,6 +34,123 @@ STAT_NAMES = {
     'charged': '技能', '*charged': '技能',
 }
 
+STAT_NAMES_ES = {
+    'abs-cold': 'abs. frío',
+    'abs-cold%': 'abs. frío',
+    'abs-fire': 'abs. fuego',
+    'abs-fire%': 'abs. fuego',
+    'abs-ltng': 'abs. rayos',
+    'abs-ltng%': 'abs. rayos',
+    'abs-mag': 'abs. magia',
+    'ac': 'defensa',
+    'ac%': 'defensa',
+    'ac-miss': 'def. proyectiles',
+    'addxp': 'experiencia',
+    'all-stats': 'atributos',
+    'allskills': 'habilidades',
+    'ama': 'amazona',
+    'att': 'ataque',
+    'att%': 'ataque',
+    'att-demon': 'at. demonios',
+    'att-skill': 'habilidad al atacar',
+    'att-undead': 'at. no muertos',
+    'aura': 'aura',
+    'balance1': 'recup. impacto',
+    'balance2': 'recup. impacto',
+    'balance3': 'recup. impacto',
+    'block': 'bloqueo',
+    'bloody': 'heridas abiertas',
+    'cast1': 'lanzamiento',
+    'cast2': 'lanzamiento',
+    'cast3': 'lanzamiento',
+    'cheap': 'descuento',
+    'cold-len': 'dur. frío',
+    'cold-max': 'daño frío máx.',
+    'cold-min': 'daño frío mín.',
+    'crush': 'golpe triturador',
+    'death-skill': 'habilidad al morir',
+    'demon-heal': 'vida por demonio',
+    'dex': 'destreza',
+    'dmg': 'daño',
+    'dmg%': 'daño mejorado',
+    'dmg-cold': 'daño frío',
+    'dmg-demon': 'daño a demonios',
+    'dmg-elem': 'daño elemental',
+    'dmg-fire': 'daño fuego',
+    'dmg-ltng': 'daño rayos',
+    'dmg-mag': 'daño mágico',
+    'dmg-max': 'daño máx.',
+    'dmg-min': 'daño mín.',
+    'dmg-norm': 'daño',
+    'dmg-undead': 'daño a no muertos',
+    'dmg-pois': 'daño veneno',
+    'dru': 'druida',
+    'dur': 'durabilidad',
+    'enr': 'energía',
+    'extra-cold': 'daño frío',
+    'extra-fire': 'daño fuego',
+    'extra-ltng': 'daño rayos',
+    'extra-mag': 'daño mágico',
+    'extra-pois': 'daño veneno',
+    'fire-max': 'daño fuego máx.',
+    'fire-min': 'daño fuego mín.',
+    'freeze': 'congelación',
+    'gold%': 'oro',
+    'gethit-skill': 'habilidad al recibir golpe',
+    'heal-kill': 'vida por baja',
+    'hit-skill': 'habilidad al golpear',
+    'hp': 'vida',
+    'hp%': 'vida',
+    'kill-skill': 'habilidad por baja',
+    'levelup-skill': 'habilidad al subir nivel',
+    'lifesteal': 'robo de vida',
+    'light': 'radio de luz',
+    'light-thorns': 'rayos al atacante',
+    'ltng-max': 'daño rayos máx.',
+    'mag%': 'objetos mágicos',
+    'mana': 'maná',
+    'mana%': 'maná',
+    'mana-kill': 'maná por baja',
+    'manasteal': 'robo de maná',
+    'move1': 'velocidad',
+    'move2': 'velocidad',
+    'move3': 'velocidad',
+    'nec': 'nigromante',
+    'oskill': 'habilidad',
+    'pal': 'paladín',
+    'pierce-cold': 'perforar res. frío',
+    'pierce-fire': 'perforar res. fuego',
+    'pierce-ltng': 'perforar res. rayos',
+    'pierce-mag': 'perforar res. magia',
+    'pierce-pois': 'perforar res. veneno',
+    'randclassskill': 'habilidad aleatoria',
+    'red-dmg': 'daño reducido',
+    'red-dmg%': 'daño reducido',
+    'red-mag': 'daño mágico reducido',
+    'regen': 'regeneración de vida',
+    'regen-mana': 'regeneración de maná',
+    'res-all': 'resistencias',
+    'res-cold': 'res. frío',
+    'res-fire': 'res. fuego',
+    'res-ltng': 'res. rayos',
+    'res-mag': 'res. magia',
+    'res-pois': 'res. veneno',
+    'skill': 'habilidad',
+    'skill-rand': 'habilidad aleatoria',
+    'skilltab': 'rama de habilidades',
+    'sock': 'engarces',
+    'sor': 'hechicera',
+    'stam': 'resistencia',
+    'str': 'fuerza',
+    'swing1': 'vel. ataque',
+    'swing2': 'vel. ataque',
+    'swing3': 'vel. ataque',
+    'thorns': 'daño al atacante',
+    'vit': 'vitalidad',
+    'charged': 'cargas',
+    '*charged': 'cargas',
+}
+
 # 只有「min..max 里随机取一个值」的属性才是可变范围：看 properties.txt 的 func1。
 # 1 / 2 / 5 / 6 / 7 / 8 / 10 / 14 / 22 = 随机取值（数值、伤害下限 / 上限 / 百分比、速度、技能页、孔数、单个技能等级）；
 # 15 = min 给下限属性、max 给上限属性（如「冰伤 15-45」是固定的伤害区间）；11 / 19 = 触发 / 充能（几率或次数 + 技能等级）；17 / 18 = 按等级 / 按时间。这些都不写。
@@ -52,20 +169,25 @@ def _skill_names(s, romfs):
         skill = row.get('skill', '').strip()
         if skill_id and skill:
             value = s.get('skills.json', 'skillname' + skill_id)
-            names[skill] = value if value and len(value) <= 4 else '技能'
+            names[skill] = (value if value and len(value) <= (24 if s.spanish else 4)
+                            else ('habilidad' if s.spanish else '技能'))
     return names
 
 
-def _label(code, param, skills):
-    label = STAT_NAMES.get(code, STAT_NAMES.get(code.lstrip('*')))
+def _label(code, param, skills, spanish=False):
+    labels = STAT_NAMES_ES if spanish else STAT_NAMES
+    generic = 'habilidad' if spanish else '技能'
+    label = labels.get(code, labels.get(code.lstrip('*')))
     if code in SKILL_CODES or code.lstrip('*') in SKILL_CODES:
         if param:
-            return skills.get(param, '技能') + '+'
-        return '技能'
+            return skills.get(param, generic) + ('' if spanish else '+')
+        return generic
+    if spanish and not label:
+        raise SystemExit('annot_ranges: falta etiqueta española para ' + code)
     return label or code
 
 
-def _range_line(rows, code_prefix, min_prefix, max_prefix, slots, skills, props):
+def _range_line(rows, code_prefix, min_prefix, max_prefix, slots, skills, props, spanish=False):
     parts = []
     for i in slots:
         code = rows.get(code_prefix.format(i), '').strip()
@@ -75,13 +197,14 @@ def _range_line(rows, code_prefix, min_prefix, max_prefix, slots, skills, props)
         maximum = rows.get(max_prefix.format(i), '').strip()
         if props.get(code.lstrip('*'), {}).get('func1') not in RANDOM_FUNCS or minimum == maximum or not minimum or not maximum:
             continue
-        label = _label(code, rows.get(('par' + str(i)) if code_prefix.startswith('prop') else ('T1Param' + str(i)), '').strip(), skills)
+        label = _label(code, rows.get(('par' + str(i)) if code_prefix.startswith('prop') else ('T1Param' + str(i)), '').strip(), skills, spanish)
         suffix = '%' if '%' in code else ''
-        prefix = '+' if code == 'ac' else ''
-        parts.append('%s%s%s-%s%s' % (label, prefix, minimum, maximum, suffix))
+        prefix = '+' if code == 'ac' or (spanish and code in SKILL_CODES) else ''
+        parts.append(('%s %s%s-%s%s' if spanish else '%s%s%s-%s%s') %
+                     (label, prefix, minimum, maximum, suffix))
         if len(parts) == 3:
             break
-    return '/'.join(parts)
+    return (' / ' if spanish else '/').join(parts)
 
 
 def _annotate(s, key, line, color, files=ITEM_FILES):
@@ -91,8 +214,12 @@ def _annotate(s, key, line, color, files=ITEM_FILES):
     so the name line gets its original color restored in front: unique / runeword ÿc4, set ÿc2."""
     if not line:
         return 0
+    detail = '[%s]' % line
+    if s.spanish:
+        from annot_strings import annotation_lines
+        detail = annotation_lines(detail)
     def add(text):
-        return text if text.startswith('\u00ffc5[') else '\u00ffc5[%s]\n%s%s' % (line, color, text)
+        return text if text.startswith('\u00ffc5[') else '\u00ffc5%s\n%s%s' % (detail, color, text)
     n = 0
     for filename in files:
         n += s.set(filename, key, add)
@@ -107,11 +234,11 @@ def ann_ranges(s, romfs):
     for row in _excel(romfs, 'uniqueitems.txt'):
         if row.get('disabled') == '1' or row.get('spawnable') != '1':
             continue
-        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 13), skills, props), '\u00ffc4')
+        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 13), skills, props, s.spanish), '\u00ffc4')
     for row in _excel(romfs, 'setitems.txt'):
-        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 9), skills, props), '\u00ffc2')
+        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 9), skills, props, s.spanish), '\u00ffc2')
     for row in _excel(romfs, 'runes.txt'):
         if row.get('complete') != '1':
             continue
-        changed += _annotate(s, row.get('Name', ''), _range_line(row, 'T1Code{}', 'T1Min{}', 'T1Max{}', range(1, 8), skills, props), '\u00ffc4', ('item-runes.json', 'chinese-overlay.json'))
+        changed += _annotate(s, row.get('Name', ''), _range_line(row, 'T1Code{}', 'T1Min{}', 'T1Max{}', range(1, 8), skills, props, s.spanish), '\u00ffc4', ('item-runes.json', 'chinese-overlay.json'))
     return changed

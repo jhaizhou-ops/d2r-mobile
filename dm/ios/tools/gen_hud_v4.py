@@ -147,6 +147,8 @@ ui={'ref':[W,H],'center_x':W/2,'slots':g['slots'],'inner':[g['IX0'],g['IY0'],g['
 font_v=SRC.font('blizzardglobal-v5_81.ttf',30)
 import re, dm_i18n   # 生命 / 法力两行的字形：原有中文这一套 + 中英表 dmHudLife / dmHudMana 英文用到的字（英文版；字形不全 v4text 会空着） | glyphs for the life / mana rows: the existing Chinese set plus the characters used by the English of dmHudLife / dmHudMana in the Chinese-English string table (English version; with missing glyphs v4text would leave blanks)
 _vt={k:(z,e) for k,z,e in dm_i18n.rows()}; _vc='生命法力:/ 0123456789'
+_es=dm_i18n.spanish_rows()
+_vc+=''.join(sorted({c for k in ('dmHudLife','dmHudMana') for c in dm_i18n.FMT.sub('',_es[k])}-set(_vc)))
 _vc+=''.join(sorted({c for k in ('dmHudLife','dmHudMana') for c in dm_i18n.FMT.sub('',_vt[k][0]+_vt[k][1])}-set(_vc)))
 ui['vital']['glyphs']=glyphs('v',(235,235,235,255),font_v,_vc)
 g['slot'].save(os.path.join(UI,'slot.png'))

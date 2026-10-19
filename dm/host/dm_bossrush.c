@@ -130,9 +130,10 @@ void dm_door_label(uint8_t *main_base, uint64_t G, int cls, const char *key, con
     uint64_t T = rd((uint64_t)(uintptr_t)(B + 0x2d64a18 + *(uint8_t *)(uintptr_t)(G + 0x106) * 16)); if (!T || (uint64_t)cls >= rd(T + 0x1550)) return;
     char *k = (char *)(uintptr_t)(rd(T + 0x1548) + (uint64_t)cls * 0x168 + 0x42); int i = 0; while (i < nsv && sv[i].cls != cls) i++;
     if (i == nsv) { if (nsv == 4) return; sv[i].cls = cls; memcpy(sv[i].orig, k, sizeof sv[i].orig); nsv++; }
-    if (in_town) { uint32_t li = *(volatile uint32_t *)(B + 0x20ae4e0); const char *ln = li < 13 ? (const char *)(uintptr_t)rd((uint64_t)(uintptr_t)(B + 0x20ae478 + 8ull * li)) : NULL;
-        int zh_ui = ln && ln[0] == 'z' && ln[1] == 'h';   // 当前语言（号 main+0x20ae4e0、名表 main+0x20ae478，同 diag.c SetLanguage 记录）：简中 / 繁中用中文，其余英文（英文版口径） | current language (id main+0x20ae4e0, name table main+0x20ae478, same as the SetLanguage record in diag.c): Simplified / Traditional Chinese use Chinese, the rest English (English-version convention)
-        loc_add((uint64_t)(uintptr_t)(B + 0x2d71030), key, zh_ui ? zh : en); loc_add((uint64_t)(uintptr_t)(B + 0x2d70ff0), key, en);
+    if (in_town) {
+        const char *label = dm_ui(key);
+        if (!strcmp(label, key)) label = dm_lang_zh() ? zh : en;
+        loc_add((uint64_t)(uintptr_t)(B + 0x2d71030), key, label); loc_add((uint64_t)(uintptr_t)(B + 0x2d70ff0), key, en);
         if (strcmp(k, key)) { memset(k, 0, sizeof sv[i].orig); strlcpy(k, key, sizeof sv[i].orig); LOG("门名牌：物件 %d 串键换成 %s", cls, key); } }
     else if (!strcmp(k, key)) { memcpy(k, sv[i].orig, sizeof sv[i].orig); LOG("门名牌：物件 %d 串键写回 %s", cls, sv[i].orig); }   // 只撤自己挂的那个键：同一类物件两处用（298 = 城里的首领连战门、秘境图里的回城门），各管各的 | only remove the key we attached ourselves: the same object class is used in two places (298 = the boss rush door in town, the return-to-town door in rift maps), each managing its own
 }

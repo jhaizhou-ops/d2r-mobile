@@ -9,6 +9,7 @@
 #include "touch_mac.h"
 #include "dm_uiscreen.h"
 #include "dm_world.h"
+#include "dm_cursor.h"
 #include "hle.h"
 #include "dm.h"
 #include <string.h>
@@ -20,6 +21,9 @@
 #include "dm_hud.h"
 #include "dm_prof.h"
 #include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <mach/mach.h>
+#endif
 
 static uint8_t *wb(void) { static uint8_t *b; if (!b) for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) b = (uint8_t *)g_mod[i].base; return b; }
 static uint64_t w_player(void) { uint8_t *b = wb(); return b ? ((uint64_t (*)(uint32_t))(b + 0x45f9d0))(*(uint32_t *)(b + 0x2d20e4c)) : 0; }
@@ -327,6 +331,16 @@ static void w_go_step(void) {
 // Rectangle: a unit takes a body box with "feet-to-head" as height and width proportional to the height (humanoid 0.44, object 1.0), objects also union in the footprint (see below); an item on the ground takes its name label rectangle, or the feet point when there is no label;
 // any side shorter than min (about 7 mm) is padded up to min, with no further overall expansion. When several rectangles contain the touch point, take the one whose center is closest to the touch point.
 static int w_project(uint8_t *b, uint64_t scene, uint64_t u, float *out, int top) { int r = ((int (*)(uint64_t, uint64_t, float *, int))(b + 0x90d110))(scene, u, out, top); if (r) out[1] += dm_ui_proj_dy(); return r; }   // 这里要真实画面坐标：把界面矩形的 y 加回来（见 dm_uiscreen.c） | real picture coordinates are needed here: add the UI rectangle's y back (see dm_uiscreen.c)
+int dm_world_mouse_aim(float nx, float ny, int32_t *rx, int32_t *ry) {
+    uint8_t *b = wb(); uint64_t pl = b ? w_player() : 0;
+    uint64_t scene = b ? *(uint64_t *)(b + 0x2e2a698) : 0; int width = 0, height = 0; float feet[2];
+    dm_screen_real(&width, &height);
+    if (!pl || !scene || width <= 0 || height <= 0 || !w_project(b, scene, pl, feet, 0)) return 0;
+    float dx = nx * width - feet[0], dy = feet[1] - ny * height, distance = sqrtf(dx * dx + dy * dy);
+    if (distance < 1 || !isfinite(distance)) return 0;
+    *rx = (int32_t)(dx / distance * 32767); *ry = (int32_t)(dy / distance * 32767);
+    return 1;
+}
 static int w_in_rect(float px, float py, float cx, float cy, float w, float h, float min, float *d) {
     if (w < min) w = min; if (h < min) h = min; float dx = px - cx, dy = py - cy; if (dx < 0) dx = -dx; if (dy < 0) dy = -dy;
     if (dx > w / 2 || dy > h / 2) return 0; *d = sqrtf(dx * dx + dy * dy); return 1;
@@ -393,11 +407,657 @@ static uint64_t w_hit(uint8_t *b, float sx, float sy, float min, float *dist, in
 }
 // 任意线程：排一笔点按（出图画面归一化坐标），主线程取手柄处执行。后一笔覆盖前一笔
 // Any thread: queue one tap (coordinates normalized to the rendered picture), executed by the main thread at the controller-poll point. A later one overwrites the earlier one
+static _Atomic int g_tap_mouse;
 static _Atomic uint64_t g_tap; static _Atomic unsigned g_tap_seq, g_tap_done; static _Atomic int g_tap_res, g_has_target;
 unsigned dm_world_tap(float nx, float ny) { if (nx < 0) nx = 0; if (nx > 1) nx = 1; if (ny < 0) ny = 0; if (ny > 1) ny = 1;
     unsigned seq = atomic_fetch_add(&g_tap_seq, 1) + 1; atomic_store(&g_tap, (uint64_t)seq << 32 | (uint64_t)(uint32_t)(nx * 65535) << 16 | (uint32_t)(ny * 65535)); return seq; }
 int dm_world_tap_result(unsigned seq) { return atomic_load(&g_tap_done) == seq ? atomic_load(&g_tap_res) : -1; }   // -1 还没执行；0 没有目标（什么都没发）；1 物品 2 NPC 3 物件 4 出口 | -1 not executed yet; 0 no target (nothing sent); 1 item 2 NPC 3 object 4 exit
 int dm_world_has_target(void) { return atomic_load(&g_has_target); }   // 按主键会去交互的目标存在（游戏手柄版自己的选择，main+0x2f7a0c）；任意线程读 | a target that the primary button would interact with exists (the game's own controller-version selection, main+0x2f7a0c); read from any thread
+#if TARGET_OS_OSX
+static struct {uint64_t seq,until;unsigned mouse,source[3],corpses,npcs;} g_pc_world_trace;
+static int pc_trace_read(uint64_t address,void *out,size_t size) {
+    vm_size_t got=0;
+    return address>=0x1000 && size && address<=UINT64_MAX-size &&
+        !vm_read_overwrite(mach_task_self(),address,size,(vm_address_t)out,&got) && got==size;
+}
+static int pc_trace_active(void) {return g_pc_world_trace.seq && w_now_ns()<g_pc_world_trace.until;}
+static void pc_trace_begin(void) {
+    const char *path=getenv("DM_MAC_POINTER_LOG");if(!path || !*path)return;
+    uint64_t seq=g_pc_world_trace.seq+1;
+    memset(&g_pc_world_trace,0,sizeof g_pc_world_trace);g_pc_world_trace.seq=seq;g_pc_world_trace.until=w_now_ns()+3000000000ull;
+}
+typedef struct {int valid;uint32_t type,id,mode,flags124,flags128;int x,y,count,lastx,lasty;} pc_trace_unit;
+static pc_trace_unit pc_trace_snapshot(uint64_t unit) {
+    pc_trace_unit s={.x=-1,.y=-1,.count=-1,.lastx=-1,.lasty=-1};uint8_t raw[0x130];uint64_t path=0;
+    if(!pc_trace_read(unit,raw,sizeof raw))return s;
+    memcpy(&s.type,raw,4);memcpy(&s.id,raw+8,4);memcpy(&s.mode,raw+0xc,4);
+    memcpy(&s.flags124,raw+0x124,4);memcpy(&s.flags128,raw+0x128,4);memcpy(&path,raw+0x38,8);s.valid=1;
+    uint8_t p[0xc8];if(!pc_trace_read(path,p,sizeof p))return s;
+    if(s.type==2 || s.type==4 || s.type==5){memcpy(&s.x,p+0x10,4);memcpy(&s.y,p+0x14,4);}
+    else {uint16_t x,y;memcpy(&x,p+2,2);memcpy(&y,p+6,2);s.x=x;s.y=y;}
+    if(s.type<=1){memcpy(&s.count,p+0x34,4);uint16_t xy[2];
+        if(s.count>0 && s.count<=128 && pc_trace_read(path+0xc8+(uint64_t)(s.count-1)*4,xy,sizeof xy)){s.lastx=xy[0];s.lasty=xy[1];}}
+    return s;
+}
+typedef struct {int valid,iso_valid,gfx_valid,box_valid;uint32_t cls,id,mode,render_mode,flags124,flags128;int iso[2],box[4];uint64_t gfx,count;} pc_trace_npc;
+static pc_trace_npc pc_trace_npc_snapshot(uint64_t unit) {
+    pc_trace_npc s={0};uint8_t raw[0x130];uint32_t type;uint64_t path,render,entries=0;
+    if(!pc_trace_read(unit,raw,sizeof raw))return s;
+    memcpy(&type,raw,4);memcpy(&s.cls,raw+4,4);
+    if(type!=1 || (s.cls!=148 && s.cls!=150 && s.cls!=154))return s;
+    memcpy(&s.id,raw+8,4);memcpy(&s.mode,raw+0xc,4);memcpy(&path,raw+0x38,8);memcpy(&render,raw+0x40,8);
+    memcpy(&s.render_mode,raw+(render?0x58:0xc),4);memcpy(&s.flags124,raw+0x124,4);memcpy(&s.flags128,raw+0x128,4);memcpy(&s.gfx,raw+0x78,8);s.valid=1;
+    if(path<=UINT64_MAX-8)s.iso_valid=pc_trace_read(path+8,s.iso,sizeof s.iso);
+    uint64_t vector[2];if(s.gfx>UINT64_MAX-0x28 || !pc_trace_read(s.gfx+0x28,vector,sizeof vector))return s;
+    entries=vector[0];s.count=vector[1];s.gfx_valid=1;
+    if(!entries || !s.count || s.count>4096 || entries>UINT64_MAX-s.count*16)return s;
+    // Modo sin transformar: observar el recurso no vuelve a invocar getters del juego.
+    uint64_t lo=0,hi=s.count;
+    while(lo<hi){uint64_t mid=lo+(hi-lo)/2;uint32_t mode;
+        if(!pc_trace_read(entries+mid*16,&mode,4))return s;
+        if(mode<s.render_mode)lo=mid+1;else hi=mid;
+    }
+    if(lo==s.count)return s;
+    uint8_t e[16];uint32_t mode;uint64_t resource,box;
+    if(!pc_trace_read(entries+lo*16,e,sizeof e))return s;
+    memcpy(&mode,e,4);memcpy(&resource,e+8,8);
+    if(mode!=s.render_mode || resource>UINT64_MAX-0x18 || !pc_trace_read(resource+0x18,&box,8) || box>UINT64_MAX-8)return s;
+    s.box_valid=pc_trace_read(box+8,s.box,sizeof s.box);return s;
+}
+static void pc_projection_npc_observe(uint64_t,int,int,int);
+static void pc_trace_npc_observe(uint64_t unit,int x,int y,int hit) {
+    pc_projection_npc_observe(unit,x,y,hit);
+    if(!pc_trace_active() || g_pc_world_trace.npcs>=6)return;
+    pc_trace_npc s=pc_trace_npc_snapshot(unit);if(!s.valid)return;
+    g_pc_world_trace.npcs++;
+    LOG("PC_WORLD_NPC seq=%llu time_ns=%llu cls=%u id=%u mode=%u renderModeRaw=%u pick=%d,%d hit=%d flags=%x,%x isoValid=%d originISO=%d,%d gfx=%llx gfxValid=%d gfxCount=%llu boxValid=%d boxRaw=%d,%d,%d,%d",
+        (unsigned long long)g_pc_world_trace.seq,(unsigned long long)w_now_ns(),s.cls,s.id,s.mode,s.render_mode,x,y,hit,s.flags124,s.flags128,
+        s.iso_valid,s.iso[0],s.iso[1],(unsigned long long)s.gfx,s.gfx_valid,(unsigned long long)s.count,s.box_valid,s.box[0],s.box[1],s.box[2],s.box[3]);
+}
+typedef struct {
+    uint64_t (*screen)(uint64_t);
+    int (*project)(void *,float,float,float *,uint64_t *,int);
+    int (*classic)(int *,int *);
+    void (*clear)(int);
+    void (*target)(int,uint64_t);
+    int (*click)(uint64_t,int,int,int,uint64_t);
+    uint64_t (*classic_screen)(uint64_t);
+} pc_mouse_api;
+typedef struct { int width,height,hd,index; void *scene; uint64_t camera,player,target; int classic_width,perspective_a,perspective_b,side,panx,pany,standstill; } pc_mouse_context;
+// Captura QA42: sólo lecturas; los getters ECS originales se reproducen sin inicializarlos ni llamarlos.
+typedef struct {uint64_t address;int valid;uint8_t bytes[0x170];} pc_projection_camera;
+static struct {
+    int enabled,active,projected;unsigned down,npcs;module_t *module;pc_mouse_api api;
+    uint64_t frame,time,screen_in,screen_out,filter;int width,height,ok,ui[4],dy;float nx,ny,out[16];
+    pc_projection_camera cameras[2][3];int resolved[2][3];
+} g_pc_projection={.enabled=-1};
+static int pc_projection_read(uint64_t p,uint64_t offset,void *out,size_t size) {
+    return p<=UINT64_MAX-offset&&pc_trace_read(p+offset,out,size);
+}
+static int pc_projection_dense(uint64_t store,uint64_t *begin,uint64_t *count) {
+    uint64_t v[2];if(!pc_projection_read(store,0x20,v,sizeof v)||v[1]<v[0]||(v[1]-v[0])%4||(v[1]-v[0])/4>65536)return 0;
+    *begin=v[0];*count=(v[1]-v[0])/4;return !*count||*begin>=0x1000;
+}
+static int pc_projection_sparse(uint64_t store,uint32_t id,uint32_t *index) {
+    uint64_t v[2],page;unsigned slot=(id>>8)&0xfff;
+    if(!pc_projection_read(store,8,v,sizeof v)||v[1]<v[0]||(v[1]-v[0])%8)return -1;
+    if(slot>=(v[1]-v[0])/8)return 0;
+    if(!pc_projection_read(v[0],slot*8,&page,8))return -1;
+    if(!page)return 0;
+    if(!pc_projection_read(page,(id&255)*4,index,4))return -1;
+    return (*index&0xfffff)!=0xfffff;
+}
+static int pc_projection_store(uint64_t base,size_t guard_offset,size_t index_offset,uint64_t *store) {
+    uint64_t guard,token,manager,v[2];uint8_t ready;uint32_t index;
+    if(!pc_projection_read(base,guard_offset,&guard,8)||!pc_projection_read(guard,0,&ready,1)||!(ready&1)||
+       !pc_projection_read(base,index_offset,&token,8)||!pc_projection_read(token,0,&index,4)||
+       !pc_projection_read(base,0x310a040,&manager,8)||!pc_projection_read(manager,0,v,sizeof v)||
+       v[1]<v[0]||(v[1]-v[0])%0x28||index>=(v[1]-v[0])/0x28)return 0;
+    return pc_projection_read(v[0],(uint64_t)index*0x28+0x20,store,8);
+}
+static int pc_projection_camera_read(uint64_t base,int which,pc_projection_camera *out) {
+    static const size_t guards[]={0x21204f0,0x2122128,0x2120590},tokens[]={0x21204f8,0x2122130,0x2120598};
+    uint64_t tag,common,tbegin,cbegin,tn,cn;*out=(pc_projection_camera){0};
+    if(which<0||which>2||!pc_projection_store(base,guards[which],tokens[which],&tag)||
+       !pc_projection_store(base,0x2120540,0x2120548,&common))return 0;
+    if(!tag||!common)return 1;
+    if(!pc_projection_dense(tag,&tbegin,&tn)||!pc_projection_dense(common,&cbegin,&cn))return 0;
+    uint64_t begin=cn<tn?cbegin:tbegin,n=cn<tn?cn:tn,other=cn<tn?tag:common;
+    for(uint64_t i=n;i>0;i--){uint32_t id,index,object;uint64_t data;
+        if(!pc_projection_read(begin,(i-1)*4,&id,4))return 0;
+        int present=pc_projection_sparse(other,id,&index);if(present<0)return 0;if(!present)continue;
+        if(pc_projection_sparse(common,id,&object)!=1||object>=cn||!pc_projection_read(common,0x38,&data,8)||
+           !pc_projection_read(data,(uint64_t)object*8,&out->address,8))return 0;
+        out->valid=out->address&&pc_projection_read(out->address,0,out->bytes,sizeof out->bytes);return 1;
+    }
+    return 1;
+}
+static uint64_t pc_projection_selected(const pc_projection_camera cameras[3]) {
+    return cameras[2].address&&cameras[1].address!=cameras[0].address?cameras[2].address:cameras[1].address;
+}
+static int pc_projection_abi(module_t *m) {
+    static const struct {size_t at;uint32_t word;} code[]={
+        {0x16288c0,0xa94223e9},{0x16291b0,0xa94223e9},{0x16289c4,0xa94223e9},
+        {0x166358c,0xb00055e9},{0x1663b1c,0xf00055e9},{0x1663854,0xb00055e9},
+        {0x16635dc,0xb00055e9},{0x1663a64,0xd100056c},{0xc7a314,0xb000a528},
+        {0xc7a35c,0x52801a0a},{0x8fdb5c,0xca418429},{0x8fdb8c,0xf9479c0a},
+        {0x8fdbc0,0xa941a109},{0xa293bc,0x942ffd6f}};
+    if(!m||!m->base||m->size<0x31e0851)return 0;
+    uint8_t ready;if(!pc_projection_read((uint64_t)m->base,0x310a0c0,&ready,1)||!(ready&1))return 0;
+    for(unsigned i=0;i<sizeof code/sizeof *code;i++){uint32_t word;
+        if(!pc_projection_read((uint64_t)m->base,code[i].at,&word,4)||word!=code[i].word)return 0;}
+    return 1;
+}
+static void pc_projection_cameras(int stage) {
+    for(int i=0;i<3;i++)g_pc_projection.resolved[stage][i]=pc_projection_camera_read((uint64_t)g_pc_projection.module->base,i,&g_pc_projection.cameras[stage][i]);
+}
+static uint64_t pc_projection_screen(uint64_t xy) {
+    g_pc_projection.screen_in=xy;return g_pc_projection.screen_out=g_pc_projection.api.screen(xy);
+}
+static int pc_projection_project(void *scene,float x,float y,float *out,uint64_t *filter,int mode) {
+    pc_projection_cameras(0);g_pc_projection.filter=*filter;
+    int ok=g_pc_projection.api.project(scene,x,y,out,filter,mode);
+    memcpy(g_pc_projection.out,out,sizeof g_pc_projection.out);g_pc_projection.ok=ok;g_pc_projection.projected=1;
+    pc_projection_cameras(1);return ok;
+}
+static int pc_projection_begin(module_t *m,const pc_mouse_context *c,const pc_mouse_api *api,int phase,float nx,float ny) {
+    if(phase||!dm_ui_pc_desktop()||!c->hd)return 0;
+    if(g_pc_projection.enabled<0)g_pc_projection.enabled=getenv("DM_TEST_MONRES_LOG")!=NULL;
+    if(!g_pc_projection.enabled||g_pc_projection.down>=12)return 0;
+    unsigned down=g_pc_projection.down+1;int enabled=g_pc_projection.enabled;
+    memset(&g_pc_projection,0,sizeof g_pc_projection);g_pc_projection.enabled=enabled;g_pc_projection.down=down;
+    if(!pc_projection_abi(m)){LOG("PC_WORLD_PROJ {\"kind\":\"rejected\",\"seq\":%u,\"reason\":\"abi_or_registry\"}",down);return 0;}
+    g_pc_projection.active=1;g_pc_projection.module=m;g_pc_projection.api=*api;g_pc_projection.nx=nx;g_pc_projection.ny=ny;
+    dm_ui_rect(g_pc_projection.ui,g_pc_projection.ui+1,g_pc_projection.ui+2,g_pc_projection.ui+3);g_pc_projection.dy=dm_ui_proj_dy();
+    g_pc_projection.width=c->width;g_pc_projection.height=c->height;g_pc_projection.frame=dm_guest_frame();g_pc_projection.time=w_now_ns();return 1;
+}
+static uint64_t pc_projection_hash(uint64_t key) {
+    key^=key>>33;key*=UINT64_C(0xff51afd7ed558ccd);key^=key>>33;key*=UINT64_C(0xc4ceb9fe1a85ec53);return key^(key>>33);
+}
+static int pc_projection_npc_point(uint64_t base,uint64_t unit,float point[3],uint32_t *entity) {
+    uint64_t scene,key,count,buckets,node,render=0,control;uint32_t refs;
+    if(!pc_projection_read(base,0x2e2a698,&scene,8)||!scene||!pc_projection_read(unit,0xd8,&key,8)||!key||
+       !pc_projection_read(scene,0xf38,&count,8)||!count||count>1048576||!pc_projection_read(scene,0xf40,&buckets,8)||
+       !pc_projection_read(buckets,(pc_projection_hash(key)&(count-1))*8,&node,8))return 0;
+    for(unsigned i=0;node&&i<64;i++){uint64_t found;
+        if(!pc_projection_read(node,8,&found,8))return 0;
+        if(found==key){
+            if(!pc_projection_read(node,0x18,&render,8)||!pc_projection_read(node,0x20,&control,8)||
+               !pc_projection_read(control,8,&refs,4)||!refs)return 0;
+            break;
+        }
+        if(!pc_projection_read(node,0,&node,8))return 0;
+    }
+    uint64_t manager,v[2],store,data,begin,n;uint32_t live,index;
+    if(!render||!pc_projection_read(render,0xa8,entity,4)||!pc_projection_read(base,0x310a040,&manager,8)||
+       !pc_projection_read(manager,0x30,v,sizeof v)||v[1]<v[0]||(v[1]-v[0])%4||(*entity&0xfffff)>=(v[1]-v[0])/4||
+       !pc_projection_read(v[0],(uint64_t)(*entity&0xfffff)*4,&live,4)||live!=*entity||
+       !pc_projection_store(base,0x211fda0,0x211fda8,&store)||!store||!pc_projection_dense(store,&begin,&n)||
+       pc_projection_sparse(store,*entity,&index)!=1||index>=n||!pc_projection_read(store,0x38,&data,8)||
+       !pc_projection_read(data,(uint64_t)index*0xd0+0x70,point,12))return 0;
+    return isfinite(point[0])&&isfinite(point[1])&&isfinite(point[2]);
+}
+static void pc_projection_npc_observe(uint64_t unit,int x,int y,int hit) {
+    if(!g_pc_projection.active||g_pc_projection.npcs>=6)return;
+    pc_trace_npc npc=pc_trace_npc_snapshot(unit);if(!npc.valid)return;
+    g_pc_projection.npcs++;float point[3]={0};uint32_t entity=0;
+    int valid=pc_projection_npc_point((uint64_t)g_pc_projection.module->base,unit,point,&entity);
+    if(!valid)memset(point,0,sizeof point);
+    LOG("PC_WORLD_PROJ {\"kind\":\"npc\",\"seq\":%u,\"cls\":%u,\"id\":%u,\"entity\":%u,\"point_valid\":%d,\"point\":[%.9g,%.9g,%.9g],\"iso\":[%d,%d],\"pick\":[%d,%d],\"box\":[%d,%d,%d,%d],\"hit\":%d,\"source\":\"scene_raw_entity_transform\"}",
+        g_pc_projection.down,npc.cls,npc.id,entity,valid,point[0],point[1],point[2],npc.iso[0],npc.iso[1],x,y,npc.box[0],npc.box[1],npc.box[2],npc.box[3],hit);
+}
+static void pc_projection_hex(const void *input,size_t size,char *out) {
+    const uint8_t *bytes=input;static const char digit[]="0123456789abcdef";
+    for(size_t i=0;i<size;i++){out[2*i]=digit[bytes[i]>>4];out[2*i+1]=digit[bytes[i]&15];}out[2*size]=0;
+}
+static void pc_projection_end(int projected,const int tile[2],const int pick[2]) {
+    if(!g_pc_projection.active)return;
+    for(int stage=0;stage<2;stage++)for(int i=0;i<3;i++){pc_projection_camera *camera=&g_pc_projection.cameras[stage][i];char hex[0x170*2+1];
+        pc_projection_hex(camera->bytes,sizeof camera->bytes,hex);
+        LOG("PC_WORLD_PROJ {\"kind\":\"camera\",\"seq\":%u,\"stage\":%d,\"name\":\"%c\",\"resolved\":%d,\"address\":\"%llx\",\"valid\":%d,\"hex\":\"%s\"}",g_pc_projection.down,stage,'A'+i,g_pc_projection.resolved[stage][i],(unsigned long long)camera->address,camera->valid,hex);}
+    char hex[sizeof g_pc_projection.out*2+1];pc_projection_hex(g_pc_projection.out,sizeof g_pc_projection.out,hex);
+    LOG("PC_WORLD_PROJ {\"kind\":\"ui\",\"seq\":%u,\"rect\":[%d,%d,%d,%d],\"projection_dy\":%d}",g_pc_projection.down,g_pc_projection.ui[0],g_pc_projection.ui[1],g_pc_projection.ui[2],g_pc_projection.ui[3],g_pc_projection.dy);
+    LOG("PC_WORLD_PROJ {\"kind\":\"event\",\"seq\":%u,\"frame\":%llu,\"time_ns\":%llu,\"normalized\":[%.9g,%.9g],\"frame_size\":[%d,%d],\"input_pixel\":[%d,%d],\"screen_pixel\":[%d,%d],\"project_called\":%d,\"project_return\":%d,\"projected\":%d,\"tile\":[%d,%d],\"pick\":[%d,%d],\"filter\":\"%llx\",\"chosen_before\":\"%llx\",\"chosen_after\":\"%llx\",\"out_hex\":\"%s\"}",
+        g_pc_projection.down,(unsigned long long)g_pc_projection.frame,(unsigned long long)g_pc_projection.time,g_pc_projection.nx,g_pc_projection.ny,g_pc_projection.width,g_pc_projection.height,
+        (int32_t)g_pc_projection.screen_in,(int32_t)(g_pc_projection.screen_in>>32),(int32_t)g_pc_projection.screen_out,(int32_t)(g_pc_projection.screen_out>>32),g_pc_projection.projected,g_pc_projection.ok,projected,tile[0],tile[1],pick[0],pick[1],(unsigned long long)g_pc_projection.filter,
+        (unsigned long long)pc_projection_selected(g_pc_projection.cameras[0]),(unsigned long long)pc_projection_selected(g_pc_projection.cameras[1]),hex);
+    g_pc_projection.active=0;
+}
+typedef struct {int active;uint32_t player;int x,y;} pc_mouse_hold;
+static int pc_mouse_hold_phase(pc_mouse_hold *held,uint32_t player,int phase,int tile[2]) {
+    if(!held || !tile || phase<0 || phase>2)return 0;
+    if(phase && (!held->active || held->player!=player)){held->active=0;return 0;}
+    if(phase==2){tile[0]=held->x;tile[1]=held->y;held->active=0;}
+    else {*held=(pc_mouse_hold){.active=1,.player=player,.x=tile[0],.y=tile[1]};}
+    return 1;
+}
+static int pc_mouse_frame(pc_mouse_context *c,int (*real_size)(int *,int *)) {
+    int width=0,height=0;
+    if(!real_size(&width,&height) || width<=0 || height<=0 || width>16384 || height>16384)return 0;
+    c->width=width;c->height=height;return 1;
+}
+static int pc_classic_pick(int x,int y,int width,int pa,int pb,int side,int panx,int pany,int out[2]) {
+    if(width<=1 || width>16384)return 0;
+    int64_t cx=x,cy=y;
+    if(pa&&pb){cy-=cy/40;int64_t product=(cx-width/2)*(40-cy/4);if(product<INT32_MIN||product>INT32_MAX)return 0;cx+=product/(width/2);}
+    int shift=side==1?-(width/4):side==2?width/4:0;
+    cx+=((int64_t)panx-shift);cy+=(int64_t)pany-8;
+    if(cx<INT32_MIN||cx>INT32_MAX||cy<INT32_MIN||cy>INT32_MAX)return 0;
+    out[0]=(int)cx;out[1]=(int)cy;return 1;
+}
+static int pc_mouse_project(const pc_mouse_context *c,const pc_mouse_api *api,float nx,float ny,int tile[2],int pick[2]) {
+    if(c->width<=0 || c->height<=0 || c->width>16384 || c->height>16384 || !isfinite(nx) || !isfinite(ny) || nx<0 || nx>1 || ny<0 || ny>1)return 0;
+    int x=(int)(nx*c->width),y=(int)(ny*c->height);
+    if(c->hd){
+        if(!c->scene)return 0;
+        uint64_t packed=api->screen((uint32_t)x|(uint64_t)(uint32_t)y<<32),camera=c->camera;float out[16]={0};
+        if(!api->project(c->scene,(float)(int32_t)packed,(float)(int32_t)(packed>>32),out,&camera,1))return 0;
+        float wx=out[0]*.5f,wy=out[2]*.5f,px=(wx-wy)*16,py=(wx+wy)*8;
+        if(!isfinite(wx)||!isfinite(wy)||fabsf(wx)>=2147483648.0f||fabsf(wy)>=2147483648.0f)return 0;
+        tile[0]=(int)wx;tile[1]=(int)wy;
+        if(pick){if(!isfinite(px)||!isfinite(py)||fabsf(px)>=2147483648.0f||fabsf(py)>=2147483648.0f)return 0;pick[0]=(int)px;pick[1]=(int)py;}
+    }else{
+        if(pick){if(!api->classic_screen)return 0;uint64_t q=api->classic_screen((uint32_t)x|(uint64_t)(uint32_t)y<<32);
+            if(!pc_classic_pick((int32_t)q,(int32_t)(q>>32),c->classic_width,c->perspective_a,c->perspective_b,c->side,c->panx,c->pany,pick))return 0;}
+        if(!api->classic(&x,&y))return 0;tile[0]=x;tile[1]=y;
+    }
+    return 1;
+}
+static uint64_t pc_mouse_flags(int standstill,int phase,int quickcast_skill) {
+    // Predicado original2b228c..22ac; UP conserva el estado nativo de la acción36.
+    if(quickcast_skill>=0&&phase!=2)return (uint32_t)(quickcast_skill-357)>1&&quickcast_skill!=370;
+    return standstill!=0;
+}
+static int pc_mouse_emit(const pc_mouse_context *c,const pc_mouse_api *api,int secondary,int phase,const int tile[2],int quickcast_skill) {
+    if(!c||!api||!api->click||!c->player||!tile||secondary<0||secondary>1||phase<0||phase>2||quickcast_skill< -1)return 0;
+    // 4ace20 transforma X4.bit0 en contexto.bit5: evita caminar antes de lanzar con la izquierda.
+    uint64_t flags=pc_mouse_flags(c->standstill,phase,quickcast_skill);
+    api->click(c->player,secondary*3+phase,tile[0],tile[1],flags);return 1;
+}
+static int pc_mouse_call(const pc_mouse_context *c,const pc_mouse_api *api,int secondary,int phase,float nx,float ny) {
+    if(!c||!api||!c->player||c->index<0||c->index>2||secondary<0||secondary>1||phase<0||phase>2)return 0;
+    int tile[2]={0};if(phase!=2&&!pc_mouse_project(c,api,nx,ny,tile,NULL))return 0;
+    if(phase!=2){if(c->target)api->target(c->index,c->target);else api->clear(c->index);}
+    return pc_mouse_emit(c,api,secondary,phase,tile,-1);
+}
+typedef struct {
+    int (*acquire)(void *);
+    void (*construct)(void *);
+    int (*at_exit)(void (*)(void *),void *,void *);
+    void (*release)(void *);
+} pc_scene_api;
+static void pc_scene_prepare(_Atomic uint8_t *guard,void *scene,void (*destroy)(void *),void *dso,const pc_scene_api *api) {
+    if (!(atomic_load_explicit(guard,memory_order_acquire)&1) && api->acquire(guard)) {
+        api->construct(scene);api->at_exit(destroy,scene,dso);api->release(guard);
+    }
+}
+static int pc_mouse_abi(module_t *m) {
+    static const struct {size_t at;uint32_t code[4];} entries[]={
+        {0x369c30,{0xf0014da8,0x52800029,0xb90e5d09,0xd65f03c0}},
+        {0x369c40,{0xf0014da8,0xb90e5d1f,0xd65f03c0,0x00000000}},
+        {0x2c1acc,{0xb94e5e68,0x1a9f07f9,0x7100011f,0x1a9f07f8}},
+        {0x4ace20,{0xd102c3ff,0xa9056ffc,0xa90667fa,0xa9075ff8}},
+        {0x4ad3e0,{0x97fc2df3,0xb5ffd4c0,0x1400000a,0xaa1c03e1}},
+        {0x466424,{0xf94022c8,0xb5000068,0xb9400268,0x340000e8}},
+        {0x3b8bac,{0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0x45f9d0,{0x71001c1f,0x54000168,0xb0014808,0x910e0108}},
+        {0x23e760,{0xf000f6e8,0x9128e108,0x2d400500,0xf0016628}},
+        {0xa29340,{0xd10543ff,0xfd0073ea,0xf9007ffc,0x6d0ea3e9}},
+        {0x2ba3f0,{0xd10203ff,0xf9002bf5,0xa9064ff4,0xa9077bfd}},
+        {0x2f3880,{0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd}},
+        {0x2f3a40,{0xa9be4ff4,0xa9017bfd,0x910043fd,0xf000ec68}},
+        {0x2f3b90,{0xa9bd57f6,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0xa1fff0,{0xf81a0ffb,0xa90167fa,0xa9025ff8,0xa90357f6}},
+        {0xa20320,{0xf81a0ffb,0xa90167fa,0xa9025ff8,0xa90357f6}},
+        {0x855320,{0xfc1b0fec,0x6d012beb,0x6d0223e9,0xa9034ff4}},
+        {0x464a70,{0xd101c3ff,0xf90013f9,0xa9035ff8,0xa90457f6}},
+        {0x2f9200,{0x6db923e9,0xf9000bfb,0xa90267fa,0xa9035ff8}}
+    };
+    if (!m || !m->base || m->size<0x2f05460) return 0;
+    for (unsigned i=0;i<sizeof entries/sizeof *entries;i++) if (memcmp(m->base+entries[i].at,entries[i].code,sizeof entries[i].code)) return 0;
+    return 1;
+}
+typedef struct {
+    int (*hit)(uint64_t,int,int,int,int);
+    int (*prefer)(uint64_t,uint64_t,uint64_t,uint64_t);
+} pc_pick_api;
+static uint64_t pc_pick_units(const uint64_t *heads,uint64_t manager,uint64_t player,int x,int y,const pc_pick_api *api) {
+    uint64_t best=0;
+    for(int type=0;type<=5;type++)if(type!=3)for(int bucket=0;bucket<128;bucket++){
+        unsigned count=0;for(uint64_t unit=heads[type*128+bucket];unit&&count++<4096;unit=*(uint64_t*)(unit+0x158)){
+            if(unit==player || (type==4&&*(uint32_t*)(unit+0xc)!=3))continue;
+            int hit=api->hit(unit,x,y,0,-1)&1;
+            if(type==1)pc_trace_npc_observe(unit,x,y,hit);
+            if(type==0 && *(uint32_t*)(unit+0xc)==0x11 && pc_trace_active() && g_pc_world_trace.corpses<8){
+                pc_trace_unit s=pc_trace_snapshot(unit);g_pc_world_trace.corpses++;
+                LOG("PC_WORLD_CORPSE seq=%llu time_ns=%llu valid=%d id=%u mode=%u pick=%d,%d hit=%d unitXY=%d,%d flags=%x,%x",
+                    (unsigned long long)g_pc_world_trace.seq,(unsigned long long)w_now_ns(),s.valid,s.id,s.mode,x,y,hit,s.x,s.y,s.flags124,s.flags128);
+            }
+            if(!hit)continue;
+            if(!best || (api->prefer(manager,player,unit,best)&1))best=unit;
+        }
+    }
+    return best;
+}
+static void pc_hover_apply(int index,uint64_t unit,void (*set)(int,uint64_t)) {
+    // Cada snapshot físico toma el slotA, también vacío: clear dejaría libre la autoselección de mando.
+    set(index,unit);
+}
+typedef struct { uint64_t root,player;uint32_t generation,id;int index; } pc_hover_context;
+typedef struct { int index;uint32_t player; } pc_hover_owner;
+static int pc_hover_pointer(int state,float nx,float ny) {
+    return (state==DM_PC_POINTER_UI||state==DM_PC_POINTER_WORLD)&&isfinite(nx)&&isfinite(ny)&&nx>=0&&nx<=1&&ny>=0&&ny<=1;
+}
+static int pc_hover_context_read(module_t *m,uint64_t player,int (*read)(uint64_t,void*,size_t),uint32_t (*generation)(void),pc_hover_context *out) {
+    if(!m||!m->base||(uint64_t)m->base>UINT64_MAX-0x2f05460||m->size<0x2f05460||!player||player>UINT64_MAX-12||!read||!generation||!out)return 0;
+    pc_hover_context c={.player=player,.generation=generation(),.index=-1};uint64_t root;uint32_t actor[3],ids[3];uint8_t flags[2],ingame;
+    if(!read(player,actor,sizeof actor)||actor[0]!=0||!read((uint64_t)m->base+0x2d60380,ids,sizeof ids)||
+       !read((uint64_t)m->base+0x2f05458,&c.root,8)||!c.root||c.root>UINT64_MAX-0xda||
+       !read(c.root+0x50,flags,2)||!flags[0]||!flags[1]||!read(c.root+0xd9,&ingame,1)||!ingame||
+       !read((uint64_t)m->base+0x2f05458,&root,8)||root!=c.root||generation()!=c.generation)return 0;
+    c.id=actor[2];for(int i=0;i<3;i++)if(ids[i]==c.id){c.index=i;break;}
+    if(c.index<0)return 0;*out=c;return 1;
+}
+static int pc_hover_context_same(module_t *m,uint64_t player,const pc_hover_context *c,int (*read)(uint64_t,void*,size_t),uint32_t (*generation)(void)) {
+    pc_hover_context current;return c&&pc_hover_context_read(m,player,read,generation,&current)&&current.root==c->root&&current.player==c->player&&
+        current.generation==c->generation&&current.id==c->id&&current.index==c->index;
+}
+static void pc_hover_release(pc_hover_owner *owner,uint32_t player,void (*clear)(int)) {
+    if(owner->index>=0&&owner->player==player)clear(owner->index);
+    owner->index=-1;
+}
+static void pc_hover_publish(pc_hover_owner *owner,const pc_hover_context *c,int state,uint64_t unit,void (*set)(int,uint64_t)) {
+    if(state!=DM_PC_POINTER_UI&&state!=DM_PC_POINTER_WORLD)return;
+    pc_hover_apply(c->index,state==DM_PC_POINTER_WORLD?unit:0,set);owner->index=c->index;owner->player=c->id;
+}
+static int pc_runtime_context(module_t *m,pc_mouse_context *c,pc_mouse_api *api) {
+    if(!pc_mouse_abi(m))return 0;
+    uint8_t *b=m->base;uint64_t pl=w_player();if(!pl)return 0;
+    *c=(pc_mouse_context){.player=pl,.index=-1};
+    uint32_t id=*(uint32_t*)(pl+8);for(int i=0;i<3;i++)if(*(uint32_t*)(b+0x2d60380+4*i)==id){c->index=i;break;}
+    if(c->index<0)return 0;
+    // El puntero ya viene de ui_y_to_screen: la cámara consume píxeles del render completo.
+    if(!pc_mouse_frame(c,dm_screen_real))return 0;
+    uint64_t root=*(uint64_t*)(b+0x2f05458);if(!root)return 0;
+    c->hd=*(uint8_t*)(root+0xb9)!=0;c->scene=b+0x2e30d30;
+    if(c->hd){pc_scene_api init={(int(*)(void*))(b+0x1b76de0),(void(*)(void*))(b+0xa1fff0),
+        (int(*)(void(*)(void*),void*,void*))(b+0x250),(void(*)(void*))(b+0x1b76df0)};
+        pc_scene_prepare((_Atomic uint8_t*)(b+0x2e32520),c->scene,(void(*)(void*))(b+0xa20320),b+0x2056000,&init);}
+    memcpy(&c->camera,b+0x2e30e58,8);
+    c->classic_width=*(int32_t*)(b+0x2080c08);c->perspective_a=*(int32_t*)(b+0x20c9ca4);c->perspective_b=*(int32_t*)(b+0x20c9ca8);
+    c->side=*(int32_t*)(b+0x2d47640);c->panx=*(int32_t*)(b+0x2d47644);c->pany=*(int32_t*)(b+0x2d47648);
+    *api=(pc_mouse_api){(uint64_t(*)(uint64_t))(b+0x23e760),(int(*)(void*,float,float,float*,uint64_t*,int))(b+0xa29340),
+        (int(*)(int*,int*))(b+0x2ba3f0),(void(*)(int))(b+0x2f3a40),(void(*)(int,uint64_t))(b+0x2f3b90),
+        (int(*)(uint64_t,int,int,int,uint64_t))(b+0x4ace20),(uint64_t(*)(uint64_t))(b+0x855320)};
+    return 1;
+}
+typedef struct {uint64_t inventory,item;uint32_t id;} pc_mouse_hand_state;
+static int pc_mouse_hand_read(uint64_t player,int (*read)(uint64_t,void*,size_t),pc_mouse_hand_state *out) {
+    pc_mouse_hand_state state={0};uint32_t type,magic;
+    if(!read||!out||!player||player>UINT64_MAX-0x98||!read(player,&type,4)||type||!read(player+0x90,&state.inventory,8)||
+       !state.inventory||state.inventory>UINT64_MAX-0x48||!read(state.inventory,&magic,4)||magic!=0x1020304||!read(state.inventory+0x40,&state.item,8))return -1;
+    if(state.item&&(state.item>UINT64_MAX-12||!read(state.item,&type,4)||type!=4||!read(state.item+8,&state.id,4)))return -1;
+    *out=state;return state.item!=0;
+}
+static int pc_mouse_down_intent(int side,int quickcast,int hand) {
+    if(hand<0)return -1;
+    return hand?(side||quickcast>=0?-1:1):0;
+}
+static int pc_mouse_drop_emit(const pc_mouse_context *c,const pc_mouse_api *api,const int tile[2]) {
+    if(!c||!api||!api->click||!c->player||!tile)return 0;
+    api->click(c->player,0,tile[0],tile[1],0);return DM_PC_MOUSE_ONESHOT;
+}
+static uint64_t pc_runtime_pick(uint8_t *b,const pc_mouse_context *c,int pick[2],float nx,float ny) {
+    uint64_t manager=((uint64_t(*)(void))(b+0x2acecc))();if(!manager)return 0;
+    pc_pick_api api={(int(*)(uint64_t,int,int,int,int))(b+0x464a70),(int(*)(uint64_t,uint64_t,uint64_t,uint64_t))(b+0x2f9200)};
+    uint64_t best=pc_pick_units((uint64_t*)(b+0x2d603a0),manager,c->player,pick[0],pick[1],&api);
+    // Las etiquetas originales se comparan sin margen; su rectángulo está en coordenadas UI.
+    float sx=nx*c->width,sy=ny*c->height-dm_ui_proj_dy();uint64_t records=*(uint64_t*)(b+0x2f0fee0),n=*(uint64_t*)(b+0x2f0fee8);
+    for(uint64_t i=0;records&&i<n&&i<512;i++){
+        int32_t *r=(int32_t*)(records+i*0x148);if(r[2]<=0||r[3]<=0||r[4]<0||sx<r[0]||sy<r[1]||sx>=(double)r[0]+r[2]||sy>=(double)r[1]+r[3])continue;
+        uint64_t u=w_find(4,(uint32_t)r[4]);if(u&&*(uint32_t*)(u+0xc)==3&&(api.hit(u,0,0,-1,-1)&1)&&(!best||(api.prefer(manager,c->player,u,best)&1)))best=u;
+    }
+    return best;
+}
+
+#endif
+void dm_world_pc_controller_observe(const uint64_t *regs,unsigned source) {
+#if TARGET_OS_OSX
+    static const uint32_t sites[]={0x2b2ebc,0x2b2f38,0x2b3124};
+    if(!regs || source>=3 || !pc_trace_active() || g_pc_world_trace.source[source]>=20)return;
+    module_t *m=NULL;for(int i=0;i<g_nmod;i++)if(!strcmp(g_mod[i].name,"main")){m=&g_mod[i];break;}
+    if(!pc_mouse_abi(m))return;
+    uint64_t unit=regs[source==2?1:0];pc_trace_unit s=pc_trace_snapshot(unit);uint8_t state[0x80]={0};
+    int manager_ok=regs[19]<=UINT64_MAX-0xd28 && pc_trace_read(regs[19]+0xd28,state,sizeof state);uint32_t index=(uint32_t)regs[26];
+    if(manager_ok && index<8 && index){uint64_t at=regs[19]+0xd28+(uint64_t)index*0xb8;manager_ok=at>=regs[19] && pc_trace_read(at,state,sizeof state);}
+    if(index>=8)manager_ok=0;
+    g_pc_world_trace.source[source]++;
+    LOG("PC_WORLD_GATE seq=%llu time_ns=%llu gate=%x site=%x nativeLR=%x gateLR=%llx pc=%d skip=0 action=%u args=%d,%d flags=%llx valid=%d type=%u id=%u mode=%u current=%d,%d pathCount=%d pathLast=%d,%d manager=%d index=%u latch=%u,%u,%u",
+        (unsigned long long)g_pc_world_trace.seq,(unsigned long long)w_now_ns(),0x99+source,sites[source],sites[source]+4,(unsigned long long)regs[30],
+        dm_ui_pc_desktop(),(unsigned)regs[source==2?0:1],(int32_t)regs[2],(int32_t)regs[3],(unsigned long long)(source==2?0:regs[4]),
+        s.valid,s.type,s.id,s.mode,s.x,s.y,s.count,s.lastx,s.lasty,manager_ok,index,state[0],state[0x6c],state[0x6d]);
+#else
+    (void)regs;(void)source;
+#endif
+}
+static int pc_skill_mouse_blocked(int phase);
+static int pc_world_mouse(int secondary,int phase,float nx,float ny,int quickcast_skill) {
+
+#if TARGET_OS_OSX
+    static pc_mouse_hold held[2];
+    if (secondary<0 || secondary>1 || phase<0 || phase>2 || quickcast_skill< -1) return 0;
+    if (pc_skill_mouse_blocked(phase)) return 0;
+    if (phase==2 && !held[secondary].active) return 0;
+    if (phase!=2 && (!dm_ui_pc_desktop() || !dm_touch_host_world_active())) return held[secondary].active ? pc_world_mouse(secondary,2,0,0,quickcast_skill) : 0;
+    module_t *m=NULL;for(int i=0;i<g_nmod;i++) if(!strcmp(g_mod[i].name,"main")){m=&g_mod[i];break;}
+    if (!pc_mouse_abi(m)) { held[secondary].active=0; return 0; }
+    uint8_t *b=m->base;uint64_t pl=w_player();if(!pl){held[secondary].active=0;return 0;}
+    uint32_t id=*(uint32_t*)(pl+8);
+    if (phase!=0 && (!held[secondary].active || held[secondary].player!=id)) { held[secondary].active=0;return 0; }
+    pc_mouse_hand_state initial_hand;pc_hover_context initial_context;int intent=0;
+    if(phase==0){
+        intent=pc_mouse_down_intent(secondary,quickcast_skill,pc_mouse_hand_read(pl,pc_trace_read,&initial_hand));
+        if(intent<0||!pc_hover_context_read(m,pl,pc_trace_read,dm_ui_gen,&initial_context))return 0;
+    }
+    pc_mouse_context c;pc_mouse_api api;
+    if(phase==2){c=(pc_mouse_context){.player=pl,.index=0};api=(pc_mouse_api){.click=(int(*)(uint64_t,int,int,int,uint64_t))(b+0x4ace20)};}
+    else if(!pc_runtime_context(m,&c,&api))return held[secondary].active?pc_world_mouse(secondary,2,0,0,quickcast_skill):0;
+    c.standstill=dm_ui_pc_binding_held(36);
+    int tile[2]={0},pick[2]={0};
+    if(phase!=2){
+        pc_mouse_api observed;int diagnostic=phase==0&&pc_projection_begin(m,&c,&api,phase,nx,ny);
+        if(diagnostic){observed=api;observed.screen=pc_projection_screen;observed.project=pc_projection_project;}
+        if(!pc_mouse_project(&c,diagnostic?&observed:&api,nx,ny,tile,pick)){
+            if(diagnostic)pc_projection_end(0,tile,pick);
+            return held[secondary].active?pc_world_mouse(secondary,2,0,0,quickcast_skill):0;
+        }
+        if(phase==0)pc_trace_begin();
+        if(phase==0){
+            pc_mouse_hand_state current_hand;
+            if(pc_mouse_hand_read(pl,pc_trace_read,&current_hand)<0||current_hand.inventory!=initial_hand.inventory||current_hand.item!=initial_hand.item||current_hand.id!=initial_hand.id||
+               !pc_hover_context_same(m,w_player(),&initial_context,pc_trace_read,dm_ui_gen)){if(diagnostic)pc_projection_end(0,tile,pick);return 0;}
+            if(intent){
+                if(diagnostic)pc_projection_end(1,tile,pick);
+                held[secondary].active=0;int result=pc_mouse_drop_emit(&c,&api,tile);
+                static unsigned traced;const char *trace=getenv("DM_MAC_POINTER_LOG");if(trace&&*trace&&traced<20)LOG("PC_ITEM_DROP %u native=4ace20 action=0 item=%u tile=%d,%d",++traced,current_hand.id,tile[0],tile[1]);
+                return result;
+            }
+        }
+        c.target=pc_runtime_pick(b,&c,pick,nx,ny);
+        if(diagnostic)pc_projection_end(1,tile,pick);
+        g_go.on=0;g_release_at=0;atomic_store(&g_walk,0);
+        if(atomic_exchange(&g_tap_mouse,0))atomic_store(&g_tap,0);
+        atomic_store(&g_dm_move_allow_until_ns,w_now_ns()+500000000ull);
+    }
+    if(phase!=2){if(c.target)api.target(c.index,c.target);else api.clear(c.index);}
+    // Con movimiento pendiente, UP también consume XY (4ad214→4ad2b0); cero detiene el camino.
+    if(!pc_mouse_hold_phase(&held[secondary],id,phase,tile))return 0;
+    if(pc_trace_active() && g_pc_world_trace.mouse++<20){pc_trace_unit player=pc_trace_snapshot(c.player),target=pc_trace_snapshot(phase==2?0:c.target);
+        LOG("PC_WORLD_MOUSE seq=%llu time_ns=%llu phase=%d side=%d normalized=%.7f,%.7f viewport=%d,%d tile=%d,%d pick=%d,%d playerValid=%d player=%u mode=%u current=%d,%d targetValid=%d targetType=%u targetId=%u targetMode=%u targetXY=%d,%d nativeFlags=%llu standstill=%d quickcastSkill=%d",
+            (unsigned long long)g_pc_world_trace.seq,(unsigned long long)w_now_ns(),phase,secondary,nx,ny,c.width,c.height,tile[0],tile[1],pick[0],pick[1],
+            player.valid,player.id,player.mode,player.x,player.y,target.valid,target.type,target.id,target.mode,target.x,target.y,(unsigned long long)pc_mouse_flags(c.standstill,phase,quickcast_skill),c.standstill,quickcast_skill);}
+    return pc_mouse_emit(&c,&api,secondary,phase,tile,quickcast_skill);
+#else
+    (void)secondary;(void)phase;(void)nx;(void)ny;(void)quickcast_skill;return 0;
+#endif
+}
+int dm_world_pc_mouse(int secondary,int phase,float nx,float ny) {return pc_world_mouse(secondary,phase,nx,ny,-1);}
+void dm_world_pc_hover(float nx,float ny,int pointer_state) {
+#if TARGET_OS_OSX
+    static pc_hover_owner owner={.index=-1};
+    module_t *m=NULL;for(int i=0;i<g_nmod;i++)if(!strcmp(g_mod[i].name,"main")){m=&g_mod[i];break;}
+    if(!pc_mouse_abi(m)){owner.index=-1;return;}
+    uint8_t *b=m->base;uint64_t pl=w_player();uint32_t id;
+    if(!pl||pl>UINT64_MAX-12||!pc_trace_read(pl+8,&id,4)){owner.index=-1;return;}
+    void (*clear)(int)=(void(*)(int))(b+0x2f3a40);
+    int dm_loadscreen_down(void),dm_padmode_busy(void),dm_game_paused(void);
+    if(!pc_hover_pointer(pointer_state,nx,ny)||!dm_ui_pc_desktop()||!dm_uiscreen_ingame()||!dm_loadscreen_down()||dm_padmode_busy()||dm_game_paused()){
+        pc_hover_release(&owner,id,clear);return;
+    }
+    pc_hover_context context;
+    if(!pc_hover_context_read(m,pl,pc_trace_read,dm_ui_gen,&context)){pc_hover_release(&owner,id,clear);return;}
+    uint64_t unit=0;
+    if(pointer_state==DM_PC_POINTER_WORLD){
+        pc_mouse_context c;pc_mouse_api api;int tile[2],pick[2];
+        if(!dm_touch_host_world_active()||!pc_runtime_context(m,&c,&api)||c.player!=pl||c.index!=context.index||!pc_mouse_project(&c,&api,nx,ny,tile,pick)){
+            pc_hover_release(&owner,id,clear);return;
+        }
+        unit=pc_runtime_pick(b,&c,pick,nx,ny);
+    }
+    // UI/HUD publica vacío sin proyectar ni consultar unidades del mundo.
+    if(!pc_hover_context_same(m,w_player(),&context,pc_trace_read,dm_ui_gen)){pc_hover_release(&owner,id,clear);return;}
+    pc_hover_publish(&owner,&context,pointer_state,unit,(void(*)(int,uint64_t))(b+0x2f3b90));
+#else
+    (void)nx;(void)ny;(void)pointer_state;
+#endif
+}
+
+#if TARGET_OS_OSX
+typedef struct { int (*select)(int,int,int); int (*mouse)(int,int,float,float); int (*selected)(int,int *,int *); } pc_skill_api;
+typedef struct { int active,slot,left,skill,assoc,previous_skill,previous_assoc,weapon;uint32_t player; } pc_skill_state;
+static pc_skill_state g_pc_skill;
+static int g_pc_skill_dispatch;
+static uint64_t g_pc_skill_frame;
+static int pc_skill_mouse_blocked(int phase) {
+    if (!g_pc_skill.active || g_pc_skill_dispatch) return 0;
+    if (phase==0) {dm_world_pc_skill_cancel();return 0;}
+    return 1;
+}
+typedef struct {float x,y;int allowed;} pc_skill_pointer;
+static pc_skill_pointer g_pc_skill_pointer;
+static int pc_skill_pointer_refresh(pc_skill_pointer *state,int (*current)(float*,float*)) {
+    float x=0,y=0;int valid=current&&current(&x,&y)&&isfinite(x)&&isfinite(y)&&x>=0&&x<=1&&y>=0&&y<=1;
+    *state=(pc_skill_pointer){x,y,valid};return valid;
+}
+
+static void pc_skill_finish(pc_skill_state *s,const pc_skill_api *api,uint32_t player,int weapon) {
+    if (!s->active) return;
+    api->mouse(!s->left,2,0,0);
+    int skill=-1,assoc=-1;
+    if (player==s->player && weapon==s->weapon && api->selected(s->left,&skill,&assoc) && skill==s->skill && assoc==s->assoc && s->previous_skill>=0)
+        api->select(s->previous_skill,s->left,s->previous_assoc);
+    memset(s,0,sizeof *s);
+}
+static int pc_skill_begin(pc_skill_state *s,const pc_skill_api *api,int slot,int skill,int assoc,int left,uint32_t player,int weapon,float x,float y) {
+    int old=-1,old_assoc=-1;
+    if (!player || skill<0 || (left!=0 && left!=1) || !api->selected(left,&old,&old_assoc) || old<0) return 0;
+    if (!api->select(skill,left,assoc)) return 0;
+    *s=(pc_skill_state){.active=1,.slot=slot,.left=left,.skill=skill,.assoc=assoc,.previous_skill=old,.previous_assoc=old_assoc,.weapon=weapon,.player=player};
+    if (!api->mouse(!left,0,x,y)) {pc_skill_finish(s,api,player,weapon);return 0;}
+    return 1;
+}
+static int pc_skill_selected(int left,int *skill,int *assoc) {
+    uint64_t pl=w_player(),list=pl?*(uint64_t*)(pl+0x100):0,node=list?*(uint64_t*)(list+(left?8:0x10)):0,data=node?*(uint64_t*)node:0;
+    if(!data)return 0;*skill=*(int16_t*)data;*assoc=*(int32_t*)(node+0x44);return 1;
+}
+static int pc_skill_mouse(int side,int phase,float x,float y) {g_pc_skill_dispatch=1;int r=pc_world_mouse(side,phase,x,y,g_pc_skill.active?g_pc_skill.skill:-1);g_pc_skill_dispatch=0;return r;}
+static module_t *pc_skill_module(void) {for(int i=0;i<g_nmod;i++)if(!strcmp(g_mod[i].name,"main"))return &g_mod[i];return NULL;}
+static int pc_skill_abi(module_t *m) {
+    static const struct {size_t at;uint32_t code[4];} e[]={
+        {0x43e000,{0xd10183ff,0xa90167fa,0xa9025ff8,0xa90357f6}},
+        {0x43f170,{0xd10183ff,0xf9000bf9,0xa9025ff8,0xa90357f6}},
+        {0x43ebb0,{0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0x43ef10,{0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0x43f040,{0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd}},
+        {0x310f30,{0xd10143ff,0xf9001bf3,0xa9047bfd,0x910103fd}},
+        {0x2acecc,{0xf81d0ff5,0xa9014ff4,0xa9027bfd,0x910083fd}}
+    };
+    if(!pc_mouse_abi(m))return 0;
+    static const uint32_t quick[]={0xb94d4f08,0x51059509,0x7100053f,0x1a9f97e9,0x7105c91f,0x1a9f07e8,0x0a090108,0xaa0003f5,0x39000288};
+    if(memcmp(m->base+0x2b228c,quick,sizeof quick))return 0;
+    static const uint32_t flags[]={0x3600007a,0x321b0294,0xb9001bf4};
+    static const uint32_t dispatch[]={0x3728009a,0x7100041f,0x54000580,0x3608057a};
+    if(memcmp(m->base+0x4acfec,flags,sizeof flags)||memcmp(m->base+0x4ae9c8,dispatch,sizeof dispatch))return 0;
+    for(unsigned i=0;i<sizeof e/sizeof *e;i++)if(memcmp(m->base+e[i].at,e[i].code,sizeof e[i].code))return 0;
+    return 1;
+}
+static int pc_setting_functor(module_t *m,uintptr_t object,int value,int *result) {
+    uintptr_t tagged=*(uintptr_t*)object,self=tagged&1?tagged&~(uintptr_t)1:object;
+    if(!self)return 0;uintptr_t table=*(uintptr_t*)self,base=(uintptr_t)m->base;
+    if(table<base || table-base>m->size-0x18)return 0;
+    uintptr_t fn=*(uintptr_t*)(table+0x10);
+    if(fn<base || fn-base>=m->text_end)return 0;
+    *result=((int(*)(void*,const int*))fn)((void*)self,&value);return 1;
+}
+static int pc_quick_enabled(module_t *m,int *enabled) {
+    uintptr_t d=((uintptr_t(*)(void))(m->base+0x310f30))();if(!d)return 0;
+    int middle=0;return pc_setting_functor(m,d+0xc8,*(int*)(d+0xc),&middle) && pc_setting_functor(m,d+0x118,middle,enabled);
+}
+static pc_skill_api pc_skill_functions(module_t *m) {return (pc_skill_api){(int(*)(int,int,int))(m->base+0x43f170),pc_skill_mouse,pc_skill_selected};}
+#endif
+void dm_world_pc_skill_pointer(float nx,float ny,int allowed) {
+#if TARGET_OS_OSX
+    g_pc_skill_pointer=(pc_skill_pointer){nx,ny,allowed&&isfinite(nx)&&isfinite(ny)&&nx>=0&&nx<=1&&ny>=0&&ny<=1};
+#else
+    (void)nx;(void)ny;(void)allowed;
+#endif
+}
+void dm_world_pc_skill_cancel(void) {
+#if TARGET_OS_OSX
+    if(!g_pc_skill.active)return;module_t *m=pc_skill_module();
+    if(!pc_skill_abi(m)){memset(&g_pc_skill,0,sizeof g_pc_skill);return;}
+    uint64_t pl=w_player();pc_skill_api api=pc_skill_functions(m);int dm_swapskill_wset(void);
+    pc_skill_finish(&g_pc_skill,&api,pl?*(uint32_t*)(pl+8):0,dm_swapskill_wset());
+#endif
+}
+void dm_world_pc_skill(int slot,int down) {
+#if TARGET_OS_OSX
+    if(slot<0 || slot>=16)return;
+    if(!down){if(g_pc_skill.active&&g_pc_skill.slot==slot)dm_world_pc_skill_cancel();return;}
+    dm_world_pc_skill_cancel();
+    module_t *m=pc_skill_module();if(!pc_skill_abi(m)||!dm_ui_pc_desktop()||!dm_touch_host_world_active())return;
+    uint8_t *b=m->base;uint64_t pl=w_player();
+    if(!pl || *(uint32_t*)(pl+0xc)==0x11 || b[0x2d20ba1] || b[0x2d5ff4b])return;
+    uint64_t game=*(uint64_t*)(b+0x2d20b80);if(slot>=9&&game&&*(uint8_t*)(game+0x5c)==1)return;
+    int enabled=0;if(!pc_quick_enabled(m,&enabled))return;
+    int skill=((int(*)(int))(b+0x43ebb0))(slot);
+    int (*select_slot)(int,int)=(int(*)(int,int))(b+0x43e000);
+    if(!enabled || skill<0 || (skill>=357&&skill<=364) || skill==370){select_slot(slot,0);return;}
+    uint64_t manager=((uint64_t(*)(void))(b+0x2acecc))(),data=manager?*(uint64_t*)(manager+0x1610):0,count=manager?*(uint64_t*)(manager+0x1618):0;
+    if(!data || (uint64_t)skill>=count)return;
+    if(*(uint8_t*)(data+(size_t)skill*0x78+0x20)){select_slot(slot,0);return;}
+    if(!pc_skill_pointer_refresh(&g_pc_skill_pointer,dm_touch_host_world_pointer))return;
+    if((atomic_load_explicit((_Atomic uint8_t*)(b+0x2f05448),memory_order_acquire)&1) || !*(uint8_t*)(manager+0xd20))return;
+    int assoc=((int(*)(int))(b+0x43ef10))(slot),left=((uint8_t(*)(int))(b+0x43f040))(slot)&1;
+    pc_skill_api api=pc_skill_functions(m);int dm_swapskill_wset(void);
+    pc_skill_mouse(!left,2,0,0);
+    int sent=pc_skill_begin(&g_pc_skill,&api,slot,skill,assoc,left,*(uint32_t*)(pl+8),dm_swapskill_wset(),g_pc_skill_pointer.x,g_pc_skill_pointer.y);
+    if(sent)g_pc_skill_frame=dm_guest_frame();
+    static unsigned reported;if(reported++<48)LOG("PC: habilidad %d, slot %d, mano %s, cursor %.3f,%.3f, despacho %d",skill,slot+1,left?"izquierda":"derecha",g_pc_skill_pointer.x,g_pc_skill_pointer.y,sent);
+#else
+    (void)slot;(void)down;
+#endif
+}
+void dm_world_pc_skill_tick(void) {
+#if TARGET_OS_OSX
+    if(!g_pc_skill.active)return;
+    pc_skill_pointer_refresh(&g_pc_skill_pointer,dm_touch_host_world_pointer);
+    uint64_t pl=w_player();int dm_swapskill_wset(void),skill=-1,assoc=-1;
+    if(!dm_ui_pc_desktop() || !dm_touch_host_world_active() || !g_pc_skill_pointer.allowed || !pl || *(uint32_t*)(pl+8)!=g_pc_skill.player || dm_swapskill_wset()!=g_pc_skill.weapon || !pc_skill_selected(g_pc_skill.left,&skill,&assoc) || skill!=g_pc_skill.skill || assoc!=g_pc_skill.assoc) {dm_world_pc_skill_cancel();return;}
+    uint64_t frame=dm_guest_frame();if(frame==g_pc_skill_frame)return;g_pc_skill_frame=frame;
+    if(!pc_skill_mouse(!g_pc_skill.left,1,g_pc_skill_pointer.x,g_pc_skill_pointer.y))dm_world_pc_skill_cancel();
+#endif
+}
 #if TARGET_OS_OSX
 static int w_hostile(uint8_t *b, uint64_t u) { if (*(uint32_t *)u != 1) return 0; uint64_t pl = w_player(); int c = pl ? ((int (*)(int, uint64_t, uint64_t))(b + 0x2f7b7c))(0x165, pl, u) : 0; return c == 1 || c == 0xa; }
 static uint64_t g_mouse_attack_at;
@@ -428,7 +1088,6 @@ static void w_walk_step(uint8_t *b) {
 // ---- Mac mouse: click a monster = attack ----
 // Issued through the game's own click entry (same as w_interact: main+0x4ace20, shared by the controller main button and the keyboard/mouse left button, with this monster as the explicit target): melee walks over and hits; if the main button is bound to a skill, that skill is cast on it; no separate attack logic.
 // While held, touch_mac.c updates "walk toward the cursor" (dm_world_walk) every 30 Hz tick: a hostile monster turns into an attack (chasing it), repeated attacks are still at least 0.2 s apart, and only non-monsters mean walking.
-static _Atomic int g_tap_mouse;
 unsigned dm_world_click(float nx, float ny) { atomic_store(&g_tap_mouse, 1); return dm_world_tap(nx, ny); }   // 任意线程：鼠标左键点世界（比触屏的点按多认敌对怪） | any thread: left mouse click on the world (recognises hostile monsters in addition to what a touch tap does)
 // 世界泵早于鼠标 hook：消费前也要取消暂停、面板或离局期间排队的鼠标指令，触屏/脚本点按不动。
 // The world pump precedes the mouse hook: also cancel queued mouse commands before consumption during pause, panels or game exit; leave touch/script taps alone.

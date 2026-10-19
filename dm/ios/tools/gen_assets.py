@@ -28,6 +28,7 @@ STEPS = [('加宽储藏箱', ['gen_widestash_art.py', '{R}']), ('编年史盖板
 
 def stamp(R):
     h = hashlib.sha256(open(os.path.join(R, 'data', 'build_manifest.psv'), 'rb').read())
+    h.update(open(os.path.join(HERE, '..', '..', 'i18n', 'ui_text.tsv'), 'rb').read())
     for d, ds, fs in sorted(os.walk(HERE)):
         ds[:] = sorted(x for x in ds if x != '__pycache__')
         for f in sorted(fs): h.update(os.path.relpath(os.path.join(d, f), HERE).encode()); h.update(open(os.path.join(d, f), 'rb').read())

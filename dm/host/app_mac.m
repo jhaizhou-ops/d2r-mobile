@@ -12,6 +12,8 @@
 #include <sys/stat.h>
 #include "hle.h"
 #include "dm_i18n.h"
+#include "dm_custom.h"
+#include "romfs_validate.h"
 #define T(k) (@(dm_ui(k)))
 
 #ifndef APP_NAME
@@ -35,18 +37,25 @@ static NSString *g_sup;   // 应用支持目录（dm_app_bootstrap 里定）：�
 //   ① The pick is the resource root (contains data/build_manifest.psv); picking one or two levels above (the root of the unpacked directory, Update) is also accepted, searching one level down;
 //   ② The pick is the data level itself (build_manifest.psv directly inside the folder): if the folder is named data → use its parent; if not named data → create a shell directory
 //      romfs_flat in the Application Support directory containing a data link pointing to it, and use the shell directory as the resource root (the game's "root/data/..." reads stay unchanged). Returns the resource root; otherwise returns nil and gives the reason
+static BOOL romfs_data_valid(NSString *data, NSString **why) {
+    char reason[512];
+    if (dm_romfs_validate(data.fileSystemRepresentation, reason, sizeof reason)) return YES;
+    if (why) *why = @(reason);
+    return NO;
+}
 static NSString *romfs_root(NSString *dir, NSString **why) {
     NSFileManager *fm = NSFileManager.defaultManager;
     for (NSString *sub in @[@"", @"RomFS", @"romfs", @"Update/RomFS"]) {
         NSString *d = sub.length ? [dir stringByAppendingPathComponent:sub] : dir;
         if ([fm fileExistsAtPath:[d stringByAppendingPathComponent:@"data/build_manifest.psv"]]) {
             if (![fm isReadableFileAtPath:[d stringByAppendingPathComponent:@"data/build_manifest.psv"]]) { if (why) *why = T("dmAppNoRead"); return nil; }
-            return d;
+            return romfs_data_valid([d stringByAppendingPathComponent:@"data"], why) ? d : nil;
         }
     }
     NSString *m = [dir stringByAppendingPathComponent:@"build_manifest.psv"];
     if ([fm fileExistsAtPath:m]) {
         if (![fm isReadableFileAtPath:m]) { if (why) *why = T("dmAppNoRead"); return nil; }
+        if (!romfs_data_valid(dir, why)) return nil;
         if ([dir.lastPathComponent isEqualToString:@"data"]) return dir.stringByDeletingLastPathComponent;
         if (g_sup) { NSString *shim = [g_sup stringByAppendingPathComponent:@"romfs_flat"], *link = [shim stringByAppendingPathComponent:@"data"];
             [fm createDirectoryAtPath:shim withIntermediateDirectories:YES attributes:nil error:nil];
@@ -94,7 +103,7 @@ int dm_app_bootstrap(int *argc, char ***argv) {
         NSString *bp = NSBundle.mainBundle.bundlePath;
         if (*argc > 1 || ![bp.pathExtension isEqualToString:@"app"]) return 0;
         NSFileManager *fm = NSFileManager.defaultManager;
-        if (!getenv("DM_LANG")) setenv("DM_LANG", [NSLocale.preferredLanguages.firstObject hasPrefix:@"zh"] ? "zh-Hans" : "en", 1);   // 命令行宿主一律简中；App 形态跟系统首选语言（提示框与游戏内同一个开关） | The command-line host is always Simplified Chinese; the App form follows the system's preferred language (dialogs and in-game text use the same switch)
+        // dm_sys_lang() establece esES por defecto sin convertirlo en una anulación DM_LANG.
         NSString *sup = [[NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@APP_NAME] copy];
         if (getenv("DM_APP_SUPPORT")) sup = @(getenv("DM_APP_SUPPORT"));   // 测试：存档等放到指定目录，不碰玩家那份 | Test: put saves and the rest in a given directory, leaving the player's own untouched
         NSString *logd = [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"Logs/" APP_NAME] copy];
@@ -107,6 +116,9 @@ int dm_app_bootstrap(int *argc, char ***argv) {
         [fm removeItemAtPath:[logd stringByAppendingPathComponent:@"host.prev.log"] error:nil];
         [fm moveItemAtPath:lf toPath:[logd stringByAppendingPathComponent:@"host.prev.log"] error:nil];
         if (!isatty(2)) { freopen(lf.fileSystemRepresentation, "w", stderr); setvbuf(stderr, NULL, _IOLBF, 0); }
+        setenv("DM_SAVE", save.fileSystemRepresentation, 1); setenv("DM_TEMP", temp.fileSystemRepresentation, 1);
+        dm_custom_init(sup.fileSystemRepresentation);
+        dm_lang_startup_set(dm_custom_lang_explicit());
         // 不要系统的「窗口状态恢复」：上次被强退 / 崩过之后，系统会在启动时弹「上次意外退出，要重新打开窗口吗」的模态框——游戏没有可恢复的窗口，
         // 框却挡着主窗口收不到鼠标键盘（游戏在后面照跑）。等同于带启动参数 -ApplePersistenceIgnoreState YES；要在建 NSApplication 之前设
         // No system "window state restoration": after a forced quit / crash the system shows a modal "the app quit unexpectedly, reopen windows?" at launch - the game has no window to restore,
@@ -122,7 +134,12 @@ int dm_app_bootstrap(int *argc, char ***argv) {
         // The bundle identifier has changed (the internal build switched to the same identifier as the iOS package for iCloud): preferences are scoped by bundle identifier, so the two items - the chosen resource folder and having seen the key reference - are carried over once from the old domain (the identifier of public builds), to avoid choosing again
         if (![ud stringForKey:kRomfsKey] && ![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"org.d2rmobile.mac"]) { NSUserDefaults *old = [[NSUserDefaults alloc] initWithSuiteName:@"org.d2rmobile.mac"]; NSString *r = [old stringForKey:kRomfsKey];
             if (r) { [ud setObject:r forKey:kRomfsKey]; if ([old boolForKey:@"KeysShown"]) [ud setBool:YES forKey:@"KeysShown"]; LOG("App：从旧包标识的偏好里接过资源文件夹 %s", r.UTF8String); } }
-        NSString *saved = [ud stringForKey:kRomfsKey], *why = nil, *rom = saved ? romfs_root(saved, &why) : nil;
+        NSString *saved = [ud stringForKey:kRomfsKey], *why = nil;
+        NSString *bundled = res_item(@"romfs");
+        NSString *rom = bundled ? romfs_root(bundled, &why) : saved ? romfs_root(saved, &why) : nil;
+        if (bundled && !rom) {
+            alert(T("dmAppNotRomfsTitle"), why ?: T("dmAppNoRead")); exit(2);
+        }
         if (getenv("DM_APP_ROMFS")) {   // 测试（没人点对话框时用）：直接给资源文件夹；不对就把同一句报错写进日志并退出，不弹框、不记进偏好 | Test (for when nobody is there to click the dialog): give the resource folder directly; if it is wrong, write the same error sentence to the log and exit, with no dialog and nothing saved to preferences
             rom = romfs_root(@(getenv("DM_APP_ROMFS")), &why);
             if (!rom) { LOG("【红】App：DM_APP_ROMFS 给的不是游戏资源文件夹：%s", why.UTF8String); exit(2); }
@@ -131,18 +148,26 @@ int dm_app_bootstrap(int *argc, char ***argv) {
             if (!rom) { LOG("App：没有选资源文件夹，退出"); exit(0); }
             [ud setObject:rom forKey:kRomfsKey];
         }
-        { void dm_custom_init(const char *dir); dm_custom_init(sup.fileSystemRepresentation); }   // 自定义设置文件的目录现在就给（同 iOS 壳）：不给的话要等存档挂上才知道在哪，而语言开关正是在挂存档那一刻读它改游戏语言的——晚了开关就不生效 | the directory of the custom settings file is given right now (same as the iOS shell): otherwise it is only known once the save is mounted, and the language switch is read to change the game language at exactly that moment - too late and the switch has no effect
+
         if (!getenv("DM_TOUCH_DEFAULTS")) setenv("DM_TOUCH_DEFAULTS", "1", 1);   // 产品缺省同 iOS 包（hle_fs.c settings_seed：玩家没碰过的设置键补上——小地图放右上角、进局自动打开、显示物品用开关式等；已有的键不动）。命令行宿主缺省不做，那边要对 Switch 真值比图 | product defaults same as the iOS package (hle_fs.c settings_seed: fills in settings keys the player has never touched - minimap in the top-right corner, opened automatically on entering a game, show-items as a toggle, and so on; existing keys are left alone). The command-line host does not do this by default, since it has to be compared against Switch ground-truth images
         if (!getenv("DM_APP_SUPPORT")) setenv("DM_CLOUD_REAL", "1", 1);   // iCloud 同步（ios/Sources/cloud_ios.m，两端共用）只认玩家真实的存档目录；测试用的支持目录一律不同步 | iCloud sync (ios/Sources/cloud_ios.m, shared by both platforms) only recognises the player's real save directory; a support directory used for testing is never synced
         setenv("DM_WINDOW", "1", 1); setenv("DM_APP", "1", 1);
         if (!getenv("DM_AUDIO")) setenv("DM_AUDIO", "1", 1);   // 产品要出声（hle_audio.c 在 Mac 上的缺省是给命令行回放 / 闸门的静音接收端）；无人值守测试显式 DM_AUDIO=0 | the product must play sound (on the Mac, hle_audio.c defaults to the silent sink used for command-line replays / gates); unattended tests set DM_AUDIO=0 explicitly
-        setenv("DM_SAVE", save.fileSystemRepresentation, 1); setenv("DM_TEMP", temp.fileSystemRepresentation, 1);
         setenv("DM_ROMFS", rom.fileSystemRepresentation, 1); setenv("DM_ROOT", sup.fileSystemRepresentation, 1);
         NSString *shmap = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"shader_map.tsv"];   // 图形后端的着色器映射表：命令行起时按可执行文件旁的源码树找，包里放在 Resources | The graphics backend's shader mapping table: when started from the command line it is found via the source tree next to the executable; in the package it is in Resources
         if ([fm fileExistsAtPath:shmap]) setenv("DM_NVN_SHMAP", shmap.fileSystemRepresentation, 1);
         NSString *msl = res_item(@"msl");   // 编好的着色器库（msl/b-<翻译链版本>/） | The compiled shader library (msl/b-<translation chain version>/)
         if (msl) setenv("DM_MSL_DIR", msl.fileSystemRepresentation, 1);
+        NSString *cursors = res_item(@"cursors");
+        if (cursors) setenv("DM_MAC_CURSOR_DIR", cursors.fileSystemRepresentation, 1);
         NSString *ov = res_item(@"romfs_overlay");
+        if (dm_custom_get("item_notes")) {
+            NSString *variants = res_item(@"romfs_overlay_variants");
+            if (!variants && ov) variants = [ov stringByAppendingString:@"_variants"];
+            NSString *notes = [variants stringByAppendingPathComponent:@"item_notes"];
+            if (notes && [fm fileExistsAtPath:[notes stringByAppendingPathComponent:@"data/.build.config"]]) ov = notes;
+            else LOG("App: variante de notas ausente; se usa la interfaz base");
+        }
         if (ov) setenv("DM_ROMFS_OVERLAY", ov.fileSystemRepresentation, 1);
         static char *av[5]; av[0] = (*argv)[0]; av[1] = strdup(prod.fileSystemRepresentation); av[2] = "main"; av[3] = "sdk"; av[4] = NULL;
         *argv = av; *argc = 4;
@@ -173,10 +198,10 @@ static void upd_check(void) {
         NSDictionary *j = (!e && code == 200 && d) ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
         NSNumber *b = [j isKindOfClass:NSDictionary.class] ? j[@"build"] : nil;
         if (![b isKindOfClass:NSNumber.class] || b.intValue < 1) { LOG("更新：读版本文件没成（%s，HTTP %ld），本次不提示", e ? e.localizedDescription.UTF8String : "格式不对", (long)code); return; }
-        NSString *zh = [j[@"note"] isKindOfClass:NSString.class] ? j[@"note"] : @"", *en = [j[@"note_en"] isKindOfClass:NSString.class] ? j[@"note_en"] : zh, *pg = [j[@"url"] isKindOfClass:NSString.class] ? j[@"url"] : nil;
+        NSString *zh = [j[@"note"] isKindOfClass:NSString.class] ? j[@"note"] : @"", *en = [j[@"note_en"] isKindOfClass:NSString.class] ? j[@"note_en"] : zh, *es = [j[@"note_es"] isKindOfClass:NSString.class] ? j[@"note_es"] : @"", *pg = [j[@"url"] isKindOfClass:NSString.class] ? j[@"url"] : nil;
         NSURL *pu = pg ? [NSURL URLWithString:pg] : nil; BOOL okpg = pu && ([pu.scheme isEqualToString:@"https"] || [pu.scheme isEqualToString:@"http"]) && [pu.host isEqualToString:u.host];
         g_upd_page = okpg ? [pg copy] : nil;
-        if (b.intValue > g_upd_own) { const char *l = getenv("DM_LANG"); NSString *note = (l && !strncmp(l, "zh", 2)) ? zh : en; LOG("更新：最新构建 %d 比自己（%d）新 → 主菜单提示（下载页 %s）", b.intValue, g_upd_own, okpg ? "有" : "没给或不同主机，不可点"); dm_update_offer(b.intValue, note.UTF8String, 0); }
+        if (b.intValue > g_upd_own) { NSString *note = dm_lang_es() ? es : dm_lang_zh() ? zh : en; LOG("更新：最新构建 %d 比自己（%d）新 → 主菜单提示（下载页 %s）", b.intValue, g_upd_own, okpg ? "有" : "没给或不同主机，不可点"); dm_update_offer(b.intValue, note.UTF8String, 0); }
         else { LOG("更新：最新构建 %d，不比自己（%d）新，不提示", b.intValue, g_upd_own); dm_update_offer(0, "", 0); }
     }] resume];
 }

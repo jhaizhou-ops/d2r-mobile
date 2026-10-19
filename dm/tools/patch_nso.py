@@ -63,11 +63,16 @@ CUTS = {'db0507f36b84200ac05f75d76ed5026f': [
      '与（w26>0x24）相与后作第 4 参传下游；lt→gt（业务含义未从字串定出）'),
     (0x1d53e80, '55736572204c617374204f6e6c696e6500', '566f6963654c616e677561676500000000',
      '只读字串 "User Last Online" → "VoiceLanguage"：第 1 处改读一个必定存在的设置键，「上次在线」取到小数值，差值恒超 30 天，配合 gt 恒放行'),
-    # 产品剪口：开场 Logo 与「按 A 开始」页剪掉，启动直达主菜单（装载画面保留）
-    # Product cut: the opening Logo and the 「按 A 开始」(Press A to Start) page are cut, and startup goes straight to the main menu (the loading screen is kept)
-    (0x8019ec, '280f0034', 'e8feff34', '前端引导首次进入分支：cbz w8,#0x801bd0（LogoMenuPanel → Logo 视频 → 标题页）改为 cbz w8,#0x8019c8'
-     '（落到直达路径的 0x23e5e0(1) → 0xb156a0 进主菜单；跳过 0x8019bc 起置联机模式 [0x2d7badc]=1 的两条，联机模式保持启动初值 0 = 离线，'
-     '不触发 0x80ec44 的联网检查、断网弹窗与回标题页）；r4 版目标 0x8019bc 会置联机模式 1，实测仍回标题页并弹断网框'),
+    # Perfil local privado mac-es1: conserva el salto original de 0x8019ec hacia
+    # LogoMenuPanel y fuerza solo las escrituras de selección online a offline.
+    # Los registros fuente siguen intactos: w22 también alimenta los mensajes UI.
+    # La ruta especial ctx+0x643 == 4 (modo 2, 0x8019e0) queda como en el original.
+    (0x801bd8, '16dd0ab9', '1fdd0ab9', 'mac-es1: inicio de la secuencia LogoMenuPanel; str w22,[x8,#0xadc] → str wzr,[x8,#0xadc]; '
+     'modo offline sin alterar w22=1 ni el avance LogoMenu:NextMovie'),
+    (0x801a20, '28dd0ab9', '3fdd0ab9', 'mac-es1: reentrada tras la secuencia inicial; str w8,[x9,#0xadc] → str wzr,[x9,#0xadc]; '
+     'conserva la selección offline antes de MainMenuPanel, sin cambiar w8'),
+    (0x8019c4, '09dd0ab9', '1fdd0ab9', 'mac-es1: entrada alternativa ctx+0x643 == 2; str w9,[x8,#0xadc] → str wzr,[x8,#0xadc]; '
+     'mantiene offline al volver al menú, sin cambiar w9=1'),
     # 宿主原生实现剪口（仅宿主：真值模拟器不应用，Ryujinx 不认识 0x80 起的宿主调用号；等价由逐块解码 5511/5511 一致证明）
     # Cuts for host-native implementations (host only: the ground-truth emulator does not apply them, Ryujinx does not know host call numbers from 0x80 up; equivalence is proven by per-block decoding matching 5511/5511)
     (0x1b0ee60, 'fc6fbaa9fa6701a9', '011000d4c0035fd6', 'TACT BLTE 块 zlib 解码入口（DecodeZlib）→ svc #0x80 ; ret：宿主用 libdeflate 实现'
@@ -182,6 +187,23 @@ PRIVATE_AIM = RULE_RUN and PRIVATE_GATES
 if PRIVATE_AIM:
     cuts.append((0x2faf04, 'fde7fe97', 'c11000d4',
       'skill-aim-v1-private: skill ground direction call only; svc86 delegates original2b4ef8 then sampled-right/original rotation+grid; zero/nonplayer/non-skill retain original; busy/town/skill/server untouched', '仅宿主'))
+if RULE_RUN and PRIVATE_GATES:
+    cuts.append((0x38f578, '3a82ff97', 'e11100d4',
+      'mac-pc-es15: BeltWidget consulta de etiquetas23..26; svc8f usa lector original de teclado36c030 solo en pc_desktop, conserva36fe60 fuera de PC', '仅宿主'))
+    cuts.append((0x3e3c48, '4840fb97', '011200d4',
+      'mac-pc-es15: SkillSelectButtonWidget etiqueta de atajo; svc90 construye sret nativo con etiqueta de teclado en PC, conserva formatter2b3d68 fuera de PC', '仅宿主'))
+    cuts.append((0xbb6f2c, '8ff3fc97', '211200d4',
+      'mac-pc-es15: visibilidad de fila QuickCast; svc91 conserva setter af3d68 y muestra solo Row KeyboardQuickCastEnabled en PC sin modificar opción', '仅宿主'))
+    cuts.append((0xaecca4, 'fbb6ff97', 'a11200d4',
+      'mac-pc-es16: Settings init muestra sólo Controls en partida PC validada; svc95 delega ada890 original y mantiene oculto en frontend/legacy', '仅宿主'))
+if RULE_RUN and PRIVATE_GATES:
+    cuts.append((0xbb59b4, '62c0fc97', '011300d4',
+      'mac-pc: svc98 registra opciones de teclado con constructores nativos antes de ae5b3c; no cambia sus valores ni persiste sin Aplicar', '仅宿主'))
+if RULE_RUN and PRIVATE_GATES:
+    assert IMG[0xc267c8:0xc267d8].hex()=='fc6fbaa9fa6701a9f85f02a9f65703a9'
+    assert IMG[0xc26e08:0xc26e18].hex()=='e00313aa24faff9768424139e8e7ff35'
+    cuts.append((0xc26e0c, '24faff97', '811400d4',
+      'mac-pc: svca4 adapta Create PC a TryCreateCharacter con el nombre del InputText; validación/proveedor originales, ConfirmedCreate y legacy mantienen c2569c', '仅宿主'))
 if RULE_RUN:
     # 方向光阴影图边长（画质档位 1，0x168a520 填 +0x48 → 建 2 层数组 0x1697394）：2100 → 1024。授权「视觉无差别即可」；
     # mini 108 张 + 连续 16 帧：营地 / 野外 / 战斗各档到 1024 的 FLIP 与同设置重跑的噪声分不开、影子区相邻帧变化量 0.71 → 0.75；真机两张阴影合计约 0.7–1.4 ms / 帧。
@@ -647,6 +669,10 @@ if RULE_RUN and PRIVATE_GATES:
     obs.append((0x2f7664, 7, "6dbb23e9", "touch target rank: candidate compare entry (closure, unit, kind, s0=score); host raises Boss/elite score, native eligibility unchanged"))
     obs.append((0xb0d560, 21, "fc1a0fe8", "TooltipsPanel add-tooltip entry (panel, text, target position x2 / x3, style, text2): tooltips are immediate-mode (re-submitted by the hovered widget every frame and cleared after drawing, so the host cannot reach the record at its own time); on touch, in panel state, for an item the player just tapped, the host swaps the target position so the game lays the tooltip out beside the panel instead of over the item grid; everything else passes through unchanged"))
     obs.append((0x7ce800, 22, "d100c3ff", "server place-one-preset-unit entry (game, room, record), only called by the room-activation preset loop 0x7ce930 (8 sites): in a rift game at tier 90+ on a rift map, for a monster record that is not a superunique and not scenery / NPC, the host swaps x2 to a copy whose class is -1 so 0x6910d0 takes its own early return (tbnz w2, #31) and nothing is spawned; the real record is untouched; rift guardian / invader / superunique spawns call 0x7ce630 / 0x69b310 directly and never pass here"))
+    obs.append((0xad75f0, 23, "d10583ff", "mac-es2 privado: entrada de carga de recurso UI (x0 objeto, x1 ruta, w2 flags); el adaptador host puede sustituir solo x1 para glifos de teclado y ratón reasignables; las demás rutas y argumentos se conservan; ejecuta después el prólogo original sub sp,sp,#0x160"))
+    obs.append((0xb88010, 24, "f81a0ffc", "mac-pc-es14: existencia de layout original; sustituye solo x0 por string prestado raíz si existe el recurso PC, sin modificar el temporal del juego; raíz no vuelve a redirigirse"))
+    obs.append((0xb84750, 25, "a9ba6ffc", "mac-pc-es14: carga de layout original; sustituye solo x0 por nombre raíz existente, conserva perfil w1 y padre x2; basedOn se resuelve dentro del cargador original"))
+    obs.append((0x3b1cb4, 26, "a9ba6ffc", "mac-pc privado: entrada Draw de InventoryGridWidget antes de lookup owner/player/getter; diagnóstico opt-in de hover/f0 y ancestros, sólo lectura; reproduce el STP original y conserva la política Draw"))
 for off, oid, ow, why in obs:
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'观测门原指令不符 {off:#x}：{w:08x}'
@@ -655,6 +681,303 @@ for off, oid, ow, why in obs:
     assert off in set(starts) or (oid == 6 and off == 0x43ecc8), f'private obs point not approved {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'观测门与改写点冲突 {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
+
+# PC: entrada de TabBar después de deserializar y antes de crear indicadores. El host siempre deja x8=0;
+# el prólogo SUB original se ejecuta una vez y el resto de la inicialización permanece nativo.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xad8a54, 0xd10383ff, 0xad8a58
+    assert struct.unpack_from('<4I', IMG, off) == (word, 0xa9086ffc, 0xa90967fa, 0xa90a5ff8)
+    assert off in set(starts) and off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x93, off)); put_branch(off, start); stat('pc_tabbar_init')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'mac-pc-es16: svc93 pone sólo byte da1=false bajo PC+VT TabBar original; conserva da0, x8 y prólogo original; siempre continúa por rama nativa', '仅宿主'))
+
+# PC: el nombre del cadáver ya se ha enviado y CBZ conserva su salida original sin indicador.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0x456c5c, 0x911bf7e8, 0x456d50
+    assert struct.unpack_from('<3I', IMG, off - 8) == (0x941afe83, 0x340007d9, word)
+    assert struct.unpack_from('<II', IMG, tgt - 4) == (0x941afe99, 0x914007ff)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x94, off)); put_branch(off, start); stat('pc_corpse_label')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'mac-pc-es16: svc94 omite sólo ControllerInteractButton después del nombre de cadáver; PC salta a epílogo original, legacy ejecuta ADD una vez', '仅宿主'))
+
+# PC: conservar la limpieza de ambos caminos del callback de inventario y sustituir sólo su destino UI.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0x368d64, 0xd288a588, 0x368e10
+    assert struct.unpack_from('<4I', IMG, 0x368d20) == (0xd10103ff, 0xa9024ff4, 0xa9037bfd, 0x9100c3fd)
+    assert struct.unpack_from('<4I', IMG, off) == (word, 0xf2bc16c8, 0xf2d480c8, 0xf2ee24e8)
+    assert struct.unpack_from('<4I', IMG, tgt) == (0xa9437bfd, 0xa9424ff4, 0x910103ff, 0xd65f03c0)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x96, off)); put_branch(off, start); stat('pc_inventory_route')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'mac-pc-es16: svc96 conserva limpieza del callback1; PC delega toggle nativo459ad0(1,1) y epílogo, legacy construye OpenPanel UISwitcher sin cambios', '仅宿主'))
+
+# PC: LeftDown de la familia ItemSlot conserva UI-first y usa su virtual F8 de dominio.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt, old_target = 0x3ca47c, 0x54000920, 0x3ca590, 0x3ca5a0
+    assert struct.unpack_from('<4I', IMG, 0x3ca3b0) == (0xa9ba6ffc,0xa90167fa,0xa9025ff8,0xa90357f6)
+    assert struct.unpack_from('<2I', IMG, off-4) == (0xeb08013f,word)
+    assert struct.unpack_from('<4I', IMG, tgt) == (0xf9422f68,0xb4000068,0x52800029,0x3902e109)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16))
+    # Relocalizar BEQ con salto corto inverso y B largo; copiar el word conservaría un PC incorrecto.
+    emit(0x54000041);emit(B(here(),old_target));emit(B(here(),off+4))
+    gates.append((ret,'svc',0x9d,off));put_branch(off,start);stat('pc_item_left')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svc9d adapta LeftDown dentro de ItemSlot después de UI-first; hit/celda/F8 originales por clase, luego consumed nativo; legacy conserva BEQ relocalizada', '仅宿主'))
+
+# PC: Update/Draw de objetos consulta el hover físico sin elegir el cursor virtual global.
+if RULE_RUN and PRIVATE_GATES:
+    off,old_target=0x3cc97c,0x3cc8b8
+    word=struct.unpack_from('<I',IMG,off)[0]
+    assert word==0x35fff9e9
+    assert struct.unpack_from('<4I',IMG,0x3cc87c)==(0xf81c0ff7,0xa90157f6,0xa9024ff4,0xa9037bfd)
+    assert struct.unpack_from('<2I',IMG,off-8)==(0xd0014a29,0x3963c129)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit(0xaa1e03e8)  # x8 lleva el LR original al host; su valor guest se restaura antes del replay.
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(LDP_POST(8,31,31,16))
+    emit(0x34000049);emit(B(here(),old_target));emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa2,off));put_branch(off,start);stat('pc_item_tooltip')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svca2 permite hover físico a callers Update/Draw verificados de inventario/equipo; replay CBNZ conserva mando y otros callers, sin escribir f0 ni selección', '仅宿主'))
+
+# PC: conservar el hover físico Grid cuando Switch lo limpia por f0=0; la selección y los updates siguientes siguen nativos.
+if RULE_RUN and PRIVATE_GATES:
+    off,word,tgt=0xabcca4,0xa9177e7f,0xabccd8
+    assert struct.unpack_from('<4I',IMG,0xabcc50)==(0xf81b0ff9,0xa9015ff8,0xa90257f6,0xa9034ff4)
+    assert struct.unpack_from('<8I',IMG,0xabcc88)==(0xd00112a8,0x3963c108,0x34000088,0xd00112a8,0x3963b108,0x340001e8,0xf940ba74,word)
+    assert struct.unpack_from('<4I',IMG,off+4)==(0x3945a268,0x34000168,0xf9400008,0x9105c275)
+    assert struct.unpack_from('<2I',IMG,tgt-4)==(0xa9007ebf,0xf940ca69)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa3,off));put_branch(off,start);stat('pc_grid_hover')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svca3 conserva sólo hover Grid físico vigente con mano vacía; salta limpieza170/178+Leave, conserva190 y updates; legacy reproduce STP y limpieza completa', '仅宿主'))
+
+# PC: el callback C0 de SkillSelectButton es RET en Switch; conservar el retorno del llamador.
+if RULE_RUN and PRIVATE_GATES:
+    off,word=0x3e4760,0xd65f03c0
+    assert struct.unpack_from('<4I',IMG,0x3e4594)==(0xa9bd57f6,0xa9014ff4,0xa9027bfd,0x910083fd)
+    assert struct.unpack_from('<5I',IMG,0x3e4750)==(0xa9427bfd,0xa9414ff4,0xa8c357f6,word,word)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(word)
+    gates.append((ret,'svc',0xa5,off));put_branch(off,start);stat('pc_skill_click')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svca5 delega el clic C0 de SkillSelectButton PC a apertura/selección nativas; conserva RET y registros, legacy mantiene el callback vacío', '仅宿主'))
+
+# PC: el HUD muestra la selección real; fuera de su contexto conserva ambos getters de atajos.
+if RULE_RUN and PRIVATE_GATES:
+    off,word,tgt=0x3e2f6c,0x2a1703e0,0x3e2f80
+    assert struct.unpack_from('<4I',IMG,0x3e2dd4)==(0xf81a0ffb,0xa90167fa,0xa9025ff8,0xa90357f6)
+    assert struct.unpack_from('<5I',IMG,off)==(word,0x94016f10,0x2a0003f5,word,0x94016fe5)
+    assert struct.unpack_from('<4I',IMG,tgt)==(0x51036ea8,0x7100091f,0x54000542,0x52802cf5)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa6,off));put_branch(off,start);stat('pc_skill_hud')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svca6 devuelve skill/assoc seleccionados sólo al HUD PC; resto Update nativo, sin escribir skillButton; legacy reproduce MOV y ambos BL con LR originales', '仅宿主'))
+
+# PC: filtrar candidatos antes de agrupar filas, sin alterar los vectores del selector.
+if RULE_RUN and PRIVATE_GATES:
+    off,word,tgt=0xc065a4,0xb94087eb,0xc066b0
+    assert struct.unpack_from('<9I',IMG,0xc06378)==(0x6db923e9,0xa9016ffc,0xa90267fa,0xa9035ff8,0xa90457f6,0xa9054ff4,0xa9067bfd,0x910183fd,0xd10683ff)
+    assert struct.unpack_from('<4I',IMG,0xc064dc)==(0xf94082c8,0xb90087f3,0xb4001e48,0xf9400114)
+    assert struct.unpack_from('<7I',IMG,off)==(word,0x7100057f,0x54000061,0x39409d0b,0x363007eb,0x3940910b,0x372007ab)
+    assert struct.unpack_from('<4I',IMG,tgt)==(0xf85203a8,0xb4000fc8,0xf9400514,0xf81203b4)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa7,off));put_branch(off,start);stat('pc_skill_candidate')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svca7 omite sólo candidatos sin capacidad nativa para el lado elegido; resto del filtro/append original, sin cambiar common ni vectores', '仅宿主'))
+
+# Los tres append explícitos comparten el predicado; el helper de vector global queda intacto.
+if RULE_RUN and PRIVATE_GATES:
+    assert struct.unpack_from('<9I',IMG,0xc06378)==(0x6db923e9,0xa9016ffc,0xa90267fa,0xa9035ff8,0xa90457f6,0xa9054ff4,0xa9067bfd,0x910183fd,0xd10683ff)
+    assert struct.unpack_from('<4I',IMG,0xc064dc)==(0xf94082c8,0xb90087f3,0xb4001e48,0xf9400114)
+    assert struct.unpack_from('<22I',IMG,0xc068c8)==(0x52802ca8,0xd10383a1,0xf900073f,0xaa1903e0,0xf900133f,0xf9001f3f,0xf9002b3f,0xf900373f,0xf900433f,0xf9004f3f,0xb81203a8,0x940008f5,0x52802cc8,0xd10383a1,0xb81203a8,0xaa1903e0,0x940008f0,0x52802e48,0xd10383a1,0xb81203a8,0xaa1903e0,0x940008eb)
+    assert struct.unpack_from('<4I',IMG,0xc08cc8)==(0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd)
+    for off,word in ((0xc068f4,0x940008f5),(0xc06908,0x940008f0),(0xc0691c,0x940008eb)):
+        assert word==(B(off,0xc08cc8)|0x80000000)
+        assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+        start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+        ret=here();emit(LDP_POST(29,30,31,16));emit(0x340000a8)
+        emit(LDP_POST(8,31,31,16));emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(B(here(),off+4))
+        emit(LDP_POST(8,31,31,16));emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(B(here(),0xc08cc8))
+        gates.append((ret,'svc',0xa8,off));put_branch(off,start);stat('pc_skill_common')
+        cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                     'mac-pc: svca8 filtra append explícito por capacidad nativa del lado; fallback c08cc8 y LR original relocalizable, sin lista negra ni cambios de conteo host', '仅宿主'))
+
+# PC: ShiftRightDown comparte el dominio de ItemSlot sin sustituir el RMB original.
+if RULE_RUN and PRIVATE_GATES:
+    off,word=0x3ca58c,0xd63f0100
+    assert struct.unpack_from('<4I',IMG,off-12)==(0xaa0003e1,0xf9408108,0xaa1403e0,word)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),off+4))
+    emit(LDP_POST(8,31,31,16))
+    # BLR original requiere LR=base+callsite+4, conservando ASLR y el retorno nativo.
+    emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(BR(8))
+    gates.append((ret,'svc',0x9e,off));put_branch(off,start);stat('pc_item_right')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svc9e adapta sólo ShiftRMB de ItemSlot; conserva virtual100 y LR original cuando no aplica, UI consumed sigue en código nativo', '仅宿主'))
+
+# PC: el objeto sostenido sigue el puntero físico, conservando el dibujante/recurso originales.
+if RULE_RUN and PRIVATE_GATES:
+    off,callee=0xabd428,0x2ab480
+    word=struct.unpack_from('<I',IMG,off)[0]
+    assert word==(B(off,callee)|0x80000000)
+    assert struct.unpack_from('<4I',IMG,0xabcf34)==(0xd104c3ff,0xa90d6ffc,0xa90e67fa,0xa90f5ff8)
+    assert struct.unpack_from('<4I',IMG,0x2ab480)==(0xd10403ff,0xfd005be8,0xa90c5ff8,0xa90d57f6)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16))
+    emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(B(here(),callee))
+    gates.append((ret,'svc',0xa1,off));put_branch(off,start);stat('pc_held_draw')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svca1 actualiza sólo argumentoXY de held con snapshot físico guest vigente; siempre dibujante2ab480 y LR original; legacy conserva centro de mando', '仅宿主'))
+
+# PC: el NpcDialog de mando consume el clic interior antes de despachar sus filas.
+if RULE_RUN and PRIVATE_GATES:
+    off,tgt,old_target,word=0x3db0b4,0x3db198,0x3db2b4,0x37001000
+    assert struct.unpack_from('<4I',IMG,0x3dadc8)==(0xd10103ff,0xa90157f6,0xa9024ff4,0xa9037bfd)
+    assert struct.unpack_from('<4I',IMG,off-12)==(0xf9400268,0xf9402508,0xd63f0100,word)
+    assert struct.unpack_from('<4I',IMG,tgt)==(0x39414268,0x34000968,0xf9403269,0xb4000929)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16))
+    # TBZ corto inverso y B largo mantienen el destino original de TBNZ fuera del stub.
+    emit(0x36000040);emit(B(here(),old_target));emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa0,off));put_branch(off,start);stat('pc_npc_click')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svca0 permite LMB sobre fila NPC viva con callback nativo por bucle de hijos original; fondo/RMB/outside/legacy conservan TBNZ relocalizada', '仅宿主'))
+
+# PC: una ventana de objetos independiente no usa el contador modal del UISwitcher de mando.
+if RULE_RUN and PRIVATE_GATES:
+    off,tgt=0x3b8648,0x3b8664
+    word=struct.unpack_from('<I',IMG,off)[0]
+    assert word==ADRP(8,off,0x2d12000)
+    assert struct.unpack_from('<4I',IMG,0x3b855c)==(0xd10203ff,0xf90023f7,0xa90557f6,0xa9064ff4)
+    assert struct.unpack_from('<2I',IMG,tgt)==(0x52800028,0x39000268)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(ADRP(8,here(),0x2d12000));emit(B(here(),off+4))
+    gates.append((ret,'svc',0x9f,off));put_branch(off,start);stat('pc_item_hold')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svc9f omite sólo autoreconciliación de mando con held y panelItem PC vigente; mantiene cola y DROP explícito; legacy conserva ADRP relocalizada', '仅宿主'))
+
+# PC: PausePanel/Close debe cerrar el layout independiente, conservando su OnClose nativo.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xae5324, 0xd288a588, 0xae53d0
+    assert struct.unpack_from('<4I', IMG, 0xae50cc) == (0xd10103ff,0xa9024ff4,0xa9037bfd,0x9100c3fd)
+    assert struct.unpack_from('<4I', IMG, off) == (word,0xf2bc16c8,0xf2d480c8,0xf2ee24e8)
+    assert struct.unpack_from('<4I', IMG, tgt) == (0xa9437bfd,0xa9424ff4,0x910103ff,0xd65f03c0)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0x9c,off));put_branch(off,start);stat('pc_pause_close')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svc9c adapta sólo PausePanelMessage/Close; PC independiente delega454f40(9,1), flag y OnClose nativos; legacy conserva ClosePanel UISwitcher', '仅宿主'))
+
+# PC: el filtro común ya cargó los modelos; x19 sigue siendo el panel antes del foco.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xae950c, 0xf9422ee8, 0xae9510
+    assert struct.unpack_from('<4I', IMG, off) == (word,0xf9406914,0xf940b262,0xb5000082)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0x97,off));put_branch(off,start);stat('pc_options_rows')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'mac-pc: svc97 aplica visibilidad de filas con af3d68 tras filtro común; x8=0, replay LDR original y foco nativo conservado', '仅宿主'))
+
+# Observación transparente: siempre reproducir el BL del productor del mando, incluido su LR original.
+if RULE_RUN and PRIVATE_GATES:
+    for off, word, number, callee in (
+        (0x2b2ebc, 0x9407e7d9, 0x99, 0x4ace20),
+        (0x2b2f38, 0x9407e7ba, 0x9a, 0x4ace20),
+        (0x2b3124, 0x940814a3, 0x9b, 0x4b83b0),
+    ):
+        assert struct.unpack_from('<I', IMG, off)[0] == word
+        assert word == (B(off, callee) | 0x80000000)
+        assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+        start = here()
+        emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+        ret = here();emit(LDP_POST(29,30,31,16))
+        emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(B(here(),callee))
+        gates.append((ret,'svc',number,off));put_branch(off,start);stat('pc_controller_move_observe')
+        cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                     f'mac-pc: svc{number:x} observa productor del mando sin mutar registros; siempre BL original {callee:x} con LR={off+4:x}; sin omisión ni filtro de paquetes', '仅宿主'))
+
+# PC: después de ClearInfo y del objetivo exacto A, omitir solo las fuentes automáticas B/C.
+# Se conserva la actualización posterior de etiquetas; ADD es independiente de PC, ADRP anterior permanece en su sitio.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xb0d150, 0x911dc108, 0xb0d168
+    assert struct.unpack_from('<I', IMG, off)[0] == word
+    assert struct.unpack_from('<I', IMG, off - 4)[0] == 0xb0011028
+    assert struct.unpack_from('<II', IMG, tgt) == (0xf940ba68, 0xb4000a08)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x92, off)); put_branch(off, start); stat('pc_hover_only')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'mac-pc-es16: svc92 omite fuentes automáticas B/C de MonsterHealth solo pc_desktop; conserva ClearInfo, objetivo exacto A y actualización de etiquetas; legacy ejecuta ADD original', '仅宿主'))
 
 # 秘境出口改道（r36 起）：分支门 0x89，挂在「按出口砖的连接换关」main+0x7cc1e0(游戏, 玩家, 砖) 的入口。它的四个调用者（点出口砖 0x6dbea0、
 # 入口物件 0x6aeaa0 / 0x6b0500、任务 0x7314c0）都在各自的判定通过之后才调它；目的地不是关卡号而是砖的对端房间（同一幕已生成的地图里），换不成别的幕。

@@ -62,7 +62,7 @@ def build(romfs, outdir, repl):
         for tier, fx in TIERS.items():
             dst = variant_path(root, asset, tier)
             o = os.path.join(outdir, 'droplight_' + dst.replace('/', '_')); open(o, 'w').write(add_light(text, fx, dst)); out['+' + dst] = o
-    return out, f'掉落光变体：{len(out) // 2} 个模型 × 2 档（原表指向不存在模型、跳过 {skipped} 个）'
+    return out, f'Variantes de luz de objetos: {len(out) // 2} modelos × 2 niveles; {skipped} modelos ausentes omitidos'
 
 if __name__ == '__main__':   # 试验：drop_light.py <RomFS> <输出目录> → 只含本模块改动的 repl.tsv（casc_overlay.py 直接吃） | Trial: drop_light.py <RomFS> <output dir> → a repl.tsv containing only this module's changes (consumed directly by casc_overlay.py)
     romfs, out = sys.argv[1:3]; os.makedirs(out, exist_ok=True)

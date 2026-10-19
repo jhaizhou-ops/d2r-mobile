@@ -258,7 +258,9 @@ _UPDATE_PAD = (_upd_text('TouchBuild', 3341, 60, 420, 30, (150, 140, 115), 'righ
                + _upd_text('TouchUpdTitle', 1220, 1524, 1400, 46, (214, 74, 58), 'center')
                + _upd_text('TouchUpdDesc', 1220, 1610, 1400, 36, (232, 228, 214), 'center')
                + _upd_btn('TouchUpdBig', None, ''))
-def pad_ribbon(s):   # 手柄版主菜单左侧按钮栏 = 原版布局，只拿掉「电影动画」：包里不播过场（列表里只有一行有字、选了什么都不播），是个没用的入口，同触屏版没有它。 | Controller layout main menu left button ribbon = the original layout, only removing 「电影动画」(Cinematics): the package does not play cutscenes (only one row in the list has text, and nothing plays whichever is chosen), so it is a useless entry; same as the touch version, which does not have it.
+def pad_ribbon(s):
+    # El backend Mac reproduce las cinemáticas; conserva posición y navegación originales.
+    if os.environ.get('DM_OVERLAY_MAC'): return s
     # 「制作人员」上移到它的位置，上下焦点改成「选项 ↔ 制作人员」直连
     # 「制作人员」(Credits) moves up into its place, and up / down focus becomes a direct link 「选项 ↔ 制作人员」(Options ↔ Credits)
     s = _sub1(s, '"rect": { "x": 164, "y": 1175 },', '"rect": { "x": 99999, "y": 99999 },')
@@ -786,12 +788,19 @@ def _rf_row(i, m, name, sub, icon, px, bb, up=1.0):
     # 两行字：第一行「层数 + 物品名」（MediumLarge，物品名原版暗金色），第二行小一号说明；两行左对齐 x 180。状态字右对齐、整行垂直居中，右留白 20 = 左边距
     # Two lines of text: the first line 'level number + item name' (MediumLarge, item name in the original game's unique gold), the second line a description one size smaller; both lines left-aligned at x 180. Status text is right-aligned and vertically centered in the whole row, with right padding 20 = left margin
     dx = 34 if m >= 100 else 0   # 三位数的层号多一个数字宽，物品名右移（Mac 截图：「100 层」压住物品名） | A three-digit level number is one digit wider, so the item name shifts right (Mac screenshot: 「100 层」(100) covered the item name)
-    return {'type': 'Widget', 'name': 'TouchRF_Row%d' % i, 'fields': {'rect': {'x': 0, 'y': KB_ROW_H * i, 'width': 1157, 'height': KB_ROW_H}}, 'children': [
+    row = {'type': 'Widget', 'name': 'TouchRF_Row%d' % i, 'fields': {'rect': {'x': 0, 'y': KB_ROW_H * i, 'width': 1157, 'height': KB_ROW_H}}, 'children': [
         {'type': 'ImageWidget', 'name': 'Bg', 'fields': {'filename': 'PANEL\\Chronicle\\Slot_list_item_XL'}}, _rf_icon(icon, px, bb, up),
         _kb_text('Tier', 180, 30 if sub else 0, 150 + dx, 70 if sub else 188, '$FontColorWhite', '$MediumLargeFontSize', text='@dmRiftMsTier%d' % m),
         _kb_text('Name', 330 + dx, 30 if sub else 0, 520 - dx, 70 if sub else 188, '$FontColorGoldYellow', '$MediumLargeFontSize', text=name),
         _kb_text('Sub', 180, 100, 670, 56, '$FontColorMoreLightGray', '$MediumFontSize', text=sub),
         _kb_text('State', 850, 0, 287, 188, '$FontColorMoreLightGray', '$MediumLargeFontSize', 'right', text='@dmRiftMsNo')]}
+    if m in (30, 60, 80):
+        # Los nombres oficiales españoles necesitan dos líneas dentro de la misma fila.
+        label = _kb_text('NameEs', 99999, 0, 520, 188, '$FontColorGoldYellow', 32, text=name)
+        label['fields']['style']['options'] = {'lineWrap': True, 'newlineHandling': 'standard'}
+        row['children'].append(label)
+    return row
+
 def _rf_kv(k, y, label, vcolor='$FontColorWhite'):   # 「标签 + 值」一行：标签灰、左列左对齐；值（缺省白）右列右对齐（左栏 0–460） | One 'label + value' row: label gray, left-aligned in the left column; value (white by default) right-aligned in the right column (left column 0–460)
     # 英文版：同一句英文比中文宽，标签写全称（Enemy Power / Next Unique）用中号字会顶到数值。每行另放一个小一号的标签控件 …LE，
     # 缺省摆在屏外；游戏语言不是中文时宿主把它挪进来、把中号那个挪出去（dm_rift_ui.c）。中文画面不变
@@ -1176,6 +1185,8 @@ def _drop_rows(*rows):
 # the video page's table is replaced entirely with our rows: section header + one original-game checkbox per switch (following the fields of the 「自动拾取金币」(Auto Gold Pickup) row on the 「游戏」(Game) page). Widget names are TouchCustom_<key>,
 # and the host dm_custom.c reads whether each is checked and handles apply / discard / default. The checkbox message sends a harmless ClosePanel (same as 「极乐世界」(Elysium)), which the game does not recognize
 _CUSTOM_KEYS = ('auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes', 'icloud', 'pot_pick', 'drop_haptic', 'gem_pick', 'store_btn', 'eco_fps', 'q3d', 'loot_filter', 'auto_buff', 'touch_swap_above')
+if os.environ.get('DM_OVERLAY_MAC'):
+    _CUSTOM_KEYS = tuple(k for k in _CUSTOM_KEYS if k not in ('touch_swap_above', 'drop_haptic'))
 # 字在中英表（dm/i18n/ui_text.tsv 的 dmCustom<键名驼峰>），布局写 @键、跟原版语言走（英文版）；行高按中文行数分，英文必须同样行数（不然换语言排版变）
 # The text lives in the Chinese-English string table (dmCustom<key name in camel case> in dm/i18n/ui_text.tsv); layouts write @key and follow the
 # original game's language (English version); row height is assigned by the number of Chinese lines, and English must have the same number of lines
@@ -1198,7 +1209,7 @@ _CUSTOM_ROWS = tuple((k, '@' + _custom_key(k)) for k in _CUSTOM_KEYS)
 # Dimensions are taken from the values the table lays out in the same widget tree: row height 180; text 1000×180; checkbox at x 1315 within the row, 70×70, vertically centered. Header row 180 (the gold divider line below it is placed for a 180 row height).
 # The first row is the language switch (also first in the host's key table), followed by the rows of _CUSTOM_KEYS; adding a row = adding a key to _CUSTOM_KEYS (and to k_keys in the host's dm_custom.c in the same order)
 _CUSTOM_TITLE_H, _CUSTOM_LINE_H = 180, 180
-_CUSTOM_ALL = (('lang_en', '@dmCustomLang'),) + _CUSTOM_ROWS
+_CUSTOM_ALL = (('language_index', '@dmCustomLang'),) + _CUSTOM_ROWS
 _CUSTOM_TEST_ROWS = int(os.environ.get('DM_CUSTOM_TEST_ROWS', '0'))   # 测试（造现场）：末尾多摆这么多行假行，验更多行时的滚动；产品不设 | test (test setup): append this many dummy rows at the end, to verify scrolling with more rows; not set in the product
 # 「3D 画质」（q3d）是单选的两项、每项下面一行说明小字，占两行高（_CUSTOM_Q3D_H）；其余各行一行高
 # "3D Quality" (q3d) is a radio with two options, each with a line of small description text below, taking two rows of height (_CUSTOM_Q3D_H); every other row is one row high
@@ -1221,14 +1232,10 @@ def _custom_toggle_row(i, key, label):
 # Language switch (first row, an ordinary row): checked = English UI + English voice, effective at the next launch (lang_en in the host's dm_custom.c, settings_lang_apply in hle_fs.c).
 # The line 「重启游戏后生效」(Takes effect after restarting the game) is first placed off screen; when the checkbox does not match the current language the host moves it to the lower half of this row's text (x taken from the label)
 _CUSTOM_LANG_HINT = ''.join('        { "type": "TextBoxWidget", "name": "TouchCustomLangHint%s", "fields": { "rect": { "x": 99999, "y": %d, "width": 1400, "height": 60 }, "text": "@dmCustomLangHint%s", "style": "$StyleSettingsText", "style/fontFace": "BlizzardGlobal" } },\n'
-                            % (n, _CUSTOM_Y[0] + 112, n) for n in ('Zh', 'En'))   # 两句各一个控件，宿主按选中的语言摆其中一句 | One control per sentence; the host places one of them according to the chosen language
-# 语言那一行是并排的两个选项「中文 / English」（单选：宿主 dm_custom.c 让两个勾选框互斥，存的仍是 lang_en 一个键）。
-# 这一行的字两种界面都要写汉字：英文界面缺省的 Formal 字体没有汉字（缺字画不出），所以这几个文字控件指定原版的全球字体 BlizzardGlobal
-# （原版标题页、队伍名等同样按控件指定它）。English 的勾选框留在各行勾选框那一列，「中文」的在它左边
-# The language row is two options side by side, 「中文 / English」 (single choice: the host dm_custom.c makes the two checkboxes mutually exclusive, and what is stored is still the one key lang_en).
-# The text of this row has to show Chinese characters in both UIs: the default Formal font of the English UI has no Chinese characters (missing glyphs cannot be drawn), so these text controls specify the original global font BlizzardGlobal
-# (the original title page, party names and so on specify it per control in the same way). The checkbox of English stays in the column where every row has its checkbox; the one of 「中文」 is to its left
-_LANG_ZH_X, _LANG_EN_X = (770, 905), (1100, 1315)   # （文字 x，勾选框 x） | (text x, checkbox x)
+                            % (n, _CUSTOM_Y[0] + 112, n) for n in ('Zh', 'En', 'Es'))   # 两句各一个控件，宿主按选中的语言摆其中一句 | One control per sentence; the host places one of them according to the chosen language
+# Tres idiomas con sus endónimos. Se conserva BlizzardGlobal para que 中文 sea visible
+# también con el juego en español o inglés. El host guarda el índice original, no un booleano.
+_LANG_ZH_X, _LANG_EN_X, _LANG_ES_X = (580, 710), (850, 1050), (1160, 1390)
 def _custom_lang_row():
     y, h = _CUSTOM_Y[0], 112; cy = y + (h - 70) // 2   # 标签、两个选项排在这一行的上 112，下面 68 留给提示那一句 | The label and the two options go in the top 112 of this row; the bottom 68 is left for the hint sentence
     def text(name, x, w, key): return ('        { "type": "TextBoxWidget", "name": "%s", "fields": { "rect": { "x": %d, "y": %d, "width": %d, "height": %d }, "text": "@%s", "style": "$StyleSettingsText", "style/fontFace": "BlizzardGlobal" } },\n' % (name, x, y, w, h, key))
@@ -1239,9 +1246,10 @@ def _custom_lang_row():
             '            "untoggledFrame": 0, "untoggledPressedFrame": 1, "untoggledHoveredFrame": 3, "untoggledDisabledFrame": 2,\n'
             '            "toggledFrame": 4, "toggledPressedFrame": 5, "toggledHoveredFrame": 6,\n'
             '            "onClickMessage": "PanelManager:ClosePanel:%s" } },\n') % (name, x, cy, name)
-    return (text('TouchCustom_lang_en_Text', 0, 700, 'dmCustomLang')
+    return (text('TouchCustom_language_index_Text', 0, 530, 'dmCustomLang')
             + text('TouchCustomLangZh_Text', _LANG_ZH_X[0], _LANG_ZH_X[1] - _LANG_ZH_X[0] - 10, 'dmCustomLangZh') + box('TouchCustom_lang_zh', _LANG_ZH_X[1])
-            + text('TouchCustomLangEn_Text', _LANG_EN_X[0], _LANG_EN_X[1] - _LANG_EN_X[0] - 10, 'dmCustomLangEnOpt') + box('TouchCustom_lang_en', _LANG_EN_X[1]))
+            + text('TouchCustomLangEn_Text', _LANG_EN_X[0], _LANG_EN_X[1] - _LANG_EN_X[0] - 10, 'dmCustomLangEnOpt') + box('TouchCustom_language_index', _LANG_EN_X[1])
+            + text('TouchCustomLangEs_Text', _LANG_ES_X[0], _LANG_ES_X[1] - _LANG_ES_X[0] - 10, 'dmCustomLangEs') + box('TouchCustom_lang_es', _LANG_ES_X[1]))
 # 「3D 画质」（流畅优先（缺省，掉帧自动降 3D 比例）/ 画质优先（不自动降））：上下两项单选，每项标题下一行说明小字。
 # 存的是一个键 q3d（1 = 画质优先）：「画质优先」的勾选框叫 TouchCustom_q3d、「流畅优先」的叫 TouchCustom_q3d_smooth（它的反面），宿主 dm_custom.c 让两框互斥（同语言行）。
 # TouchCustom_q3d_Text 是空字、高度盖住两项的框：手柄选中框按「文字框与勾选框的上下沿取并」框住整行（dm_custom.c），所以用它把两项一起框进去

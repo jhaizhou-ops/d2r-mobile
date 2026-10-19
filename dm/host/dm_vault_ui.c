@@ -32,11 +32,32 @@
 
 enum { VCOLS = 3, VROWS = 4, VPER = VCOLS * VROWS, VSET_ROWS = 7, VSET_N = 6, VU_UNIQ_Y = 516, VX0 = 156, VW0 = 1372, VT_TIER_Y = 444 };   // VX0 / VW0 / VT_TIER_Y 同 wide_stash.py VX / VW / PT_Y + 2 × PT_PITCH   // 同 wide_stash.py VAULT_* / UNIQ_Y | VX0 / VW0 / VT_TIER_Y same as wide_stash.py VX / VW / PT_Y + 2 × PT_PITCH   // same as wide_stash.py VAULT_* / UNIQ_Y
 enum { ST_NONE, ST_SEEN, ST_STORED };
+typedef struct { int stats_x,stats_y,tiers_x,tiers_y,checks[3],label_y,unique_x,unique_y,sets_x,sets_y; } vu_layout;
+static vu_layout vu_geometry(int pc,int zh,int sub) {
+    if(pc) return (vu_layout){105,sub?325:505,105,557,{0,440,880},0,113,sub?377:638,105,377};
+    return (vu_layout){156,450,VX0+VW0-(zh?590:650),VT_TIER_Y,{0,zh?200:240,zh?400:430},-5,156,VU_UNIQ_Y,156,296};
+}
 int dm_vault_has(int kind, int idx); int dm_vault_gen(void);   // dm_vault.c
 static _Atomic int g_dirty = 1, g_flip, g_sub_req = -1;
 static int g_sub, g_part, g_page[VT_NPART + 1], g_tiers = 7;   // g_page[VT_NPART] = 套装页 | g_page[VT_NPART] = set page
 static int g_pg_cur, g_pg_tot;   // 底部页码：第几页（1 起）、共几页 | Bottom page number: which page (from 1), total pages
-static int g_drop_id;   // 拖进编年史页、等放回原格后存入的那件 | The item dragged into the chronicle page, to be stored once it is put back into its original cell
+typedef struct { uint32_t held,id,returning;int wait; } vu_deposit;
+static vu_deposit g_deposit;
+static void vu_deposit_returning(vu_deposit *s,uint32_t id) {
+    if(!id) { *s=(vu_deposit){0};return; }
+    if(s->returning==id && (s->held==id || s->wait))return;
+    *s=(vu_deposit){.held=id,.returning=id};
+}
+static uint32_t vu_deposit_step(vu_deposit *s,int pc,uint32_t held,uint32_t drop) {
+    if(pc && ((s->returning && drop!=s->returning) || (s->wait && held))) *s=(vu_deposit){0};
+    if(s->held && !held && drop==s->held) { s->wait=8;s->id=s->held;if(pc)s->returning=s->held; }
+    s->held=held;
+    if(s->wait && !--s->wait) { uint32_t id=s->id;s->id=0;s->returning=0;return id; }
+    return 0;
+}
+// Hilo guest, justo antes de devolver este objeto sostenido a su celda original.
+// Comparte la transición y los ocho frames del pump; cero cancela la intención PC.
+void dm_vault_ui_returning(uint32_t id) { if(dm_ui_pc_desktop())vu_deposit_returning(&g_deposit,id); }
 static char g_query[64]; static int g_page_q;
 static int g_tip_on;   // 说明框开着时 = 哪一格 + 1   // 搜索字（空 = 按部位看）、搜索结果翻到第几页 | While the tooltip is open = which cell + 1   // search text (empty = browse by slot), which page of the search results
 static int g_cell_row[VPER], g_set_row[VSET_ROWS][VSET_N];   // 屏上每一格对应 vt_rows 的哪一行（−1 = 空），画的时候记，点按时查 | Which vt_rows row each on-screen cell corresponds to (−1 = empty); recorded when drawing, looked up on tap
@@ -202,7 +223,9 @@ static int vu_desc(uint8_t *b, const vt_row *e, char *out, size_t n) {
 }
 static void vu_tip_place(uint64_t tb, uint64_t bg) {   // 说明框按字的大小摆在编年史页正中、底框包住字；文字控件量尺寸（fitToText）要晚一两帧，开着时每帧对齐 | The tooltip is placed at the center of the chronicle page according to the text size, with the background frame enclosing the text; the text widget's size measurement (fitToText) lags a frame or two, so align every frame while open
     int w = *(int32_t *)(tb + 0x78), h = *(int32_t *)(tb + 0x7c); if (w <= 0 || h <= 0) return;
-    int x = 156 + (1372 - w) / 2, y = 296 + (820 - h) / 2; if (y < 150) y = 150;
+    int pc=dm_ui_pc_desktop();
+    int x = pc ? 82+(1390-w)/2 : 156+(1372-w)/2, y = pc ? 219+(981-h)/2 : 296+(820-h)/2;
+    if(y<(pc?235:150)) y=pc?235:150;
     int32_t *r = (int32_t *)(bg + 0x70); if (r[2] != w + 80 || r[3] != h + 60) { r[2] = w + 80; r[3] = h + 60; r[0] = -1; }
     vu_move(bg, x - 40, y - 30); vu_move(tb, x, y);
 }
@@ -257,12 +280,12 @@ int dm_vault_ui_tap(int x, int y) {
         // 我们自己的可点控件（子页签、下拉、勾选、搜索框）照常发鼠标给游戏；编年史页上别的地方一律吃掉：底下是原版魔盒容器，不许点到它（独立页面）
         // Our own tappable widgets (sub-tabs, dropdown, checkboxes, search box) send mouse events to the game as usual; everywhere else on the chronicle page is swallowed: underneath is the original game's cube container, which must not be tapped (standalone page)
         return dm_vault_ui_blocks(x, y); }
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); double now = ts.tv_sec + ts.tv_nsec / 1e9; static double last; static int lcell = -1;
-    const vt_row *e = &vt_rows[row]; int dbl = cell == lcell && now - last < 0.40;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); double now = ts.tv_sec + ts.tv_nsec / 1e9; static double last; static int lcell = -1, lrow = -1;
+    const vt_row *e = &vt_rows[row]; int dbl = cell == lcell && (!dm_ui_pc_desktop() || row == lrow) && now - last < 0.40;
     if (dbl) { last = 0; lcell = -1;
         if (dm_vault_has(e->kind, e->row)) { void dm_vault_request_withdraw(int, int); dm_vault_request_withdraw(e->kind, e->row); LOG("编年史仓库：双击 %s（%s %d）→ 取出", e->key, e->kind ? "暗金" : "套装件", e->row); }
         else LOG("编年史仓库：双击 %s —— 这一格没存，不动", e->key); }
-    else { last = now; lcell = cell; LOG("编年史仓库：点了 %s（%s）", e->key, dm_vault_has(e->kind, e->row) ? "存着" : "没存"); }
+    else { last = now; lcell = cell; lrow = row; LOG("编年史仓库：点了 %s（%s）", e->key, dm_vault_has(e->kind, e->row) ? "存着" : "没存"); }
     if (dbl || g_tip_on == cell + 1) { vu_tip(b, vt, NULL); g_tip_on = 0; } else { vu_tip(b, vt, e); g_tip_on = cell + 1; }   // 单击出说明，再点同一格 / 双击收起 | Single tap shows the description; tapping the same cell again / double-tapping closes it
     return 1;
 }
@@ -324,22 +347,25 @@ static void vu_search(uint8_t *b, uint64_t vt) {
 // 0 = start: only stored cells accept it (return 1); the item image follows the finger (TouchV_Drag, drawn above the finger: same as the drag-and-drop rule "drop point = item image position", with the lift amount reported by the front end (dm_ui_drag_lift)), and the original cell is dimmed.
 // 1 = move; 2 = release: item image center landing on an inventory cell = ask the server to withdraw at this drop point (if it does not fit / overlaps another item, no withdraw and the error sound plays, dm_vault.c bag_fits); landing anywhere else = no withdraw, play the error sound.
 // It can never get equipped or dropped on the ground: withdraw only goes through the single "put into a specified inventory cell" path
-static struct { int on, row, bx0, by0; float ax, ay; } g_dg;
+static struct { int on, row, bx0, by0, local_x, local_y; float ax, ay; } g_dg;
 static void vu_drag_place(uint64_t vt, int x, int y) {
     uint64_t im = vu_find(vt, "TouchV_Drag", 0); if (!im || g_dg.ax <= 0 || g_dg.ay <= 0) return;
-    int ux = 142 + (int)((x - g_dg.bx0) / g_dg.ax), uy = 136 + (int)((y - g_dg.by0) / g_dg.ay), w = *(int32_t *)(im + 0x78), h = *(int32_t *)(im + 0x7c);
+    int ux = g_dg.local_x + (int)((x - g_dg.bx0) / g_dg.ax), uy = g_dg.local_y + (int)((y - g_dg.by0) / g_dg.ay), w = *(int32_t *)(im + 0x78), h = *(int32_t *)(im + 0x7c);
     vu_move(im, ux - (w > 0 ? w / 2 : 49), uy - (h > 0 ? h / 2 : 49));
 }
 int dm_vault_ui_drag(int phase, int x, int y) {
     uint8_t *b = vu_base(); uint64_t root = b ? *(uint64_t *)(b + 0x2f05458) : 0, bk = root ? dm_ui_top(root, "BankExpansionLayout") : 0, vt = bk ? vu_find(bk, "TouchVault", 1) : 0; if (!vt) { g_dg.on = 0; return 0; }
+    if (phase < 0) { int on=g_dg.on; g_dg.on=0; if(on) { vu_move(vu_find(vt,"TouchV_Drag",0),99999,0);atomic_store(&g_dirty,1); } return on; }
+    if (phase > 2) return 0;
     float dm_ui_drag_lift_get(void); int vh = *(int32_t *)(b + 0x211da3c), lift = (int)(vh * dm_ui_drag_lift_get());   // 抬起量由前端报（同各自拖放落点） | The lift amount is reported by the front end (same as each of the other drag-and-drop drop points)
-    if (phase == 0) { int cell; int row = vu_cell_at(vt, x, y, &cell); if (row < 0 || !dm_vault_has(vt_rows[row].kind, vt_rows[row].row)) return 0;
+    if (phase == 0) { int cell; int row = vu_cell_at(vt, x, y, &cell); if (row < 0 || row >= VT_NROW || !dm_vault_has(vt_rows[row].kind, vt_rows[row].row)) return 0;
         uint64_t bg = vu_find(vt, "TouchV_Back", 0); if (!bg) return 0; int a, c, x0, x1, y0, y1, vw = *(int32_t *)(b + 0x211da38);   // 面板单位 ↔ 视口像素：探暗底的四条边（暗底在布局里是 x 142–1542、y 136–1136） | Panel units ↔ viewport pixels: probe the four edges of the dark background (in the layout the dark background is x 142–1542, y 136–1136)
         for (a = 0, c = x; a < c;) { int mid = (a + c) / 2; if (vu_hit(bg, mid, y)) c = mid; else a = mid + 1; } x0 = a;
         for (a = x, c = vw - 1; a < c;) { int mid = (a + c + 1) / 2; if (vu_hit(bg, mid, y)) a = mid; else c = mid - 1; } x1 = a;
         for (a = 0, c = y; a < c;) { int mid = (a + c) / 2; if (vu_hit(bg, x, mid)) c = mid; else a = mid + 1; } y0 = a;
         for (a = y, c = vh - 1; a < c;) { int mid = (a + c + 1) / 2; if (vu_hit(bg, x, mid)) a = mid; else c = mid - 1; } y1 = a;
-        g_dg = (typeof(g_dg)){ 1, row, x0, y0, (x1 - x0 + 1) / 1400.0f, (y1 - y0 + 1) / 1000.0f };
+        int pc=dm_ui_pc_desktop();
+        g_dg = (typeof(g_dg)){ 1, row, x0, y0, pc?82:142, pc?219:136, (x1 - x0 + 1) / (pc?1390.0f:1400.0f), (y1 - y0 + 1) / (pc?981.0f:1000.0f) };
         if (g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; }
         uint64_t im = vu_find(vt, "TouchV_Drag", 0); if (im) { vu_image(b, im, vt_rows[row].icon); *(float *)(im + 0x80) = 1.0f; *(float *)(im + 0x94) = 1.0f; }
         if (cell >= 0 && cell < VPER) { char nm[16]; snprintf(nm, sizeof nm, "TouchV_U%d", cell); uint64_t c2 = vu_find(vt, nm, 1), ti = c2 ? vu_find(c2, "TileImg", 0) : 0; if (ti) *(float *)(ti + 0x94) = 0.2f; }
@@ -362,6 +388,69 @@ int dm_vault_ui_pager_hit(int x, int y) {
     if (!vt || *(int32_t *)(vt + 0x70) != 0) return 0;
     return vu_hit(vu_find(vt, "TouchV_PgLHit", 0), x, y) ? -1 : vu_hit(vu_find(vt, "TouchV_PgRHit", 0), x, y) ? 1 : 0;
 }
+enum { VU_PC_CONSUME=1, VU_PC_TAP=2, VU_PC_DRAG_START=4, VU_PC_DRAG_MOVE=8, VU_PC_DRAG_END=16, VU_PC_DRAG_CANCEL=32 };
+typedef struct { int active,target,row,stored,cancelled,dragging,x,y; } vu_pointer;
+static int vu_pointer_step(vu_pointer *s,int kind,int same,int target,int row,int stored,int x,int y) {
+    if(kind<0 || kind==DM_UP_END) { int result=s->active?VU_PC_CONSUME:0; if(s->dragging)result|=VU_PC_DRAG_CANCEL;*s=(vu_pointer){0};return result; }
+    if(kind==DM_UP_LDOWN) {
+        if(s->active) { s->cancelled=1;int result=VU_PC_CONSUME;if(s->dragging){s->dragging=0;result|=VU_PC_DRAG_CANCEL;}return result; }
+        if(target<=0)return 0;
+        *s=(vu_pointer){.active=1,.target=target,.row=row,.stored=stored,.x=x,.y=y};return VU_PC_CONSUME;
+    }
+    if(!s->active || (kind!=DM_UP_HOVER && kind!=DM_UP_MOVE && kind!=DM_UP_LUP))return 0;
+    int result=VU_PC_CONSUME;
+    if(!same) { s->cancelled=1;if(s->dragging){result|=VU_PC_DRAG_CANCEL;s->dragging=0;} }
+    if(kind==DM_UP_LUP) {
+        if(s->dragging)result|=VU_PC_DRAG_END;
+        else if(!s->cancelled && target==s->target && row==s->row && target>2)result|=VU_PC_TAP;
+        s->active=0;s->dragging=0;return result;
+    }
+    if(s->dragging)return result|VU_PC_DRAG_MOVE;
+    if(!s->cancelled && (target!=s->target || row!=s->row)) {
+        if(s->stored && s->row>=0 && s->target>=100 && s->target<1000) { s->dragging=1;return result|VU_PC_DRAG_START|VU_PC_DRAG_MOVE; }
+        s->cancelled=1;
+    }
+    return result;
+}
+typedef struct { uint64_t widget;int sub,part,page,tiers,generation;char query[sizeof g_query]; } vu_pointer_view;
+static vu_pointer g_pc_pointer;
+static vu_pointer_view g_pc_pointer_view;
+static int vu_pointer_target(uint64_t vt,int x,int y,int *row) {
+    *row=-1;
+    if(!dm_vault_ui_blocks(x,y))return 0;
+    int page=dm_vault_ui_pager_hit(x,y);if(page)return 2000+(page>0);
+    if(!g_sub)for(int p=0;p<VT_NPART;p++) { char name[20];snprintf(name,sizeof name,"TouchV_PT%d",p);uint64_t part=vu_find(vt,name,1);if(vu_hit(vu_find(part,"Hit",0),x,y))return 1000+p; }
+    int cell;*row=vu_cell_at(vt,x,y,&cell);return *row>=0 && *row<VT_NROW?100+cell:1;
+}
+// PC: llama en el hilo guest, incluso para UP fuera del panel; kind=-1 cancela sin retirada.
+// Nunca conserva punteros de widgets para desreferenciarlos después de un cambio de vista.
+int dm_vault_ui_pointer(int kind,int x,int y) {
+    uint8_t *b=vu_base();uint64_t root=b?*(uint64_t *)(b+0x2f05458):0;
+    uint64_t bank=root?dm_ui_top(root,"BankExpansionLayout"):0,vt=bank?vu_find(bank,"TouchVault",1):0;
+    int live=dm_ui_pc_desktop() && (dm_ui_panel_state()&DM_PS_VAULT) && vt && *(uint8_t *)(bank+0x50) && *(int32_t *)(vt+0x70)==0;
+    uint64_t dropdown=root?vu_find(root,"DropdownListContents",1):0;
+    if(dropdown && *(uint8_t *)(dropdown+0x50))live=0;
+    vu_pointer_view view={0};int target=0,row=-1,stored=0;
+    if(live) {
+        view.widget=vt;view.sub=g_sub;view.part=g_part;view.page=g_query[0]?g_page_q:g_page[g_sub?VT_NPART:g_part];view.tiers=g_tiers;view.generation=dm_vault_gen();memcpy(view.query,g_query,sizeof g_query);
+        int width=*(int32_t *)(b+0x211da38),height=*(int32_t *)(b+0x211da3c);
+        if(x>=0 && y>=0 && x<width && y<height)target=vu_pointer_target(vt,x,y,&row);
+        if(kind==DM_UP_LDOWN && !g_pc_pointer.active && dm_vault_ui_tip_gate(x,y))target=2;
+        if(row>=0 && row<VT_NROW)stored=dm_vault_has(vt_rows[row].kind,vt_rows[row].row);
+    }
+    int same=live && view.widget==g_pc_pointer_view.widget && view.sub==g_pc_pointer_view.sub && view.part==g_pc_pointer_view.part && view.page==g_pc_pointer_view.page && view.tiers==g_pc_pointer_view.tiers && view.generation==g_pc_pointer_view.generation && !memcmp(view.query,g_pc_pointer_view.query,sizeof view.query);
+    if(kind==DM_UP_LDOWN && !g_pc_pointer.active)g_pc_pointer_view=view;
+    int action=vu_pointer_step(&g_pc_pointer,kind,same,target,row,stored,x,y);
+    if(action&VU_PC_DRAG_CANCEL)dm_vault_ui_drag(-1,x,y);
+    if(action&VU_PC_DRAG_START) {
+        int cell,origin=vu_cell_at(vt,g_pc_pointer.x,g_pc_pointer.y,&cell);
+        if(origin!=g_pc_pointer.row || !dm_vault_ui_drag(0,g_pc_pointer.x,g_pc_pointer.y)) { g_pc_pointer.dragging=0;g_pc_pointer.cancelled=1;action&=~VU_PC_DRAG_MOVE; }
+    }
+    if(action&VU_PC_DRAG_MOVE)dm_vault_ui_drag(1,x,y);
+    if(action&VU_PC_DRAG_END)dm_vault_ui_drag(2,x,y);
+    if(action&VU_PC_TAP)dm_vault_ui_tap(x,y);
+    return !!(action&VU_PC_CONSUME);
+}
 void dm_vault_ui_flip(int dir) { atomic_store(&g_flip, dir < 0 ? -1 : 1); }   // 交互层：第六页上点了左右箭头（dm_cursor.c ui_classify） | Interaction layer: a left / right arrow was tapped on page six (dm_cursor.c ui_classify)
 void dm_vault_on_uimsg(const char *cat, const char *act, const char *arg) {   // 界面消息回调（diag.c）：子页签、勾选框点了发 ClosePanel:TouchV_*；下拉选了一项发 DropdownListWidgetMessage | UI message callback (diag.c): tapping a sub-tab or checkbox sends ClosePanel:TouchV_*; picking a dropdown entry sends DropdownListWidgetMessage
     if (!strcmp(cat, "DropdownListWidgetMessage") || !strcmp(cat, "TouchVaultMessage")) { atomic_store(&g_dirty, 1); return; }
@@ -371,12 +460,12 @@ void dm_vault_on_uimsg(const char *cat, const char *act, const char *arg) {   //
 }
 void dm_vault_ui_pump(void) {
     uint8_t *b = vu_base(); uint64_t root = b ? *(uint64_t *)(b + 0x2f05458) : 0, bk = root ? dm_ui_top(root, "BankExpansionLayout") : 0;
-    static int was; if (!bk || !*(uint8_t *)(bk + 0x50)) { was = 0; return; }
-    uint64_t tabs = vu_find(bk, "BankTabs", 0), vt = vu_find(bk, "TouchVault", 1); if (!tabs || !vt) return;
+    static int was; if (!bk || !*(uint8_t *)(bk + 0x50)) { dm_vault_ui_pointer(-1,0,0);dm_vault_ui_returning(0);was = 0; return; }
+    uint64_t tabs = vu_find(bk, "BankTabs", 0), vt = vu_find(bk, "TouchVault", 1); if (!tabs || !vt) { dm_vault_ui_pointer(-1,0,0);dm_vault_ui_returning(0);return; }
     if (!vu_is(tabs, VT_TABBAR)) return;
     int on = *(int32_t *)(tabs + 0xdc4) == 5;
     vu_move(vt, on ? 0 : 99999, 0);
-    if (!on) { if (g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; } was = 0; return; }
+    if (!on) { dm_vault_ui_pointer(-1,0,0);dm_vault_ui_returning(0);if (g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; } was = 0; return; }
 
     if (!was) { was = 1; atomic_store(&g_dirty, 1); LOG("编年史仓库：进第六页（%s，部位 %d）", g_sub ? "套装" : "暗金", g_part); }
     // 手柄模式：这一页上没有原版能给焦点的东西，摇杆推着原版光标圈在页上自由走——A = 在光标处点一下，走触屏点按同一条路（dm_ui_touch：格子单击出说明 / 连按两次取出、
@@ -423,9 +512,9 @@ void dm_vault_ui_pump(void) {
       static dm_wref lastvt; if (vt != dm_wref_get(&lastvt)) { dm_wref_set(&lastvt, vt); for (int i = 0; i < 3; i++) { char nm[16]; snprintf(nm, sizeof nm, "TouchV_T%d", i); vu_toggle(vu_find(vt, nm, 1), g_tiers >> i & 1); } tm = g_tiers; }
       if (!tm) tm = 7;   // 三个都不勾 = 全看（同原版编年史） | None of the three checked = show all (same as the original game's chronicle)
       if (tm != g_tiers) { g_tiers = tm; atomic_store(&g_dirty, 1); } }
-    { int dm_ui_vault_drop(void); static uint32_t held; static int wait;   // 拖进编年史页：手上那件放回原格（手空了）再隔几帧（等服务端也放好）请求存入 | Dragged into the chronicle page: put the item in hand back into its original cell (hand now empty), then a few frames later (waiting for the server to finish placing it too) request the store
-      uint32_t h = dm_vault_ui_held(); if (held && !h && (uint32_t)dm_ui_vault_drop() == held) { wait = 8; g_drop_id = (int)held; } held = h;
-      if (wait && !--wait) { void dm_vault_request_deposit(uint32_t); dm_vault_request_deposit((uint32_t)g_drop_id); LOG("编年史仓库：拖进来的物品 id %u → 存入", (unsigned)g_drop_id); } }
+    { int dm_ui_vault_drop(void);   // El registro explícito y el muestreo usan una única espera, sin dos solicitudes de depósito.
+      uint32_t id=vu_deposit_step(&g_deposit,dm_ui_pc_desktop(),dm_vault_ui_held(),(uint32_t)dm_ui_vault_drop());
+      if(id) { void dm_vault_request_deposit(uint32_t);dm_vault_request_deposit(id);LOG("编年史仓库：拖进来的物品 id %u → 存入",(unsigned)id); } }
     { int dm_vault_take_full_sound(void); if (dm_vault_take_full_sound()) ((void (*)(int, uint64_t, int, int, int))(b + 0x35f120))(3, 0, 0, 0, 0); }   // 取不出（背包满）/ 存不进：原版错误音（同物品栏放不下，dm_actions.c） | Cannot withdraw (inventory full) / cannot store: the original game's error sound (same as when the original inventory is full, dm_actions.c)
     // 搜索框里的字：读输入框控件自己的正式文字串 +0x558 {指针, 长度}（原版「把键盘结果写进输入框」0xac2058 用通用串赋值 0x136e5c 写的就是它，控件构造时即初始化）。
     // 原先读的 +0x12a8 / +0x12b0 是键盘结果的待处理缓冲：系统键盘线程写、控件更新函数 0xac2944 在标志 +0x12d0 置位时持锁（+0x1288）取走交给 0xac2058，
@@ -443,17 +532,19 @@ void dm_vault_ui_pump(void) {
     static int fr; int dirty = atomic_exchange(&g_dirty, 0); if (!dirty && ++fr % 30) return;   // 编年史收录在服务端拍里变：开着时每半秒重写一次（字没变不写） | Chronicle records change in the server tick: while open, rewrite once every half second (no write if the text did not change)
     vu_toggle(vu_find(vt, "TouchV_SubU", 1), g_sub == 0); vu_toggle(vu_find(vt, "TouchV_SubS", 1), g_sub == 1);
     vu_show(vu_find(vt, "TouchV_Parts", 0), g_sub == 0); vu_show(vu_find(vt, "TouchV_Tiers", 0), g_sub == 0 && !g_query[0]);
+    int pc=dm_ui_pc_desktop(); vu_layout layout=vu_geometry(pc,dm_lang_zh(),g_sub);
+    if(pc) vu_move(vu_find(vt,"TouchV_Stats",0),layout.stats_x,layout.stats_y);
     {   // 档次勾选的排法跟语言走（英文版）：中文照布局（wide_stash.py：块右对齐宽 590、三格间距 200）；英文三个标签宽窄不一、统计行也长， | the layout of the quality tier checkboxes follows the language (English version): Chinese follows the layout (wide_stash.py: block right-aligned and 590 wide, three cells spaced 200 apart); in English the three labels differ in width and the stats row is longer too,
         // 块改宽 650、各格按标签宽排（Norm 140 / Exc 100 / Elite 136 单位，Mac 上的 iOS 包截图量，标签后各留 15），让出的地方给统计行（左对齐，宽到 780）。勾选框在 x、标签在 x + 75、y − 5（同 _vt_check）
         // The block is widened to 650 and each cell is laid out by its label width (Norm 140 / Exc 100 / Elite 136 units, measured from screenshots of the iOS
         // package on Mac, with 15 left after each label), and the freed space goes to the stats row (left-aligned, up to 780 wide). Checkbox at x, label at x +
         // 75, y - 5 (same as _vt_check)
-        static const int zx[3] = { 0, 200, 400 }, ex[3] = { 0, 240, 430 }; int zh = dm_lang_zh(); const int *xs = zh ? zx : ex;
-        vu_move(vu_find(vt, "TouchV_Tiers", 0), VX0 + VW0 - (zh ? 590 : 650), VT_TIER_Y);
-        for (int i = 0; i < 3; i++) { char nm[24]; snprintf(nm, sizeof nm, "TouchV_T%d", i); vu_move(vu_find(vt, nm, 1), xs[i], 0); snprintf(nm, sizeof nm, "TouchV_T%d_Text", i); vu_move(vu_find(vt, nm, 1), xs[i] + 75, -5); } }
+        vu_move(vu_find(vt, "TouchV_Tiers", 0), layout.tiers_x, layout.tiers_y);
+        for (int i = 0; i < 3; i++) { char nm[24]; snprintf(nm, sizeof nm, "TouchV_T%d", i); vu_move(vu_find(vt, nm, 1), layout.checks[i], 0); snprintf(nm, sizeof nm, "TouchV_T%d_Text", i); vu_move(vu_find(vt, nm, 1), layout.checks[i] + 75, layout.label_y); } }
     for (int p = 0; p < VT_NPART; p++) { char nm[16]; snprintf(nm, sizeof nm, "TouchV_PT%d", p); uint64_t t = vu_find(vt, nm, 1); if (!t) continue;   // 部位页签：选中那个换原版页签的选中帧（带菱形）、白字 | Slot tabs: the selected one switches to the original game's selected tab frame (with the diamond) and white text
-        vu_frame(vu_find(t, "Img", 0), p == g_part); vu_show(vu_find(t, "TextOn", 0), p == g_part); vu_show(vu_find(t, "Text", 0), p != g_part); }   // 搜索跨档次，不看勾选（统计行也要这块地方） | Search spans tiers and ignores the checkboxes (the stats line also needs this space)
-    int grid = g_sub == 0 || g_query[0]; vu_move(vu_find(vt, "TouchV_Uniq", 0), grid ? 156 : 99999, VU_UNIQ_Y); vu_move(vu_find(vt, "TouchV_Sets", 0), grid ? 99999 : 156, 296);
+        if(pc) vu_show(vu_find(t,"BgActive",0),p==g_part); else vu_frame(vu_find(t, "Img", 0), p == g_part);
+        vu_show(vu_find(t, "TextOn", 0), p == g_part); vu_show(vu_find(t, "Text", 0), p != g_part); }   // 搜索跨档次，不看勾选（统计行也要这块地方） | Search spans tiers and ignores the checkboxes (the stats line also needs this space)
+    int grid = g_sub == 0 || g_query[0]; vu_move(vu_find(vt, "TouchV_Uniq", 0), grid ? layout.unique_x : 99999, layout.unique_y); vu_move(vu_find(vt, "TouchV_Sets", 0), grid ? 99999 : layout.sets_x, layout.sets_y);
     if (dirty && g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; }   // 内容变了（翻页、切子页、搜索、存取）：说明框收起；每半秒的例行重画不收 | Contents changed (page flip, sub-page switch, search, store / withdraw): the tooltip is closed; the routine half-second redraw does not close it
     if (g_query[0]) vu_search(b, vt); else if (g_sub == 0) vu_uniques(b, vt); else vu_sets(b, vt);
     { struct { const char *s; uint64_t n; } key = { "SharedStashPage", 15 }; uint64_t fmt = ((uint64_t (*)(void *))(b + 0x7f5630))(&key); char pt[256]; memset(pt, 0, sizeof pt);   // 原版共享页页码的写法「第 n/m 页」（同 dm_cursor.c pages_text）： | The original game's way of writing the shared page number, 「第 n/m 页」(Page n/m) (same as dm_cursor.c pages_text):

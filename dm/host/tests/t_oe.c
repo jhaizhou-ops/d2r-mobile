@@ -141,6 +141,12 @@ static void test_scale3d(void) {
     CHECK(a == 0 && b == 0, "动态比例：实玩第二段的慢帧序列（帧率 59+）不论散开还是挤在一起都不换级");
 }
 int main(void) {
+    char lang[8]; uint64_t code;
+    unsetenv("DM_LANG"); code = h_oe_GetLang(); memcpy(lang, &code, sizeof lang);
+    CHECK(!strcmp(lang, "es"), "Mac informa español al juego si DM_LANG está ausente");
+    setenv("DM_LANG", "en-US", 1); code = h_oe_GetLang(); memcpy(lang, &code, sizeof lang);
+    CHECK(!strcmp(lang, "en-US"), "DM_LANG explícita se conserva al consultar el idioma del sistema");
+    unsetenv("DM_LANG");
     test_scale3d();
     unsetenv("DM_OE_SCRIPT"); reset();
     CHECK(empty(), "初始空队列：返回false且不改输出");

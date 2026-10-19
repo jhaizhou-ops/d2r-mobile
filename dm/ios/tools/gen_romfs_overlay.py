@@ -10,6 +10,10 @@ import json, os, struct, subprocess, sys, tempfile, shutil
 from PIL import Image
 HERE=os.path.dirname(os.path.abspath(__file__)); V4=os.environ.get('DM_HUD_V4_DIR') or __import__('gen_paths').gen_dir('NativeHUD','v4')   # 试调时可指向别的产物目录 | Can point to another build output directory when tuning
 romfs, out = sys.argv[1], sys.argv[2]
+if os.environ.get('DM_OVERLAY_PC') == '1':
+    import pc_desktop_layout
+    pc_desktop_layout.main(romfs, out)
+    sys.exit(0)
 sys.path.insert(0,HERE); import gen_assets; gen_assets.ensure(romfs)   # 要读的生成资源（底栏 v4、选角右侧面板…）先确保齐全；输入没变不重出（gen_assets.py 文件头） | First make sure the generated resources to be read (bottom bar v4, character select right panel...) are complete; not regenerated if inputs are unchanged (gen_assets.py file header)
 REPL={'data/hd/global/ui/panel/hud_02/bugbtn.sprite':'base.sprite',            # 借用路径（登记表「当前用途」= 底部 UI v4 底图） | Borrowed path (registry 「当前用途」(current use) = bottom UI v4 base image)
       'data/hd/global/ui/panel/hud_02/front_panel.sprite':'close.sprite',       # 借用路径：局内面板外框右上角的关闭按钮图（NativeHUD/touch/close.png，gen_close_btn.py） | Borrowed path: the close button image at the top-right corner of the in-game panel outer frame (NativeHUD/touch/close.png, gen_close_btn.py)
@@ -53,6 +57,10 @@ with tempfile.TemporaryDirectory() as t:
     REPL.update(touch_layout.build_glyphs(romfs,t))   # 22 张手柄键图标换成透明 | 22 controller button icons replaced with transparent ones
     if os.environ.get('DM_OVERLAY_MAC'):   # Mac App：再出一套键盘键帽，放在触屏键帽同一个目录、文件名「<平台>k<名字>」（宿主 dm_padmode.c 的键盘键帽路径 Ztouch_controller_buttons_ui/%sK%s） | Mac App: additionally produce a set of keyboard key caps, placed in the same directory as the touch key caps with file names "<platform>k<name>" (the keyboard key-cap path of the host's dm_padmode.c is Ztouch_controller_buttons_ui/%sK%s)
         import kbd_glyphs; REPL.update({'data/hd/global/ui/ztouch_controller_buttons_ui/switchk'+os.path.basename(k):v for k,v in kbd_glyphs.build(romfs,t).items()})
+        universal, inputglyphs = kbd_glyphs.build_universal(romfs, t)
+        REPL.update({'data/hd/global/ui/ztouch_controller_buttons_ui/switchk' + name.lower(): path
+                     for name, path in universal.items()})
+        print('Teclas reasignables: %d sprites y 1296 etiquetas nativas' % len(universal))
     REPL.update(touch_layout.build_profile(romfs,t))   # 大字号 | Large font size
     import touch_strings; ts,nts=touch_strings.build(romfs,t); REPL.update(ts)   # 排版用的串（大字号）；手柄说法 → 触摸说法改由宿主按模式换（旁路表 touch_strings.tsv，见 emit） | Strings used for typesetting (large font size); controller wording → touch wording is now switched by the host according to mode (sidecar table touch_strings.tsv, see emit)
     TS=touch_strings.build_sidecar(romfs)
@@ -94,6 +102,11 @@ with tempfile.TemporaryDirectory() as t:
     for rel,fn in (('controller/console/settingspanelhd.json',touch_layout.pad_settings),('controller/console/videooptionspanelhd.json',touch_layout.pad_custom_page)):   # 手柄版选项页：「视频」页签换成「自定义」页 | Controller options page: the "Video" tab is replaced by the "Custom" page
         lp,lt=touch_layout.read_layout(romfs,rel); o=os.path.join(tpad,'pad_'+rel.replace('/','_')); open(o,'w',encoding='utf-8').write(fn(lt)); PR[lp.lower()]=o
     PR.update(pouch_layout.build(romfs,tpad,PR)[0]); PR.update(wide_stash.build(romfs,tpad,PR)[0])   # 储藏箱 10 → 14 列（编年史仓库第 1 步）：表、底图、宽外框、布局；要在触摸布局之后（储藏箱 / 外框布局叠在那份上） | Stash 10 → 14 columns (chronicle vault step 1): table, base image, wide outer frame, layout; must come after the touch layout (the stash / outer frame layout stacks on that copy)
+    if os.environ.get('DM_OVERLAY_MAC'):
+        legend = 'data/global/ui/layouts/controller/controlleroverlayhd.json'
+        target = PR[legend]
+        with open(target, encoding='utf-8') as f: legend_text = touch_strings.mac_legend(f.read())
+        with open(target, 'w', encoding='utf-8') as f: f.write(legend_text)
     cb=Image.open(os.path.join(HERE,'..','NativeHUD','touch','close.png')).convert('RGBA')
     open(os.path.join(t,'close.sprite'),'wb').write(b'SpA1'+struct.pack('<HHIIIIII',31,cb.width,cb.width,cb.height,0,1,0,0)+struct.pack('<II',cb.width*cb.height*4,4)+cb.tobytes())
     # 选角页右侧面板底图：去掉「转换角色」的槽与十字花、只留居中一个槽（原图解出后改的，同尺寸）
@@ -205,6 +218,8 @@ with tempfile.TemporaryDirectory() as t:
         with open(os.path.join(dst,'touch_strings.tsv'),'w',encoding='utf-8') as f:   # 键 \t 原文校验（SHA-1 前 8 位） \t 触摸说法（\\ \\n \\t 转义）；宿主 dm_padmode.c 读 | key <TAB> source checksum (first 8 hex digits of SHA-1) <TAB> touch wording (backslash, newline and tab are escaped); read by the host's dm_padmode.c
             for k,o,v in TS: f.write('%s\t%s\t%s\n' % (k,o,v.replace('\\','\\\\').replace('\n','\\n').replace('\t','\\t')))
         if os.environ.get('DM_OVERLAY_MAC'): open(os.path.join(dst,'kbd_glyphs'),'w').write('ztouch_controller_buttons_ui/switchk*.sprite\n')   # 标记文件：覆盖层带键盘键帽，宿主 dm_padmode.c 见到它才用 | marker file: the overlay carries keyboard key caps; the host's dm_padmode.c uses them only when it sees this
+        if os.environ.get('DM_OVERLAY_MAC'):
+            shutil.copyfile(inputglyphs, os.path.join(dst, 'inputglyphs.tsv'))
         open(os.path.join(dst,'ctrl_touch'),'w').write('触屏版布局在 layouts/xtouch_lay、ztouch_console_lay、0touch_console_switch_lay（dm_padmode.c 见到本文件才改写前缀）\n')
         return new[0], os.path.getsize(os.path.join(dst,'data',new[0]))
     n0,z0=emit(REPL,out,'')
@@ -213,7 +228,7 @@ with tempfile.TemporaryDirectory() as t:
     if ASTC:
         idx=os.path.join(ASTC,'pack_index.tsv'); assert os.path.isfile(idx) and os.path.isfile(os.path.join(ASTC,'pack.json')), 'DM_ASTC_PACK 目录里缺 pack_index.tsv / pack.json：'+ASTC
         na,za=emit(REPL,out+'_astc','astc_',idx); shutil.copyfile(os.path.join(ASTC,'pack.json'),os.path.join(out+'_astc','pack.json'))
-        assert na==n0, f'ASTC 版覆盖层的新数据档 {na} 与 BC 版 {n0} 不同名（预取清单按名字找档）'
+        assert na==n0, f'El archivo ASTC {na} y el BC {n0} deben compartir nombre para la precarga'
         print(f'romfs_overlay_astc：{na} {za} 字节（贴图指向补充包 {ASTC}）')
     # 走覆盖层的自定义开关（按组合出全部 2^n 份，App 启动按 dm_custom_get 挑一份，重启生效；开关到第 4 个再换「拼表」方案）。
     # 每项 = (自定义页的键, 模块名)：模块提供 build(romfs, 临时目录, 前面已换的 repl) → ({包内逻辑路径: 本地文件}, 统计)，在传入的 repl 之上改（同一文件多个特性都改时自然叠加）。

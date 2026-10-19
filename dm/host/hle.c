@@ -93,7 +93,13 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
                 regs[g->arg] = t;
                 return t;
             }
-            case G_OBS: if (g_obs_fn[g->arg]) g_obs_fn[g->arg](regs); return 0;   // 只读寄存器；dm_gate 回写的 x0–x8 即原值 | Registers are read-only; the x0–x8 that dm_gate writes back are the original values
+            case G_OBS:
+#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
+                if (g->arg == OBS_GLYPH_PATH) { const char *dm_controls_glyph_path(const char *) __attribute__((weak_import)); if (dm_controls_glyph_path) regs[1] = (uint64_t)dm_controls_glyph_path((const char *)regs[1]); return 0; }
+                if (g->arg == OBS_PC_LAYOUT_EXISTS) { const void *dm_ui_pc_layout_exists_arg(const void *) __attribute__((weak_import)); if (dm_ui_pc_layout_exists_arg) regs[0]=(uint64_t)dm_ui_pc_layout_exists_arg((const void *)regs[0]); return 0; }
+                if (g->arg == OBS_PC_LAYOUT_LOAD) { const char *dm_ui_pc_layout_path(const char *) __attribute__((weak_import)); if (dm_ui_pc_layout_path) regs[0]=(uint64_t)dm_ui_pc_layout_path((const char *)regs[0]); return 0; }
+#endif
+                if (g_obs_fn[g->arg]) g_obs_fn[g->arg](regs); return 0;   // 只读寄存器；dm_gate 回写的 x0–x8 即原值 | Registers are read-only; the x0–x8 that dm_gate writes back are the original values
             default: return svc_dispatch(g->arg, regs, g->orig);
         }
         if (!g->ret) die("unknown gate at %#llx", ret_addr);

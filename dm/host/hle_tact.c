@@ -295,6 +295,33 @@ uint64_t svc_host_call(int num, uint64_t *regs) {
     case SVC_HOST_SAVE_ACT: { void svc_save_act(uint64_t *); svc_save_act(regs); return 1; }
     case SVC_HOST_MERC_SLOT: { void svc_merc_slot(uint64_t *); svc_merc_slot(regs); return 1; }
     case SVC_HOST_MERC_SLOT_CL: { void svc_merc_slot_cl(uint64_t *); svc_merc_slot_cl(regs); return 1; }
+    case SVC_HOST_PC_BELT_LABEL: { void dm_ui_pc_belt_label(uint64_t *); dm_ui_pc_belt_label(regs); return 1; }
+    case SVC_HOST_PC_SKILL_LABEL: { void dm_ui_pc_skill_label(uint64_t *); dm_ui_pc_skill_label(regs); return 1; }
+    case SVC_HOST_PC_QUICKCAST_ROW: { void dm_ui_pc_quickcast_row(uint64_t *); dm_ui_pc_quickcast_row(regs); return 1; }
+    case SVC_HOST_PC_HOVER_ONLY: { int dm_ui_pc_desktop(void);regs[8]=dm_ui_pc_desktop()!=0;return 1; }
+    case SVC_HOST_PC_TABBAR_INIT: { void dm_ui_pc_tabbar_init(uint64_t *);dm_ui_pc_tabbar_init(regs);return 1; }
+    case SVC_HOST_PC_CORPSE_LABEL: { int dm_ui_pc_desktop(void);regs[8]=dm_ui_pc_desktop()!=0;return 1; }
+    case SVC_HOST_PC_CONTROLS_TAB: { void dm_ui_pc_controls_tab(uint64_t *);dm_ui_pc_controls_tab(regs);return 1; }
+    case SVC_HOST_PC_INVENTORY: { void dm_ui_pc_inventory(uint64_t *);dm_ui_pc_inventory(regs);return 1; }
+    case SVC_HOST_PC_OPTIONS_ROWS: { void dm_ui_pc_options_rows(uint64_t *);dm_ui_pc_options_rows(regs);return 1; }
+    case SVC_HOST_PC_HELD_DRAW: { void dm_ui_pc_held_draw(uint64_t *);dm_ui_pc_held_draw(regs);return 1; }
+    case SVC_HOST_PC_GRID_HOVER: { void dm_ui_pc_grid_hover(uint64_t *);dm_ui_pc_grid_hover(regs);return 1; }
+    case SVC_HOST_PC_ITEM_TOOLTIP: { void dm_ui_pc_item_tooltip(uint64_t *);dm_ui_pc_item_tooltip(regs);return 1; }
+    case SVC_HOST_PC_CREATE_COMMIT: { void dm_ui_pc_create_commit(uint64_t *);dm_ui_pc_create_commit(regs);return 1; }
+    case SVC_HOST_PC_SKILL_CLICK: { void dm_ui_pc_skill_click(uint64_t *);dm_ui_pc_skill_click(regs);return 1; }
+    case SVC_HOST_PC_SKILL_HUD: { int dm_ui_pc_skill_hud(uint64_t *);regs[8]=dm_ui_pc_skill_hud(regs)!=0;return 1; }
+    case SVC_HOST_PC_SKILL_CANDIDATE: { int dm_ui_pc_skill_candidate(uint64_t *);regs[8]=dm_ui_pc_skill_candidate(regs)!=0;return 1; }
+    case SVC_HOST_PC_SKILL_COMMON: { int dm_ui_pc_skill_common(uint64_t *);regs[8]=dm_ui_pc_skill_common(regs)!=0;return 1; }
+    case SVC_HOST_PC_NPC_CLICK: { void dm_ui_pc_npc_click(uint64_t *);dm_ui_pc_npc_click(regs);return 1; }
+    case SVC_HOST_PC_ITEM_HOLD: { void dm_ui_pc_item_hold(uint64_t *);dm_ui_pc_item_hold(regs);return 1; }
+    case SVC_HOST_PC_ITEM_RIGHT: { void dm_ui_pc_item_right(uint64_t *);dm_ui_pc_item_right(regs);return 1; }
+    case SVC_HOST_PC_ITEM_LEFT: { void dm_ui_pc_item_left(uint64_t *);dm_ui_pc_item_left(regs);return 1; }
+    case SVC_HOST_PC_PAUSE_CLOSE: { void dm_ui_pc_pause_close(uint64_t *);dm_ui_pc_pause_close(regs);return 1; }
+    case SVC_HOST_PC_OPTIONS_INIT: { void dm_ui_pc_options_init(uint64_t *);dm_ui_pc_options_init(regs);return 1; }
+    case SVC_HOST_PC_MOVE_STOP_A: case SVC_HOST_PC_MOVE_STOP_B: case SVC_HOST_PC_MOVE_AXIS: {
+        void dm_world_pc_controller_observe(const uint64_t *,unsigned);
+        dm_world_pc_controller_observe(regs,(unsigned)(num-SVC_HOST_PC_MOVE_STOP_A));return 1;
+    }
     }
     return 0;
 }

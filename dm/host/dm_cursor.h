@@ -1,5 +1,7 @@
 #pragma once
 #include <stdint.h>
+void dm_ui_pc_item_tooltip(uint64_t *regs);
+void dm_ui_pc_create_commit(uint64_t *regs);
 
 // 界面代号：游戏每重建一次界面（切手柄 / 触屏布局与运行模式的通知被游戏取走、切语言、面板卸载、前端 ↔ 局内、顶层面板换了一批）加 1。
 // 重建会释放旧控件；跨帧留着的控件裸指针再读就是野指针（腰带补满崩溃），只比身份的也会被新控件复用旧地址骗过。
@@ -41,6 +43,23 @@ void dm_cursor_apply(uint64_t *buttons, int32_t *lx, int32_t *ly);
 int dm_cursor_pending(void);   // 还有几下 A 扣着没送到游戏（光标没走到位）；前端收脉冲前要等它归零 | How many A presses are still held back and not delivered to the game (the cursor is not in position yet); the front end must wait for it to return to zero before ending the pulse
 // 原生点击（界面鼠标消息注入，见 dm_cursor.c）：前端把触点交过来，宿主在游戏取手柄处逐帧发给界面根控件
 // Native click (UI mouse message injection, see dm_cursor.c): the front end hands over the touch points, and the host sends them frame by frame to the UI root widget where the game reads the controller
+enum { DM_PC_QUESTS, DM_PC_CHARACTER, DM_PC_INVENTORY, DM_PC_SKILLS, DM_PC_OPTIONS };
+int dm_ui_pc_desktop(void);
+const char *dm_ui_pc_layout_path(const char *name);
+const void *dm_ui_pc_layout_exists_arg(const void *arg);
+void dm_ui_pc_panel(int panel);
+void dm_ui_pc_bindings_cancel(void); // Cualquier hilo: el guest libera las acciones pendientes al recuperar su turno.
+int dm_ui_pc_binding(int action,int down); // Solo hilo del juego: acciones nativas 0..68; DOWN/UP se encolan para el dispatcher original.
+int dm_ui_pc_binding_held(int action); // Solo hilo del juego: held del clon PC vigente en mundo; lectura sin modificar bindings.
+int dm_ui_pc_key(int vk,int modifiers,int down); // Cualquier hilo: VK1..104hex; Mayús1000/Control2000/Opción4000. Entrega guest.
+int dm_ui_pc_wheel(int steps,int modifiers,int momentum,float nx,float ny); // Cualquier hilo: rueda UI primero; momentum nunca activa bindings de juego.
+int dm_ui_pc_controls(void); // Cualquier hilo: solicita el menú original de asignaciones PC.
+int dm_ui_pc_controls_active(void); // Cualquier hilo: snapshot de visibilidad del menú nativo, publicado por guest.
+int dm_ui_pc_profile_ready(void); // Cualquier hilo: snapshot guest de partida jugable/ToGame y tabla nativa cargada.
+int dm_ui_pc_mouse_reserved(int button); // Cualquier hilo: NSEvent.buttonNumber2..4 reservados por bindings nativos; snapshot guest.
+int dm_ui_pc_world_active(void); // Política sin XY: HUD e inventario no modal, sin otros paneles funcionales.
+int dm_ui_pc_world_at(float nx,float ny); // Solo guest: mundo descubierto, también con inventario no modal, fuera de UI/HUD; no modifica selección ni cachés.
+int dm_ui_pc_cancel_binding(void); // Solo hilo del juego: cierra el modal de asignación sin pulsar una casilla.
 void dm_ui_send_queue(const char *spec);   // 「类别:动作[:参数]」；下一次取手柄时往界面根控件发（按键脚本 MSG 步用） | 'category:action[:argument]'; sent to the UI root widget on the next controller read (used by the MSG step of key scripts)
 int dm_ui_fe_drag_ok(void);                      // 前端此刻纵向拖能否当滚动（删除确认 / 模式页 / 起名页 / 确认框开着时不能） | Whether a vertical drag in the front end can count as a scroll right now (not while the delete confirmation / mode page / naming page / a confirmation box is open)
 void dm_ui_touch(int phase, float nx, float ny);   // phase：0 按下 1 移动 2 抬起 3 作废（改成滚动）；坐标 = 出图画面归一化 [0,1] | phase: 0 down, 1 move, 2 up, 3 cancelled (turned into a scroll); coordinates = normalized to the rendered picture [0,1]
@@ -82,6 +101,8 @@ void dm_ui_watch(const char *spec);            // 测试量具：盯住界面控
 int dm_ui_watch_pos(float *nx, float *ny);    // 任意线程：盯住的控件可见返回 1 并给出游戏视图归一化坐标 | Any thread: returns 1 if the watched widget is visible and gives its coordinates normalized to the game view
 uint64_t dm_ui_taps_base(void);   // 测试：DM_UI_TAPS_AT 命中时的出图帧（0 = 还没命中） | Test: presented frame at which DM_UI_TAPS_AT hit (0 = not hit yet)
 void dm_ui_ptr(int kind, float nx, float ny, int arg);
+void dm_ui_ptr_at(int kind,float nx,float ny,int arg); // Posición y evento se publican juntos, con varios productores.
+void dm_ui_ptr_at_mods(int kind,float nx,float ny,int arg,int modifiers); // Snapshot PC: Shift1000/Ctrl2000/Alt4000; arg nativo intacto.
 int dm_ui_touch_active(void);
 // 前端路径理顺（见 dm_cursor.c）：界面消息回调登记、取手柄处执行、自动按键掩码
 // Front-end path streamlining (see dm_cursor.c): UI message callback registration, execution where the controller is read, auto key mask
