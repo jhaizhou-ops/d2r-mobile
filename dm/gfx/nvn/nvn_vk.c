@@ -99,6 +99,10 @@ static int8_t g_rtf_grp[RT_FSEG_MAX];static int g_rtf_n,g_rtf_print;static uint6
    Runtime A/B: rtseg.txt = 0 off (default, zero cost) / 1 group stats only / 2 + segment table. */
 static int g_rtseg_on;
 static int g_rtgrp_cur=2;
+/* 跨组依赖探针：T2T 拷贝的源/目标按自身尺寸归类（>2000x900 = 全屏组），统计跨组拷贝。
+   跨组拷贝就是并行两组之间必须插同步的点。 | Cross-group dependency probe: T2T copies classified
+   by endpoint extent (>2000x900 = full-screen group); cross-group copies are the required sync points. */
+static uint64_t g_rtcopy_same,g_rtcopy_cross;static uint64_t g_rtcopy_cs[8][2];static int g_rtcopy_cn;
 static void rt_seg_print(const char *tag,uint64_t frame,uint32_t ops,int n,const int8_t *grp,const uint32_t *st,const uint32_t *op,const uint32_t *dr){
     char line[900];int m=0;m+=snprintf(line+m,sizeof line-m,"segments=%d ops=%u",n,ops);
     for(int i=0;i<n&&m<(int)sizeof line-96;i++)
@@ -3480,6 +3484,9 @@ static void copy_t2t(const p_copy_t2t *p) {
     /* A partial BC update must retain the other compressed blocks already
      * present in guest storage, even when the destination is first used here. */
     VTexture *s=texture_get(p->src,1),*d=texture_get(p->dst,bc_destination);
+    if(g_rtseg_on){int sg=(s->width>2000&&s->height>900),dg=(d->width>2000&&d->height>900);
+        if(sg!=dg){g_rtcopy_cross++;if(g_rtcopy_cn<8){g_rtcopy_cs[g_rtcopy_cn][0]=p->src->serial;g_rtcopy_cs[g_rtcopy_cn][1]=p->dst->serial;g_rtcopy_cn++;}}
+        else g_rtcopy_same++;}
     int sv=p->src->d.target==NVN_TEXTURE_TARGET_3D,dv=p->dst->d.target==NVN_TEXTURE_TARGET_3D;
     if(s==d || sv!=dv || s->format!=d->format || p->src->d.format!=p->dst->d.format)die("texture copy alias/dimension/format",p->dst->serial);
     VkImageSubresourceLayers sl=copy_layers(p->src,s->format,p->has_sv?&p->sv:NULL,&p->sr),dl=copy_layers(p->dst,d->format,p->has_dv?&p->dv:NULL,&p->dr);
@@ -3859,7 +3866,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 (unsigned long long)G.present_count+1,(double)g_rtgrp_ops[0]/fr,(double)g_rtgrp_draws[0]/fr,
                 (double)g_rtgrp_ops[1]/fr,(double)g_rtgrp_draws[1]/fr,(double)g_rtgrp_ops[2]/fr,(double)g_rtgrp_switches/fr);
             g_rtgrp_ops[0]=g_rtgrp_ops[1]=g_rtgrp_ops[2]=0;g_rtgrp_draws[0]=g_rtgrp_draws[1]=g_rtgrp_draws[2]=0;
-            g_rtgrp_switches=0;g_rtgrp_last=-1; }
+            g_rtgrp_switches=0;g_rtgrp_last=-1;
+            { char cx[220];int cn=0;cx[0]=0;
+              for(int i=0;i<g_rtcopy_cn;i++)cn+=snprintf(cx+cn,sizeof cx-cn," %llu>%llu",(unsigned long long)g_rtcopy_cs[i][0],(unsigned long long)g_rtcopy_cs[i][1]);
+              fprintf(stderr,"[nvn-vulkan] RENDER_RT_COPY frame=%llu same_group=%.0f cross_group=%.0f%s\n",
+                  (unsigned long long)G.present_count+1,(double)g_rtcopy_same/fr,(double)g_rtcopy_cross/fr,cx); }
+            g_rtcopy_same=g_rtcopy_cross=0;g_rtcopy_cn=0; }
           { uint64_t fs[3];nvn_dirty_find_stats(fs);
             fprintf(stderr,"[nvn-vulkan] RENDER_FIND_CACHE frame=%llu miss_scans=%.0f hits=%.0f steps=%.0f\n",
                 (unsigned long long)G.present_count+1,(double)fs[0]/fr,(double)fs[1]/fr,(double)fs[2]/fr); }
