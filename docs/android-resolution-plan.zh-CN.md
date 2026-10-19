@@ -334,3 +334,25 @@ triangle strip 用退化三角形拼成一次 `vkCmdDraw`，813 次 per-draw（�
 3. 退化三角形在该驱动上的行为。
 
 建议用最小夹具（全屏 RT + 两笔 4 顶点 strip）先离线验证一次合并 draw，再上真机。
+
+## 附四：ASan 复现——合批在 ASan 下不崩，也不报错
+
+用 `-DDM_ASAN=ON` + `DM_PACK_ASAN=1`（运行时 libclang_rt.asan-aarch64-android.so 打进 APK）
+构建，插桩确认生效（.so 内 41 个 `__asan` 符号、build.ninja 带 `-fsanitize=address`）。
+
+在 ASan 版上打开同一套 UI 合批（`DM_UI_MERGE=1 DM_UI_MERGE_N=2`）：
+
+| 构建 | 结果 |
+|---|---|
+| 发行版 | 稳定崩溃（guest SIGSEGV，address=0x128，无 die 消息） |
+| **ASan 版** | **不崩溃、画面正常、30 fps**；**ASan 没有任何报告** |
+
+结论：
+1. 崩溃**对内存布局敏感**（ASan 的 redzone 改变布局后不再触发）——典型的内存破坏特征；
+2. 但 ASan **没有报出越界**，说明出错的位置**不在 ASan 能跟踪的内存里**——最可能是
+   Vulkan 映射的缓冲（我们的合批顶点缓冲是 `vkMapMemory` 的，ASan 看不见）或驱动内部；
+3. 因此 ASan 这条路对本 bug 无效，需要 **HWASan**（对非 malloc 内存更敏感，需 arm64 +
+   `-fsanitize=hwaddress`）或对合批缓冲加**显式哨兵校验**（写入后在末尾放 canary，flush 前校验）。
+
+下一步建议：给合批缓冲加 canary（成本极低、能直接证明是不是我们写越界），或在合批缓冲前后
+各留一页 PROT_NONE 的守卫页（mmap 自管内存，不经过 Vulkan）。

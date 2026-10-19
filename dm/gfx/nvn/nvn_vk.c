@@ -2961,6 +2961,7 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     VShader *vs=program_stage(0),*ps=program_stage_optional(1);
 
 
+
     { /* UI 合批前提：连续 UI draw 的 shader / 顶点格式是否一致 | UI batching prerequisite: same shader / vertex format across consecutive UI draws */
       uint32_t c0=(uint32_t)(a?a->count:idx->count);
       int cls0=3; const p_set_rt *rt0=&G.state.rt;
