@@ -126,6 +126,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
 @implementation DmMetalView {
     UITouch *_slot[16];   // 强引用（真机 SIGSEGV：原先不保留，某条路径没清槽时手指对象已释放，下次 pushFrom 读它就崩）。所有结束 / 取消路径都要清槽 | Strong references (real-device SIGSEGV: previously not retained, so when some path failed to clear the slot the finger object was already released and the next pushFrom crashed reading it). All end / cancel paths must clear the slot
     dm_tc_state _controls;
+    UIImpactFeedbackGenerator *_panelDpadFeedback;
     DmTouchOverlay *_overlay;
     UIView *_info;   // 信息层：秘境任务条、小地图任务终点。不是触屏控件，手柄模式也要显示（只在前端页面藏），所以不挂在 _overlay 上 | info layer: the Rift objective bar and the minimap quest goal. These are not touch controls and must show in controller mode too (hidden only on front-end pages), so they are not attached to _overlay
     NSHashTable<UITouch *> *_swallow;   // 手柄模式下落下的手指：只用来切回触屏模式，整根（按下 / 移动 / 抬起）不交给手势层和界面点击 | Fingers that landed in controller mode: used only to switch back to touch mode; the whole touch (down / move / up) is not passed to the gesture layer or UI clicks
@@ -182,6 +183,10 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
 - (void)frontendMode:(BOOL)fe { _feMode=fe; _overlay.hidden=fe || _padMode; _info.hidden=fe; if(fe) { _pendEnd=nil; _finalAsked=NO; for(int i_=0;i_<16;i_++) _slot[i_]=nil; dm_tc_cancel_all(&_controls); [self pushFrom:"frontend" phase:"none"]; } }
 - (void)panelDpad:(BOOL)enabled {
     dm_tc_set_panel_dpad(&_controls,enabled && !_feMode && !_padMode);
+    if(_controls.panel_dpad) {
+        if(!_panelDpadFeedback) _panelDpadFeedback=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [_panelDpadFeedback prepare];
+    }
     [self pushFrom:"panel_dpad" phase:"none"];
 }
 - (void)navigationMode:(int)n {
@@ -531,6 +536,11 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         if(!_mapTouch && [self inMinimap:[t locationInView:self]]) { _mapTouch=t; _mapP0=[t locationInView:self]; _mapT0=CACurrentMediaTime(); continue; }
         for(int i=0;i<16;i++) if(!_slot[i]) {
             _slot[i]=t; CGPoint p=[t locationInView:self]; { int ex=0; _controls.belt_rows=dm_belt_rows(&ex); _controls.belt_open=ex; } dm_tc_begin_at(&_controls,i,p.x,p.y,CACurrentMediaTime()); slot=i;
+            /* 仅有效方向键起手轻震一次；保护区空隙、拖动和长按连发不震。
+               One light haptic on accepted arrow touch-down; none for guard gaps, movement or hold repeats. */
+            if(dm_tc_dpad_press_accepted(&_controls,i)) {
+                [_panelDpadFeedback impactOccurredWithIntensity:0.6]; [_panelDpadFeedback prepare];
+            }
             if(!_navigation && _controls.finger[i].target==DM_TC_PORTAL) { void dm_tp_request(void); dm_tp_request(); LOG("前端：点回城钮 → 免费回城"); }   // 不要回城书 / 卷轴（宿主 dm_freetp.c） | No Tome of Town Portal / scroll needed (host dm_freetp.c)
             if(!_navigation && !_mapBackTouch && _controls.finger[i].target==DM_TC_NONE && dm_ui_map_is_full()) { _mapBackTouch=t; _mapP0=p; _mapT0=CACurrentMediaTime(); }   // 全屏地图开着、这根手指没落在任何键和摇杆区上：松手时若是点按就回小地图 | Fullscreen map open and this finger landed on no button and no stick area: if it turns out to be a tap on release, return to the minimap
             // 功能页里的指针手指：问宿主这点是不是物品区（游戏主线程下一帧作答，松手时取）

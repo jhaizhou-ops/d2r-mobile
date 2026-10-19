@@ -144,6 +144,9 @@ int dm_tc_dpad_hit(const dm_tc_layout *layout, float x, float y);
 float dm_tc_dpad_hit_radius(const dm_tc_layout *layout);
 int dm_tc_dpad_guard_hit(const dm_tc_layout *layout, float x, float y);
 int dm_tc_dpad_active(const dm_tc_state *state);
+/* 仅在起手时查询：这根手指确实取得了方向输入，可给一次触感反馈。
+   Query only at touch-down: this finger owns directional input and may receive one haptic. */
+int dm_tc_dpad_press_accepted(const dm_tc_state *state, int slot);
 void dm_tc_set_panel_dpad(dm_tc_state *state, int enabled);
 int dm_tc_scene_dead(void);   /* 死亡弹窗开着（导航态，但不给手柄圆钮） | Death popup open (navigation state, but no controller round buttons) */
 /* 面板模式（前端两端共用一个算式，iOS front_ios.m 与 Mac touch_mac.c）：0 = 游戏态；1 = 面板态；2 = 死亡页；3 = 只开着 NPC 对话菜单。

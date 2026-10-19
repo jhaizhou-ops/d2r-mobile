@@ -165,6 +165,16 @@ static uint64_t dpad_buttons(const dm_tc_state *s) {
     return 0;
 }
 
+int dm_tc_dpad_press_accepted(const dm_tc_state *s, int slot) {
+    if(slot<0 || slot>=DM_TC_MAX_TOUCH || !dm_tc_dpad_active(s)) return 0;
+    for(int i=0;i<DM_TC_MAX_TOUCH;i++) {
+        const dm_tc_finger *f=&s->finger[i];
+        if(f->active && f->target==DM_TC_DPAD && !f->aim_cancelled &&
+           dm_tc_dpad_hit(&s->layout,f->x,f->y)>=0) return i==slot;
+    }
+    return 0;
+}
+
 int dm_tc_hit(const dm_tc_layout *l, float x, float y) {
     if (!isfinite(x) || !isfinite(y) || x < 0 || y < 0 || x > l->width || y > l->height)
         return DM_TC_NONE;

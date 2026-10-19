@@ -37,9 +37,9 @@ int main(void) {
     for(int d=0;d<4;d++) {
         setup(&s); s.pointer_valid=1; begin(&s,0,d,1);
         CHECK(s.finger[0].target==DM_TC_DPAD); CHECK(s.pointer_slot==DM_TC_NONE);
-        CHECK(s.buttons==buttons[d]); CHECK(!s.pointer_valid); CHECK(!s.lx && !s.ly);
+        CHECK(s.buttons==buttons[d]); CHECK(dm_tc_dpad_press_accepted(&s,0)); CHECK(!s.pointer_valid); CHECK(!s.lx && !s.ly);
         for(int i=0;i<40;i++) { dm_tc_tick(&s,1+i*.02); CHECK(s.buttons==buttons[d]); }
-        dm_tc_end_at(&s,0,2); CHECK(!s.buttons); CHECK(!s.mouse_click_seq && !s.world_tap_seq);
+        dm_tc_end_at(&s,0,2); CHECK(!s.buttons); CHECK(!dm_tc_dpad_press_accepted(&s,0)); CHECK(!s.mouse_click_seq && !s.world_tap_seq);
     }
     setup(&s); begin(&s,0,3,1); dm_tc_end_at(&s,0,1.01);
     CHECK(s.buttons==DM_BTN_RIGHT && s.panel_dpad_pulse); CHECK(dm_tc_dpad_active(&s));
@@ -49,7 +49,8 @@ int main(void) {
     setup(&s); begin(&s,0,0,1); dm_tc_move_at(&s,0,s.layout.dpad[3].x,s.layout.dpad[3].y,1.2);
     CHECK(s.buttons==DM_BTN_RIGHT); dm_tc_cancel_finger(&s,0); CHECK(!s.buttons);
     setup(&s); begin(&s,0,0,1); begin(&s,1,1,1.1);
-    CHECK(s.buttons==DM_BTN_UP); dm_tc_end_at(&s,0,2); CHECK(s.buttons==DM_BTN_DOWN);
+    CHECK(s.buttons==DM_BTN_UP); CHECK(dm_tc_dpad_press_accepted(&s,0)); CHECK(!dm_tc_dpad_press_accepted(&s,1));
+    dm_tc_end_at(&s,0,2); CHECK(s.buttons==DM_BTN_DOWN);
     dm_tc_end_at(&s,1,2); CHECK(!s.buttons);
     setup(&s); begin(&s,0,0,1); begin(&s,1,1,1.2); dm_tc_end_at(&s,1,1.21);
     CHECK(s.buttons==DM_BTN_UP && !s.panel_dpad_pulse); dm_tc_end_at(&s,0,2); CHECK(!s.buttons);
@@ -62,7 +63,7 @@ int main(void) {
     /* 物品触点正在拖放时，第二根手指不能用方向键抢走光标。
        A second finger on the D-pad cannot steal the cursor from an active item gesture. */
     setup(&s); dm_tc_begin_at(&s,0,600,160,1); CHECK(s.pointer_slot==0);
-    begin(&s,1,0,1.1); CHECK(!s.buttons && s.pointer_slot==0); CHECK(!dm_tc_dpad_active(&s));
+    begin(&s,1,0,1.1); CHECK(!s.buttons && s.pointer_slot==0); CHECK(!dm_tc_dpad_press_accepted(&s,1)); CHECK(!dm_tc_dpad_active(&s));
     dm_tc_cancel_finger(&s,0); CHECK(!s.buttons); dm_tc_end_at(&s,1,2); CHECK(!s.buttons);
     setup(&s); s.holding=1; begin(&s,0,0,1); CHECK(!s.buttons); dm_tc_end_at(&s,0,2); CHECK(!s.buttons);
     setup(&s); begin(&s,0,0,1); dm_tc_begin_at(&s,1,600,160,1.2);
@@ -81,7 +82,7 @@ int main(void) {
         setup(&s); float x=gaps[i][0],y=gaps[i][1];
         CHECK(dm_tc_dpad_guard_hit(&s.layout,x,y)); CHECK(dm_tc_dpad_hit(&s.layout,x,y)==-1);
         dm_tc_begin_at(&s,0,x,y,1); CHECK(s.finger[0].target==DM_TC_DPAD);
-        CHECK(s.pointer_slot==DM_TC_NONE && !s.buttons && !dm_tc_dpad_active(&s));
+        CHECK(s.pointer_slot==DM_TC_NONE && !s.buttons && !dm_tc_dpad_active(&s)); CHECK(!dm_tc_dpad_press_accepted(&s,0));
         dm_tc_move_at(&s,0,s.layout.dpad[3].x,s.layout.dpad[3].y,1.02); CHECK(!s.buttons);
         dm_tc_move_at(&s,0,830,300,1.03); dm_tc_end_at(&s,0,1.05); dm_tc_tick(&s,1.3);
         CHECK(!s.buttons && !s.close_left && !s.pulse_button);
