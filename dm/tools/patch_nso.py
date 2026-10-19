@@ -839,6 +839,118 @@ if RULE_RUN:
         0x52800062, 0x51000849, B(a+20,0x6c6584)],
         'touch-run-v4：原通用合法移动仅player0请求Walk2规范为Run3，非player与其它请求保原，w8/原资格不改')
 
+# PC 物品/NPC 域：保留原指令和 legacy 分支；宿主缺少 profile/snapshot 时不改行为。
+# PC item/NPC domain: preserve original instructions and legacy branches; no profile/snapshot leaves behavior unchanged.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt, old_target = 0x3ca47c, 0x54000920, 0x3ca590, 0x3ca5a0
+    assert struct.unpack_from('<4I', IMG, 0x3ca3b0) == (0xa9ba6ffc,0xa90167fa,0xa9025ff8,0xa90357f6)
+    assert struct.unpack_from('<2I', IMG, off-4) == (0xeb08013f,word)
+    assert struct.unpack_from('<4I', IMG, tgt) == (0xf9422f68,0xb4000068,0x52800029,0x3902e109)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16))
+    emit(0x54000041);emit(B(here(),old_target));emit(B(here(),off+4))
+    gates.append((ret,'svc',0x9d,off));put_branch(off,start);stat('pc_item_left')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC 物品左键：原版 hit/cell/F8 与 consumed，旧模式保留 BEQ | PC ItemSlot LeftDown: native hit/cell/F8 and consumed; legacy keeps relocated BEQ', '仅宿主'))
+
+if RULE_RUN and PRIVATE_GATES:
+    off,old_target=0x3cc97c,0x3cc8b8
+    word=struct.unpack_from('<I',IMG,off)[0]
+    assert word==0x35fff9e9
+    assert struct.unpack_from('<4I',IMG,0x3cc87c)==(0xf81c0ff7,0xa90157f6,0xa9024ff4,0xa9037bfd)
+    assert struct.unpack_from('<2I',IMG,off-8)==(0xd0014a29,0x3963c129)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit(0xaa1e03e8)
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(LDP_POST(8,31,31,16))
+    emit(0x34000049);emit(B(here(),old_target));emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa2,off));put_branch(off,start);stat('pc_item_tooltip')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC 物品 getter：验证 Update/Draw/交易调用者，只改 W9 | PC item getter: verified Update/Draw/trade callers, changes W9 only', '仅宿主'))
+
+if RULE_RUN and PRIVATE_GATES:
+    off,word,tgt=0xabcca4,0xa9177e7f,0xabccd8
+    assert struct.unpack_from('<4I',IMG,0xabcc50)==(0xf81b0ff9,0xa9015ff8,0xa90257f6,0xa9034ff4)
+    assert struct.unpack_from('<8I',IMG,0xabcc88)==(0xd00112a8,0x3963c108,0x34000088,0xd00112a8,0x3963b108,0x340001e8,0xf940ba74,word)
+    assert struct.unpack_from('<4I',IMG,off+4)==(0x3945a268,0x34000168,0xf9400008,0x9105c275)
+    assert struct.unpack_from('<2I',IMG,tgt-4)==(0xa9007ebf,0xf940ca69)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa3,off));put_branch(off,start);stat('pc_grid_hover')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC Grid hover：有效物理指针保留 hover；旧模式完整重放清理 | PC Grid hover: valid physical pointer retains hover; legacy replays full cleanup', '仅宿主'))
+
+if RULE_RUN and PRIVATE_GATES:
+    off,word=0x3ca58c,0xd63f0100
+    assert struct.unpack_from('<4I',IMG,off-12)==(0xaa0003e1,0xf9408108,0xaa1403e0,word)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),off+4))
+    emit(LDP_POST(8,31,31,16))
+    emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(BR(8))
+    gates.append((ret,'svc',0x9e,off));put_branch(off,start);stat('pc_item_right')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC Shift 右键：旧模式保留 virtual100 与原版 LR | PC ShiftRMB: fallback preserves virtual100 and original LR', '仅宿主'))
+
+if RULE_RUN and PRIVATE_GATES:
+    off,callee=0xabd428,0x2ab480
+    word=struct.unpack_from('<I',IMG,off)[0]
+    assert word==(B(off,callee)|0x80000000)
+    assert struct.unpack_from('<4I',IMG,0xabcf34)==(0xd104c3ff,0xa90d6ffc,0xa90e67fa,0xa90f5ff8)
+    assert struct.unpack_from('<4I',IMG,0x2ab480)==(0xd10403ff,0xfd005be8,0xa90c5ff8,0xa90d57f6)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16))
+    emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(B(here(),callee))
+    gates.append((ret,'svc',0xa1,off));put_branch(off,start);stat('pc_held_draw')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC 手持绘制：只改有效指针 XY，保留绘制函数与 LR | PC held draw: changes valid pointer XY only, preserving renderer and LR', '仅宿主'))
+
+if RULE_RUN and PRIVATE_GATES:
+    off,tgt,old_target,word=0x3db0b4,0x3db198,0x3db2b4,0x37001000
+    assert struct.unpack_from('<4I',IMG,0x3dadc8)==(0xd10103ff,0xa90157f6,0xa9024ff4,0xa9037bfd)
+    assert struct.unpack_from('<4I',IMG,off-12)==(0xf9400268,0xf9402508,0xd63f0100,word)
+    assert struct.unpack_from('<4I',IMG,tgt)==(0x39414268,0x34000968,0xf9403269,0xb4000929)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16))
+    emit(0x36000040);emit(B(here(),old_target));emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa0,off));put_branch(off,start);stat('pc_npc_click')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC 对话左键：有效行走原版子控件循环，旧模式保留 TBNZ | PC NPC LeftDown: valid rows use native child dispatch; legacy keeps relocated TBNZ', '仅宿主'))
+
+if RULE_RUN and PRIVATE_GATES:
+    off,tgt=0x3b8648,0x3b8664
+    word=struct.unpack_from('<I',IMG,off)[0]
+    assert word==ADRP(8,off,0x2d12000)
+    assert struct.unpack_from('<4I',IMG,0x3b855c)==(0xd10203ff,0xf90023f7,0xa90557f6,0xa9064ff4)
+    assert struct.unpack_from('<2I',IMG,tgt)==(0x52800028,0x39000268)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(ADRP(8,here(),0x2d12000));emit(B(here(),off+4))
+    gates.append((ret,'svc',0x9f,off));put_branch(off,start);stat('pc_item_hold')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC 手持：仅跳过手柄自动协调，保留队列与显式 DROP | PC held: skips controller reconciliation only, retaining queue and explicit DROP', '仅宿主'))
+
 os.makedirs(outdir, exist_ok=True)
 P = lambda ext: os.path.join(outdir, f'{NAME}.{ext}')
 open(P('patched.bin'), 'wb').write(IMG + bytearray(PATCH_OFF - len(IMG)) + patch)

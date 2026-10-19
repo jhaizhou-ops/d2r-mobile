@@ -21,6 +21,7 @@
 // Basis for equivalence: libdeflate_zlib_decompress likewise verifies the zlib header and adler32 and allows output shorter than capacity;
 // an offline cross-check of all 4,979 files before character select (558.8 MiB of output) gives MD5 == the list's CKey.
 #include "hle.h"
+#include "dm_pc_items.h"
 #include "../third_party/libdeflate/libdeflate.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
@@ -295,6 +296,13 @@ uint64_t svc_host_call(int num, uint64_t *regs) {
     case SVC_HOST_SAVE_ACT: { void svc_save_act(uint64_t *); svc_save_act(regs); return 1; }
     case SVC_HOST_MERC_SLOT: { void svc_merc_slot(uint64_t *); svc_merc_slot(regs); return 1; }
     case SVC_HOST_MERC_SLOT_CL: { void svc_merc_slot_cl(uint64_t *); svc_merc_slot_cl(regs); return 1; }
+    case SVC_HOST_PC_ITEM_LEFT: dm_ui_pc_item_left(regs); return 1;
+    case SVC_HOST_PC_ITEM_RIGHT: dm_ui_pc_item_right(regs); return 1;
+    case SVC_HOST_PC_ITEM_HOLD: dm_ui_pc_item_hold(regs); return 1;
+    case SVC_HOST_PC_NPC_CLICK: dm_ui_pc_npc_click(regs); return 1;
+    case SVC_HOST_PC_HELD_DRAW: dm_ui_pc_held_draw(regs); return 1;
+    case SVC_HOST_PC_ITEM_TOOLTIP: dm_ui_pc_item_tooltip(regs); return 1;
+    case SVC_HOST_PC_GRID_HOVER: dm_ui_pc_grid_hover(regs); return 1;
     }
     return 0;
 }

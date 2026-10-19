@@ -186,3 +186,45 @@ $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+
+# PC 物品策略测试使用现有原始镜像；不启动游戏。
+# PC item policy tests use the existing original image; they do not launch the game.
+run: pc-items
+.PHONY: pc-items
+pc-items: $(B)/main.orig.bin $(B)/t_pc_items
+$(B)/t_pc_items: t_pc_items.c ../dm_pc_items.c ../dm_pc_items.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_items.c
+
+pc-items: $(B)/t_pc_items_legacy $(B)/t_pc_items_profile $(B)/t_pc_pouch $(B)/t_pc_items_domains $(B)/t_pc_vault_pointer $(B)/t_pc_vault_deposit $(B)/t_pc_vault_layout $(B)/t_pc_vault_pointer_widgets
+	$(B)/t_pc_items_legacy
+	$(B)/t_pc_items_profile
+	$(B)/t_pc_pouch
+	$(B)/t_pc_items $(B)/main.orig.bin
+	$(B)/t_pc_items_domains $(B)/main.orig.bin
+	$(B)/t_pc_vault_pointer
+	$(B)/t_pc_vault_deposit
+	$(B)/t_pc_vault_layout
+	$(B)/t_pc_vault_pointer_widgets
+	$(PY) ../../ios/tools/test_pc_item_layouts.py
+	cd ../../.. && DM_MAIN_ORIGINAL="$(abspath $(B)/main.orig.bin)" $(PY) dm/host/tests/t_pc_items_gates.py
+	cd ../../.. && DM_MAIN_ORIGINAL="$(abspath $(B)/main.orig.bin)" $(PY) dm/host/tests/t_pc_item_tooltip_gate.py
+	cd ../../.. && DM_MAIN_ORIGINAL="$(abspath $(B)/main.orig.bin)" $(PY) dm/host/tests/t_pc_grid_hover_gate.py
+$(B)/t_pc_items_domains: t_pc_items_domains.c ../dm_pc_items.c ../dm_pc_items.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_items_domains.c
+$(B)/t_pc_vault_pointer: t_pc_vault_pointer.c ../dm_vault_ui.c ../dm_pc_items.h ../dm_vault_tab.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_vault_pointer.c
+$(B)/t_pc_vault_deposit: t_pc_vault_deposit.c ../dm_vault_ui.c ../dm_pc_items.h ../dm_vault_tab.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_vault_deposit.c
+$(B)/t_pc_vault_layout: t_pc_vault_layout.c ../dm_vault_ui.c ../dm_pc_items.h ../dm_vault_tab.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_vault_layout.c
+$(B)/t_pc_vault_pointer_widgets: t_pc_vault_pointer_widgets.c ../dm_vault_ui.c ../dm_pc_items.h ../dm_vault_tab.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_vault_pointer_widgets.c
+../dm_vault_tab.h:
+	$(MAKE) -C .. dm_vault_tab.h
+
+$(B)/t_pc_items_legacy: t_pc_items_legacy.c ../dm_pc_items.c ../dm_pc_items.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_items_legacy.c ../dm_pc_items.c
+$(B)/t_pc_items_profile: t_pc_items_legacy.c ../dm_pc_items.c ../dm_pc_items.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -DDM_PC_TEST_PROFILE_LINK -I.. -Wl,-dead_strip -o $@ t_pc_items_legacy.c ../dm_pc_items.c
+$(B)/t_pc_pouch: t_pc_pouch.c ../dm_pouch.c ../dm_pc_items.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_pouch.c

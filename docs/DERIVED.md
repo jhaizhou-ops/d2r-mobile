@@ -37,3 +37,7 @@ These are records of facts about the game, not game content: without them, you c
 ### About the 7 rewrites for offline play
 
 Seven of the rewrite rules in `dm/tools/patch_nso.py` exist to let the game run without a network connection (the original checks online at startup). **These 7 are taken from an existing community offline fix** (LFS Mod Offline Fix); they are not our original work. We have no reliable record of where it was first published or who wrote it — if you know, please open an issue and we will add the credit. This project is fully offline and has nothing to do with online play.
+
+### PC item boundary records
+
+The PC inventory slice adds seven guarded rewrite sites and their ABI preimages for the original 3.3.94012 program. These interface records and their synthetic/production-AST tests contain no game resources or executable image. The sites, integration requirements and unexecuted acceptance checks are listed in [PC inventory, NPC dialogue and stash boundary](mac-pc-items.md). Bank textures and inventory tables are generated locally from the user's own files; they are not included.

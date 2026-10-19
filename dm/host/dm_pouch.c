@@ -41,6 +41,7 @@
 // Threads: dm_pouch_step on the game main thread (dm_world.c); UI message callback dm_pouch_on_uimsg (diag.c); stow / release / system notices in the server tick dm_pouch_srv_tick (hud_tick in diag.c);
 // persistence in the pre-commit hook pouch_hook on the disk-write thread (start of Commit in hle_fs.c, [2]).
 #include "dm_widget.h"
+#include "dm_pc_items.h"
 #include "hle.h"
 #include "dm_i18n.h"
 #include <stdatomic.h>
@@ -418,6 +419,12 @@ int dm_pouch_tip_gate(int x, int y) {
     if (box && (((int (*)(uint64_t, uint64_t))*(uint64_t *)(*(uint64_t *)box + 0x48))(box, (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32)) & 1)) return 0;
     tip_show(root, 0); LOG("百宝囊：点了清单外 → 收起清单，这一下不做别的"); return 1;
 }
+static void pouch_place(uint64_t boxw,int gp,int sb,int pc) {
+    w_move(find_w(boxw,"TouchPouch",1),gp ? (pc ? 90 : 222) : 99999,pc ? 1344 : 1294);
+    w_move(find_w(boxw,"TouchPouchIcon",1),gp ? (pc ? 106 : 246) : 99999,pc ? 1352 : 1310);
+    w_move(find_w(boxw,"TouchPouchCount",1),gp ? (pc ? 204 : 350) : 99999,pc ? 1344 : 1294);
+    w_move(find_w(boxw,"TouchStore",1),sb ? (pc ? 800 : 916) : 99999,pc ? 1348 : 1323);
+}
 static void ui_pump(void) {
     // 百宝囊的控件全部插在物品栏布局里（pouch_layout.py）：先取物品栏面板（界面根的直接子控件，dm_widget.h），再在面板里找；物品栏没开就不扫整棵界面树
     // All of the pouch widgets are inserted into the inventory layout (pouch_layout.py): first get the inventory panel (a direct child of the UI root, dm_widget.h), then search inside it; when the inventory is not open, the whole UI tree is not scanned
@@ -425,8 +432,7 @@ static void ui_pump(void) {
     if (dm_ui_top_chk_on()) { uint64_t old = root ? find_w(root, "TouchPouchBox", 2) : 0; if (old != boxw) { static int k; if (k++ < 20) LOG("【红】百宝囊对拍：TouchPouchBox 新找法 %#llx、旧找法 %#llx", (unsigned long long)boxw, (unsigned long long)old); } }
     if (!boxw) return;
     int gp = dm_custom_get("gem_pick"), sb = dm_custom_get("store_btn");
-    w_move(find_w(boxw, "TouchPouch", 1), gp ? 222 : 99999, 1294); w_move(find_w(boxw, "TouchPouchIcon", 1), gp ? 246 : 99999, 1310); w_move(find_w(boxw, "TouchPouchCount", 1), gp ? 350 : 99999, 1294);
-    w_move(find_w(boxw, "TouchStore", 1), sb ? 916 : 99999, 1323);
+    pouch_place(boxw,gp,sb,dm_pc_items_enabled());
     static int shown = -1; int gen = atomic_load(&g_ugen); if (gen != shown) { char n[16]; snprintf(n, sizeof n, "%d", atomic_load(&g_ucount)); w_text(find_w(boxw, "TouchPouchCount", 1), n); shown = gen; if (g_tip) tip_show(root, 1); }
     if (atomic_exchange(&g_pouch_tap, 0)) tip_show(root, !g_tip);
     if (g_tip) tip_show(root, 1);   // 文字控件量尺寸要晚一两帧（fitToText）：开着时每帧对齐 | Text widgets measure their size a frame or two late (fitToText): align every frame while open
