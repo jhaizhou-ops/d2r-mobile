@@ -312,6 +312,10 @@ triangle strip 用退化三角形拼成一次 `vkCmdDraw`，813 次 per-draw（�
 
 结论：**顶点重定向/偏移路径已验证正确**；问题出在"延迟合并"的那一次大 draw。已排除：
 顶点缓冲复用跨帧未同步、`buffer_make()` 在录制中调用、`S.in_pass` 外发 draw（都补过，仍崩）。
+第四轮又排除了 **flush 时序**：原先 flush 放在 pass_end 里，那时新一笔的描述符已经绑上、管线还是
+上一笔的，pipeline/descriptor 不匹配属于未定义行为；改成"draw 入口（bind_shader 之前）+ 帧提交前"
+之后**仍然崩溃**——说明根因不在 flush 时序，也不在绑定状态，而在"一次画完 4,884 个顶点"这个
+动作本身或它之前的顶点数据布局。
 
 下一步该怀疑的方向（尚未验证）：
 1. 延迟期间命令缓冲被 `sub_chunk_flush` 换掉（虽然它在 `S.in_pass` 时直接返回，但 `pass_end`
