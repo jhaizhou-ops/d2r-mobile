@@ -4157,6 +4157,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(rmdir&&*rmdir&&snprintf(rmf,sizeof rmf,"%s/readmemo.txt",rmdir)<(int)sizeof rmf){FILE *fp=fopen(rmf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=G.read_memo_enabled){G.read_memo_enabled=m;
                 fprintf(stderr,"[nvn-vulkan] READ_MEMO 运行中切换 → %d\n",m);}fclose(fp);}}}
+        /* 附件 store 跳过运行时切换：attskip.txt = 0 关 / 1 深度 / 2 颜色 / 3 全部（试验）。
+           用于同进程内相邻帧对拍，避免两次运行的状态漂移。 */
+        { static const char *asdir; if(!asdir)asdir=getenv("DM_FRAME_DIR"); char asf[1300];
+          if(asdir&&*asdir&&snprintf(asf,sizeof asf,"%s/attskip.txt",asdir)<(int)sizeof asf){FILE *fp=fopen(asf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=3&&m!=g_att_store_skip){g_att_store_skip=m;
+                fprintf(stderr,"[nvn-vulkan] ATT_STORE_SKIP 运行中切换 → %d\n",m);}fclose(fp);}}}
         /* 分段统计运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 组别 / 2 组别+分段表。
            RT segment stats runtime A/B: rtseg.txt = 0 off (default) / 1 groups / 2 + segment table. */
         { static const char *rsdir; if(!rsdir)rsdir=getenv("DM_FRAME_DIR"); char rsf[1300];

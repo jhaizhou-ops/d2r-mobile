@@ -234,6 +234,17 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-nvn-queue");
     if(access(driver_option,F_OK)==0)setenv("DM_NVN_SYNC","1",1);
     if(!getenv("DM_PRESENT_HZ"))setenv("DM_PRESENT_HZ","80",1);
+    /* 附件 store 跳过（深度通道）：同 fps 下把附件流量从 891.8 降到 691.8 MB/帧（−22%），
+       给复杂场景留 GPU 余量。营地/营地外静态对拍无可检测差异（分区热力图与噪声同形态），
+       但战斗/特效/过场未验证，且 Vulkan 规范允许 DONT_CARE 内容为任意值——所以**默认关**，
+       仅在 diagnostics/enable-att-skip 存在时打开。删掉该文件即回退。
+       Attachment store elision for depth passes: same fps, attachment traffic 891.8 -> 691.8 MB/frame
+       (-22%), leaving GPU headroom for heavy scenes. No detectable difference in static camp/field
+       shots (the per-cell diff map matches the noise shape), but combat/effects/cutscenes are not
+       validated and Vulkan allows DONT_CARE to leave arbitrary contents -- so off by default,
+       enabled only when diagnostics/enable-att-skip exists. Delete the file to roll back. */
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-att-skip");
+    if(access(driver_option,F_OK)==0)setenv("DM_ATT_STORE_SKIP","1",1);
     setenv("DM_WRITEBACK_PREPARE","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-writeback-prepare");
     if(access(driver_option,F_OK)==0)setenv("DM_WRITEBACK_PREPARE","0",1);
