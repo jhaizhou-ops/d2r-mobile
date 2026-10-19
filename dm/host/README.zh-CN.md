@@ -1,5 +1,7 @@
 # dm/host：宿主文件索引
 
+可选的 [Mac PC 输入配置](../../docs/mac-pc-input.zh-CN.md)：集成前提和专项测试。
+
 English: [README.md](README.md)
 
 宿主做两件事：装载改写后的游戏程序、提供它调用的平台服务；在原版之上加的功能和触摸适配也在这个目录里。整体怎么工作见 [dm/README.zh-CN.md](../README.zh-CN.md)。

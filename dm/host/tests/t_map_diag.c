@@ -1,7 +1,9 @@
 // 小地图诊断回归：实际生产采样函数，自造对象；检查缺失/隐藏/换幕/偏移及稳定状态去重，控件只读。
 // Minimap diagnostic regression: real production sampler with authored objects; covers missing/hidden/Act changes/offsets, stable-state deduplication and read-only widgets.
 // Minimap diagnostic regression: real production sampler with authored objects; covers missing/hidden/Act changes/offsets, stable-state deduplication and read-only widgets.
+#define DM_PC_ITEMS_CONNECTED 0
 #include "../dm_cursor.c"
+int dm_ui_pc_desktop(void) { return 0; }
 module_t g_mod[MAX_MOD]; int g_nmod;
 static int area = 1, uy = 308;
 void dm_hud_get(dm_hud_info *h) { memset(h, 0, sizeof *h); h->valid = 1; h->area = area; }

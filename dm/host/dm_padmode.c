@@ -46,6 +46,45 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <TargetConditionals.h>
 
+static _Atomic int g_pc_desktop;
+static module_t *g_pc_module;
+static _Atomic unsigned g_pc_layout_trace;
+int dm_ui_pc_desktop(void) { return atomic_load(&g_pc_desktop); }
+static const char *pc_layout_root(const char *name, int (*exists)(const void *)) {
+    static const char *const prefixes[]={"Controller/Console/Switch/","Controller/Console/","Controller/"};
+    if (!name || !exists) return name;
+    for (unsigned i=0;i<sizeof prefixes/sizeof *prefixes;i++) {
+        size_t n=strlen(prefixes[i]); if (strncmp(name,prefixes[i],n)) continue;
+        const char *root=name+n; if (!*root || !strcmp(root,"GlobalData") || !strcmp(root,"FocusManager")) return name;
+        struct { const char *text; uint64_t length,capacity; } borrowed={root,strlen(root),UINT64_MAX};
+        return exists(&borrowed)&1 ? root : name;
+    }
+    return name;
+}
+const char *dm_ui_pc_layout_path(const char *name) {
+    if (!dm_ui_pc_desktop() || !g_pc_module) return name;
+    unsigned trace=atomic_fetch_add(&g_pc_layout_trace,1);
+    if (trace<48) LOG("PC layout[%u]: root lookup, input %.180s",trace,name ? name : "(null)");
+    const char *selected=pc_layout_root(name,(int (*)(const void *))(g_pc_module->base+0xb88010));
+    if (trace<48) LOG("PC layout[%u]: output %.180s (%s)",trace,selected ? selected : "(null)",selected!=name ? "root" : "unchanged/fallback");
+    return selected;
+}
+const void *dm_ui_pc_layout_exists_arg(const void *arg) {
+    static _Thread_local struct { const char *text; uint64_t length,capacity; } borrowed;
+    if (!arg || !dm_ui_pc_desktop()) return arg;
+    const char *name=*(const char *const *)arg,*root=dm_ui_pc_layout_path(name);
+    if (root==name) return arg;
+    borrowed.text=root; borrowed.length=strlen(root); borrowed.capacity=UINT64_MAX;
+    return &borrowed;
+}
+static int pc_layout_abi(const module_t *m) {
+    static const uint32_t exists_tail[]={0xa90167fa,0xa9025ff8,0xa90357f6};
+    static const uint32_t loader_tail[]={0xa90167fa,0xa9025ff8,0xa90357f6};
+    return m && m->size>=0xb88020 && gate_obs_present(OBS_PC_LAYOUT_EXISTS) && gate_obs_present(OBS_PC_LAYOUT_LOAD)
+        && !memcmp(m->base+0xb88014,exists_tail,sizeof exists_tail)
+        && !memcmp(m->base+0xb84754,loader_tail,sizeof loader_tail);
+}
+
 static const struct { uint32_t off; const char *pad, *touch; } k_pfx[] = {
     { 0x1d21db5, "Controller/Console/Switch/", "0touch_console_switch_lay/" },
     { 0x1d2c33f, "Controller/Console/", "Ztouch_console_lay/" },
@@ -73,6 +112,9 @@ uint32_t dm_padmode_rebuilds(void) { return atomic_load(&g_rebuilds); }
 // (ios/tools/kbd_glyphs.py, in the same directory as the touch layout's transparent key caps, file names "<platform>K<name>"). When the player presses the keyboard, keyboard key caps are used; when a physical gamepad has input, it switches back to gamepad key caps;
 // swapping images requires the game to reload the layout, which goes through the same switching transaction as gamepad / touch (the transaction's "mode" carries one more bit: bit 0 gamepad layout, bit 1 keyboard key caps).
 #if TARGET_OS_OSX
+#include "dm_controls_mac.h"
+static int g_glyph_epoch, g_glyph_epoch_next;
+static unsigned g_glyph_revision, g_glyph_revision_next;
 #define KBD_GLYPH_OFF 0x1d0f5b8
 static const char k_kbd_glyph[] = "Ztouch_controller_buttons_ui/%sK%s";
 static int g_kbd_have, g_kbd, g_kbd_next, g_app;   // 覆盖层带键盘键帽；当前路径指着键盘键帽；下一次写路径时要不要指键盘键帽；Mac App 形态 | the overlay carries keyboard key caps; the current path points at keyboard key caps; whether the next path write should point at keyboard key caps; Mac App form
@@ -156,10 +198,16 @@ void dm_padmode_boot(void) {   // 开机：游戏建面板之前（main.c，nnMa
     if (gate_obs_present(OBS_NOTICE_INPUT)) gate_obs_set(OBS_NOTICE_INPUT, notice_input_obs);
     module_t *m = NULL; for (int i = 0; i < g_nmod; ++i) if (!strcmp(g_mod[i].name, "main")) m = &g_mod[i]; char mk[1100];
     if (!m || !getenv("DM_ROMFS_OVERLAY")) return;
+#if TARGET_OS_OSX
+    if (getenv("DM_APP") && dm_overlay_file("pc_desktop",mk,sizeof mk)) {
+        if (!pc_layout_abi(m)) { LOG("PC: marker present, but gates are missing or layout ABI does not match"); return; }
+        g_pc_module=m; g_app=1; g_cur=1; atomic_store(&g_want,1); atomic_store(&g_pc_desktop,1); LOG("PC: native desktop layouts with per-resource fallback");
+    }
+#endif
     if (!dm_overlay_file("ctrl_touch", mk, sizeof mk)) { LOG("手柄 / 触屏布局：覆盖层没有 ctrl_touch 标记，照原版布局"); return; }
     int pad = getenv("DM_APP") != NULL;   // Mac App：没有触屏圆钮与底栏的绘制层，开机就用原版手柄版（我们的功能页在手柄版布局里同样有），之后也不切 | Mac App: there is no drawing layer for the touch buttons and bottom bar, so it starts in the original gamepad UI (our feature pages exist in the gamepad layout as well) and never switches afterwards
 #if TARGET_OS_OSX
-    g_app = pad; g_kbd_have = pad && dm_overlay_file("kbd_glyphs", mk, sizeof mk); g_kbd = g_kbd_next = g_kbd_have; atomic_store(&g_kbd_want, g_kbd);   // Mac App 开机先用键盘键帽（多数人没接手柄）；实体手柄一有输入就换 | the Mac App starts with keyboard key caps (most people have no gamepad connected); it switches as soon as a physical gamepad has input
+    g_app = pad; g_kbd_have = pad && dm_overlay_file("kbd_glyphs", mk, sizeof mk); g_kbd = g_kbd_next = g_kbd_have; g_glyph_revision = dm_controls_revision(); atomic_store(&g_kbd_want, g_kbd);   // Mac App 开机先用键盘键帽（多数人没接手柄）；实体手柄一有输入就换 | the Mac App starts with keyboard key caps (most people have no gamepad connected); it switches as soon as a physical gamepad has input
     if (pad) LOG("手柄 / 触屏布局：键盘键帽 %d", g_kbd_have);
 #endif
     if (pfx_write((uint8_t *)m->base, pad)) { g_have = 1; g_cur = pad; atomic_store(&g_want, pad); g_b = (uint8_t *)m->base; str_load(); LOG("手柄 / 触屏布局：开机用%s", pad ? "原版手柄版（Mac App）" : "触屏版（layouts/xtouch_lay 等三个目录）"); }
@@ -487,10 +535,15 @@ void dm_padmode_step(uint8_t *b, uint64_t frame) {   // 游戏主线程每帧（
       if (fp != fp0) { fp0 = fp; nfp++; } g_sig = dm_oe_ui_opmode_reads() + nfp; }
 #if TARGET_OS_OSX
     int w = atomic_load(&g_want), wx = w, cx = g_cur;
-    if (g_kbd_have) { int tp = w >= 0 ? w : g_cur, tk = tp ? atomic_load(&g_kbd_want) : 0; if (tk != g_kbd && tp == g_cur && !kbd_swap_ok(b)) tk = g_kbd;
-        wx = tp | tk << 1; cx = g_cur | g_kbd << 1; if (wx == cx && w < 0) wx = -1; }   // 键帽那一位并进事务的「模式」里 | the key-cap bit is merged into the transaction's "mode"
+    if (g_kbd_have) {
+        int tp = w >= 0 ? w : g_cur, tk = tp ? atomic_load(&g_kbd_want) : 0, epoch = g_glyph_epoch;
+        int safe = kbd_swap_ok(b); if (tk != g_kbd && tp == g_cur && !safe) tk = g_kbd;
+        if (tk && safe && dm_controls_revision() != g_glyph_revision) epoch = !g_glyph_epoch;
+        wx = tp | tk << 1 | epoch << 2; cx = g_cur | g_kbd << 1 | g_glyph_epoch << 2;
+        if (wx == cx && w < 0) wx = -1;
+    }
     int act = dm_modetx_step(&g_tx, frame, wx, cx, g_sig);
-    if (act == DM_TXA_BEGIN) { g_kbd_next = wx >> 1; w = wx & 1; }
+    if (act == DM_TXA_BEGIN) { g_kbd_next = (wx >> 1) & 1; g_glyph_epoch_next = (wx >> 2) & 1; g_glyph_revision_next = dm_controls_revision(); w = wx & 1; }
 #else
     int w = atomic_load(&g_want), act = dm_modetx_step(&g_tx, frame, w, g_cur, g_sig);
 #endif
@@ -501,7 +554,7 @@ void dm_padmode_step(uint8_t *b, uint64_t frame) {   // 游戏主线程每帧（
         items_run(g_cur, 1);   // 旧一侧各登记项收手（dm_mode_items.h）：在途的替按键作废、挪过的控件写回、缓存的控件地址清掉 | Registered items of the old side stand down (dm_mode_items.h): in-flight key presses on the player's behalf are voided, moved widgets written back, cached widget addresses cleared
         g_cur = w; str_apply(w); dm_oe_ui_opmode(!dm_opmode());
 #if TARGET_OS_OSX
-        g_kbd = g_kbd_next; if (g_kbd_have) LOG("手柄 / 触屏布局：键盘键帽 → %d", g_kbd);
+        g_kbd = g_kbd_next; g_glyph_epoch = g_glyph_epoch_next; g_glyph_revision = g_glyph_revision_next; if (g_kbd_have) LOG("手柄 / 触屏布局：键盘键帽 → %d", g_kbd);
 #endif
         LOG("手柄 / 触屏布局：切到%s版——开始（输入冻结，让游戏重载布局）", w ? "原版手柄" : "触屏"); return; }
     if (g_tx.timeouts) LOG("【红】手柄 / 触屏布局：%d 帧内没回读到界面重建（游戏没来读运行模式、界面根下的面板也没换），按超时往下走", DM_MODETX_TIMEOUT);

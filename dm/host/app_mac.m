@@ -144,6 +144,8 @@ int dm_app_bootstrap(int *argc, char ***argv) {
         if ([fm fileExistsAtPath:shmap]) setenv("DM_NVN_SHMAP", shmap.fileSystemRepresentation, 1);
         NSString *msl = res_item(@"msl");   // 编好的着色器库（msl/b-<翻译链版本>/） | The compiled shader library (msl/b-<translation chain version>/)
         if (msl) setenv("DM_MSL_DIR", msl.fileSystemRepresentation, 1);
+        NSString *cursors = res_item(@"cursors");
+        if (cursors && !getenv("DM_MAC_CURSOR_DIR")) setenv("DM_MAC_CURSOR_DIR", cursors.fileSystemRepresentation, 1);
         BOOL missing_overlay = NO;
         NSString *ov = dm_mac_overlay(res_item(@"romfs_overlay"), res_item(@"romfs_overlay_variants"), dm_custom_get, &missing_overlay);
         if (missing_overlay) LOG("App：缺少已启用自定义功能的覆盖层组合，暂用基础覆盖层；请重新生成并打包覆盖层");

@@ -1,0 +1,7 @@
+// PC HUD offset stays stable between world and panel; frontend and legacy unchanged.
+#include "../dm_uiscreen.c"
+module_t g_mod[MAX_MOD];int g_nmod;
+static int desktop,checks,failures;
+int dm_ui_pc_desktop(void){return desktop;}
+#define CHECK(c,t) do{checks++;if(!(c)){failures++;fprintf(stderr,"FAIL %s\n",t);}}while(0)
+int main(void){atomic_store(&g_mode,DM_UISCREEN_BOTTOM);atomic_store(&g_rw,1920);atomic_store(&g_rh,1200);atomic_store(&g_uh,1080);atomic_store(&g_ingame,1);atomic_store(&g_panel,0);CHECK(yoff()==120,"Legacy mundo alineado abajo");atomic_store(&g_panel,1);CHECK(yoff()==60,"Legacy panel centra interfaz");desktop=1;CHECK(yoff()==120,"PC panel conserva posición del HUD");atomic_store(&g_panel,0);CHECK(yoff()==120,"PC cerrar panel no desplaza HUD");atomic_store(&g_ingame,0);CHECK(yoff()==60,"PC frontend permanece centrado");atomic_store(&g_ingame,1);atomic_store(&g_mode,DM_UISCREEN_CENTER);CHECK(yoff()==60,"PC respeta modo centrado solicitado");atomic_store(&g_mode,DM_UISCREEN_TOP);atomic_store(&g_panel,1);CHECK(yoff()==0,"PC respeta modo superior con panel");desktop=0;CHECK(yoff()==60,"Legacy superior continúa centrando panel");atomic_store(&g_mode,DM_UISCREEN_OFF);CHECK(yoff()==0,"Modo apagado conserva offset cero");atomic_store(&g_mode,DM_UISCREEN_BOTTOM);atomic_store(&g_rh,1080);CHECK(yoff()==0,"16:9 no introduce offset");printf("PC UI OFFSET %d comprobaciones, %d fallos\n",checks,failures);return!!failures;}

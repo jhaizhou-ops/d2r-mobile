@@ -182,6 +182,29 @@ PRIVATE_AIM = RULE_RUN and PRIVATE_GATES
 if PRIVATE_AIM:
     cuts.append((0x2faf04, 'fde7fe97', 'c11000d4',
       'skill-aim-v1-private: skill ground direction call only; svc86 delegates original2b4ef8 then sampled-right/original rotation+grid; zero/nonplayer/non-skill retain original; busy/town/skill/server untouched', '仅宿主'))
+# PC input: 0x8f, 0x90, 0x91, 0x95.
+if RULE_RUN and PRIVATE_GATES:
+    cuts.append((0x38f578, '3a82ff97', 'e11100d4',
+      'PC input: PC belt shortcut labels; legacy keeps the controller binding reader', '仅宿主'))
+    cuts.append((0x3e3c48, '4840fb97', '011200d4',
+      'PC input: PC skill shortcut label via the native sret formatter; legacy unchanged', '仅宿主'))
+    cuts.append((0xbb6f2c, '8ff3fc97', '211200d4',
+      'PC input: PC QuickCast settings row through the original visibility setter', '仅宿主'))
+    cuts.append((0xaecca4, 'fbb6ff97', 'a11200d4',
+      'PC input: PC in-game Controls visibility through the original initialization helper', '仅宿主'))
+
+# PC input: 0x98.
+if RULE_RUN and PRIVATE_GATES:
+    cuts.append((0xbb59b4, '62c0fc97', '011300d4',
+      'PC input: PC keyboard option registration before native settings initialization', '仅宿主'))
+
+# PC input: 0xa4.
+if RULE_RUN and PRIVATE_GATES:
+    assert IMG[0xc267c8:0xc267d8].hex()=='fc6fbaa9fa6701a9f85f02a9f65703a9'
+    assert IMG[0xc26e08:0xc26e18].hex()=='e00313aa24faff9768424139e8e7ff35'
+    cuts.append((0xc26e0c, '24faff97', '811400d4',
+      'PC input: PC Create dispatches TryCreateCharacter with the native InputText name; legacy keeps its provider', '仅宿主'))
+
 if RULE_RUN:
     # 方向光阴影图边长（画质档位 1，0x168a520 填 +0x48 → 建 2 层数组 0x1697394）：2100 → 1024。授权「视觉无差别即可」；
     # mini 108 张 + 连续 16 帧：营地 / 野外 / 战斗各档到 1024 的 FLIP 与同设置重跑的噪声分不开、影子区相邻帧变化量 0.71 → 0.75；真机两张阴影合计约 0.7–1.4 ms / 帧。
@@ -647,6 +670,9 @@ if RULE_RUN and PRIVATE_GATES:
     obs.append((0x2f7664, 7, "6dbb23e9", "touch target rank: candidate compare entry (closure, unit, kind, s0=score); host raises Boss/elite score, native eligibility unchanged"))
     obs.append((0xb0d560, 21, "fc1a0fe8", "TooltipsPanel add-tooltip entry (panel, text, target position x2 / x3, style, text2): tooltips are immediate-mode (re-submitted by the hovered widget every frame and cleared after drawing, so the host cannot reach the record at its own time); on touch, in panel state, for an item the player just tapped, the host swaps the target position so the game lays the tooltip out beside the panel instead of over the item grid; everything else passes through unchanged"))
     obs.append((0x7ce800, 22, "d100c3ff", "server place-one-preset-unit entry (game, room, record), only called by the room-activation preset loop 0x7ce930 (8 sites): in a rift game at tier 90+ on a rift map, for a monster record that is not a superunique and not scenery / NPC, the host swaps x2 to a copy whose class is -1 so 0x6910d0 takes its own early return (tbnz w2, #31) and nothing is spawned; the real record is untouched; rift guardian / invader / superunique spawns call 0x7ce630 / 0x69b310 directly and never pass here"))
+    obs.append((0xad75f0, 23, "d10583ff", 'PC UI resource entry: replace only x1 for rebindable keyboard/mouse glyph paths; replay the original SUB prologue'))
+    obs.append((0xb88010, 24, "f81a0ffc", 'PC layout existence query: borrow an existing root layout name in x0; native temporary unchanged'))
+    obs.append((0xb84750, 25, "a9ba6ffc", 'PC layout load: borrow an existing root name in x0, preserve profile w1 and parent x2; native basedOn resolution'))
 for off, oid, ow, why in obs:
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'观测门原指令不符 {off:#x}：{w:08x}'
@@ -655,6 +681,180 @@ for off, oid, ow, why in obs:
     assert off in set(starts) or (oid == 6 and off == 0x43ecc8), f'private obs point not approved {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'观测门与改写点冲突 {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
+
+# PC input: 0x93.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xad8a54, 0xd10383ff, 0xad8a58
+    assert struct.unpack_from('<4I', IMG, off) == (word, 0xa9086ffc, 0xa90967fa, 0xa90a5ff8)
+    assert off in set(starts) and off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x93, off)); put_branch(off, start); stat('pc_tabbar_init')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'Disable only the PC TabBar controller-indicator flag; native initialization and replay remain', '仅宿主'))
+
+# PC input: 0x94.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0x456c5c, 0x911bf7e8, 0x456d50
+    assert struct.unpack_from('<3I', IMG, off - 8) == (0x941afe83, 0x340007d9, word)
+    assert struct.unpack_from('<II', IMG, tgt - 4) == (0x941afe99, 0x914007ff)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x94, off)); put_branch(off, start); stat('pc_corpse_label')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'Keep corpse name; skip only the controller interaction indicator in PC mode', '仅宿主'))
+
+# PC input: 0x96.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0x368d64, 0xd288a588, 0x368e10
+    assert struct.unpack_from('<4I', IMG, 0x368d20) == (0xd10103ff, 0xa9024ff4, 0xa9037bfd, 0x9100c3fd)
+    assert struct.unpack_from('<4I', IMG, off) == (word, 0xf2bc16c8, 0xf2d480c8, 0xf2ee24e8)
+    assert struct.unpack_from('<4I', IMG, tgt) == (0xa9437bfd, 0xa9424ff4, 0x910103ff, 0xd65f03c0)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x96, off)); put_branch(off, start); stat('pc_inventory_route')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'Keep inventory callback cleanup; PC uses native independent-panel toggle, legacy unchanged', '仅宿主'))
+
+# Shared with the inventory slice: one A3 hook, with a weak skill-only host adapter.
+if RULE_RUN and PRIVATE_GATES:
+    off,word,tgt=0xabcca4,0xa9177e7f,0xabccd8
+    assert struct.unpack_from('<4I',IMG,0xabcc50)==(0xf81b0ff9,0xa9015ff8,0xa90257f6,0xa9034ff4)
+    assert struct.unpack_from('<8I',IMG,0xabcc88)==(0xd00112a8,0x3963c108,0x34000088,0xd00112a8,0x3963b108,0x340001e8,0xf940ba74,word)
+    assert struct.unpack_from('<4I',IMG,off+4)==(0x3945a268,0x34000168,0xf9400008,0x9105c275)
+    assert struct.unpack_from('<2I',IMG,tgt-4)==(0xa9007ebf,0xf940ca69)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa3,off));put_branch(off,start);stat('pc_grid_hover')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'PC Grid hover：有效物理指针保留 hover；旧模式完整重放清理 | PC Grid hover: valid physical pointer retains hover; legacy replays full cleanup', '仅宿主'))
+
+# PC input: 0xa5.
+if RULE_RUN and PRIVATE_GATES:
+    off,word=0x3e4760,0xd65f03c0
+    assert struct.unpack_from('<4I',IMG,0x3e4594)==(0xa9bd57f6,0xa9014ff4,0xa9027bfd,0x910083fd)
+    assert struct.unpack_from('<5I',IMG,0x3e4750)==(0xa9427bfd,0xa9414ff4,0xa8c357f6,word,word)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(word)
+    gates.append((ret,'svc',0xa5,off));put_branch(off,start);stat('pc_skill_click')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'Delegate PC SkillSelectButton C0 to native open/select; keep original caller RET and registers', '仅宿主'))
+
+# PC input: 0xa6.
+if RULE_RUN and PRIVATE_GATES:
+    off,word,tgt=0x3e2f6c,0x2a1703e0,0x3e2f80
+    assert struct.unpack_from('<4I',IMG,0x3e2dd4)==(0xf81a0ffb,0xa90167fa,0xa9025ff8,0xa90357f6)
+    assert struct.unpack_from('<5I',IMG,off)==(word,0x94016f10,0x2a0003f5,word,0x94016fe5)
+    assert struct.unpack_from('<4I',IMG,tgt)==(0x51036ea8,0x7100091f,0x54000542,0x52802cf5)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa6,off));put_branch(off,start);stat('pc_skill_hud')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'Supply selected skill/assoc only to the PC HUD; legacy MOV and both original calls remain', '仅宿主'))
+
+# PC input: 0xa7.
+if RULE_RUN and PRIVATE_GATES:
+    off,word,tgt=0xc065a4,0xb94087eb,0xc066b0
+    assert struct.unpack_from('<9I',IMG,0xc06378)==(0x6db923e9,0xa9016ffc,0xa90267fa,0xa9035ff8,0xa90457f6,0xa9054ff4,0xa9067bfd,0x910183fd,0xd10683ff)
+    assert struct.unpack_from('<4I',IMG,0xc064dc)==(0xf94082c8,0xb90087f3,0xb4001e48,0xf9400114)
+    assert struct.unpack_from('<7I',IMG,off)==(word,0x7100057f,0x54000061,0x39409d0b,0x363007eb,0x3940910b,0x372007ab)
+    assert struct.unpack_from('<4I',IMG,tgt)==(0xf85203a8,0xb4000fc8,0xf9400514,0xf81203b4)
+    assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+    start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0xa7,off));put_branch(off,start);stat('pc_skill_candidate')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'Skip only selector candidates missing native capability for the chosen side; vectors unchanged', '仅宿主'))
+
+# PC input: 0xa8.
+if RULE_RUN and PRIVATE_GATES:
+    assert struct.unpack_from('<9I',IMG,0xc06378)==(0x6db923e9,0xa9016ffc,0xa90267fa,0xa9035ff8,0xa90457f6,0xa9054ff4,0xa9067bfd,0x910183fd,0xd10683ff)
+    assert struct.unpack_from('<4I',IMG,0xc064dc)==(0xf94082c8,0xb90087f3,0xb4001e48,0xf9400114)
+    assert struct.unpack_from('<22I',IMG,0xc068c8)==(0x52802ca8,0xd10383a1,0xf900073f,0xaa1903e0,0xf900133f,0xf9001f3f,0xf9002b3f,0xf900373f,0xf900433f,0xf9004f3f,0xb81203a8,0x940008f5,0x52802cc8,0xd10383a1,0xb81203a8,0xaa1903e0,0x940008f0,0x52802e48,0xd10383a1,0xb81203a8,0xaa1903e0,0x940008eb)
+    assert struct.unpack_from('<4I',IMG,0xc08cc8)==(0xa9bc5ff8,0xa90157f6,0xa9024ff4,0xa9037bfd)
+    for off,word in ((0xc068f4,0x940008f5),(0xc06908,0x940008f0),(0xc0691c,0x940008eb)):
+        assert word==(B(off,0xc08cc8)|0x80000000)
+        assert off<TEXT_END and off not in kinds and not any(seg[0].address<=off<seg[-1].address+4 for seg in windows)
+        start=here();emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16));emit_gate_call();emit(BLR(30))
+        ret=here();emit(LDP_POST(29,30,31,16));emit(0x340000a8)
+        emit(LDP_POST(8,31,31,16));emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(B(here(),off+4))
+        emit(LDP_POST(8,31,31,16));emit(ADRP(30,here(),off+4));emit(ADDI(30,30,(off+4)&0xfff));emit(B(here(),0xc08cc8))
+        gates.append((ret,'svc',0xa8,off));put_branch(off,start);stat('pc_skill_common')
+        cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                     'Filter explicit common append by native side capability; keep fallback append and relocatable original LR', '仅宿主'))
+
+# PC input: 0x9c.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xae5324, 0xd288a588, 0xae53d0
+    assert struct.unpack_from('<4I', IMG, 0xae50cc) == (0xd10103ff,0xa9024ff4,0xa9037bfd,0x9100c3fd)
+    assert struct.unpack_from('<4I', IMG, off) == (word,0xf2bc16c8,0xf2d480c8,0xf2ee24e8)
+    assert struct.unpack_from('<4I', IMG, tgt) == (0xa9437bfd,0xa9424ff4,0x910103ff,0xd65f03c0)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0x9c,off));put_branch(off,start);stat('pc_pause_close')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'Close the independent PC PausePanel through native close and OnClose; legacy unchanged', '仅宿主'))
+
+# PC input: 0x97.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xae950c, 0xf9422ee8, 0xae9510
+    assert struct.unpack_from('<4I', IMG, off) == (word,0xf9406914,0xf940b262,0xb5000082)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8,31,31,-16));emit(STP_PRE(29,30,31,-16))
+    emit_gate_call();emit(BLR(30))
+    ret=here();emit(LDP_POST(29,30,31,16));emit(0x34000068)
+    emit(LDP_POST(8,31,31,16));emit(B(here(),tgt))
+    emit(LDP_POST(8,31,31,16));emit(word);emit(B(here(),off+4))
+    gates.append((ret,'svc',0x97,off));put_branch(off,start);stat('pc_options_rows')
+    cuts.append((off,struct.pack('<I',word).hex(),struct.pack('<I',B(off,start)).hex(),
+                 'Update PC option-row visibility after native common filtering; replay original LDR and focus', '仅宿主'))
+
+# PC input: 0x92.
+if RULE_RUN and PRIVATE_GATES:
+    off, word, tgt = 0xb0d150, 0x911dc108, 0xb0d168
+    assert struct.unpack_from('<I', IMG, off)[0] == word
+    assert struct.unpack_from('<I', IMG, off - 4)[0] == 0xb0011028
+    assert struct.unpack_from('<II', IMG, tgt) == (0xf940ba68, 0xb4000a08)
+    assert off < TEXT_END and off not in kinds and not any(seg[0].address <= off < seg[-1].address + 4 for seg in windows)
+    start = here()
+    emit(STP_PRE(8, 31, 31, -16)); emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call(); emit(BLR(30))
+    ret = here(); emit(LDP_POST(29, 30, 31, 16)); emit(0x34000068)
+    emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
+    emit(LDP_POST(8, 31, 31, 16)); emit(word); emit(B(here(), off + 4))
+    gates.append((ret, 'svc', 0x92, off)); put_branch(off, start); stat('pc_hover_only')
+    cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                 'Keep ClearInfo and exact target A; skip only automatic B/C in PC mode', '仅宿主'))
 
 # 秘境出口改道（r36 起）：分支门 0x89，挂在「按出口砖的连接换关」main+0x7cc1e0(游戏, 玩家, 砖) 的入口。它的四个调用者（点出口砖 0x6dbea0、
 # 入口物件 0x6aeaa0 / 0x6b0500、任务 0x7314c0）都在各自的判定通过之后才调它；目的地不是关卡号而是砖的对端房间（同一幕已生成的地图里），换不成别的幕。

@@ -33,6 +33,12 @@
 import sys, os, re, struct, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 import nsoimg
+import importlib
+
+# Each optional slice supplies independent word templates; A3 is shared.
+_pc_verifiers = [importlib.import_module(name)
+                 for name in ('pc_input_struct', 'pc_items_struct')
+                 if os.path.isfile(os.path.join(os.path.dirname(__file__), name + '.py'))]
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # 工作区根目录（游戏文件、产物、运行现场都在它下面） | Workspace root (game files, build outputs and run artifacts are all under it)
 
 LLVM = os.environ.get('LLVM_BIN', '/opt/homebrew/opt/llvm@23/bin')
@@ -130,6 +136,11 @@ _hreg = {}
 for l in open(os.path.join(os.path.dirname(__file__), '..', 'host', 'hle.h'), encoding='utf-8'):
     m = re.match(r'//\s+(0x[0-9a-fA-F]+)\s.*?\s(0x[0-9a-fA-F]+)（([^）]*)', l)
     if m: _hreg[int(m[1], 16)] = (int(m[2], 16), m[3])
+# New slice rows are English; direct calls retain the existing BL-form checks.
+for verifier in _pc_verifiers:
+    for roff, (number, target) in getattr(verifier, 'CALLS', {}).items():
+        if number in _reg:
+            _hreg[number] = (roff, f'bl {target:#x} call site')
 def _bl(w, o): return o + 4 * (((w & 0x3FFFFFF) ^ 0x2000000) - 0x2000000) if w & 0xFC000000 == 0x94000000 else None
 for a, n in _hostcall.items():
     if n not in _hreg: bad(f'宿主调用 svc #{n:#x}：hle.h 登记表没有对应行'); continue
@@ -331,6 +342,15 @@ for n, (roff, form) in _hreg.items():
         bad(f'分支门 svc #{n:#x} {roff:#x}：块不符模板'); continue
     if gates.get(ks[0] + 12) != ('svc', n, roff): bad(f'分支门 svc #{n:#x} gates.tsv 行不符：{gates.get(ks[0] + 12)}')
     seen.add(ks[0] + 12); nbranch += 1
+pc_seen = set()
+for verifier in _pc_verifiers:
+    try:
+        pc_seen.update(verifier.verify(mod, orig, pat, h, gates, cuts))
+    except ValueError as error:
+        bad(str(error))
+# Ordinary SVC rows were already counted; shared A3 contributes one return PC.
+pc_extra = pc_seen - seen
+seen.update(pc_seen)
 if set(gates) != seen: bad(f'gates.tsv 有多余行 {len(set(gates) - seen)}')
 
 # ⑥ 线程槽
@@ -351,7 +371,7 @@ expected = {}
 for kind in sites.values():
     key = {'x18': 'K18', 'W': 'K18', 'tpidr_r': 'KTLS', 'tpidr_w': 'KTLS', 'tpidrro_r': 'KTLR'}.get(kind)
     if key: expected[key] = expected.get(key, 0) + 1
-expected['KGATE'] = len(gsites) + len(obs) + nbranch
+expected['KGATE'] = len(gsites) + len(obs) + nbranch + len(pc_extra)
 for _, _, _, key in params: expected[key] = expected.get(key, 0) + 1
 if any(nk.get(k, 0) != v for k, v in expected.items()) or any(k not in expected and v for k, v in nk.items()):
     bad(f'键页槽访问计数不符：期望 {expected} 实际 {nk}')

@@ -1,5 +1,7 @@
 # dm/host: host file index
 
+Optional [Mac PC input profile](../../docs/mac-pc-input.md): integration prerequisites and focused tests.
+
 中文: [README.zh-CN.md](README.zh-CN.md)
 
 The host does two things: it loads the rewritten game program and provides the platform services that program calls. The features added on top of the original game, and the touch adaptation, live in this directory too. For how it all works see [dm/README.md](../README.md).

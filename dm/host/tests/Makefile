@@ -152,16 +152,16 @@ $(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c | $(B)
 $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h ../dm_i18n.c ../dm_i18n_tab.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c ../dm_i18n.c
 
-$(B)/t_hid_script: t_hid_script.c t_touch_tick_stub.c ../hle_hid.c ../dm_cursor.c ../dm_hud.c ../dm_hud.h ../touch_mac.c ../../ios/Sources/dm_touch_controls.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B) ../dm_prof.c
-	clang -O1 -Wno-unused-function -I.. -I../../ios/Sources -o $@ t_hid_script.c t_touch_tick_stub.c ../dm_cursor.c ../dm_hud.c ../touch_mac.c ../../ios/Sources/dm_touch_controls.c -lm ../dm_prof.c
+$(B)/t_hid_script: t_hid_script.c t_touch_tick_stub.c ../hle_hid.c ../dm_cursor.c ../dm_hud.c ../dm_hud.h ../touch_mac.c ../../ios/Sources/dm_touch_controls.c ../hle.h ../dm.h ../dm_input.h ../front.h ../dm_cursor.h ../touch_mac.h ../dm_world.h | $(B) ../dm_prof.c
+	clang -DDM_PC_ITEMS_CONNECTED=0 -O1 -Wno-unused-function -I.. -I../../ios/Sources -o $@ t_hid_script.c t_touch_tick_stub.c ../dm_cursor.c ../dm_hud.c ../touch_mac.c ../../ios/Sources/dm_touch_controls.c -lm ../dm_prof.c
 
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_oe.c
 
-$(B)/t_hid_receipt: t_hid_receipt.c t_touch_tick_stub.c ../hle_hid.c ../dm_cursor.c ../dm_hud.c ../dm_hud.h ../touch_mac.c ../../ios/Sources/dm_touch_controls.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B) ../dm_prof.c
-	clang -O1 -Wno-unused-function -I.. -I../../ios/Sources -o $@ t_hid_receipt.c t_touch_tick_stub.c ../dm_cursor.c ../dm_hud.c ../touch_mac.c ../../ios/Sources/dm_touch_controls.c -lm ../dm_prof.c
-$(B)/t_touch_mac: t_touch_mac.c ../touch_mac.c ../dm_cursor.c ../dm_hud.c ../dm_hud.h ../../ios/Sources/dm_touch_controls.c ../../ios/Sources/dm_touch_controls.h ../../host/dm_input.h | $(B)   # 测试 #include 了 touch_mac.c 与 dm_touch_controls.c，须列为依赖（漏列致改源不重编） ../dm_prof.c | The tests #include touch_mac.c and dm_touch_controls.c, so they must be listed as dependencies (missing them means editing the source does not trigger a rebuild) ../dm_prof.c
-	clang -std=c11 -Wall -Wextra -Werror -I.. -I../../ios/Sources -o $@ t_touch_mac.c ../dm_cursor.c ../dm_hud.c -lm ../dm_prof.c
+$(B)/t_hid_receipt: t_hid_receipt.c t_touch_tick_stub.c ../hle_hid.c ../dm_cursor.c ../dm_hud.c ../dm_hud.h ../touch_mac.c ../../ios/Sources/dm_touch_controls.c ../hle.h ../dm.h ../dm_input.h ../front.h ../dm_cursor.h ../touch_mac.h ../dm_world.h | $(B) ../dm_prof.c
+	clang -DDM_PC_ITEMS_CONNECTED=0 -O1 -Wno-unused-function -I.. -I../../ios/Sources -o $@ t_hid_receipt.c t_touch_tick_stub.c ../dm_cursor.c ../dm_hud.c ../touch_mac.c ../../ios/Sources/dm_touch_controls.c -lm ../dm_prof.c
+$(B)/t_touch_mac: t_touch_mac.c ../touch_mac.c ../dm_cursor.c ../dm_hud.c ../dm_hud.h ../../ios/Sources/dm_touch_controls.c ../../ios/Sources/dm_touch_controls.h ../../host/dm_input.h ../dm_cursor.h ../touch_mac.h ../dm_world.h | $(B)   # 测试 #include 了 touch_mac.c 与 dm_touch_controls.c，须列为依赖（漏列致改源不重编） ../dm_prof.c | The tests #include touch_mac.c and dm_touch_controls.c, so they must be listed as dependencies (missing them means editing the source does not trigger a rebuild) ../dm_prof.c
+	clang -DDM_PC_ITEMS_CONNECTED=0 -std=c11 -Wall -Wextra -Werror -I.. -I../../ios/Sources -o $@ t_touch_mac.c ../dm_cursor.c ../dm_hud.c -lm ../dm_prof.c
 $(B)/t_target_rank: t_target_rank.c ../hle_target.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_target_rank.c ../hle_target.c
 $(B)/t_rift_clock: t_rift_clock.c ../dm_rift.c ../dm_rift.h ../hle_os.c ../hle.h ../dm.h | $(B)
@@ -186,3 +186,87 @@ $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+
+# Synthetic binding labels and AppKit formats; no RomFS or application launch.
+.PHONY: controls-i18n-mac
+controls-i18n-mac: $(B)/t_controls_i18n_mac
+	$(B)/t_controls_i18n_mac
+
+$(B)/t_controls_i18n_mac: t_controls_i18n_mac.m ../dm_controls_mac.m ../dm_controls_mac.h ../dm_i18n.c ../dm_i18n.h ../dm_i18n_tab.h | $(B)
+	clang -fobjc-arc -fblocks -Wall -Werror -Wno-unused-function -I.. -framework Cocoa -framework Carbon -o $@ t_controls_i18n_mac.m ../dm_controls_mac.m ../dm_i18n.c
+
+# Input-only PR87 regression suite. Original executable stays in ignored build/.
+PC_INPUT_TESTS = t_pc_mouse t_pc_escape t_pc_frontend t_pc_inventory t_pc_keys t_pc_layout t_pc_options_focus t_pc_options_rows t_pc_settings_tabs t_pc_skill_binding t_pc_skill_widgets t_pc_tabbar t_pc_tabbar_mouse t_pc_ui_hover t_pc_uiscreen t_pc_binding_held t_pc_controls_transition t_ui_pointer_queue
+.PHONY: pc-input
+pc-input: export DM_TEST_MAIN = $(abspath $(B))/main.orig.bin
+pc-input: export DM_TEST_BUILD = $(abspath $(B))
+pc-input: $(EXEFS)/main $(B)/main.orig.bin $(addprefix $(B)/,$(PC_INPUT_TESTS)) $(B)/t_controls_front $(B)/t_controls_mac $(B)/t_touch_mac controls-i18n-mac t_pc_items_boundary.py test_pc_input_hooks.py t_pc_quickcast_original.py ../../ios/tests/test_pc_input_overlay.py
+	@set -e; for test in $(PC_INPUT_TESTS); do if [ "$$test" = t_pc_keys ]; then $(B)/$$test $(B)/main.orig.bin; else $(B)/$$test; fi; done
+	@set -e; dir=$$(mktemp -d "$(abspath $(B))/pc-input.XXXXXX"); trap 'rm -r "$$dir"' EXIT; $(B)/t_controls_front "$$dir/front"; for mode in write read resurrected legacy olddefault oldcustom oldcustom-read oldcustom-reset pc34default pc34custom pc34invalid mouse-write mouse-read; do case $$mode in read) data=write;; oldcustom-read|oldcustom-reset) data=oldcustom;; mouse-read) data=mouse-write;; *) data=$$mode;; esac; $(B)/t_controls_mac $$mode "$$dir/$$data"; done
+	$(B)/t_touch_mac
+	$(PY) t_pc_items_boundary.py
+	$(PY) test_pc_input_hooks.py --nso "$(EXEFS)/main"
+	$(PY) ../../ios/tests/test_pc_input_overlay.py
+	$(PY) ../../ios/tests/test_mac_framework_boundary.py
+	$(B)/t_pc_mouse > $(B)/pc-input-mouse.log
+	$(PY) t_pc_quickcast_original.py --original $(B)/main.orig.bin --host-log $(B)/pc-input-mouse.log
+
+$(B)/t_pc_escape: t_pc_escape.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_escape.c
+
+$(B)/t_pc_frontend: t_pc_frontend.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_frontend.c
+
+$(B)/t_pc_inventory: t_pc_inventory.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_inventory.c
+
+$(B)/t_pc_keys: t_pc_keys.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_keys.c
+
+$(B)/t_pc_layout: t_pc_layout.c ../dm_padmode.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_layout.c
+
+$(B)/t_pc_options_focus: t_pc_options_focus.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_options_focus.c
+
+$(B)/t_pc_options_rows: t_pc_options_rows.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_options_rows.c
+
+$(B)/t_pc_settings_tabs: t_pc_settings_tabs.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_settings_tabs.c
+
+$(B)/t_pc_skill_binding: t_pc_skill_binding.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_skill_binding.c
+
+$(B)/t_pc_skill_widgets: t_pc_skill_widgets.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_skill_widgets.c
+
+$(B)/t_pc_tabbar: t_pc_tabbar.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_tabbar.c
+
+$(B)/t_pc_tabbar_mouse: t_pc_tabbar_mouse.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_tabbar_mouse.c
+
+$(B)/t_pc_ui_hover: t_pc_ui_hover.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_ui_hover.c
+
+$(B)/t_pc_uiscreen: t_pc_uiscreen.c ../dm_uiscreen.c ../dm_uiscreen.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_uiscreen.c
+
+$(B)/t_pc_binding_held: t_pc_binding_held.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_binding_held.c
+
+$(B)/t_pc_controls_transition: t_pc_controls_transition.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_controls_transition.c
+
+$(B)/t_ui_pointer_queue: t_ui_pointer_queue.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_ui_pointer_queue.c
+
+$(B)/t_controls_front: t_controls_front.m ../front_mac.m ../dm_controls_mac.m ../dm_controls_mac.h ../dm_i18n.c ../dm_i18n_tab.h ../touch_mac.h | $(B)
+	clang -O1 -fobjc-arc -Wall -Werror -Wno-unused-function -Wno-deprecated-declarations -I.. -Wl,-undefined,dynamic_lookup -o $@ t_controls_front.m ../dm_controls_mac.m ../dm_i18n.c -framework Cocoa -framework Carbon -framework QuartzCore -framework Metal -framework ImageIO
+
+$(B)/t_controls_mac: t_controls_mac.m ../dm_controls_mac.m ../dm_controls_mac.h ../dm_i18n.c ../dm_i18n_tab.h | $(B)
+	clang -O1 -fobjc-arc -Wall -Werror -Wno-unused-function -I.. -o $@ t_controls_mac.m ../dm_controls_mac.m ../dm_i18n.c -framework Cocoa -framework Carbon
+
+$(B)/t_pc_mouse: t_pc_mouse.c ../dm_world.c ../dm_world.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_pc_mouse.c

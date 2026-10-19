@@ -76,6 +76,23 @@ uint64_t dm_audio_render_calls(void);   // 声卡回调累计次数（静音接�
 //   0x8c   秘境里存档的当前幕（人在秘境图里把 w9 换成 4 = 第五幕，写 x9；x8 恒 0） dm_rift.c      0x6fa9d0（分支门：x8≠0 跳 0x6fa9d4，否则执行原指令回 0x6fa9d4）
 //   0x8d   佣兵加装备位（佣兵 + 秘境 ≥10 层 + 腰带 / 鞋 / 手套 / 戒指 / 项链时把 w0 换成 1，写 x0；x8 恒 0） dm_rift.c      0x64a34c（分支门：x8≠0 跳 0x64a350，否则执行原指令回 0x64a350）
 //   0x8e   佣兵加装备位的客户端校验（秘境 ≥10 层 + 物品是腰带 / 鞋 / 手套 / 戒指 / 项链时把 w1 换成物品自己的类型号，写 x1；x8 恒 0） dm_rift.c      0x3beb58（分支门：x8≠0 跳 0x3beb5c，否则执行原指令回 0x3beb5c）
+//   0x8f   Original PC belt keyboard labels; call 0x38f578, native 0x36c030 / legacy 0x36fe60.
+//   0x90   Original PC SkillSelect shortcut labels; call 0x3e3c48, native string sret x8.
+//   0x91   PC QuickCast option-row visibility; call 0xbb6f2c, original setter and option value preserved.
+//   0x92   Exact PC hover target; branch 0xb0d150 -> 0xb0d168, legacy instruction -> 0xb0d154.
+//   0x93   PC TabBar controller indicators off before child creation; 0xad8a54, x8 stays zero.
+//   0x94   PC corpse label without duplicate controller label; branch 0x456c5c -> 0x456d50.
+//   0x95   Controls tab visibility only for a ready PC game profile; call 0xaecca4.
+//   0x96   Independent PC inventory toggle after native cleanup; branch 0x368d64 -> 0x368e10.
+//   0x97   PC rows after common filtering and before native focus; branch 0xae950c, x8 stays zero.
+//   0x98   Register native PC option descriptors before Gameplay initialization; call 0xbb59b4.
+//   0xa5   PC SkillSelectButton click; 0x3e4760, native open/select and original return/registers.
+//   0xa6   PC HUD skill selection; 0x3e2f6c -> 0x3e2f80 on success, original MOV and calls otherwise.
+//   0xa7   Learned PC skill candidates; 0xc065a4 -> 0xc066b0 on skip, original load otherwise.
+//   0xa8   Explicit PC skill candidates; 0xc068f4/0xc06908/0xc0691c, original calls and LR otherwise.
+//   0x9c   Close PC pause panel through native ID9; branch 0xae5324, legacy UISwitcher preserved.
+//   0xa3   Physical PC skill-grid hover; shared with the optional item module at 0xabcca4.
+//   0xa4   PC CharacterCreate validates and copies InputText through native TryCreateCharacter; call 0xc26e0c.
 // ---------- Host call number registry (a cut replaces a game-internal function entry with `svc #number; ret`, and the rewriter turns it into a host gate) ----------
 // Horizon's SVC numbers only go up to 0x7F; 0x80 onward is reserved for host calls. New ones must be registered here and numbers must not repeat; dispatch is in hle_svc.c → svc_host_call.
 //   No.    Purpose                                      File            Cut (main offset)
@@ -94,4 +111,4 @@ uint64_t dm_audio_render_calls(void);   // 声卡回调累计次数（静音接�
 //   0x8c   Current act saved while in a rift (when the character is in a rift map w9 is replaced with 4 = Act V, writes x9; x8 always 0) dm_rift.c      0x6fa9d0 (branch gate: x8≠0 jumps to 0x6fa9d4, otherwise executes the original instruction and returns to 0x6fa9d4)
 //   0x8d   Extra mercenary equipment slots (mercenary + rift level ≥10 + belt / boots / gloves / ring / amulet: w0 is replaced with 1, writes x0; x8 always 0) dm_rift.c      0x64a34c (branch gate: x8≠0 jumps to 0x64a350, otherwise executes the original instruction and returns to 0x64a350)
 //   0x8e   Client-side check for the extra mercenary equipment slots (rift level ≥10 + the item is a belt / boots / gloves / ring / amulet: w1 is replaced with the item's own type number, writes x1; x8 always 0) dm_rift.c      0x3beb58 (branch gate: x8≠0 jumps to 0x3beb5c, otherwise executes the original instruction and returns to 0x3beb5c)
-enum { SVC_HOST_TACT_ZLIB = 0x80, SVC_HOST_C2S_DELIVER = 0x81, SVC_HOST_C2S_SYS = 0x82, SVC_HOST_GRANNY_A = 0x83, SVC_HOST_GRANNY_B = 0x84, SVC_HOST_PRIVATE_SKILL_RENDER = 0x85, SVC_HOST_PRIVATE_SKILL_AIM = 0x86, SVC_HOST_GROUND_ASSET = 0x87, SVC_HOST_DROP_SOUND = 0x88, SVC_HOST_RIFT_EXIT = 0x89, SVC_HOST_JOIN_SPAWN = 0x8a, SVC_HOST_JOIN_CORPSE = 0x8b, SVC_HOST_SAVE_ACT = 0x8c, SVC_HOST_MERC_SLOT = 0x8d, SVC_HOST_MERC_SLOT_CL = 0x8e };   // 0x87：地上物品取模型路径（dm_dropfilter.c 掉落光）   // 0x83/0x84：Granny 逐块解码调用点（hle_granny.c） | 0x87: fetch the model path for ground items (dm_dropfilter.c drop light)   // 0x83/0x84: Granny per-block decode call sites (hle_granny.c)
+enum { SVC_HOST_TACT_ZLIB = 0x80, SVC_HOST_C2S_DELIVER = 0x81, SVC_HOST_C2S_SYS = 0x82, SVC_HOST_GRANNY_A = 0x83, SVC_HOST_GRANNY_B = 0x84, SVC_HOST_PRIVATE_SKILL_RENDER = 0x85, SVC_HOST_PRIVATE_SKILL_AIM = 0x86, SVC_HOST_GROUND_ASSET = 0x87, SVC_HOST_DROP_SOUND = 0x88, SVC_HOST_RIFT_EXIT = 0x89, SVC_HOST_JOIN_SPAWN = 0x8a, SVC_HOST_JOIN_CORPSE = 0x8b, SVC_HOST_SAVE_ACT = 0x8c, SVC_HOST_MERC_SLOT = 0x8d, SVC_HOST_MERC_SLOT_CL = 0x8e, SVC_HOST_PC_BELT_LABEL = 0x8f, SVC_HOST_PC_SKILL_LABEL = 0x90, SVC_HOST_PC_QUICKCAST_ROW = 0x91, SVC_HOST_PC_HOVER_ONLY = 0x92, SVC_HOST_PC_TABBAR_INIT = 0x93, SVC_HOST_PC_CORPSE_LABEL = 0x94, SVC_HOST_PC_CONTROLS_TAB = 0x95, SVC_HOST_PC_INVENTORY = 0x96, SVC_HOST_PC_OPTIONS_ROWS = 0x97, SVC_HOST_PC_OPTIONS_INIT = 0x98, SVC_HOST_PC_PAUSE_CLOSE = 0x9c, SVC_HOST_PC_GRID_HOVER = 0xa3, SVC_HOST_PC_CREATE_COMMIT = 0xa4, SVC_HOST_PC_SKILL_CLICK = 0xa5, SVC_HOST_PC_SKILL_HUD = 0xa6, SVC_HOST_PC_SKILL_CANDIDATE = 0xa7, SVC_HOST_PC_SKILL_COMMON = 0xa8 };   // 0x87：地上物品取模型路径（dm_dropfilter.c 掉落光）   // 0x83/0x84：Granny 逐块解码调用点（hle_granny.c） | 0x87: fetch the model path for ground items (dm_dropfilter.c drop light)   // 0x83/0x84: Granny per-block decode call sites (hle_granny.c)

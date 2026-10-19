@@ -55,6 +55,16 @@ if [ "${DM_MAC_OVERLAY:-}" != none ]; then
   else DM_OVERLAY_MAC=1 python3 "$DM/ios/tools/gen_romfs_overlay.py" "${DM_ROMFS_SRC:-$ROOT/data/switch/3.3.94012/Update/RomFS}" "$OVD" > /dev/null || { echo "🔴 界面覆盖层生成失败"; exit 2; }; fi
   [ -z "$LINK" ] || [ ! -d "${OVD}_variants" ] || echo "romfs_overlay_variants=${OVD}_variants" >> "$RES/paths.txt"
 fi
+# Generated cursor images remain private game-derived resources.
+if [ "${DM_OVERLAY_PC:-}" = 1 ]; then
+  CURSORS="$RES/cursors"
+  if [ -n "$LINK" ]; then
+    CURSORS="$OUT/cursors.local"
+    [ ! -e "$CURSORS" ] || { echo "Cursor output already exists: $CURSORS"; exit 2; }
+    echo "cursors=$CURSORS" >> "$RES/paths.txt"
+  fi
+  python3 "$DM/ios/tools/gen_mac_cursors.py" "${DM_ROMFS_SRC:-$ROOT/data/switch/3.3.94012/Update/RomFS}" "$CURSORS"
+fi
 [ -s "$RES/paths.txt" ] || rm -f "$RES/paths.txt"
 VER=${DM_MAC_VERSION:-1.0}; BUILD=${DM_MAC_BUILD:-$(date +%m%d%H%M)}
 echo "版本 ${VER} 构建 ${BUILD} 产物 $(basename "$P") 提交 $(git -C "$DM" rev-parse --short HEAD 2>/dev/null || echo 未知)" > "$RES/build.txt"

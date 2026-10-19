@@ -3,11 +3,13 @@
 #include "dm_cursor.h"
 #include "dm_actions.h"
 #include "dm_hud.h"
+#include "dm_world.h"
 #include "../ios/Sources/dm_touch_controls.h"
 #include "dm_uiscreen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 uint64_t now_ns(void);
 // 手势层的坐标是「界面矩形里的归一化」（同 iOS 的游戏视图）；点世界 / 点地走要的是「整屏归一化」。16:9 时两者一样；
@@ -33,17 +35,19 @@ enum { START_BEATS = 60, LATE_LIMIT_BEATS = 125, LATE_LIMIT_FAST_BEATS = 2000, T
 
 static struct {
     int ready, enabled, prefix, started, based, drop, next, count, loaded, tick_set, late_reported, sample_set;
+    int pc_pointer_live;
     int ui_drag_on;   // 这根手指的界面连续手势已交给宿主（dm_ui_drag_*） | this finger's continuous UI gesture has been handed to the host (dm_ui_drag_*)
     uint32_t to_game_tick, start_tick, sample_tick;
     uint64_t pulse_end_beat, pulse_epoch, pulse_resume_beat, pulse_hold_beat; int pulse_hold_left;
     uint64_t beat;
     touch_event event[256];
     dm_tc_state state;
+    uint64_t pc_context_previous, pc_context_active, pc_binding_previous, pc_binding_blocked;
 } g_touch;
 
 int dm_touch_host_world_active(void) {
     int dm_uiscreen_ingame(void);
-    return !g_live_on || (dm_uiscreen_ingame() && !g_touch.state.navigation_mode && !dm_game_paused());
+    return !g_live_on || (dm_uiscreen_ingame() && (dm_ui_pc_desktop() ? dm_ui_pc_world_active() : !g_touch.state.navigation_mode) && !dm_game_paused());
 }
 
 // ---- 真鼠标（Mac App，front_mac.m）：事件来自前端而不是脚本表。界面沿用触屏状态机，世界点击在按下时直接点选。界面用原版手柄 HUD，屏上没有触屏圆钮与摇杆：
@@ -53,26 +57,126 @@ int dm_touch_host_world_active(void) {
 // outside panels no button targets are enabled and the lower-left corner does not start a stick (click a target to walk over and interact, click empty ground to walk there); inside panels it works as before (widgets, tabs, item cells).
 // Front-end pages (main menu / character select / character creation, not in game) bypass the state machine and touches are UI clicks directly (same as frontendMode on the iOS front end).
 #include <stdatomic.h>
+#include <pthread.h>
 static uint32_t g_live_tick0; static int g_live_based; static uint64_t g_live_btn; static uint32_t g_live_btn_until;
-static struct { _Atomic unsigned head, tail; struct { int op; float nx, ny; } q[64]; } g_live;
-// 悬停只留最新位置，不占点击队列；位 63 = 待处理，位 62 = 已离开画面。游戏线程才读界面树。
-// Coalesce hover positions outside the click queue; bit 63 = pending, bit 62 = outside the picture. Only the game thread reads UI widgets.
+typedef struct {int op;float nx,ny;int pc_button,pc_side,pc_mods,pc_precise;} live_mouse_event;
+static struct {_Atomic unsigned head,tail;live_mouse_event q[64];} g_live;
+static live_mouse_event *g_live_extra;static unsigned g_live_capacity=64;static int g_live_reading,g_live_cancel;
+static pthread_mutex_t g_live_lock=PTHREAD_MUTEX_INITIALIZER;
+// PR95: non-PC hover coalesces outside the click FIFO; bit63=pending, bit62=outside.
 static _Atomic uint64_t g_live_hover;
+static void live_mouse_enqueue(live_mouse_event event) {
+    pthread_mutex_lock(&g_live_lock);
+    unsigned h=atomic_load(&g_live.head),t=atomic_load(&g_live.tail),count=t-h;live_mouse_event *q=g_live_extra?g_live_extra:g_live.q;
+    if(g_live_cancel){pthread_mutex_unlock(&g_live_lock);return;}
+    if(event.op%3==1&&count&&(!g_live_reading||count>1)){
+        live_mouse_event *last=&q[(t-1)%g_live_capacity];
+        if(last->op==event.op&&last->pc_button==event.pc_button&&last->pc_side==event.pc_side&&last->pc_mods==event.pc_mods&&last->pc_precise==event.pc_precise){*last=event;pthread_mutex_unlock(&g_live_lock);return;}
+    }
+    if(count==g_live_capacity){
+        unsigned capacity=g_live_capacity<=UINT32_MAX/2?g_live_capacity*2:0;
+        size_t bytes;live_mouse_event *more=capacity&&!__builtin_mul_overflow((size_t)capacity,sizeof(live_mouse_event),&bytes)?malloc(bytes):NULL;
+        if(!more){g_live_cancel=1;pthread_mutex_unlock(&g_live_lock);return;}
+        for(unsigned i=0;i<count;i++)more[(h+i)%capacity]=q[(h+i)%g_live_capacity];
+        free(g_live_extra);g_live_extra=more;g_live_capacity=capacity;q=more;
+    }
+    q[t%g_live_capacity]=event;atomic_store(&g_live.tail,t+1);pthread_mutex_unlock(&g_live_lock);
+}
+static int live_mouse_peek(live_mouse_event *event,unsigned *head) {
+    pthread_mutex_lock(&g_live_lock);*head=atomic_load(&g_live.head);int pending=*head!=atomic_load(&g_live.tail);
+    if(pending){*event=(g_live_extra?g_live_extra:g_live.q)[*head%g_live_capacity];g_live_reading=1;}
+    else if(g_live_cancel){*event=(live_mouse_event){.op=6};g_live_cancel=0;g_live_reading=2;pending=1;}
+    pthread_mutex_unlock(&g_live_lock);return pending;
+}
+static void live_mouse_consume(unsigned head) {
+    pthread_mutex_lock(&g_live_lock);if(g_live_reading==1)atomic_store(&g_live.head,head+1);g_live_reading=0;
+    if(atomic_load(&g_live.head)==atomic_load(&g_live.tail)){free(g_live_extra);g_live_extra=NULL;g_live_capacity=64;}
+    pthread_mutex_unlock(&g_live_lock);
+}
 // 世界手势从按下到抬起独占；点选答案只用于空地回退，不能让抬起再触发一次。
 // Own a world gesture from down through up; the pick result only supplies the ground fallback, never a second click on release.
 static struct { int owned, down, repeat; uint32_t last; float x, y; unsigned tap_seq; float tap_x, tap_y; } g_lm;
-void dm_touch_host_live(int op, float nx, float ny) {   // 前端线程：op 0 按下 1 拖动 2 抬起 3 悬停；坐标 = 界面归一化，悬停可在画面外 | Front-end thread: op 0 down, 1 drag, 2 up, 3 hover; coordinates = UI-normalized, hover may be outside the picture
-    if (!g_live_on) return;
-    if (op == 3) {
-        uint64_t p = 1ull << 63;
-        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) p |= (uint64_t)(uint32_t)(nx * 65535 + .5f) << 16 | (uint32_t)(ny * 65535 + .5f);
-        else p |= 1ull << 62;
-        atomic_store(&g_live_hover, p); return;
+static struct { uint64_t button; float x, y; int down, samples; } g_rm;
+typedef struct {int kind,down,dirty,side,ui_side;float x,y;uint32_t tick;} pc_mouse_gesture;
+static pc_mouse_gesture g_pc_mouse[32];
+static int pc_mouse_other_down(int button,int side){for(int b=0;b<32;b++)if(b!=button&&g_pc_mouse[b].kind==1&&g_pc_mouse[b].down&&g_pc_mouse[b].side==side)return 1;return 0;}
+static int pc_mouse_event(int op,float nx,float ny,int in,int button,int side,int mods,int precise) {
+    int phase=op%3;if(button<0){button=op>=3;side=button;}
+    if(button>=32)return 1;
+    pc_mouse_gesture *s=&g_pc_mouse[button];
+    if (phase!=2 || precise) {if(nx!=s->x || ny!=s->y)s->dirty=1;s->x=nx;s->y=ny;}
+    if (phase==0) {
+        if(s->kind==3)return 1;
+        if(s->kind==1)dm_world_pc_mouse(s->side,2,0,0);
+        s->kind=0;s->down=0;s->dirty=0;s->side=side;s->ui_side=button<2?button:side;
+        if(s->ui_side==1 && dm_ui_pc_cancel_binding()){s->kind=4;return 1;}
+        if(dm_touch_host_world_active() && dm_ui_pc_world_at(nx,ny)) {
+            if(side<0){s->kind=4;return 1;}
+            s->kind=1;s->down=dm_world_pc_mouse(side,0,nx,ui_y_to_screen(ny));
+            if(s->down==DM_PC_MOUSE_ONESHOT){s->kind=3;s->down=0;}
+            s->tick=touch_cur_tick();return 1;
+        }
+        (void)in;
+        s->kind=s->ui_side>=0?2:4;
     }
-    atomic_store(&g_live_hover, 0);
-    if (!g_live_on) return; unsigned t = atomic_load(&g_live.tail); if (t - atomic_load(&g_live.head) >= 64) return;
-    g_live.q[t % 64].op = op; g_live.q[t % 64].nx = nx; g_live.q[t % 64].ny = ny; atomic_store(&g_live.tail, t + 1);
+    if(s->kind==1) {
+        if(phase==2){if(s->down&&s->dirty&&dm_ui_pc_world_at(s->x,s->y))dm_world_pc_mouse(s->side,1,s->x,ui_y_to_screen(s->y));if(s->down&&!pc_mouse_other_down(button,s->side))dm_world_pc_mouse(s->side,2,0,0);s->kind=s->down=0;}
+        return 1;
+    }
+    if(s->kind==2) {
+        dm_ui_ptr_at_mods(DM_UP_MOVE,s->x,s->y,0,mods);
+        if(phase!=1)dm_ui_ptr_at_mods(s->ui_side?(phase==0?DM_UP_RDOWN:DM_UP_RUP):(phase==0?DM_UP_LDOWN:DM_UP_LUP),s->x,s->y,0,mods);
+        if(phase==2)s->kind=0;
+        return 1;
+    }
+    if(phase==2)s->kind=0;
+    return 1;
 }
+static void pc_mouse_pump(void) {
+    int sampled[2]={0};
+    for(int button=0;button<32;button++) {
+        pc_mouse_gesture *s=&g_pc_mouse[button];int side=s->side;if(s->kind!=1 || !s->down)continue;
+        if(!dm_touch_host_world_active() || !dm_ui_pc_world_at(s->x,s->y)){dm_world_pc_mouse(side,2,0,0);s->down=0;continue;}
+        uint32_t tick=touch_cur_tick();if(sampled[side]){s->tick=tick;s->dirty=0;continue;}sampled[side]=1;if(tick!=s->tick){s->tick=tick;s->dirty=0;if(!dm_world_pc_mouse(side,1,s->x,ui_y_to_screen(s->y)))s->down=0;}
+    }
+}
+
+static pthread_mutex_t g_aim_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct { uint64_t skills; float x, y;int valid; } g_key_aim;
+void dm_touch_host_pointer(float nx,float ny,int valid){pthread_mutex_lock(&g_aim_lock);g_key_aim.x=nx;g_key_aim.y=ny;g_key_aim.valid=valid;pthread_mutex_unlock(&g_aim_lock);}
+int dm_touch_host_world_pointer(float *nx,float *ny) {
+    if(!nx||!ny||!dm_ui_pc_desktop())return 0;
+    pthread_mutex_lock(&g_aim_lock);float x=g_key_aim.x,y=g_key_aim.y;int valid=g_key_aim.valid;pthread_mutex_unlock(&g_aim_lock);
+    if(!valid||!dm_touch_host_world_active()||!dm_ui_pc_world_at(x,y))return 0;
+    float real_y=ui_y_to_screen(y);if(!isfinite(x)||!isfinite(real_y)||x<0||x>1||real_y<0||real_y>1)return 0;
+    *nx=x;*ny=real_y;return 1;
+}
+void dm_touch_host_aim(uint64_t skills, float nx, float ny) {
+    const uint64_t mask = DM_BTN_A | DM_BTN_B | DM_BTN_Y | DM_BTN_X | DM_BTN_R | DM_BTN_ZR;
+    pthread_mutex_lock(&g_aim_lock); g_key_aim.skills = skills & mask;g_key_aim.valid=skills!=0; g_key_aim.x = nx; g_key_aim.y = ny; pthread_mutex_unlock(&g_aim_lock);
+}
+void dm_touch_host_live(int op, float nx, float ny) {   // Left down/drag/up=0/1/2; non-PC hover=3 (PR95). PC right down/drag/up=3/4/5 retain exact event coordinates.
+    if(!g_live_on||op<0||op>5)return;
+    if(op==3&&!dm_ui_pc_desktop()){
+        uint64_t position=1ull<<63;
+        if(nx>=0&&nx<=1&&ny>=0&&ny<=1)position|=(uint64_t)(uint32_t)(nx*65535+.5f)<<16|(uint32_t)(ny*65535+.5f);
+        else position|=1ull<<62;
+        atomic_store(&g_live_hover,position);return;
+    }
+    atomic_store(&g_live_hover,0);
+    live_mouse_enqueue((live_mouse_event){.op=op,.nx=nx,.ny=ny,.pc_button=-1,.pc_side=-1});
+}
+void dm_touch_host_pc_mouse(int button,int phase,float nx,float ny,int side) {
+    if(!g_live_on||button<0||button>=32||phase<0||phase>2||side< -1||side>1)return;
+    atomic_store(&g_live_hover,0);
+    live_mouse_enqueue((live_mouse_event){.op=phase+(button==1?3:0),.nx=nx,.ny=ny,.pc_button=button,.pc_side=side});
+}
+void dm_touch_host_pc_mouse_mods(int button,int phase,float nx,float ny,int side,int modifiers) {
+    if(!g_live_on||button<0||button>=32||phase<0||phase>2||side< -1||side>1)return;
+    atomic_store(&g_live_hover,0);
+    live_mouse_enqueue((live_mouse_event){.op=phase+(button==1?3:0),.nx=nx,.ny=ny,.pc_button=button,.pc_side=side,.pc_mods=modifiers&0x7000,.pc_precise=1});
+}
+
 static void touch_uimsg(const char *cat, const char *act, const char *arg) {
     static dm_tc_scene scene;
     if (!strcmp(cat, "DM") && !strcmp(act, "ReplayDone") && g_touch.prefix)
@@ -171,6 +275,7 @@ static void *live_test_thread(void *arg) {
     char line[160]; double t0 = (double)now_ns() / 1e9; int n = 0;
     while (fgets(line, sizeof line, f)) { double sec; char op[8]; float x = 0, y = 0; if (line[0] == '#' || sscanf(line, "%lf %7s %f,%f", &sec, op, &x, &y) < 2) continue;
         double wait = sec - ((double)now_ns() / 1e9 - t0); if (wait > 0) usleep((useconds_t)(wait * 1e6));
+        if (!strcmp(op, "hover") && dm_ui_pc_desktop()) continue;
         dm_touch_host_live(!strcmp(op, "hover") ? 3 : !strcmp(op, "down") ? 0 : !strcmp(op, "move") ? 1 : 2, x / 2868, y / 1320); n++; }
     fclose(f); fprintf(stderr, "[dm] DM_TEST_LIVE：%d 条发完\n", n); return NULL;
 }
@@ -182,9 +287,9 @@ void dm_touch_host_live_enable(void) {   // 前端开窗后、客体线程起来
         void uimsg_subscribe(void (*fn)(const char *, const char *, const char *)); uimsg_subscribe(touch_uimsg); }
     dm_tc_set_joy_block(&g_touch.state, 1); dm_tc_enable_targets(&g_touch.state, 0);
     g_live_on = 1; dm_pad_hook = dm_touch_host_step; fprintf(stderr, "[dm] 鼠标：接到触屏状态机（点目标 / 点界面；没有触屏圆钮与摇杆）\n");
-    // 测试开关 DM_TEST_LIVE=<文件>（没人操作窗口时验这条路）：每行「秒 down|move|up x,y」，坐标按 2868×1320，秒 = 从这里起的墙钟；到点调上面的 dm_touch_host_live，
+    // 测试开关 DM_TEST_LIVE=<文件>（没人操作窗口时验这条路）：每行「秒 down|move|up|hover x,y」，坐标按 2868×1320，秒 = 从这里起的墙钟；到点调上面的 dm_touch_host_live，
     // 与真鼠标只差「系统鼠标事件 → 归一化坐标」那三行
-    // Test switch DM_TEST_LIVE=<file> (to verify this path when nobody operates the window): each line is "seconds down|move|up x,y", coordinates on a 2868×1320 basis, seconds = wall clock from here; at that time the dm_touch_host_live above is called,
+    // Test switch DM_TEST_LIVE=<file> (to verify this path when nobody operates the window): each line is "seconds down|move|up|hover x,y" (hover is non-PC only), coordinates on a 2868×1320 basis, seconds = wall clock from here; at that time the dm_touch_host_live above is called,
     // differing from a real mouse only by the three lines "system mouse event -> normalized coordinates"
     if (getenv("DM_TEST_LIVE")) { pthread_t th; pthread_create(&th, NULL, live_test_thread, strdup(getenv("DM_TEST_LIVE"))); pthread_detach(th); }
 }
@@ -199,8 +304,23 @@ void dm_touch_host_game_start(uint64_t now) {
 
 void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     if (!g_touch.ready) touch_init(now);
-    if (g_live_on) {   // Mac 键盘的回车与 Esc（front_mac.m 用两个游戏不认的高位送来）：按下那一刻按当前页定成哪个手柄键，按住期间不变 | Return and Esc on a Mac keyboard (sent by front_mac.m as two high bits the game does not recognise): decided as a gamepad key by the current page at the moment of pressing, unchanged while held
-        static uint64_t ent, esc; int dm_padmode_legend_has(uint32_t glyph), dm_game_paused(void), dm_uiscreen_ingame(void); uint64_t kb = *buttons; *buttons &= ~((1ull << 40) | (1ull << 41));
+    const uint64_t binding_keys=DM_BTN_A|DM_BTN_B|DM_BTN_Y|DM_BTN_X|DM_BTN_R|DM_BTN_ZR;
+    int cancel_binding=0;
+    if(g_live_on&&dm_ui_pc_desktop())*buttons&=~((3ull<<40)|(15ull<<42)|DM_MAC_NAV_MASK|DM_MAC_POTION_MASK|DM_MAC_ZOOM);
+    if (g_live_on && !dm_ui_pc_desktop()) {   // Mac 键盘的回车与 Esc（front_mac.m 用两个游戏不认的高位送来）：按下那一刻按当前页定成哪个手柄键，按住期间不变 | Return and Esc on a Mac keyboard (sent by front_mac.m as two high bits the game does not recognise): decided as a gamepad key by the current page at the moment of pressing, unchanged while held
+        static uint64_t ent, esc; static int esc_cancel; int dm_padmode_legend_has(uint32_t glyph), dm_game_paused(void), dm_uiscreen_ingame(void); uint64_t kb = *buttons; *buttons &= ~((1ull << 40) | (1ull << 41) | DM_MAC_ZOOM);
+        uint64_t context = kb & (DM_MAC_NAV_MASK|DM_MAC_POTION_MASK), down = context & ~g_touch.pc_context_previous;
+        int world = dm_touch_host_world_active();
+        uint64_t allowed = world ? DM_MAC_POTION_MASK : DM_MAC_NAV_MASK;
+        g_touch.pc_context_active = ((g_touch.pc_context_active & context) | (down & allowed)) & allowed;
+        g_touch.pc_context_previous = context;
+        *buttons &= ~(DM_MAC_NAV_MASK|DM_MAC_POTION_MASK);
+        const uint64_t directions[] = {DM_BTN_LEFT,DM_BTN_UP,DM_BTN_RIGHT,DM_BTN_DOWN};
+        const uint64_t potions[] = {DM_BTN_LEFT,DM_BTN_UP,DM_BTN_DOWN,DM_BTN_RIGHT};
+        for (int i=0;i<4;i++) {
+            if (g_touch.pc_context_active & (DM_MAC_NAV_LEFT<<i)) *buttons |= directions[i];
+            if (!dm_ui_pc_desktop() && (g_touch.pc_context_active & (DM_MAC_POTION_1<<i))) *buttons |= potions[i];
+        }
         // 回车：缺省 = 确认（A）——提示条写的是手柄字母，拿键盘的人按回车是想确认；当前页的提示条里有「＋」这一条时 = ＋（起名页的「创建」等；主菜单除外，见 dm_padmode_legend_has）
         // 起名页另有一条：名字还没填时回车 = 输入名称（A），填过之后才是接受（＋）——「回车弹框 → 打字 → 回车 → 回车创建」
         // Return: default = confirm (A) - the hint bar shows gamepad letters, and someone with a keyboard presses Return to confirm; when the current page's hint bar has a "+" entry = + ("Create" on the naming page and so on; except the main menu, see dm_padmode_legend_has)
@@ -208,25 +328,62 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
         if (!(kb & (1ull << 40))) ent = 0; else if (!ent) { int dm_ui_fe_name_wants_input(void); ent = !dm_ui_fe_name_wants_input() && dm_padmode_legend_has(0xe005) ? DM_BTN_PLUS : DM_BTN_A; }
         // Esc：返回（B）；局内没有面板开着、游戏也没停着时 = 开功能页（＋）——那时 B 是一格技能
         // Esc: back (B); with no panel open in game and the game not stopped = open the function page (+) - B is a skill slot then
-        if (!(kb & (1ull << 41))) esc = 0; else if (!esc) esc = dm_uiscreen_ingame() && !g_touch.state.navigation_mode && !dm_game_paused() ? DM_BTN_PLUS : DM_BTN_B;
-        *buttons |= ent | esc; }
+        if (!(kb & (1ull << 41))) { esc=0; esc_cancel=0; } else if (!esc) { if (dm_ui_pc_cancel_binding()) { esc=1ull<<63; esc_cancel=1; } else if (dm_touch_host_world_active()) { esc = 1ull << 63; dm_ui_pc_panel(DM_PC_OPTIONS); } else esc = DM_BTN_B; }
+        *buttons |= ent | (esc & ~(1ull << 63));
+        if (esc_cancel) { cancel_binding=1; *buttons &= ~binding_keys; }
+        static uint64_t previous_pc; static int quest_nav; uint64_t pc = kb & (15ull << 42), pressed = pc & ~previous_pc; previous_pc = pc;
+        *buttons &= ~(15ull << 42);
+        if (!(pc & (1ull << 45))) quest_nav = 0;
+        if (pressed & (1ull << 45)) quest_nav = !dm_ui_pc_desktop() && !dm_touch_host_world_active();
+        if ((pc & (1ull << 45)) && quest_nav) *buttons |= DM_BTN_L;
+        if (dm_uiscreen_ingame()) {
+            if (pressed & (1ull << 42)) dm_ui_pc_panel(DM_PC_INVENTORY);
+            if (pressed & (1ull << 43)) dm_ui_pc_panel(DM_PC_CHARACTER);
+            if (pressed & (1ull << 44)) dm_ui_pc_panel(DM_PC_SKILLS);
+            if ((pressed & (1ull << 45)) && !quest_nav) dm_ui_pc_panel(DM_PC_QUESTS);
+        }
+    }
     if (g_live_on) {   // 真鼠标：前端页直通界面点击；局内并进事件表（拍 = 此刻），与脚本事件同一段处理 | Real mouse: on front-end pages it goes straight to a UI click; in game it joins the event table (tick = now) and is handled in the same pass as script events
         int dm_uiscreen_ingame(void); int in = dm_uiscreen_ingame(); static float px, py; unsigned h;
         if (in && !g_live_based) { g_live_based = 1; g_live_tick0 = touch_cur_tick(); if (!g_touch.based) { g_touch.started = 1; g_touch.based = 1; g_touch.loaded = 1; g_touch.tick_set = 1; g_touch.start_tick = g_live_tick0; g_touch.to_game_tick = g_live_tick0; } }
         if (!in) g_live_based = 0;
-        while ((h = atomic_load(&g_live.head)) != atomic_load(&g_live.tail)) {
-            int op = g_live.q[h % 64].op; float nx = g_live.q[h % 64].nx, ny = g_live.q[h % 64].ny; if (op != 2) { px = nx; py = ny; }
+        live_mouse_event event;
+        while(live_mouse_peek(&event,&h)) {
+            int op=event.op;float nx=event.nx,ny=event.ny;
+            if(op==6){
+                // Allocation failure drains the accepted prefix and cancels without another cast or MOVE.
+                for(int b=0;b<32;b++){g_pc_mouse[b].dirty=0;if(g_pc_mouse[b].kind)pc_mouse_event(2,0,0,in,b,g_pc_mouse[b].side,0,0);}
+                memset(&g_lm,0,sizeof g_lm);memset(&g_rm,0,sizeof g_rm);g_live_btn=0;g_live_btn_until=0;
+                g_touch.next=g_touch.count=0;g_touch.pulse_end_beat=0;g_touch.pulse_hold_left=0;
+                if(g_touch.ui_drag_on){g_touch.ui_drag_on=0;dm_ui_drag_end();}
+                dm_tc_cancel_all(&g_touch.state);if(dm_ui_pc_desktop())dm_touch_host_pointer(0,0,0);dm_ui_touch(3,0,0);dm_world_pc_skill_cancel();live_mouse_consume(h);continue;
+            }
+            if(dm_ui_pc_desktop()&&pc_mouse_event(op,nx,ny,in,event.pc_button,event.pc_side,event.pc_mods,event.pc_precise)){live_mouse_consume(h);continue;}
+            if (op >= 3) {
+                if (op == 5) { g_rm.down = 0; if (g_rm.samples) g_rm.button = 0; }
+                else {
+                    g_rm.x = nx; g_rm.y = ny;
+                    if (op == 3) {
+                        int cancel=dm_ui_pc_cancel_binding();
+                        int world = !cancel && in && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(nx, ny) == 3;
+                        g_rm.button = cancel ? 0 : world ? DM_BTN_X : DM_BTN_B; g_rm.down = 1; g_rm.samples = 0;
+                        if (cancel) { cancel_binding=1; *buttons &= ~binding_keys; }
+                    }
+                }
+                live_mouse_consume(h); continue;
+            }
+            if (op != 2) { px = nx; py = ny; }
             if (op == 0) memset(&g_lm, 0, sizeof g_lm);
             if (g_lm.owned) {
                 g_lm.x = px; g_lm.y = py;
                 if (op == 2) g_lm.owned = g_lm.down = 0;
-                atomic_store(&g_live.head, h + 1); continue;
+                live_mouse_consume(h); continue;
             }
             // 按在按键提示条的某一条上：这一下不当点击，改成按那个键 4 拍（dm_padmode.c）；按在局内底部 HUD 的技能格 / 腰带格 / 钮上：按住期间按着对应的键，抬起再放（至少 3 拍）；
             // HUD 上没有对应键的东西（血球、魔球、经验条）：吃掉。都吞到抬起为止
             // Pressed on an entry of the key-hint bar: this is not treated as a click but as pressing that key for 4 ticks (dm_padmode.c); pressed on a skill slot / belt cell / button of the in-game bottom HUD: the corresponding key is held while the mouse is down and released on mouse up (at least 3 ticks);
             // things on the HUD with no corresponding key (life orb, mana orb, experience bar): swallowed. All are swallowed until release
-            { uint64_t dm_padmode_legend_click(float, float); int dm_padmode_hud_click(float, float, uint64_t *), dm_game_paused(void); static int eat, hold; uint64_t lb = op == 0 ? dm_padmode_legend_click(px, py) : 0, hb = 0; int hk = op == 0 && !lb && in && !g_touch.state.navigation_mode ? dm_padmode_hud_click(px, py, &hb) : 0;   /* 有面板开着：不认 HUD（面板底下那排 HUD 还画着） | a panel is open: the HUD is not recognised (the HUD row under the panel is still drawn) */
+            { uint64_t dm_padmode_legend_click(float, float); int dm_padmode_hud_click(float, float, uint64_t *), dm_game_paused(void); static int eat, hold; uint64_t lb = !dm_ui_pc_desktop() && op == 0 ? dm_padmode_legend_click(px, py) : 0, hb = 0; int hk = !dm_ui_pc_desktop() && op == 0 && !lb && in && !g_touch.state.navigation_mode ? dm_padmode_hud_click(px, py, &hb) : 0;   /* 有面板开着：不认 HUD（面板底下那排 HUD 还画着） | a panel is open: the HUD is not recognised (the HUD row under the panel is still drawn) */
               if (lb) { eat = 1; hold = 0; g_live_btn = lb; g_live_btn_until = touch_cur_tick() + 4; }
               else if (hk == 1) { eat = 1; hold = 1; g_live_btn = hb; g_live_btn_until = touch_cur_tick() + 30 * 600; }
               else if (hk == 2) { eat = 1; hold = 0; }
@@ -234,29 +391,29 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
               // 手势层按名单认面板，大秘境选层页这类借壳的面板不在名单里（它右上角的关闭 X 正落在地名条的范围内，点 X 变成了切地图），所以再加两条——游戏没停着、这一点不在任何面板里
               // Top-right minimap (same as the iOS shell): clicking the area-name strip at its top (1/4 of the rectangle's height) = switch to the full-screen map; with the full-screen map open, clicking anywhere outside the HUD = back to the minimap. Recognised only when no panel is open:
               // the gesture layer recognises panels by a list, and panels that borrow another shell, such as the Greater Rift level-selection page, are not on it (its close X at the top right falls exactly within the area-name strip, so clicking X turned into switching the map), hence two more conditions - the game is not stopped, and this point is not inside any panel
-              else if (op == 0 && in && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(px, py) != 0) { int dm_ui_minimap_rect(float r[4]), dm_ui_map_is_full(void); void dm_ui_map_full(int on); float mr[4];
+              else if (!dm_ui_pc_desktop() && op == 0 && in && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(px, py) != 0) { int dm_ui_minimap_rect(float r[4]), dm_ui_map_is_full(void); void dm_ui_map_full(int on); float mr[4];
                   if (dm_ui_map_is_full()) { dm_ui_map_full(0); eat = 1; hold = 0; fprintf(stderr, "[dm] 鼠标：全屏地图开着，点一下 → 回到小地图\n"); }
                   else if (dm_ui_minimap_rect(mr)) { float band = (mr[3] - mr[1]) / 4; if (band < 0.042f) band = 0.042f; if (band > (mr[3] - mr[1]) * 0.4f) band = (mr[3] - mr[1]) * 0.4f;
                       if (px >= mr[0] && px <= mr[2] && py >= mr[1] && py <= mr[1] + band) { dm_ui_map_full(1); eat = 1; hold = 0; fprintf(stderr, "[dm] 鼠标：点在小地图顶上那一条 → 切到全屏地图\n"); } } }
-              if (eat) { if (op == 2) { eat = 0; if (hold) { hold = 0; g_live_btn_until = touch_cur_tick() + 3; } } atomic_store(&g_live.head, h + 1); continue; } }
+              if (eat) { if (op == 2) { eat = 0; if (hold) { hold = 0; g_live_btn_until = touch_cur_tick() + 3; } } live_mouse_consume(h); continue; } }
             if (!in) { static int upd_eat; int dm_update_click_at(float, float);   // 主菜单右上角的「有新版本…」那行：点它 = 打开下载页（dm_update.c），这一下从按下到抬起都不再交给界面 | the "New version..." line at the top right of the main menu: clicking it = open the download page (dm_update.c); this click is no longer passed to the interface from press to release
                 if (op == 0 && dm_update_click_at(px, py)) upd_eat = 1;
-                if (upd_eat) { if (op == 2) upd_eat = 0; atomic_store(&g_live.head, h + 1); continue; } }
+                if (upd_eat) { if (op == 2) upd_eat = 0; live_mouse_consume(h); continue; } }
             if (!in) {   // 前端页：抬起时先问一次命中——落在页签上就走「点页签 = 按对应的手柄键」（页签不认鼠标点击；局内由手势层做同一件事），其余照旧发鼠标点击 | front-end pages: on release, hit-test once first - landing on a tab goes through "clicking a tab = pressing the corresponding gamepad key" (tabs do not take mouse clicks; in game the gesture layer does the same), everything else sends a mouse click as before
                 if (op == 2 && dm_ui_item_at_now(px, py) == 2) { dm_ui_touch(3, px, py); dm_ui_tab_go(); } else dm_ui_touch(op, px, py);
-                atomic_store(&g_live.head, h + 1); continue; }
+                live_mouse_consume(h); continue; }
             // 只有世界区域走按下响应；菜单、物品、页签和 HUD 继续走各自的手势路径。
             // Only the world area responds on down; menus, items, tabs and the HUD keep their existing gesture paths.
-            if (op == 0 && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(px, py) == 3) {
+            if (!dm_ui_pc_desktop() && op == 0 && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(px, py) == 3) {
                 unsigned dm_world_click(float, float);
                 g_lm.owned = g_lm.down = 1; g_lm.x = g_lm.tap_x = px; g_lm.y = py;
                 g_lm.tap_y = ui_y_to_screen(py); g_lm.tap_seq = dm_world_click(px, g_lm.tap_y);
-                atomic_store(&g_live.head, h + 1); continue;
+                live_mouse_consume(h); continue;
             }
             if (g_touch.next == g_touch.count) g_touch.next = g_touch.count = 0;   // 表里的都处理完了：从头复用 | Everything in the table has been handled: reuse from the start
-            if (g_touch.count >= 256) break;
+            if (g_touch.count >= 256) {pthread_mutex_lock(&g_live_lock);g_live_reading=0;pthread_mutex_unlock(&g_live_lock);break;}
             touch_event *e = &g_touch.event[g_touch.count++]; e->beat = 0; e->slot = 0; e->op = op == 0 ? TOUCH_DOWN : op == 1 ? TOUCH_MOVE : TOUCH_UP; e->x = px * 2868; e->y = py * 1320;
-            atomic_store(&g_live.head, h + 1);
+            live_mouse_consume(h);
         }
         // 空地答案一到就走；按住时每 30 Hz 拍更新目的地，不再等 0.3 秒起步、每 0.2 秒转向。
         // 面板、暂停或离局会取消这一笔世界手势，直到抬起都不交给界面。
@@ -274,13 +431,40 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
               g_lm.last = tk; dm_world_walk(g_lm.x, ui_y_to_screen(g_lm.y));
           } }
     }
-    if (g_live_on) {
-        uint64_t h = atomic_exchange(&g_live_hover, 0);
-        if (h && getenv("DM_TEST_HOVER_LOG")) fprintf(stderr, "[dm] 鼠标悬停派发：%#llx 手势 %d 槽 %d 队列 %d/%d 脉冲 %llu\n", (unsigned long long)h, g_lm.owned, g_touch.state.pointer_slot, g_touch.next, g_touch.count, (unsigned long long)g_touch.state.pulse_button);
-        if (h && !g_live_btn && !g_lm.owned && g_touch.next == g_touch.count && g_touch.state.pointer_slot == DM_TC_NONE && !g_touch.state.buttons && !g_touch.state.pulse_button && !*buttons && !*lx && !*ly && !*rx && !*ry) {
-            float x = h & (1ull << 62) ? -1 : (float)((h >> 16) & 0xffff) / 65535, y = h & (1ull << 62) ? -1 : (float)(h & 0xffff) / 65535;
-            if (dm_ui_mouse_hover_now(x, y)) { g_touch.state.pointer_valid = 0; dm_cursor_clear(); }
+    if(g_live_on && dm_ui_pc_desktop()) {
+        pc_mouse_pump();
+        int valid;float nx,ny;pthread_mutex_lock(&g_aim_lock);valid=g_key_aim.valid;nx=g_key_aim.x;ny=g_key_aim.y;pthread_mutex_unlock(&g_aim_lock);
+        float real_y=ui_y_to_screen(ny);
+        int pointer=valid&&dm_uiscreen_ingame()&&!dm_game_paused()&&isfinite(nx)&&isfinite(real_y)&&nx>=0&&nx<=1&&real_y>=0&&real_y<=1;
+        int world_pointer=pointer&&dm_touch_host_world_active()&&dm_ui_pc_world_at(nx,ny);
+        int state=!pointer?DM_PC_POINTER_NONE:world_pointer?DM_PC_POINTER_WORLD:DM_PC_POINTER_UI;
+        dm_world_pc_hover(nx,real_y,state);g_touch.pc_pointer_live=1;
+        dm_world_pc_skill_pointer(nx,real_y,world_pointer);
+        dm_world_pc_skill_tick();
+    }else if(g_touch.pc_pointer_live){
+        dm_world_pc_hover(0,0,DM_PC_POINTER_NONE);g_touch.pc_pointer_live=0;
+    }
+    if(g_live_on){
+        uint64_t hover=atomic_exchange(&g_live_hover,0);
+        if(!dm_ui_pc_desktop()&&hover&&!g_live_btn&&!g_lm.owned&&!g_rm.down&&!g_rm.button&&g_touch.next==g_touch.count&&g_touch.state.pointer_slot==DM_TC_NONE&&!g_touch.state.buttons&&!g_touch.state.pulse_button&&!*buttons&&!*lx&&!*ly&&!*rx&&!*ry){
+            float x=hover&(1ull<<62)?-1:(float)((hover>>16)&0xffff)/65535;
+            float y=hover&(1ull<<62)?-1:(float)(hover&0xffff)/65535;
+            if(dm_ui_mouse_hover_now(x,y)){g_touch.state.pointer_valid=0;dm_cursor_clear();}
         }
+    }
+    if (cancel_binding) { g_rm.button=0; *buttons &= ~binding_keys; }
+    if (g_rm.button && !g_rm.down && g_rm.samples) g_rm.button = 0;
+    if (g_live_on && g_rm.button) {
+        int world = dm_uiscreen_ingame() && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(g_rm.x, g_rm.y) == 3;
+        if ((g_rm.button == DM_BTN_X) != world) g_rm.button = 0;
+        else {
+            *buttons |= g_rm.button; g_rm.samples++;
+            if (g_rm.button == DM_BTN_X) dm_world_mouse_aim(g_rm.x, ui_y_to_screen(g_rm.y), rx, ry);
+        }
+    }
+    if (g_live_on && !dm_ui_pc_desktop() && dm_touch_host_world_active()) {
+        uint64_t skills; float nx, ny; pthread_mutex_lock(&g_aim_lock); skills = g_key_aim.skills; nx = g_key_aim.x; ny = g_key_aim.y; pthread_mutex_unlock(&g_aim_lock);
+        if ((*buttons & skills) && dm_ui_item_at_now(nx, ny) == 3) dm_world_mouse_aim(nx, ui_y_to_screen(ny), rx, ry);
     }
     if (g_live_btn) { if ((int32_t)(g_live_btn_until - touch_cur_tick()) > 0) *buttons |= g_live_btn; else g_live_btn = 0; }
     if (!g_touch.enabled || !g_touch.started) return;
