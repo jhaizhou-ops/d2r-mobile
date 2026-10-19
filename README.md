@@ -7,6 +7,7 @@ This is not a tech demo that "sort of runs". It is a mobile version polished for
 Platforms: iPhone / iPad (iOS 26 and later; iOS 18 – 25 with the older-API build) · Mac (Apple silicon, macOS 26 or later; macOS 15 – 25 with the older-API build) · Apple TV 4K (3rd generation, A15; community port, developer preview) · Game version: Switch release with Reign of the Warlock, 1.0.34.0 (corresponds to PC version 3.3.94012) · English / 中文 · License: MIT · **Bring your own game files**
 
 中文: [README.zh-CN.md](README.zh-CN.md)
+Android: [README.android.md](README.android.md) — native Android port, in development (about 30 fps today)
 
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/hero_en.jpg" width="100%" alt="The game filling the whole edge-to-edge screen of an iPhone: Harrogath on Hell, with the red portal to the Greater Rift">
@@ -291,7 +292,7 @@ Download our prebuilt "shell" package (`D2RMobile-shell-build-input.zip`; `D2RMo
 - For the items marked not verified, tell us whether they worked or not. Either answer is valuable.
 - To change the code: get the test entry points above passing first. Every change has to pass the regression gates.
 
-**Taking it to other platforms:** this approach is not limited to iPhone and iPad. Apple silicon Macs already have a native version (see "Playing directly on a Mac" above), built from the same game program and the same host; Apple TV also has a community port (developer preview, see the device table). Android phones use the same class of processor, so the game program executes natively there as well, and the route is fully open: the only parts to replace are the sides of the host and the graphics layer that face the platform. The author has no Android phone at hand, and would love to see someone bring it to Android.
+**Taking it to other platforms:** this approach is not limited to iPhone and iPad. Apple silicon Macs already have a native version (see "Playing directly on a Mac" above), built from the same game program and the same host; Apple TV also has a community port (developer preview, see the device table). Android phones use the same class of processor, so the game program executes natively there as well, and the route is fully open: the only parts to replace are the sides of the host and the graphics layer that face the platform. An Android port now exists and is playable: see [README.android.md](README.android.md). It is still in development (about 30 fps today) and its remaining work is written down there.
 
 **Taking it to other games:** someone has already tried other Switch games on the same host. The host has some behaviour that is on by default on iOS and was written for this one game; another game runs into these first, so turn them off or move them out before you start:
 

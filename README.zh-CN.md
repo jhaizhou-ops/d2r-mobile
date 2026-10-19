@@ -7,6 +7,7 @@
 平台：iPhone / iPad（iOS 26 起；iOS 18 – 25 用老接口版）· Mac（Apple 芯片，macOS 26 及以上；macOS 15 – 25 用老接口版）· Apple TV 4K（第三代 A15，社区移植，开发者预览）· 游戏版本：Switch 版「术士君临」1.0.34.0（对应 PC 版 3.3.94012）· 中文 / English · 许可证：MIT · **需要自备游戏文件**
 
 English: [README.md](README.md)
+Android: [README.android.zh-CN.md](README.android.zh-CN.md) — 安卓原生版，开发中（目前约 30 fps）
 
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/hero_zh.jpg" width="100%" alt="iPhone 上全面屏铺满的游戏画面：地狱难度的哈洛加斯，红门通往秘境">
@@ -291,7 +292,7 @@ DM_MAC_M3=1 dm/tools/mac_app.sh      # macOS 15 – 25：产出 D2R Mobile M3.ap
 - 没验过的那几项，走通或走不通都值得告诉我们。
 - 想改代码：先跑通上面的测试入口，每次改动都要过回归闸门。
 
-**往别的平台走：** 这套做法不限于 iPhone 和 iPad。Apple 芯片的 Mac 已经有了原生版本（见上面「在 Mac 上直接玩」），用的是同一份游戏程序和同一个宿主；Apple TV 也已有社区移植（开发者预览，见设备表）。安卓手机用的是同一类处理器，游戏程序同样可以原生执行，这条路完全走得通：要换的只是宿主和图形层对接的那一侧。作者手边没有安卓手机，非常期待看到有人把它带到安卓上。
+**往别的平台走：** 这套做法不限于 iPhone 和 iPad。Apple 芯片的 Mac 已经有了原生版本（见上面「在 Mac 上直接玩」），用的是同一份游戏程序和同一个宿主；Apple TV 也已有社区移植（开发者预览，见设备表）。安卓手机用的是同一类处理器，游戏程序同样可以原生执行，这条路完全走得通：要换的只是宿主和图形层对接的那一侧。安卓版已经做出来并且可以完整游玩，见 [README.android.zh-CN.md](README.android.zh-CN.md)；它仍在开发中（目前约 30 fps），剩余工作写在那份文档里。
 
 **往别的游戏走：** 已经有人拿同一份宿主去试别的 Switch 游戏。宿主里有一些「iOS 上缺省就开」的行为是为这一个游戏写的，换游戏会先撞到它们，动手前先关掉或挪走：
 
