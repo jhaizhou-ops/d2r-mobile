@@ -215,15 +215,25 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     unsetenv("DM_PSO_LAST_CACHE");
     path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-pso-last-cache");
     if(access(driver_option,F_OK)==0)setenv("DM_PSO_LAST_CACHE","1",1);
-    /* 翻译队列（Apple v1.0.15 同构）在本设备实测：轻场景无差、重场景因大核吞吐受限无增益
-       （游戏逻辑+翻译+驱动已吃满 CPU），且同步模式久经考验 —— 默认回同步；flag-nvn-queue
-       可开启队列做实验。 | The translation queue (Apple v1.0.15 shape) measured on this device:
-       no difference in light scenes and no gain in heavy ones (the big cores are already saturated
-       by game logic + translation + driver), so the proven synchronous mode stays the default;
-       flag-nvn-queue enables the queue for experiments. */
-    setenv("DM_NVN_SYNC","1",1);
-    path(driver_option,sizeof driver_option,port_root,"diagnostics/flag-nvn-queue");
-    if(access(driver_option,F_OK)==0)unsetenv("DM_NVN_SYNC");
+    /* 翻译队列 + 25ms 出图节拍（2026-10-19 实测，营地标准档）：
+         同步模式（DM_NVN_SYNC=1）下 replay 直接跑在游戏线程里，游戏线程每帧 25.2ms 全花在
+         nvnQueueSubmitCommands 内部等自己把 replay 做完；开启队列后同一项降到 0.020ms。
+         但只开队列不够——默认节拍是 33.3ms（游戏 interval 2 @60Hz），本身就封顶 30fps。
+         两个一起开才是收益点：交替两轮 A/B 中位 36.11/35.90 fps vs 同步 30.50/30.12（+18~19%），
+         GPU util 97–100%（此时是 GPU 打满，CPU 有余量）。
+         用户提供的事实：游戏逻辑固定 25 拍，出图节拍只是呈现节奏，所以 25ms 节拍不改逻辑速度。
+         回退：disable-nvn-queue 回同步；env.txt 的 DM_PRESENT_HZ 覆盖节拍。
+       Translation queue + 25 ms present cadence (measured 2026-10-19, camp standard tier):
+       in sync mode replay runs on the game thread and the whole 25.2 ms/frame is spent waiting
+       inside nvnQueueSubmitCommands; with the queue it drops to 0.020 ms. The queue alone is not
+       enough because the default cadence is 33.3 ms (game interval 2 @60 Hz), which caps at 30 fps.
+       Alternating A/B medians: 36.11/35.90 fps vs 30.50/30.12 (+18-19%), GPU utilisation 97-100%.
+       The game logic is a fixed 25 ticks; the cadence is only presentation, so this does not change
+       logic speed. Rollback: diagnostics/disable-nvn-queue restores sync; DM_PRESENT_HZ overrides. */
+    unsetenv("DM_NVN_SYNC");
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-nvn-queue");
+    if(access(driver_option,F_OK)==0)setenv("DM_NVN_SYNC","1",1);
+    if(!getenv("DM_PRESENT_HZ"))setenv("DM_PRESENT_HZ","80",1);
     setenv("DM_WRITEBACK_PREPARE","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-writeback-prepare");
     if(access(driver_option,F_OK)==0)setenv("DM_WRITEBACK_PREPARE","0",1);
