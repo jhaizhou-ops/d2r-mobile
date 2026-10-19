@@ -97,9 +97,9 @@ The Custom settings page has a **Resolution** row with three choices:
 
 | Tier | Output budget | World (3D) budget | Notes |
 |---|---|---|---|
-| Power saver | 1.0 MP | 1.0 MP | cheapest, softest picture |
-| **Standard (default)** | 1.25 MP | 1.25 MP | about 30 fps on the tested phone |
-| High | native output | 0.55 × output | sharpest UI, world slightly below standard |
+| Power saver | 1.80 MP (1966×914) | 1.00 MP | cheapest, softest picture |
+| **Standard (default)** | 2.40 MP (2270×1056) | 1.25 MP (3D scale 0.722) | about 30 fps on the tested phone |
+| High | native output | 0.55 × output | sharpest UI, world resolution below standard |
 
 The output width is derived from the height to keep the display aspect exactly — **no tier distorts the
 picture**. Changing the tier requires restarting the game.
