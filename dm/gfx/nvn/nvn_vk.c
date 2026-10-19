@@ -95,14 +95,21 @@ static int8_t g_rtseg_grp[RT_SEG_MAX];static int g_rtseg_n,g_rtseg_last=-2;stati
 #define RT_FSEG_MAX 40
 static uint32_t g_rtf_start[RT_FSEG_MAX],g_rtf_ops[RT_FSEG_MAX],g_rtf_draws[RT_FSEG_MAX];
 static int8_t g_rtf_grp[RT_FSEG_MAX];static int g_rtf_n,g_rtf_print;static uint64_t g_rtf_frame=~0ull;static uint32_t g_rtf_idx;
-/* 运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 只组别统计 / 2 再加分段表。
-   Runtime A/B: rtseg.txt = 0 off (default, zero cost) / 1 group stats only / 2 + segment table. */
+/* 运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 组别统计 / 2 再加分段表 / 3 再加跨组依赖探针。
+   Runtime A/B: rtseg.txt = 0 off (default) / 1 group stats / 2 + segment table / 3 + dependency probe. */
 static int g_rtseg_on;
 static int g_rtgrp_cur=2;
 /* 跨组依赖探针：T2T 拷贝的源/目标按自身尺寸归类（>2000x900 = 全屏组），统计跨组拷贝。
    跨组拷贝就是并行两组之间必须插同步的点。 | Cross-group dependency probe: T2T copies classified
    by endpoint extent (>2000x900 = full-screen group); cross-group copies are the required sync points. */
 static uint64_t g_rtcopy_same,g_rtcopy_cross;static uint64_t g_rtcopy_cs[8][2];static int g_rtcopy_cn;
+/* 跨组读依赖探针：登记"贴图本帧最后被哪一组写"（pass 附件 + copy 目标处），采样绑定时比对当前组。
+   帧号不符即视为上一帧的写，不算帧内依赖。direct-mapped，8192 槽，碰撞只影响统计精度。
+   Cross-group read-dependency probe: register which group last wrote each texture this frame
+   (at pass attachments and copy destinations) and compare at sampled bind time. */
+#define RT_WREG 8192
+static uint64_t g_wreg_frame[RT_WREG];static int8_t g_wreg_grp[RT_WREG];
+static uint64_t g_rtdep_cross,g_rtdep_same;static uint64_t g_rtdep_cs[8][2];static int g_rtdep_cn;
 static void rt_seg_print(const char *tag,uint64_t frame,uint32_t ops,int n,const int8_t *grp,const uint32_t *st,const uint32_t *op,const uint32_t *dr){
     char line[900];int m=0;m+=snprintf(line+m,sizeof line-m,"segments=%d ops=%u",n,ops);
     for(int i=0;i<n&&m<(int)sizeof line-96;i++)
@@ -2074,6 +2081,10 @@ static void texture_require_storage(VTexture *t) {
         (unsigned long long)t->serial,t->source.d.flags,t->usage,t->width,t->height,t->depth,t->source.d.levels,t->source.L.layers,
         (unsigned long long)G.image_retired_live);
 }
+/* 贴图写登记：serial → 本帧最后写入的组别。direct-mapped，碰撞只影响统计精度。 */
+static inline unsigned wreg_slot(uint64_t serial){return (unsigned)((serial*2654435761ull)>>13)&(RT_WREG-1);}
+static void wreg_put(uint64_t serial,int grp){unsigned s=wreg_slot(serial);g_wreg_frame[s]=G.present_count;g_wreg_grp[s]=(int8_t)grp;}
+static int wreg_get(uint64_t serial,int *grp){unsigned s=wreg_slot(serial);if(g_wreg_frame[s]!=G.present_count)return 0;*grp=g_wreg_grp[s];return 1;}
 static void collect_image_uses(VShader *s) {
     if(!s)return;
     for(unsigned i=0;i<s->h.nb;i++) {RBinding *b=&s->b[i];if(b->kind!=4&&b->kind!=6)continue;
@@ -2083,6 +2094,10 @@ static void collect_image_uses(VShader *s) {
         uint64_t serial=G.tslot[tid].texture.serial;unsigned j=0;while(j<S.nimage_uses&&S.image_uses[j].serial!=serial)j++;
         if(j==S.nimage_uses){if(j==2*LIMIT_BINDINGS)die("image-use capacity",j);S.image_uses[S.nimage_uses++]=(ImageUse){serial,0};}
         S.image_uses[j].roles|=b->kind==6?2u:1u;
+        /* 跨组读依赖：这张贴图本帧被别的组写过。 | Cross-group read dependency: written by another group this frame. */
+        if(g_rtseg_on>2){int wg;if(wreg_get(serial,&wg)){
+            if(wg!=g_rtgrp_cur){g_rtdep_cross++;if(g_rtdep_cn<8){g_rtdep_cs[g_rtdep_cn][0]=serial;g_rtdep_cs[g_rtdep_cn][1]=(uint64_t)g_rtgrp_cur;g_rtdep_cn++;}}
+            else g_rtdep_same++;}}
         if(b->kind==6)texture_require_storage(slot_texture(&G.tslot[tid],1));
     }
 }
@@ -2842,6 +2857,7 @@ static VkRenderPass render_begin(void) {
         t->cpu_owned=0;tex_attach_dirty(t,range.baseMipLevel);
         if(n<4) seq_ser[n]=source->serial;
         if(S.pass_attach_n<9){S.pass_attach_t[S.pass_attach_n]=t;S.pass_attach_level[S.pass_attach_n]=range.baseMipLevel;S.pass_attach_n++;}
+        if(g_rtseg_on>2)wreg_put(source->serial,g_rtgrp_cur);
         VkImageLayout attachment_layout=is_depth?VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         if(is_depth&&S.depth_sampled&&depth_read_only())attachment_layout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         else if(S.feedback_flags&(is_depth?VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT:VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT))attachment_layout=VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
@@ -3486,7 +3502,8 @@ static void copy_t2t(const p_copy_t2t *p) {
     VTexture *s=texture_get(p->src,1),*d=texture_get(p->dst,bc_destination);
     if(g_rtseg_on){int sg=(s->width>2000&&s->height>900),dg=(d->width>2000&&d->height>900);
         if(sg!=dg){g_rtcopy_cross++;if(g_rtcopy_cn<8){g_rtcopy_cs[g_rtcopy_cn][0]=p->src->serial;g_rtcopy_cs[g_rtcopy_cn][1]=p->dst->serial;g_rtcopy_cn++;}}
-        else g_rtcopy_same++;}
+        else g_rtcopy_same++;
+        if(g_rtseg_on>2)wreg_put(p->dst->serial,g_rtgrp_cur);}
     int sv=p->src->d.target==NVN_TEXTURE_TARGET_3D,dv=p->dst->d.target==NVN_TEXTURE_TARGET_3D;
     if(s==d || sv!=dv || s->format!=d->format || p->src->d.format!=p->dst->d.format)die("texture copy alias/dimension/format",p->dst->serial);
     VkImageSubresourceLayers sl=copy_layers(p->src,s->format,p->has_sv?&p->sv:NULL,&p->sr),dl=copy_layers(p->dst,d->format,p->has_dv?&p->dv:NULL,&p->dr);
@@ -3871,6 +3888,11 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
               for(int i=0;i<g_rtcopy_cn;i++)cn+=snprintf(cx+cn,sizeof cx-cn," %llu>%llu",(unsigned long long)g_rtcopy_cs[i][0],(unsigned long long)g_rtcopy_cs[i][1]);
               fprintf(stderr,"[nvn-vulkan] RENDER_RT_COPY frame=%llu same_group=%.0f cross_group=%.0f%s\n",
                   (unsigned long long)G.present_count+1,(double)g_rtcopy_same/fr,(double)g_rtcopy_cross/fr,cx); }
+            { if(g_rtseg_on>2){ char dx[220];int dn=0;dx[0]=0;
+              for(int i=0;i<g_rtdep_cn;i++)dn+=snprintf(dx+dn,sizeof dx-dn," %llu->g%llu",(unsigned long long)g_rtdep_cs[i][0],(unsigned long long)g_rtdep_cs[i][1]);
+              fprintf(stderr,"[nvn-vulkan] RENDER_RT_DEP frame=%llu sampled_same=%.0f sampled_cross=%.0f%s\n",
+                  (unsigned long long)G.present_count+1,(double)g_rtdep_same/fr,(double)g_rtdep_cross/fr,dx); }
+              g_rtdep_same=g_rtdep_cross=0;g_rtdep_cn=0; }
             g_rtcopy_same=g_rtcopy_cross=0;g_rtcopy_cn=0; }
           { uint64_t fs[3];nvn_dirty_find_stats(fs);
             fprintf(stderr,"[nvn-vulkan] RENDER_FIND_CACHE frame=%llu miss_scans=%.0f hits=%.0f steps=%.0f\n",
@@ -4060,7 +4082,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
            RT segment stats runtime A/B: rtseg.txt = 0 off (default) / 1 groups / 2 + segment table. */
         { static const char *rsdir; if(!rsdir)rsdir=getenv("DM_FRAME_DIR"); char rsf[1300];
           if(rsdir&&*rsdir&&snprintf(rsf,sizeof rsf,"%s/rtseg.txt",rsdir)<(int)sizeof rsf){FILE *fp=fopen(rsf,"r");
-            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=2&&m!=g_rtseg_on){g_rtseg_on=m;
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=3&&m!=g_rtseg_on){g_rtseg_on=m;
                 fprintf(stderr,"[nvn-vulkan] RT_SEG 运行中切换 → %d\n",m);}fclose(fp);}}}
         /* 有意通道分割器运行时切换：passsplit.txt = 单通道 draw 上限（0=关）。 | Intentional
          * pass splitter: passsplit.txt = draws per pass cap (0 = off). */
