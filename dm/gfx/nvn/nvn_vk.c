@@ -98,7 +98,8 @@ static int8_t g_rtf_grp[RT_FSEG_MAX];static int g_rtf_n,g_rtf_print;static uint6
 /* 运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 组别统计 / 2 再加分段表 / 3 再加跨组依赖探针。
    Runtime A/B: rtseg.txt = 0 off (default) / 1 group stats / 2 + segment table / 3 + dependency probe. */
 static int g_rtseg_on;
-static int g_att_audit_on;   /* DM_ATT_AUDIT：附件 store 后是否被读（诊断） | attachment store audit */
+static int g_att_audit_on;
+static int g_att_store_skip;   /* DM_ATT_STORE_SKIP：1=深度通道 storeOp DONT_CARE，2=颜色通道（试验） */   /* DM_ATT_AUDIT：附件 store 后是否被读（诊断） | attachment store audit */
 static int g_rtgrp_cur=2;
 /* 跨组依赖探针：T2T 拷贝的源/目标按自身尺寸归类（>2000x900 = 全屏组），统计跨组拷贝。
    跨组拷贝就是并行两组之间必须插同步的点。 | Cross-group dependency probe: T2T copies classified
@@ -635,7 +636,7 @@ static void backend_init(void) {
     {const char *ps=getenv("DM_PASS_SPLIT");G.pass_split_draws=ps?atoi(ps):0;}
     G.fb_cache_enabled=getenv("DM_DISABLE_FB_CACHE")==NULL;
     G.read_memo_enabled=getenv("DM_DISABLE_READ_MEMO")==NULL;
-    G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;g_att_audit_on=getenv("DM_ATT_AUDIT")!=NULL;{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
+    G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;g_att_audit_on=getenv("DM_ATT_AUDIT")!=NULL;{const char *ss=getenv("DM_ATT_STORE_SKIP");g_att_store_skip=ss?atoi(ss):0;}{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
     G.disable_resource_cache=getenv("DM_DISABLE_RESOURCE_CACHE")!=NULL;
     /* 上游（dodola）默认开启，在 Adreno 642L 系统驱动上实测营地 +17.5%（19.23→22.60 fps）。
      * 我们在 Adreno 730 / 同一驱动 id=8 上交替重启四轮 A/B：按标志 27.79/27.55 vs 保守
@@ -2924,9 +2925,17 @@ static VkRenderPass render_begin(void) {
         VkImageLayout layout;
         if(!is_depth&&texture_range_ok(t)&&range.levelCount<t->source.d.levels){texture_transition_levels(t,range.baseMipLevel,range.levelCount,attachment_layout);layout=attachment_layout;}
         else{texture_transition(t,attachment_layout);layout=t->layout;}
+        /* 附件 store 跳过（试验）：审计显示约 43% 的附件写回从未被读。按通道类型逐类开启，
+           用画面 + sf_fps 验收；默认关。 | Attachment store elision (experimental): the audit shows
+           ~43% of attachment stores are never read. Enabled per attachment class, gated off by default. */
+        /* loadOp=LOAD 表示本通道开始时读入该附件内容——这本身就是一次「读」，
+           审计必须记上，否则会把「下一通道靠 load 续用」的附件误判成白写。 */
+        if(g_att_audit_on && !(G.diag_loadstore>=2)) att_audit_read(t->serial);
+        int skip_store = G.diag_loadstore>=1 ||
+            ((g_att_store_skip&1) && is_depth) || ((g_att_store_skip&2) && !is_depth);
         attachments[n]=(VkAttachmentDescription){.format=t->format,.samples=VK_SAMPLE_COUNT_1_BIT,
            .loadOp=G.diag_loadstore>=2?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
-           .storeOp=G.diag_loadstore>=1?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
+           .storeOp=skip_store?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
            .stencilLoadOp=G.diag_loadstore>=2?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
            .stencilStoreOp=G.diag_loadstore>=1?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
            .initialLayout=layout,.finalLayout=layout};
@@ -3560,6 +3569,7 @@ static void copy_t2t(const p_copy_t2t *p) {
     /* A partial BC update must retain the other compressed blocks already
      * present in guest storage, even when the destination is first used here. */
     VTexture *s=texture_get(p->src,1),*d=texture_get(p->dst,bc_destination);
+    att_audit_read(s->serial);   /* 拷贝源也算「被读」，否则会把被拷走的附件误判成白写 */
     if(g_rtseg_on){int sg=(s->width>2000&&s->height>900),dg=(d->width>2000&&d->height>900);
         if(sg!=dg){g_rtcopy_cross++;if(g_rtcopy_cn<8){g_rtcopy_cs[g_rtcopy_cn][0]=p->src->serial;g_rtcopy_cs[g_rtcopy_cn][1]=p->dst->serial;g_rtcopy_cn++;}}
         else g_rtcopy_same++;
