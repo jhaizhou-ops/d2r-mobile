@@ -9,7 +9,7 @@
 // 什么时候放（都是为了不打扰玩家）：人物站立那一拍（客户端与服务端模式都是 1）——走路会被施法打断，攻击 / 施法中原版自己拒；不在城里（喊叫类在城里
 //   调用会被拒、还会把人重置成站立）；没死；手上没拿东西；法力够（宿主先自己比，不够不调——原版在法力不足时会出语音）；一拍只做一件事。
 // 节流：发出后 2 秒内状态没出现算一次失败，同一技能隔 3 秒再试（DM_AUTOBUFF_RETRY，拍），连败 3 次本局不再补它并记红。
-// 开关：「自定义」设置 auto_buff（缺省开）。只在 iOS 包上缺省生效（Mac 宿主的对拍闸门回放的是真机录制，不该多出施法）；DM_AUTOBUFF=1 / 0 强制。
+// 开关：「自定义」设置 auto_buff（缺省开）。在 iOS 和 Mac App 生效；Mac 命令行对拍回放不自动施法；DM_AUTOBUFF=1 / 0 强制。
 // 第二笔：副手那套武器给的增益（典型：战争召唤给的战斗指挥 / 战斗体制）。装备给的非职业技能（属性 97，层 = 技能号）只在那套武器在手时才有节点，
 //   所以要「换到副手 → 把该补的全放完 → 换回」。换走期间主手与盾的属性全没了，条件比第一笔严：站立、不在城里、没死、手上没拿东西、
 //   副手组技能的连招没在进行、周围 DM_AUTOBUFF_SAFE 格（缺省 40）内没有活着的敌对怪。换武器调游戏自己的 main+0x41db90(当前组)（同 dm_actions.c）。
@@ -26,7 +26,7 @@
 // When it is cast (all so as not to disturb the player): on a tick when the character is standing (client and server mode both 1), since walking would be interrupted by the cast and the game itself refuses during attack / cast; not in town (warcries called in town
 //   are refused and also reset the character to standing); not dead; nothing on the cursor; enough Mana (the host compares first and does not call if short: the game plays a voice line on insufficient Mana); one thing per tick.
 // Throttle: if the state has not appeared within 2 seconds of the request it counts as one failure; the same skill is retried 3 seconds later (DM_AUTOBUFF_RETRY, ticks); after 3 failures in a row it is not recast again this game and a failure is logged.
-// Switch: "Custom" setting auto_buff (default on). On by default only in the iOS app (the Mac host's parity gate replays device recordings and must not gain extra casts); DM_AUTOBUFF=1 / 0 forces it.
+// Switch: "Custom" setting auto_buff (default on). Active in iOS and the Mac App; Mac command-line parity replays do not auto-cast; DM_AUTOBUFF=1 / 0 forces it.
 // Part 2: buffs granted by the off-hand weapon set (typical: Battle Command / Battle Orders from Call to Arms). A gear-granted non-class skill (stat 97, layer = skill id) only has a node while that set is in hand,
 //   so it takes "swap to off-hand → cast everything due → swap back". While swapped away all main-hand and shield stats are gone, so the conditions are stricter than part 1: standing, not in town, not dead, nothing on the cursor,
 //   no off-hand-set skill combo in progress, no living hostile monster within DM_AUTOBUFF_SAFE tiles (default 40). The weapon swap calls the game's own main+0x41db90(current set) (same as dm_actions.c).
@@ -99,7 +99,8 @@ static int skipped(int skill) { if (getenv("DM_TEST_BUFF_NOSKIP")) return 0;   /
 uint32_t dm_cur_tick(void);
 
 static int enabled(void) { static int env = -2; if (env == -2) { const char *e = getenv("DM_AUTOBUFF"); env = e ? e[0] != '0' : -1; }
-    return env >= 0 ? env : (TARGET_OS_IPHONE && dm_custom_get("auto_buff")); }
+    const char *app = getenv("DM_APP");
+    return env >= 0 ? env : ((TARGET_OS_IPHONE || (app && app[0] && app[0] != '0')) && dm_custom_get("auto_buff")); }
 static int cfg(const char *nm, int def) { const char *e = getenv(nm); return e && atoi(e) > 0 ? atoi(e) : def; }
 static int has_state(uint64_t u, int st) {
     uint64_t sl = *(uint64_t *)(u + 0x88); if (!sl || !(*(uint32_t *)(sl + 0x1c) >> 31)) return 0;

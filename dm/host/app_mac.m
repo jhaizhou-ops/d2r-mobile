@@ -12,6 +12,8 @@
 #include <sys/stat.h>
 #include "hle.h"
 #include "dm_i18n.h"
+#include "dm_custom.h"
+#include "app_mac_overlay.h"
 #define T(k) (@(dm_ui(k)))
 
 #ifndef APP_NAME
@@ -142,7 +144,9 @@ int dm_app_bootstrap(int *argc, char ***argv) {
         if ([fm fileExistsAtPath:shmap]) setenv("DM_NVN_SHMAP", shmap.fileSystemRepresentation, 1);
         NSString *msl = res_item(@"msl");   // 编好的着色器库（msl/b-<翻译链版本>/） | The compiled shader library (msl/b-<translation chain version>/)
         if (msl) setenv("DM_MSL_DIR", msl.fileSystemRepresentation, 1);
-        NSString *ov = res_item(@"romfs_overlay");
+        BOOL missing_overlay = NO;
+        NSString *ov = dm_mac_overlay(res_item(@"romfs_overlay"), res_item(@"romfs_overlay_variants"), dm_custom_get, &missing_overlay);
+        if (missing_overlay) LOG("App：缺少已启用自定义功能的覆盖层组合，暂用基础覆盖层；请重新生成并打包覆盖层");
         if (ov) setenv("DM_ROMFS_OVERLAY", ov.fileSystemRepresentation, 1);
         static char *av[5]; av[0] = (*argv)[0]; av[1] = strdup(prod.fileSystemRepresentation); av[2] = "main"; av[3] = "sdk"; av[4] = NULL;
         *argv = av; *argc = 4;

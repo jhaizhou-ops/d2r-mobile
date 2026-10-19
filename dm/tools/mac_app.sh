@@ -2,14 +2,14 @@
 # 把 Mac 宿主包成能双击起的 macOS App：mac_app.sh [输出目录]   产出 <输出目录>/D2R Mobile.app（缺省 $DM_ROOT/out/macapp）
 # 包里有：宿主程序、改写后的游戏程序（产物目录，种类 DM_MAC_PRODUCT，缺省 touch）、有界面覆盖层就带上（DM_MAC_OVERLAY=<目录>）。
 # DM_MAC_LINK=1：不带派生物的出法——改写后的游戏程序、着色器库、界面覆盖层都是从游戏内容派生的，公开发布的包不能带；
-#   这样出的包里只有宿主程序和 Resources/paths.txt（三项各指向本机构建产物的路径），只在构建它的这台机器上能跑。
+#   这样出的包里只有宿主程序和 Resources/paths.txt（各项指向本机构建产物的路径），只在构建它的这台机器上能跑。
 # 版本：给人看的版本号 DM_MAC_VERSION（缺省 1.0，与 iOS 包同叫法）；构建号 DM_MAC_BUILD（缺省取当前月日时分，同 iOS 包格式）。产物代号与提交号写在包里的 Resources/build.txt。
 # 更新检查：DM_MAC_UPDATE_URL=<版本文件地址>（如下载站的 latest_mac.json）写进 Info.plist 的 SWUpdateURL，App 启动后读它、比包内构建号新就在主菜单提示；不给 = 不检查（公开版 / 自己构建的包）。
 # 游戏资源不进包：第一次启动请玩家选资源文件夹（host/app_mac.m）。签名用本地临时签名，本机直接能跑。
 # Wrap the Mac host into a macOS App that starts on double-click: mac_app.sh [output directory]   produces <output directory>/D2R Mobile.app (default $DM_ROOT/out/macapp)
 # The package holds: the host program, the rewritten game program (build output directory, kind DM_MAC_PRODUCT, default touch), and the UI overlay when there is one (DM_MAC_OVERLAY=<directory>).
 # DM_MAC_LINK=1: build without derived content - the rewritten game program, the shader libraries and the UI overlay are all derived from game content and must not be in a publicly released package;
-#   a package built this way holds only the host program and Resources/paths.txt (three entries, each pointing at a build output on this machine), and runs only on the machine that built it.
+#   a package built this way holds only the host program and Resources/paths.txt (entries pointing at build outputs on this machine), and runs only on the machine that built it.
 # Version: the human-readable version DM_MAC_VERSION (default 1.0, named the same way as the iOS package); the build number DM_MAC_BUILD (default: current month-day-hour-minute, same format as the iOS package). The build output generation and the commit are written to Resources/build.txt in the package.
 # Update check: DM_MAC_UPDATE_URL=<version file address> is written into SWUpdateURL in Info.plist; after launch the App reads it and shows a hint on the main menu when it is newer than the build number in the package; not given = no check (public builds / packages you build yourself).
 # Game resources do not go into the package: on first launch the player is asked to choose the resource folder (host/app_mac.m). Signing is local ad-hoc signing, which runs directly on this machine.
@@ -42,9 +42,18 @@ else mkdir -p "$RES/msl/b-$V"; rsync -a --include='*.metallib' --include='*.json
 # 界面覆盖层（自定义页、珍宝匣、秘境等我们的页面都在里面）：从游戏资源现生成（约 3 秒）；DM_MAC_OVERLAY=<目录> 用现成的，=none 不带（原版界面）
 # UI overlay (the Custom page, the trove, rifts and our other pages all live in it): generated on the spot from the game resources (about 3 seconds); DM_MAC_OVERLAY=<dir> uses an existing one, =none leaves it out (original UI)
 if [ "${DM_MAC_OVERLAY:-}" != none ]; then
-  OVD="$RES/romfs_overlay"; [ -z "$LINK" ] || { OVD="$OUT/romfs_overlay.local"; rm -rf "$OVD"; echo "romfs_overlay=$OVD" >> "$RES/paths.txt"; }
-  if [ -n "${DM_MAC_OVERLAY:-}" ]; then cp -R "$DM_MAC_OVERLAY" "$OVD"
+  OVD="$RES/romfs_overlay"; [ -z "$LINK" ] || { OVD="$OUT/romfs_overlay.local"; echo "romfs_overlay=$OVD" >> "$RES/paths.txt"; }
+  # 基础覆盖层与开关组合成套更新，防止复用输出目录时残留旧组合；外部覆盖层也照带同名兄弟目录。
+  # Refresh the base overlay and feature combinations together, avoiding stale variants on rebuild; external overlays also carry their sibling directory.
+  if [ -n "${DM_MAC_OVERLAY:-}" ]; then
+    [ "$(cd "$DM_MAC_OVERLAY" && pwd -P)" != "$(mkdir -p "$OVD" && cd "$OVD" && pwd -P)" ] || { echo "DM_MAC_OVERLAY must differ from the output overlay directory"; exit 2; }
+  fi
+  rm -rf "$OVD" "${OVD}_variants"
+  if [ -n "${DM_MAC_OVERLAY:-}" ]; then
+    cp -R "$DM_MAC_OVERLAY" "$OVD"
+    [ ! -d "${DM_MAC_OVERLAY%/}_variants" ] || cp -R "${DM_MAC_OVERLAY%/}_variants" "${OVD}_variants"
   else DM_OVERLAY_MAC=1 python3 "$DM/ios/tools/gen_romfs_overlay.py" "${DM_ROMFS_SRC:-$ROOT/data/switch/3.3.94012/Update/RomFS}" "$OVD" > /dev/null || { echo "🔴 界面覆盖层生成失败"; exit 2; }; fi
+  [ -z "$LINK" ] || [ ! -d "${OVD}_variants" ] || echo "romfs_overlay_variants=${OVD}_variants" >> "$RES/paths.txt"
 fi
 [ -s "$RES/paths.txt" ] || rm -f "$RES/paths.txt"
 VER=${DM_MAC_VERSION:-1.0}; BUILD=${DM_MAC_BUILD:-$(date +%m%d%H%M)}
