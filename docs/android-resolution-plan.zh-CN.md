@@ -742,3 +742,50 @@ CPU 多 0.3ms，帧时间涨 2.8ms。**跨过 ~23ms 这条线，收益是跳跃�
 按量级：bind 9.21 → tail 4.58 → pool 2.81。但注意：**单点争取一两毫秒不够，
 要凑够 ~2.9ms 才见效**。且 bind 的 full 路径 1887 次是**真失效**（`state` 闸门失效 1465 次/帧，
 游戏确实每帧改绑定），不是判据过严——三种闸门变体都试过且中性。
+
+### 下次开工清单（2026-10-19 末留下）
+
+**一句话**：GPU 只要 24ms（41fps 的料），现在 36fps 是 CPU 录不进 23ms。**只做一件事：把 CPU
+从 25.8ms 砍到 ≤23ms。**
+
+#### 先复现基线（5 分钟，别跳过）
+
+```
+adb shell am force-stop org.d2r.binaryprobe
+adb shell 'printf "DM_PROFILE_DETAIL=1\n" > <diag>/env.txt'
+启动 → 进营地 → 读三行：
+  RENDER_CPU_PROFILE      → 看 replay 各项（须 ~25.8ms 才算复现）
+  RENDER_PHASE_CPU_PROFILE→ 看 replay_inclusive 与其它阶段
+  RENDER_PROFILE          → fps 与 elapsed_ms
+再读 CHUNK_TIME 的 dur/gap：dur 应恒定 ~24ms，gap 0–4ms 抖动
+```
+判据：CPU 合计 ≤23ms 时 fps 会**跳到 39–40**（阈值效应），不是线性爬。
+
+#### 三个候选靶子（按量级）
+
+1. **bind 9.21ms** —— full 路径 1887 次/帧 × 3.47µs，其中 `loop` 4.96ms（逐绑定组装）、
+   `desc_alloc+upd` 1.37ms。注意：`state` 闸门失效 1465 次/帧是**真失效**（游戏每帧确实改
+   绑定），三种闸门变体都试过且中性，所以**不要再调闸门**，要减少 full 次数本身。
+   > 唯一没试过的方向：他们的「绑定缓存」键设计（客体地址+真实绑定大小；命中还需
+   > 范围仍受跟踪 + 页代数未变 + 最新重叠 pending-copy 未变；payload 逐字段编码避免结构体
+   > padding；hash 混高位避免 64KiB 对齐 arena offset 撞桶）。我们现有缓存是 payload 键，
+   > **未验证过「键设计」这个维度**。
+2. **tail 4.58ms** —— 逐 draw 收尾，还没拆过子项（`RENDER_TAIL_SPLIT` 有 bind/state/draw/idx
+   四桶，可先读）。
+3. **pool 2.81ms** —— 池上传/查表。`DM_RESOURCE_STATS` 下看 POOL_UPLOAD_STATS。
+
+#### 别浪费时间的（本会话已实测否掉）
+
+- 并行 replay（三败，且优化错了线程，见附十二与 `rt-parallel-draft.md`）
+- 单独放开节拍（25ms 档只在开队列后有意义）
+- 描述符动态偏移（我们 136 次未命中/帧，上限 1.27ms）
+- 调 chunk 深度 / PSO_LAST_CACHE / planstate / precise_sync（全部中性或更差）
+- 靠温度/频率解释（两态都出现过 787MHz）
+
+#### 硬规矩（本会话踩过的坑）
+
+1. **A/B 必须先确认没有更早的天花板**——第 8 轮就是被 33.3ms 节拍骗了。
+2. **像素对拍必须先跑噪声基线**（营地静止基线 2.6–3.1%），且两次截图必须同一游戏状态
+   ——71.6% 那次误判就是跨场景截图。
+3. **Android 提交/出图路径只认 `nvn_platform_present.inc`**，`hle_nvn.c` 的 `#else` 是死代码。
+4. 设备热态会给出**跨启动双稳态**（同一配置 34 / 39.9），单次测量不可信，至少交替 3 轮。
