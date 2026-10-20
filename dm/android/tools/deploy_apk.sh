@@ -6,7 +6,16 @@ SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 ADB=${ADB:-$HOME/Android/Sdk/platform-tools/adb}
 PKG=org.d2r.binaryprobe
 DATA=${DM_DATA:-${DM_ROOT:-$HOME/dm-work}/build/dodola-data}
-APK=${1:-$SRC/dm/android/build/apk/dodola.signed.apk}
+APK=${1:-}
+# 不给参数就取打包目录里最新的那个 d2r-mobile-android-*.apk。产物名带版本号和构建号，没法在脚本里写死一个路径；
+# 按修改时间取最新，正好对上"刚打完包就装机"这个用法。找不到就报清楚。
+# With no argument, take the newest d2r-mobile-android-*.apk in the output directory. The name carries a version and a build
+# number, so a literal path cannot be hardcoded; taking the most recently modified file matches "package, then install".
+# If there is none, say so plainly.
+if [ -z "$APK" ]; then
+  APK=$(ls -t "$SRC"/dm/android/build/apk/d2r-mobile-android-*.apk 2>/dev/null | head -1 || true)
+  [ -n "$APK" ] || { echo "缺 APK：$SRC/dm/android/build/apk/ 下没有 d2r-mobile-android-*.apk（先跑 tools/build_apk.sh）" >&2; exit 2; }
+fi
 EXT=/sdcard/Android/data/$PKG/files
 
 [ -f "$APK" ] || { echo "缺 APK：$APK" >&2; exit 2; }

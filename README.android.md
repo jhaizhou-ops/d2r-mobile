@@ -56,7 +56,11 @@ dm/android/tools/gen_overlay.sh
 # 2) Build the native library
 cd dm/android/build && ninja
 
-# 3) Package the APK (output: dm/android/build/apk/dodola.signed.apk)
+# 3) Package the APK (output: dm/android/build/apk/d2r-mobile-android-<version>+<build>.apk, e.g.
+#    d2r-mobile-android-0.2-native-android-port+20261020.apk; the version comes from AndroidManifest.xml, the build number
+#    defaults to today's date and can be overridden with DM_APK_BUILD)
+#    The launcher icon reuses the iOS artwork (dm/ios/Assets.xcassets/AppIcon.appiconset/AppIcon1024.png) and is scaled to
+#    five densities by tools/gen_icons.py at packaging time; no second copy is kept in the repository
 dm/android/tools/build_apk.sh
 
 # 4) Deploy to the device and launch

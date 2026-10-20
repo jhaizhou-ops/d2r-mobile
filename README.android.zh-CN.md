@@ -56,7 +56,10 @@ dm/android/tools/gen_overlay.sh
 # 2) 编译原生库
 cd dm/android/build && ninja
 
-# 3) 打包 APK（产物：dm/android/build/apk/dodola.signed.apk）
+# 3) 打包 APK（产物：dm/android/build/apk/d2r-mobile-android-<版本>+<构建号>.apk，例 d2r-mobile-android-0.2-native-android-port+20261020.apk；
+#    版本号取自 AndroidManifest.xml，构建号缺省当天日期，可用 DM_APK_BUILD 覆盖）
+#    启动图标复用 iOS 那份美术（dm/ios/Assets.xcassets/AppIcon.appiconset/AppIcon1024.png），
+#    打包时由 tools/gen_icons.py 缩成 5 档密度，仓库里不另存一套
 dm/android/tools/build_apk.sh
 
 # 4) 部署到设备并启动
