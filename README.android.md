@@ -85,7 +85,9 @@ dm/android/tools/build_apk.sh
 ADB=adb ANDROID_SERIAL=<your-device> dm/android/tools/deploy_apk.sh
 ```
 
-`deploy_apk.sh` pushes the game data (RomFS and the shader cache) into the app's data directory, then installs and starts the APK. Layout:
+`deploy_apk.sh` pushes the game data (RomFS and the shader cache) into the app's data directory, pushes the
+coverage-table seed `dm/gfx/nvn/pass-coverage.tsv` next to the shaders (optional, `chmod 664` so the game can
+read it), then installs and starts the APK. Layout:
 
 ```
 /sdcard/Android/data/org.d2r.binaryprobe/files/d2r-mobile/

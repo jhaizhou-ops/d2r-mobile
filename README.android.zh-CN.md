@@ -83,7 +83,8 @@ dm/android/tools/build_apk.sh
 ADB=adb ANDROID_SERIAL=<你的设备> dm/android/tools/deploy_apk.sh
 ```
 
-`deploy_apk.sh` 会做三件事：把游戏数据（RomFS 与着色器缓存）推到应用数据目录、安装并启动 APK。数据目录约定：
+`deploy_apk.sh` 会做四件事：把游戏数据（RomFS 与着色器缓存）推到应用数据目录、把附件覆盖率表种子
+`dm/gfx/nvn/pass-coverage.tsv` 推到 shader 目录（可选，`chmod 664` 保证游戏读得到）、安装 APK、启动。数据目录约定：
 
 ```
 /sdcard/Android/data/org.d2r.binaryprobe/files/d2r-mobile/
