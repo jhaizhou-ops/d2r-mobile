@@ -565,7 +565,7 @@ typedef struct {
 } CovRec;
 static CovRec *g_cov; static unsigned g_cov_n; static int g_cov_dirty;
 static uint32_t g_cov_slot[COV_SLOTS];
-static int g_cov_table;        /* DM_ATT_LOAD_TABLE：查表决定颜色 loadOp（默认关）| default off */
+static int g_cov_table;        /* DM_ATT_LOAD_TABLE：查表决定颜色 loadOp（默认开）| default on */
 static int g_cov_quarantined;  /* 冲突后本局禁用；运行中开关不得把它重新打开 | set on COV_CONFLICT; the runtime switch must not re-enable it */
 static unsigned g_cov_min_samples=8;   /* 一条 green 至少要被独立探针命中几次才敢用（DM_COV_MIN_SAMPLES）；8 次是为了过滤「某个场景碰巧全覆盖」——实测有过 6 次全绿、第 10 次漏 1 像素的键 | samples before a green may be trusted: one key looked green 6 times and leaked a pixel on the 10th */
 static int g_cov_loaded;

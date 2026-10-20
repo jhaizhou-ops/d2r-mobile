@@ -1400,3 +1400,32 @@ python3 dm/android/tools/coverage_scan_report.py --scan coverage-scan
    默认开是因为证据够，不是因为它提帧。
 4. 回退：`diagnostics/disable-att-load-table`（重启）或 `diagnostics/att-load-table.txt=0`（运行中）；
    真在没扫过的场景看到花点，先关表复现，再把对应键改红并复跑。
+
+## 附二十二：未开的四项逐个重试（2026-10-20 晚）
+
+附二十一定稿时还有四项没开：颜色 store 跳过、深度 load 跳过、清屏折叠、通道合并。
+这一节是把它们逐个打开实测的结果——三项判负，一项本来就没有可做的对象。
+
+| 项 | 开关/做法 | 实测 | 结论 |
+|---|---|---|---|
+| 颜色/中间缓冲 store 跳过 | `diagnostics/attskip.txt=3`（0 关 / 1 深度 / 2 颜色 / 3 全部） | 记账 store **230 → 0**、总流量 617 → 387 MB/帧；但打开物品栏/选项后**面板画不出来**，HUD 也会消失 | ❌ 判负。UI 合成附件后续还要读，不能全局跳 store；保持缺省 `1`（只跳深度） |
+| 深度 load 跳过 | 测试开关 + 带深度 green 的种子（深度键也走 DONT_CARE） | 启动加载阶段 **SIGABRT**：`STOP unimplemented NVN command opcode (257)`；恢复普通种子后正常 | ❌ 判负。深度 z-test 依赖上一帧内容，深度 green 本身也不可信；深度 load 保持 LOAD，测试开关已从代码回退 |
+| 清屏折叠 | 把独立清屏并进 `loadOp=CLEAR` | 独立清屏 **0 次/帧**；清屏都在通道内直接写（29 次/帧） | ✅ 无对象可折。清屏首绘的通道会被覆盖率表判 green，load 已由附二十省掉 |
+| 连续同目标通道合并 | 没有合并开关；用 `DM_QUERY_PRERESET=1` 做“更少更长通道”的近似 | 通道 126 → **93**/帧、总流量 617 → **397** MB/帧，但 fps 39.1 / 39.2 / 35.5（基线 37.6–39.9），GPU wait 213–228 ms 反而更高 | ❌ 判负。和附十三一致：这块 Adreno 上更少更长的通道不划算 |
+
+### 结论
+
+- 四项里只有 **loadOp 覆盖率表**（附二十）是真正能留的：颜色附件 load 421.8 → 387.4 MB/帧。
+- 颜色 store 和深度 load 是**正确性**问题，不是“再调调参数就能开”：前者 UI 直接消失，后者启动崩溃。
+- 通道合并方向在当前机器上稳定负收益；清屏折叠没有对象。
+- 默认路径仍是：`DM_ATT_LOAD_TABLE=1`（附二十），`DM_ATT_STORE_SKIP=1`（只跳深度 store），
+  深度 load 保持 LOAD，不做通道合并。
+
+复现命令：
+
+```bash
+# 颜色 store 跳过（会坏 UI，仅复现用）
+printf '3\n' > diagnostics/attskip.txt && chmod 664 diagnostics/attskip.txt
+# 恢复
+printf '1\n' > diagnostics/attskip.txt
+```
