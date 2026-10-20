@@ -4,7 +4,7 @@
 
 中文: [README.android.zh-CN.md](README.android.zh-CN.md) · Main repository: [README.md](README.md) · Game files: [docs/GAME_FILES.md](docs/GAME_FILES.md)
 
-> **Status: in development.** The Android build is fully playable (into a game, combat, saves, settings, the complete touch scheme), but it does not yet reach the iOS build's 60 fps — it currently measures about **30 fps** (see "Measured performance" below). The release target and the known limits are both documented here.
+> **Status: in development.** The Android build is fully playable (into a game, combat, saves, settings, the complete touch scheme), but it does not yet reach the iOS build's 60 fps — it currently measures **30–40 fps** depending on the resolution tier (see "Measured performance" below). The release target and the known limits are both documented here.
 
 ---
 
@@ -42,7 +42,7 @@ See [docs/GAME_FILES.md](docs/GAME_FILES.md) for how to export them from your ow
 | Android NDK | 27.2.12479018 |
 | CMake | 3.22 or later |
 | Ninja | any recent version |
-| JDK | 17 (for packaging the APK) |
+| JDK | 17 or newer (any `javac`; packaging compiles with `-source 17`) |
 | Python 3 | for asset generation and the verification scripts |
 
 ### 2.2 Steps
@@ -99,42 +99,67 @@ The first launch does a slower initial pass (unpacking and indexing resources); 
 
 The Custom settings page has a **Resolution** row with three choices:
 
-| Tier | Output budget | World (3D) budget | Notes |
-|---|---|---|---|
-| Power saver | 1.80 MP (1966×914) | 1.00 MP | cheapest, softest picture |
-| **Standard (default)** | 2.40 MP (2270×1056) | 1.25 MP (3D scale 0.722) | about 30 fps on the tested phone |
-| High | native output | 0.55 × output | sharpest UI, world resolution below standard |
+The three tiers are defined by **vertical pixels** (800p / 1080p / native); the width is derived from
+the height times the SurfaceView aspect, so **no tier distorts the picture**. The world (3D) budget is
+an **absolute megapixel figure**, from which the 3D scale is derived. The absolute numbers below are
+from the tested phone (SurfaceView 2624×1220); other screens recompute with the same formula.
 
-The output width is derived from the height to keep the display aspect exactly — **no tier distorts the
-picture**. Changing the tier requires restarting the game.
+| Tier | Output (measured on a 2624×1220 screen) | World (3D) budget → actual | Measured frame interval (camp) |
+|---|---|---|---|
+| Power saver | 800p: 1720×800 (1.38 MP) | 0.85 MP → scale 0.786, 1352×629 | P50 24.8 ms, P95 40.5 ms (≈40 fps) |
+| **Standard (default)** | 1080p: 2322×1080 (2.51 MP) | 1.10 MP needs scale 0.662, below the 0.70 floor → **clamped to 0.70**, 1.23 MP (1625×756) | P50 24.8–33.0 ms (30–40 fps) |
+| High | panel native: 2624×1220 (3.20 MP) | 1.75 MP → scale 0.739, 1940×902 | P50 28.9–33.0 ms (30–35 fps) |
+
+> The standard tier logs a yellow line on every start: `【黄】世界预算需 3D 比例 0.662 < 0.70，按 0.70 截断`
+> ("world budget needs 3D scale 0.662 < 0.70, clamped to 0.70"). That is expected — the 0.70 floor keeps the
+> world from getting too soft; the 1.10 MP budget only takes effect if the floor drops below 0.66.
+>
+> Thermal downscaling is **off by default** on Android (it needs `DM_3D_SCALE_DYN=1`): levels
+> 0.85 / 0.80 / 0.75 / 0.70 / 0.65, floor 0.70. While it is off, the 3D scale is the fixed value in the
+> table above. Details: [docs/android-resolution-plan.zh-CN.md](docs/android-resolution-plan.zh-CN.md), appendix 19.
+
+Changing the tier requires restarting the game (the output resolution is fixed at startup).
 
 Outside the Custom page you can also override with `diagnostics/quality.txt` (one line: `low` /
 `standard` / `high`) or with `diagnostics/flag-*` (see `dm/android/app_jni.c` for the full list).
 Priority: `DM_GAME_RES` / `DM_3D_SCALE` environment variables > `DM_QUALITY_TIER` > Custom page > default.
 
-### 4.2 Measured performance (22081212C, standard tier, camp scene)
+### 4.2 Measured performance (22081212C, camp scene)
 
-| Metric | Value |
-|---|---|
-| Frame rate | **29.9–30.1 fps** (cool state, X2 at 1.5–2.1 GHz; SurfaceFlinger actual presentation timestamps) |
-| Frame interval | P50 33.06 ms, P95 41.3 ms, dropped frames 0 |
-| CPU (game thread) | about 33 ms/frame — replay 16–19 ms, command recording about 3 ms |
-| GPU | about 28 ms/frame (80–90% utilisation) |
-| Core usage | one render thread is saturated at 100% (the bottleneck); about 2 cores for the whole process |
+External ruler `tools/pf/sf_fps.py` (SurfaceFlinger actual presentation timestamps), 2026-10-20, same
+camp, three 15-second windows per tier:
 
-**Thermal effect**: after a long session the SoC throttles (measured: X2 dropping from 2.13 GHz to
-1.29 GHz) and the same scene falls to about **27 fps**. That is the device's thermal design, not a
-software regression; holding the higher frame rate needs better cooling.
+| Tier (output / world) | Frame interval P50 | P95 | Effective |
+|---|---|---|---|
+| Power saver 1720×800 / 1352×629 | 24.8 ms | 40.5 ms | ≈40 fps |
+| Standard 2322×1080 / 1625×756 | 24.8–33.0 ms | 33.1 ms | 30–40 fps |
+| High 2624×1220 / 1940×902 | 28.9–33.0 ms | 33.1 ms | 30–35 fps |
+| Standard + `DM_3D_SCALE=0.90` | 33.0 ms | 33.1 ms | ≈30 fps |
 
-**World scale versus frame rate** (same camp, stepped through restarts): with the standard output
-fixed at 2270×1056, a world scale of 0.722 → 0.90 holds the same frame rate (**81% more world pixels
-for free**); only 1.0 costs about 3%. For a sharper picture set `DM_3D_SCALE=0.88` (restart to apply).
+**Read this with one thing in mind**: the panel is 120 Hz, and present pacing lands on either 3 vsyncs
+(≈25 ms) or 4 vsyncs (≈33 ms) — the "25 ms present cadence" comment in `dm/android/app_jni.c` is the
+same thing. **The same tier switches between the two within minutes**, so a single 15-second window
+cannot compare tiers: all of them sit in 30–40 fps and the differences are lost in measurement noise.
+What can be stated:
+
+- **Output pixels barely matter**: the power-saver output is 55% of the standard one, yet no stable
+  difference in frame interval shows up — the bottleneck is **the serial work of one submission
+  thread** (about 1,977 draws and 36,000 commands per frame, binding resolution the main cost; one
+  render thread is saturated at 100%).
+- **World scale**: raising the standard tier's 3D scale to 0.90 (world 1.23 → 2.03 MP) still measured
+  the 33 ms band and showed no separate, slower regime — but neither did it reproduce the old claim
+  that "0.722 → 0.90 holds the frame rate for 81% more pixels for free". For a sharper picture try
+  `DM_3D_SCALE=0.85` and judge with a long-window A/B on your own phone (restart to apply).
+- **Thermal effect**: after a long session the SoC throttles (measured: X2 dropping from 2.13 GHz to
+  1.29 GHz) and the same scene loses another 3–5 fps (2026-10-19 standard-tier baseline: ~30 → ~27 fps).
+  That is the device's thermal design, not a software regression.
 
 ### 4.3 Where the gap to iOS is
 
-iOS holds 60 fps; Android is at 30. The gap is not on the GPU side (the GPU still has headroom) but in
-**the serial work of one submission thread**: about 1,977 draws and 36,000 commands per frame, with
-binding resolution as the main cost. Every optimisation tried and every one ruled out is recorded in
+iOS holds 60 fps; Android currently sits at **30–40 fps** depending on the tier (high 30–35, standard
+and power saver about 40). At the standard tier the bottleneck is not the GPU but **the serial work of
+one submission thread** (about 1,977 draws and 36,000 commands per frame); with more world pixels
+(3D scale above 0.90, or the high tier) it more often lands in the 30 fps band. Every optimisation tried and every one ruled out is recorded in
 [docs/android-resolution-plan.zh-CN.md](docs/android-resolution-plan.zh-CN.md) (Chinese).
 
 ---
@@ -184,8 +209,9 @@ bash dm/android/tools/sync_surface_audit.sh       # surface-sync audit (conflict
 
 ## 7. Known limitations
 
-- **Performance**: about 30 fps; the 40 fps target has not been reached yet (reasons and ruled-out
-  approaches are in section 4 and the linked plan document).
+- **Performance**: about 40 fps on the standard / power-saver tiers and 30–35 on high (cool camp
+  scene), still short of iOS's 60 fps; the bottleneck is the single submission thread (section 4 and
+  the linked plan document).
 - **Validation layer**: not installed on the device; the built-in driver-side message callback stands
   in for it.
 - **Address sanitizer**: `cmake -DDM_ASAN=ON` plus `DM_PACK_ASAN=1 dm/android/tools/build_apk.sh`

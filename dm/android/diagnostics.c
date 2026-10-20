@@ -241,11 +241,12 @@ void dm_backtrace(uint64_t fp) {
     }
 }
 /* 输出分辨率：按「分辨率档」（自定义页 q_res，Android 专属）与屏幕尺寸算出来，比例严格等于 SurfaceView。
- * 档位预算见 docs/android-resolution-plan.zh-CN.md：low 1.8 MP / standard 2.4 MP / high = 屏幕原生。
+ * 档位按纵向像素定义：low 800p / standard 1080p / high = 屏幕原生（见 docs/android-resolution-plan.zh-CN.md 附十九）。
  * DM_GAME_RES=宽x高 仍然最优先（脚本、调试、quality.txt 老档别名都走它）。
  * Output resolution: derived from the "resolution tier" (Custom page q_res, Android only) and the surface size,
  * with the aspect ratio exactly equal to the SurfaceView. Budgets: docs/android-resolution-plan.zh-CN.md
- * (low 1.8 MP / standard 2.4 MP / high = screen native). DM_GAME_RES=WxH still wins (scripts, debugging, old quality.txt aliases). */
+ * (low 800p / standard 1080p / high = screen native; see docs/android-resolution-plan.zh-CN.md appendix 19).
+ * DM_GAME_RES=WxH still wins (scripts, debugging, old quality.txt aliases). */
 static unsigned g_out_w, g_out_h;   // 最近一次算出的出图（hle_oe.c 反算 3D 比例要读同一个值） | last derived output (hle_oe.c reads the same value to derive the 3D scale)
 
 static int game_res_env(unsigned *w, unsigned *h) {

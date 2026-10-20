@@ -14,7 +14,11 @@
 
 - **我们这层**：`TouchControlsView.java` 与 iOS `DmTouchOverlay.m` 同一公式（注释在 `dm/ios/Sources/DmTouchOverlay.m:77-79`）：
   `x = 屏宽/2 + (稿像素 − 1434) × 屏高/1320`、`y = 稿像素 × 屏高/1320`。共享 C 里的触摸层也一模一样（`dm/ios/Sources/dm_touch_controls.c:62-70`：`l->width/2 + (稿x − 1434) * u`）。
-- **游戏出图**：默认档**硬编码 2624×1220**（`dm/android/diagnostics.c:250-260`，`DM_GAME_RES` 可覆盖，上限 3840×2160）。
+- **游戏出图**：现按分辨率档**从 SurfaceView 派生**（`dm/android/diagnostics.c` 的 `quality_out_compute`：
+  800p / 1080p / 原生，宽度由高度乘屏比）；老版本曾硬编码 2624×1220。`DM_GAME_RES` 仍最优先（上限 3840×2160）。
+  本机默认档（标准）是 2322×1080，与旧的 2624×1220 比例相同（2.151）；**出图与 SurfaceView 严格同比例**，
+  下面说的横向多拉只可能发生在 SurfaceView（2624 宽）→ 面板（2712 宽）这一段，与档位无关。
+  现行档位数值见 [android-resolution-plan.zh-CN.md](android-resolution-plan.zh-CN.md) 附十九。
 - **本机实测**（adb，2026-10-18）：`model 22081212C`，物理 **1220×2712**、density 480 → 横屏 2712×1220 = **20:9**；出图 2624×1220 = 19.35:9 → **横向多拉 3.3%**。
 - **安卓的呈现方式**：`vkCmdBlitImage` 的 `dstOffsets` = 整个 swap extent（`dm/gfx/nvn/nvn_vk.c:3443-3451`）→ **拉满整屏，不保比例、不留黑边**。iOS 相反：保比例居中留边（`dm/gfx/nvn/nvn_mtl.m:5928`），而且 iOS 的出图 = 屏幕原生尺寸，所以那边天然没这个问题。
 - **后果**：中心对齐（中线处误差为 0），**越靠屏幕边误差越大**。本机上底栏最右的雕像翼尖约差 17px、屏幕最右约差 40px——所以"底栏全对"的验收没错，只是差得看不出来。

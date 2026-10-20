@@ -390,12 +390,16 @@ static void android_scale_configure(void) {
        档位可在 diagnostics/quality.txt 或 flag/env 里改（app_jni.c）。 */
     float base=0.75f;
 #if defined(__ANDROID__)
-    /* 分辨率档（自定义页 q_res）决定世界预算：low 1.0 MP / standard 1.25 MP / high 0.55×出图。
-       出图像素由 front_game_res 同一套预算算出（含 DM_GAME_RES 覆盖）。派生值自己夹在 0.70..1.0，
-       不把超出范围的数交给下面那句 die（那是给显式 DM_3D_SCALE 用的校验）。
-       Resolution tier (Custom page q_res) decides the world budget: low 1.0 MP / standard 1.25 MP / high 0.55x output.
-       The output pixels come from the same budgets in front_game_res (including the DM_GAME_RES override). The derived value is
-       clamped to 0.70..1.0 here instead of being handed to the die below (that check is for an explicit DM_3D_SCALE). */
+    /* 分辨率档（自定义页 q_res）决定世界预算：low 0.85 MP / standard 1.10 MP / high 1.75 MP（绝对 MP）。
+       出图像素按纵向像素档（800p / 1080p / 原生）在 front_game_res 里派生（含 DM_GAME_RES 覆盖）。
+       派生值自己夹在 0.70..1.0，不把超出范围的数交给下面那句 die（那是给显式 DM_3D_SCALE 用的校验）；
+       标准档的 1.10 MP 需要 0.662、会被 0.70 下限截断，日志会打黄字（预期行为，见
+       docs/android-resolution-plan.zh-CN.md 附十九）。
+       Resolution tier (Custom page q_res) decides the world budget: low 0.85 MP / standard 1.10 MP / high 1.75 MP, absolute MP.
+       The output pixels are derived in front_game_res from the vertical-pixel tier (800p / 1080p / native), including the
+       DM_GAME_RES override. The derived value is clamped to 0.70..1.0 here instead of being handed to the die below (that check
+       is for an explicit DM_3D_SCALE); the standard tier's 1.10 MP would need 0.662 and is clamped by the 0.70 floor, logging a
+       yellow line (expected; see docs/android-resolution-plan.zh-CN.md appendix 19). */
     { extern unsigned dm_android_quality_out_px(void);
       unsigned out = dm_android_quality_out_px();
       int tier = dm_custom_res_tier();

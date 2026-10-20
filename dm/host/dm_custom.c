@@ -29,7 +29,7 @@ static const char *const k_keys[] = { "lang_en", "auto_mana", "merc_pot", "drop_
 #define NK (int)(sizeof k_keys / sizeof *k_keys)
 static const int k_def[NK] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
 #if defined(__ANDROID__)
-                               1,   // q_res 缺省 1 = 标准档（1.8/2.4 MP 预算，见 docs/android-resolution-plan.zh-CN.md） | q_res default 1 = standard tier (budgets in docs/android-resolution-plan.zh-CN.md)
+                               1,   // q_res 缺省 1 = 标准档（1080p，世界预算 1.10 MP；见 docs/android-resolution-plan.zh-CN.md 附十九） | q_res default 1 = standard tier (1080p, 1.10 MP world budget; see docs/android-resolution-plan.zh-CN.md appendix 19)
 #endif
                                0, 1, 1, 0 };   // 缺省值：省电模式（30 帧）缺省关、3D 画质缺省流畅优先（q3d=0），换组默认在传送门左侧，其余缺省开 | Defaults: power-saving mode (30 fps) off, 3D quality smoothness first (q3d=0), switch left of portal by default, everything else on
 // q3d（3D 画质）：0 = 流畅优先（掉帧就自动降 3D 比例）、1 = 画质优先（不自动降）。生效 = 调 hle_oe.c 的 dm_3d_quality_mode_set，读盘与点「应用」时当场调，下一帧控制器就按新档走。

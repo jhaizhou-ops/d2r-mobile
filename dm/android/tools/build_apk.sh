@@ -101,8 +101,18 @@ if [ -f "$APPICON" ]; then
 else
     echo "警告：缺 iOS 图标 ${APPICON}，APK 将没有启动图标"
 fi
+# res/ 得先 aapt2 compile 成编译单元再交给 link：`-R` 是"overlay 语义的编译单元"（zip/apk），
+# 不收源码目录——直接 -R res 会以 "failed to read magic from input: Is a directory" 失败（真机链路实测）。
+# 所以走标准两步：compile --dir → 产出 res.zip，再作为普通输入位置参数交给 link。
+# res/ must be compiled into a compilation unit before link: `-R` means "compilation unit with overlay semantics"
+# (a zip/apk), and it does not take a source directory -- passing `-R res` fails with "failed to read magic from
+# input: Is a directory" (measured on a real packaging run). So use the standard two-step: compile --dir -> res.zip,
+# then hand that to link as an ordinary positional input.
 AAPT_RES=()
-[ -d "$RES" ] && AAPT_RES=(-R "$RES")
+if [ -d "$RES" ]; then
+    "$AAPT2" compile --dir "$RES" -o "$OUT/res.zip" || { echo "🔴 资源编译失败" >&2; exit 1; }
+    AAPT_RES=("$OUT/res.zip")
+fi
 "$AAPT2" link -o "$OUT/base.apk" -I "$PLATFORM_JAR" \
     --manifest "$SRC/dm/android/AndroidManifest.xml" -A "$OUT/assets" "${AAPT_RES[@]}" --java "$OUT/gen"
 
