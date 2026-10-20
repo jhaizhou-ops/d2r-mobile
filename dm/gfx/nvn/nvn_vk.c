@@ -680,7 +680,7 @@ static void backend_init(void) {
     {const char *ps=getenv("DM_PASS_SPLIT");G.pass_split_draws=ps?atoi(ps):0;}
     G.fb_cache_enabled=getenv("DM_DISABLE_FB_CACHE")==NULL;
     G.read_memo_enabled=getenv("DM_DISABLE_READ_MEMO")==NULL;
-    G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;g_att_audit_on=getenv("DM_ATT_AUDIT")!=NULL;{const char *ss=getenv("DM_ATT_STORE_SKIP");g_att_store_skip=ss?atoi(ss):0;}{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
+    G.disable_desc_cache=getenv("DM_DISABLE_DESC_CACHE")!=NULL;G.disable_control_cache=getenv("DM_DISABLE_CONTROL_CACHE")!=NULL;G.disable_barrier_elision=getenv("DM_DISABLE_BARRIER_ELISION")!=NULL;G.disable_sample_copy_cache=getenv("DM_DISABLE_SAMPLE_COPY_CACHE")!=NULL;G.pass_timing=getenv("DM_PASS_TIMING")!=NULL;g_att_audit_on=getenv("DM_ATT_AUDIT")!=NULL;{const char *ss=getenv("DM_ATT_STORE_SKIP");g_att_store_skip=ss?atoi(ss):1;}{const char *sk=getenv("DM_SKIP_PS");if(sk){strncpy(G.skip_ps,sk,16);G.skip_ps[16]=0;fprintf(stderr,"[nvn-vulkan] DIAG_SKIP_PS key=%s (timing diagnostic only)\n",G.skip_ps);}}
     G.disable_resource_cache=getenv("DM_DISABLE_RESOURCE_CACHE")!=NULL;
     /* 上游（dodola）默认开启，在 Adreno 642L 系统驱动上实测营地 +17.5%（19.23→22.60 fps）。
      * 我们在 Adreno 730 / 同一驱动 id=8 上交替重启四轮 A/B：按标志 27.79/27.55 vs 保守
@@ -701,7 +701,7 @@ static void backend_init(void) {
     G.control_cache=calloc(CONTROL_CACHE,sizeof(*G.control_cache));
     if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
-     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;g_load_skip=getenv("DM_ATT_LOAD_SKIP")!=NULL;if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
+     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;{const char *vl=getenv("DM_ATT_LOAD_SKIP");g_load_skip=vl?atoi(vl):1;}if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
      fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}

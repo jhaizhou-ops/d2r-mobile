@@ -255,8 +255,15 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
        shots (the per-cell diff map matches the noise shape), but combat/effects/cutscenes are not
        validated and Vulkan allows DONT_CARE to leave arbitrary contents -- so off by default,
        enabled only when diagnostics/enable-att-skip exists. Delete the file to roll back. */
-    path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-att-skip");
-    if(access(driver_option,F_OK)==0)setenv("DM_ATT_STORE_SKIP","1",1);
+    /* 附件冗余带宽削减现在**默认开**（哨兵探针已证明颜色附件全覆盖；深度 store 跳过在
+       营地/野外静态对拍无可检测差异）。两个回退文件见下，删/建即切。
+       Attachment-bandwidth elision now defaults to ON; see the rollback files below. */
+    setenv("DM_ATT_STORE_SKIP","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-skip");
+    if(access(driver_option,F_OK)==0)setenv("DM_ATT_STORE_SKIP","0",1);
+    setenv("DM_ATT_LOAD_SKIP","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-load-skip");
+    if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_SKIP","0",1);
     setenv("DM_WRITEBACK_PREPARE","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-writeback-prepare");
     if(access(driver_option,F_OK)==0)setenv("DM_WRITEBACK_PREPARE","0",1);
