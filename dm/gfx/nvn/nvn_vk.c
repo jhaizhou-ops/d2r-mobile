@@ -512,8 +512,9 @@ static void trace_capture_queue(VBuffer *buffer,uint64_t bytes,const char *name)
    自检：DM_PASS_SENTINEL_SELFTEST=1 时回读前再清一次 → 必然全哨兵；报 0 即链路是假绿。 */
 #define SENT_MAX 16
 static int g_sent_on;
+static int g_load_skip;   /* DM_ATT_LOAD_SKIP：颜色附件 loadOp=DONT_CARE（哨兵探针已证全覆盖） */
 static uint64_t g_sent_passes,g_sent_dirty_passes,g_sent_pixels,g_sent_dirty_pixels,g_sent_frames;
-static unsigned g_sent_seen;
+static unsigned g_sent_seen;static uint64_t g_sent_pass0,g_sent_frame_seen;static unsigned g_sent_target;
 static void sentinel_complete(VkSubmission *sub);
 static void texture_transition(VTexture *t,VkImageLayout layout);
 static void trace_capture_complete(VkSubmission *sub) {
@@ -700,7 +701,7 @@ static void backend_init(void) {
     G.control_cache=calloc(CONTROL_CACHE,sizeof(*G.control_cache));
     if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
-     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
+     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;g_load_skip=getenv("DM_ATT_LOAD_SKIP")!=NULL;if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
      fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}
@@ -1234,9 +1235,10 @@ static void sentinel_complete(VkSubmission *sub) {
         uint64_t n=(uint64_t)w*h,dirty=0;const uint8_t *px=rb->map;
         for(uint64_t k=0;k<n;k++,px+=4) if(px[0]==255&&px[1]==0&&px[2]==255) dirty++;
         g_sent_passes++;g_sent_pixels+=n;
-        if(dirty){g_sent_dirty_passes++;g_sent_dirty_pixels+=dirty;
-            fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_RED pass=%u rt=%ux%u serial=%llu uncovered=%llu/%llu (%.3f%%)\n",
-                sub->sentinel[i].pass,w,h,(unsigned long long)sub->sentinel[i].serial,(unsigned long long)dirty,(unsigned long long)n,100.0*(double)dirty/(double)n);}
+        if(dirty){g_sent_dirty_passes++;g_sent_dirty_pixels+=dirty;}
+        fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_PROBE slot=%u rt=%ux%u serial=%llu uncovered=%llu/%llu (%.3f%%)%s\n",
+            sub->sentinel[i].slot,w,h,(unsigned long long)sub->sentinel[i].serial,(unsigned long long)dirty,(unsigned long long)n,
+            100.0*(double)dirty/(double)n,dirty?" [RED]":"");
     }
     sub->nsentinel=0;
     if(g_sent_frames%16==0)
@@ -3277,11 +3279,13 @@ static VkRenderPass render_begin(void) {
         if(g_att_audit_on && !(G.diag_loadstore>=2)) att_audit_read(t->serial);
         int skip_store = G.diag_loadstore>=1 ||
             ((g_att_store_skip&1) && is_depth) || ((g_att_store_skip&2) && !is_depth);
-        if(g_sent_on && !is_depth && n==0 && t->bpp==4 && (uint64_t)t->width*t->height<=1024ull*1024 && S.nsentinel<1 && G.pass_count==(uint32_t)(G.present_count%24)){
+        if(g_sent_on){ if(G.present_count!=g_sent_frame_seen){g_sent_frame_seen=G.present_count;g_sent_pass0=G.pass_count;g_sent_target=(g_sent_target+1)%160;} }
+        if(g_sent_on && !is_depth && n==0 && t->bpp==4 && (uint64_t)t->width*t->height<=1024ull*1024 && S.nsentinel<1
+           && (G.pass_count-g_sent_pass0)==g_sent_target){
             probe_slot=n; probe_tex=t;
         }
         attachments[n]=(VkAttachmentDescription){.format=t->format,.samples=VK_SAMPLE_COUNT_1_BIT,
-           .loadOp=G.diag_loadstore>=2?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
+           .loadOp=(G.diag_loadstore>=2||(g_load_skip&&!is_depth))?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
            .storeOp=skip_store?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
            .stencilLoadOp=G.diag_loadstore>=2?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
            .stencilStoreOp=G.diag_loadstore>=1?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
@@ -3366,7 +3370,7 @@ static VkRenderPass render_begin(void) {
     if(probe_slot>=0){ sent_clear[probe_slot].color.float32[0]=1.0f;sent_clear[probe_slot].color.float32[1]=0.0f;
         sent_clear[probe_slot].color.float32[2]=1.0f;sent_clear[probe_slot].color.float32[3]=1.0f;
         S.sentinel[S.nsentinel].buf=NULL;S.sentinel[S.nsentinel].tex=probe_tex;S.sentinel[S.nsentinel].w=probe_tex->width;
-        S.sentinel[S.nsentinel].h=probe_tex->height;S.sentinel[S.nsentinel].pass=G.pass_count;S.sentinel[S.nsentinel].serial=probe_tex->serial;S.nsentinel++;
+        S.sentinel[S.nsentinel].h=probe_tex->height;S.sentinel[S.nsentinel].pass=G.pass_count;S.sentinel[S.nsentinel].serial=probe_tex->serial;S.sentinel[S.nsentinel].slot=(uint32_t)(G.pass_count-g_sent_pass0);S.nsentinel++;
         if(!g_sent_seen){g_sent_seen=1;fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_FIRST rt=%ux%u bpp=%u serial=%llu\n",probe_tex->width,probe_tex->height,probe_tex->bpp,(unsigned long long)probe_tex->serial);} }
     VkRenderPassBeginInfo begin={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=rp,.framebuffer=fb,
        .renderArea={{0,0},{(G.diag_shape&4)&&width>16?16:width,(G.diag_shape&4)&&height>16?16:height}},
