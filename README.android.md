@@ -58,12 +58,19 @@ See [docs/GAME_FILES.md](docs/GAME_FILES.md) for how to export them from your ow
 ### 2.2 Steps
 
 ```bash
-# 1) Generate assets and the ROMFS overlay (needs the game files above)
+# 1) Patch the game modules and generate the host lookup tables (both need the game files above; step 3's
+#    ninja build already depends on the tables)
+dm/android/tools/build_modules.sh
+#    Products: build/modules-touch/{main,sdk,subsdk0}.patched.bin (used when packaging) and the host's three tables:
+#    dm_hud_exp.h / dm_vault_tab.h (in build/generated/) and dm_bright_levels.inc (in dm/host/, the cave / indoor
+#    criterion of the 3D picture brightening). Missing game files fail loudly with a red message, never a silent skip.
+
+# 2) Generate assets and the ROMFS overlay (needs the game files above)
 dm/android/tools/gen_overlay.sh
 #    If assets were generated before and you only want to repackage:
 #    DM_ASSETS_REUSE=1 dm/android/tools/gen_overlay.sh
 
-# 2) Configure and build the native library (the build directory is not in the repository, so a new machine
+# 3) Configure and build the native library (the build directory is not in the repository, so a new machine
 #    configures it once)
 SDK=${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}
 NDK=$SDK/ndk/27.2.12479018
@@ -71,17 +78,17 @@ cmake -S dm/android -B dm/android/build -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
       -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release
 cd dm/android/build && ninja
-#    Configure checks for gen-assets/native_art/dm_touch_native_art.c from step 1; if the assets were generated
+#    Configure checks for gen-assets/native_art/dm_touch_native_art.c from step 2; if the assets were generated
 #    elsewhere, point DM_GEN_ASSETS=/path/to/gen-assets at them (or copy dm/android/build/gen-assets wholesale).
 
-# 3) Package the APK (output: dm/android/build/apk/d2r-mobile-android-<version>+<build>.apk, e.g.
+# 4) Package the APK (output: dm/android/build/apk/d2r-mobile-android-<version>+<build>.apk, e.g.
 #    d2r-mobile-android-0.2-native-android-port+20261020.apk; the version comes from AndroidManifest.xml, the build number
 #    defaults to today's date and can be overridden with DM_APK_BUILD)
 #    The launcher icon reuses the iOS artwork (dm/ios/Assets.xcassets/AppIcon.appiconset/AppIcon1024.png) and is scaled to
 #    five densities by tools/gen_icons.py at packaging time; no second copy is kept in the repository
 dm/android/tools/build_apk.sh
 
-# 4) Deploy to the device and launch
+# 5) Deploy to the device and launch
 ADB=adb ANDROID_SERIAL=<your-device> dm/android/tools/deploy_apk.sh
 ```
 
