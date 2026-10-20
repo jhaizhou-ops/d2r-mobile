@@ -566,6 +566,7 @@ typedef struct {
 static CovRec *g_cov; static unsigned g_cov_n; static int g_cov_dirty;
 static uint32_t g_cov_slot[COV_SLOTS];
 static int g_cov_table;        /* DM_ATT_LOAD_TABLE：查表决定颜色 loadOp（默认关）| default off */
+static int g_cov_quarantined;  /* 冲突后本局禁用；运行中开关不得把它重新打开 | set on COV_CONFLICT; the runtime switch must not re-enable it */
 static unsigned g_cov_min_samples=8;   /* 一条 green 至少要被独立探针命中几次才敢用（DM_COV_MIN_SAMPLES）；8 次是为了过滤「某个场景碰巧全覆盖」——实测有过 6 次全绿、第 10 次漏 1 像素的键 | samples before a green may be trusted: one key looked green 6 times and leaked a pixel on the 10th */
 static int g_cov_loaded;
 static uint64_t g_cov_green_bytes,g_cov_red_bytes,g_cov_miss_bytes,g_cov_weak_bytes;   /* 查表决策记账 | decision accounting, windowed */
@@ -614,6 +615,7 @@ static void cov_note(uint64_t key,uint32_t w,uint32_t h,uint32_t format,int is_d
             fprintf(stderr,"[nvn-vulkan] COV_CONFLICT pk=%016llx rt=%ux%u fmt=%u d=%d：表里 green，探针实测漏 %llu/%llu → 改判 red 并停用本局查表（宁可慢，不许花屏）\n",
                 (unsigned long long)key,w,h,format,is_depth,(unsigned long long)uncovered,(unsigned long long)total);
             g_cov_table=0;
+            g_cov_quarantined=1;
         }
         fprintf(stderr,"[nvn-vulkan] COV_RED pk=%016llx rt=%ux%u fmt=%u d=%d uncovered=%llu/%llu 该键保持 LOAD\n",
             (unsigned long long)key,w,h,format,is_depth,(unsigned long long)uncovered,(unsigned long long)total);
@@ -4715,6 +4717,17 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
           if(lsdir&&*lsdir&&snprintf(lsf,sizeof lsf,"%s/loadstore.txt",lsdir)<(int)sizeof lsf){FILE *fp=fopen(lsf,"r");
             if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=3&&m!=G.diag_loadstore){G.diag_loadstore=m;
                 fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE 运行中切换 → %d（%s）\n",m,m?"内容将不正确（诊断）":"恢复正常");}fclose(fp);}}}
+        /* 覆盖率表运行中开关：att-load-table.txt = 1 开 / 0 关，每窗口读一次。
+           表在首次出图时已经载入（无论开不开），所以这里只翻转 g_cov_table；表外键仍然一律 LOAD。
+           冲突隔离（COV_CONFLICT）优先：已经隔离的会话不允许再打开，避免运行中开关把安全闸门绕掉。
+           Runtime coverage-table switch, read once per window. The table is loaded at first present
+           regardless of the switch, so this only flips g_cov_table; keys absent from the table still
+           stay LOAD. Quarantine wins: once a conflict latched, this switch cannot re-enable it. */
+        { static const char *ctdir; if(!ctdir)ctdir=getenv("DM_FRAME_DIR"); char ctf[1300]; static int cwarned;
+          if(ctdir&&*ctdir&&snprintf(ctf,sizeof ctf,"%s/att-load-table.txt",ctdir)<(int)sizeof ctf){FILE *fp=fopen(ctf,"r");
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&(m==0||m==1)&&m!=g_cov_table){
+                if(m&&g_cov_quarantined){ if(!cwarned){cwarned=1;fprintf(stderr,"[nvn-vulkan] ATT_LOAD_TABLE 运行中请求开，但本局已因 COV_CONFLICT 隔离 → 保持关\n");} }
+                else { g_cov_table=m; cwarned=0; fprintf(stderr,"[nvn-vulkan] ATT_LOAD_TABLE 运行中切换 → %s\n",m?"开（表内 green 颜色附件用 DONT_CARE）":"关（全部恢复 LOAD）"); }}fclose(fp);}}}
         /* 分块提交粒度运行时切换：chunkd.txt = 每多少绘制冲刷一次（0 = 关，整帧一个命令缓冲）。
          * 每个窗口（~1 秒）读一次，下一帧起生效。 | Runtime chunk-submit granularity: chunkd.txt =
          * draws between flushes (0 = off, one command buffer per frame). Read once per window. */

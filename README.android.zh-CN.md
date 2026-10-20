@@ -208,7 +208,8 @@ iOS 版能稳定 60 fps，Android 目前视档位在 **30–40 fps**（高清 30
 | `quality.txt` | 画质档：`low` / `standard` / `high` |
 | `flag-*` | 各种预设开关（分块大小、比例、呈现频率等） |
 | `loadstore.txt` / `planstate.txt` / `prereset.txt` / `nooccl.txt` / `chunkd.txt` … | **运行中 A/B** 开关：内容 0/1（或档位值），每个统计窗口读一次，不必重启 |
-| `enable-att-load-table` / `disable-att-load-table` | 开/关逐通道 `loadOp` 覆盖率表（默认关；原理与实测见 `docs/android-resolution-plan.zh-CN.md` 附二十） |
+| `att-load-table.txt` | 逐通道覆盖率表的**运行中开关**：`1` 开 / `0` 关，每窗口读一次；冲突隔离后拒绝再开 |
+| `enable-att-load-table` / `disable-att-load-table` | 启动时开/关逐通道 `loadOp` 覆盖率表（默认关；原理与实测见 `docs/android-resolution-plan.zh-CN.md` 附二十） |
 | `pass-sentinel` / `pass-sentinel-selftest` | 开哨兵探针给覆盖率表填数据（很慢，7–18fps；`selftest` 让探针自证会报红） |
 
 常用环境变量：

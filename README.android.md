@@ -226,7 +226,8 @@ them):
 | `quality.txt` | quality tier: `low` / `standard` / `high` |
 | `flag-*` | preset switches (chunk size, scale, present rate, …) |
 | `loadstore.txt`, `planstate.txt`, `prereset.txt`, `nooccl.txt`, `chunkd.txt`, … | **in-session A/B** switches: content 0/1 (or a step value), read once per statistics window, no restart needed |
-| `enable-att-load-table` / `disable-att-load-table` | turn the per-pass `loadOp` coverage table on/off (default off; see appendix 20 of `docs/android-resolution-plan.zh-CN.md`) |
+| `att-load-table.txt` | **in-session** switch for the coverage table: `1` on / `0` off, read once per window; refused after a conflict quarantine |
+| `enable-att-load-table` / `disable-att-load-table` | turn the per-pass `loadOp` coverage table on/off at startup (default off; see appendix 20 of `docs/android-resolution-plan.zh-CN.md`) |
 | `pass-sentinel` / `pass-sentinel-selftest` | sentinel probe used to fill the coverage table (slow, 7–18 fps; `selftest` proves the probe can report red) |
 
 Frequently used environment variables:

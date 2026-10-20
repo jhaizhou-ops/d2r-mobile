@@ -6,15 +6,21 @@
 # 种子只收颜色附件（is_depth=0）：深度 load 还没开——哨兵清 0.5 会改变 z-test，green 不可信。
 # Seed lists color attachments only (is_depth=0): depth load is still guarded off, and the depth
 # sentinel (clear to 0.5) changes z-test outcomes, so a depth green would not be trustworthy.
+# 场景（2026-10-20，DM_TEST_WARP_LV 造现场）：营地、邪恶洞穴（8）、精华荒地（2）、洞穴一层（9）。
+# 四个场景表开 + 探针都是 0 冲突；红键始终是 2322x1080 的全屏 UI 合成。
+# Scenes (2026-10-20, set up with DM_TEST_WARP_LV): Rogue Encampment, Den of Evil (8),
+# Rocky Waste (2), Cave Level 1 (9). Table-on + probe found 0 conflicts in all four;
+# the red key is always the 2322x1080 full-screen UI composite.
 pk	w	h	format	is_depth	verdict	samples	uncovered	total
-b5c020fc81e86657	800	600	37	0	green	10	0	4800000
-49a218eaaa264a25	2322	1080	37	0	red	26	9214102	65201760
-8531cc185715c7be	1625	756	98	0	green	4	0	4914000
-fa078e9151117d0d	1625	756	122	0	green	20	0	24570000
-9ff7c4666408b1a8	812	378	122	0	green	15	0	4604040
-bb854c223030776c	406	189	122	0	green	13	0	997542
-799bdde960e495f5	203	94	122	0	green	13	0	248066
-c3927032b59ae46a	101	47	122	0	green	13	0	61711
-a0672187cf96a2f5	50	23	122	0	green	13	0	14950
-8bf38593b7f6ddf2	25	11	122	0	green	10	0	2750
-f6fc268dbad25799	12	5	122	0	green	4	0	240
+b5c020fc81e86657	800	600	37	0	green	32	0	15360000
+49a218eaaa264a25	2322	1080	37	0	red	112	58621596	280869120
+8531cc185715c7be	1625	756	98	0	green	24	0	29484000
+fa078e9151117d0d	1625	756	122	0	green	113	0	138820500
+1a80d10df7ae71dc	1625	756	122	0	green	10	0	12285000
+9ff7c4666408b1a8	812	378	122	0	green	90	0	27624240
+bb854c223030776c	406	189	122	0	green	89	0	6829326
+799bdde960e495f5	203	94	122	0	green	91	0	1736462
+c3927032b59ae46a	101	47	122	0	green	91	0	431977
+a0672187cf96a2f5	50	23	122	0	green	88	0	101200
+8bf38593b7f6ddf2	25	11	122	0	green	64	0	17600
+f6fc268dbad25799	12	5	122	0	green	22	0	1320
