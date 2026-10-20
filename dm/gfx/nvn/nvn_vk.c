@@ -1243,8 +1243,8 @@ static void sentinel_complete(VkSubmission *sub) {
         }
         g_sent_passes++;g_sent_pixels+=n;
         if(dirty){g_sent_dirty_passes++;g_sent_dirty_pixels+=dirty;}
-        fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_PROBE slot=%u rt=%ux%u serial=%llu uncovered=%llu/%llu (%.3f%%)%s\n",
-            sub->sentinel[i].slot,w,h,(unsigned long long)sub->sentinel[i].serial,(unsigned long long)dirty,(unsigned long long)n,
+        fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_PROBE slot=%u rt=%ux%u serial=%llu pk=%016llx d=%d uncovered=%llu/%llu (%.3f%%)%s\n",
+            sub->sentinel[i].slot,w,h,(unsigned long long)sub->sentinel[i].serial,(unsigned long long)sub->sentinel[i].pk,sub->sentinel[i].depth,(unsigned long long)dirty,(unsigned long long)n,
             100.0*(double)dirty/(double)n,dirty?" [RED]":"");
     }
     sub->nsentinel=0;
@@ -3381,7 +3381,11 @@ static VkRenderPass render_begin(void) {
                sent_clear[probe_slot].color.float32[2]=1.0f;sent_clear[probe_slot].color.float32[3]=1.0f; }
         S.sentinel[S.nsentinel].buf=NULL;S.sentinel[S.nsentinel].tex=probe_tex;S.sentinel[S.nsentinel].w=probe_tex->width;
         S.sentinel[S.nsentinel].h=probe_tex->height;S.sentinel[S.nsentinel].pass=G.pass_count;S.sentinel[S.nsentinel].serial=probe_tex->serial;
-        S.sentinel[S.nsentinel].slot=(uint32_t)(G.pass_count-g_sent_pass0);S.sentinel[S.nsentinel].depth=dep;S.sentinel[S.nsentinel].fmt=(uint32_t)probe_tex->format;S.nsentinel++;
+        S.sentinel[S.nsentinel].slot=(uint32_t)(G.pass_count-g_sent_pass0);S.sentinel[S.nsentinel].depth=dep;S.sentinel[S.nsentinel].fmt=(uint32_t)probe_tex->format;
+        { const uint8_t *pb=(const uint8_t *)&S.pass_key;uint64_t h=1469598103934665603ULL;
+          for(size_t bi=0;bi<sizeof(S.pass_key);bi++){h^=pb[bi];h*=1099511628211ULL;}
+          S.sentinel[S.nsentinel].pk=h; }
+        S.nsentinel++;
         if(!g_sent_seen){g_sent_seen=1;fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_FIRST rt=%ux%u bpp=%u depth=%d fmt=%d serial=%llu\n",probe_tex->width,probe_tex->height,probe_tex->bpp,dep,(int)probe_tex->format,(unsigned long long)probe_tex->serial);} }
     VkRenderPassBeginInfo begin={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=rp,.framebuffer=fb,
        .renderArea={{0,0},{(G.diag_shape&4)&&width>16?16:width,(G.diag_shape&4)&&height>16?16:height}},
