@@ -28,9 +28,23 @@ fi
 # Note the `|| true`: this script runs under set -euo pipefail, and `ls -d <missing dir>/*` exits non-zero; pipefail carries
 # that failure up the pipeline and set -e exits on the spot -- so not even the "missing X" message below gets printed, and all
 # that is left is a bare exit code. `|| true` swallows it and leaves the explicit [ -n ... ] check to report the problem.
-BT=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)
+# 取"最新一版"目录：macOS 自带的是 BSD sort，没有 -V。直接 `sort -V` 在那边会报错退出，管道被 pipefail 带下来，
+# 最后只会看到"找不到 build-tools"这种误导性报错。所以先试 GNU 的 sort -V，不支持就用 python3 按数字段比较
+# （打包流程本来就要 python3）。
+# Newest directory: macOS ships BSD sort without -V. A bare `sort -V` fails there and pipefail turns it into a
+# misleading "no build-tools" error. Try GNU sort -V first, otherwise compare numeric chunks in python3 (python3 is
+# required by the packaging flow anyway).
+pick_latest() {
+    if printf '1.0\n' | sort -V >/dev/null 2>&1; then sort -V | tail -1
+    else python3 -c 'import re, sys
+key = lambda p: [int(x) for x in re.findall(r"[0-9]+", p)]
+lines = [l for l in sys.stdin.read().splitlines() if l.strip()]
+print(max(lines, key=key) if lines else "")'
+    fi
+}
+BT=$(ls -d "$SDK"/build-tools/* 2>/dev/null | pick_latest || true)
 [ -n "$BT" ] && [ -x "$BT/aapt2" ] || { echo "SDK 里没有 build-tools（缺 aapt2）：用 sdkmanager 装一份，SDK=$SDK" >&2; exit 2; }
-PLATFORM_JAR=$(ls -d "$SDK"/platforms/android-* 2>/dev/null | sort -V | tail -1 || true)/android.jar
+PLATFORM_JAR=$(ls -d "$SDK"/platforms/android-* 2>/dev/null | pick_latest || true)/android.jar
 [ -f "$PLATFORM_JAR" ] || { echo "SDK 里没有 platforms/android-*/android.jar：用 sdkmanager 装一个 platform，SDK=$SDK" >&2; exit 2; }
 # JDK：JAVA_HOME 优先；其次用 macOS 的 /usr/libexec/java_home（Apple 自带，能挑到已装的 JDK）；再退到 PATH 上的 javac 反推。
 # JDK: JAVA_HOME first; then macOS's /usr/libexec/java_home (shipped by Apple, picks an installed JDK); finally derive it from
@@ -114,7 +128,7 @@ if [ -d "$RES" ]; then
     AAPT_RES=("$OUT/res.zip")
 fi
 "$AAPT2" link -o "$OUT/base.apk" -I "$PLATFORM_JAR" \
-    --manifest "$SRC/dm/android/AndroidManifest.xml" -A "$OUT/assets" "${AAPT_RES[@]}" --java "$OUT/gen"
+    --manifest "$SRC/dm/android/AndroidManifest.xml" -A "$OUT/assets" ${AAPT_RES[@]+"${AAPT_RES[@]}"} --java "$OUT/gen"
 
 # 3) Java → dex
 find "$SRC/dm/android/src" "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
@@ -127,7 +141,7 @@ find "$SRC/dm/android/src" "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
 CLASSES=()
 while IFS= read -r _c; do CLASSES+=("$_c"); done < <(find "$OUT/classes" -name '*.class')
 [ "${#CLASSES[@]}" -gt 0 ] || { echo "javac 没有产出任何 .class（检查上面的编译输出）" >&2; exit 1; }
-"$D8" --lib "$PLATFORM_JAR" --min-api 29 --output "$OUT/dex" "${CLASSES[@]}"
+"$D8" --lib "$PLATFORM_JAR" --min-api 29 --output "$OUT/dex" ${CLASSES[@]+"${CLASSES[@]}"}
 
 # 4) 组装
 cp "$OUT/base.apk" "$OUT/$APK_STEM.apk"
@@ -141,7 +155,7 @@ cp "$CMAKE/libd2r_mobile_android.so" "$OUT/stage/lib/arm64-v8a/"
 # darwin-aarch64, ...), instead of hardcoding one machine's absolute path and NDK version. If it is not there, skip --
 # only DM_PACK_ASAN=1 actually needs it.
 if [ "${DM_PACK_ASAN:-0}" = "1" ]; then
-    NDK=$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1 || true)   # 同上：没有 ndk/ 目录时别让 pipefail 立刻退出 | same as above: a missing ndk/ must not trip pipefail
+    NDK=$(ls -d "$SDK"/ndk/* 2>/dev/null | pick_latest || true)   # 同上：没有 ndk/ 目录时别让 pipefail 立刻退出 | same as above: a missing ndk/ must not trip pipefail
     case "$(uname -s)" in
         Darwin) HOST_TAG=darwin-$(uname -m);;
         *)      HOST_TAG=linux-$(uname -m);;
@@ -165,6 +179,19 @@ unzip -l "$OUT/$APK_STEM.apk" | grep -E "classes.dex|\.so|AndroidManifest|module
 # 5) 对齐 + 签名
 "$ZIPALIGN" -f -p 4 "$OUT/$APK_STEM.apk" "$OUT/$APK_STEM.aligned.apk"
 KS=${DM_KEYSTORE:-$HOME/.android/debug.keystore}
+# 换机器后调试密钥通常还不存在（只有 Android Studio 会建）。缺了就按官方调试密钥的规格现建一个；
+# 口令/别名与 Android 的调试约定一致（storepass=keypass=android，alias=androiddebugkey）。
+# A fresh machine usually has no debug keystore yet (only Android Studio creates one). Create it with the standard
+# debug spec; the password and alias match Android's debug convention (storepass=keypass=android, alias=androiddebugkey).
+if [ ! -f "$KS" ] && [ -z "${DM_KEYSTORE:-}" ]; then
+    echo "没有调试签名密钥，现建一个：$KS"
+    mkdir -p "$(dirname "$KS")"
+    "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$KS" -storepass android -keypass android \
+        -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+        -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1 \
+        || { echo "建调试密钥失败（缺 keytool？）：$KS" >&2; exit 2; }
+fi
+[ -f "$KS" ] || { echo "缺签名密钥：$KS（设 DM_KEYSTORE 指到你的 keystore）" >&2; exit 2; }
 "$APKSIGNER" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
     --out "$OUT/$APK_NAME" "$OUT/$APK_STEM.aligned.apk"
 "$APKSIGNER" verify "$OUT/$APK_NAME" && echo "signed OK"

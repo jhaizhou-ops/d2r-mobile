@@ -79,6 +79,37 @@ ADB=adb ANDROID_SERIAL=<your-device> dm/android/tools/deploy_apk.sh
 
 The first launch does a slower initial pass (unpacking and indexing resources); after that you are in a game about one second after the main menu.
 
+### 2.3 Output name and packaging on another machine
+
+The APK lands in `dm/android/build/apk/`:
+
+```
+d2r-mobile-android-<versionName>+<build>.apk
+e.g. d2r-mobile-android-0.2-native-android-port+20261020.apk
+```
+
+- `<versionName>` is read from `dm/android/AndroidManifest.xml` (currently `0.2-native-android-port`), so there is no
+  second source of truth; characters that do not belong in a file name (spaces, `/`) become `-`
+- `<build>` defaults to **today's date** `YYYYMMDD` (two builds on the same day overwrite each other); pass
+  `DM_APK_BUILD=a1 dm/android/tools/build_apk.sh` to tell them apart
+- Intermediates use the same stem (`….aligned.apk`) — no more `dodola.*`; `deploy_apk.sh` with no argument picks
+  the newest file in that directory
+
+On another machine, satisfy these and the script finds everything else itself (environment variable first, then the
+usual per-platform locations, then a plain-sentence error):
+
+| Needed | How to provide it |
+|---|---|
+| Android SDK (aapt2/d8/zipalign/apksigner in build-tools, plus `platforms/android-*/android.jar`) | `ANDROID_SDK_ROOT` or `ANDROID_HOME`; otherwise it probes `~/Android/Sdk`, `~/Library/Android/sdk`, ... |
+| JDK 17+ | `JAVA_HOME`; otherwise macOS `/usr/libexec/java_home`; otherwise derived from the `javac` on PATH |
+| python3 + Pillow | generates the launcher icons (square and round, 5 densities each) |
+| A built native library | `cd dm/android/build && ninja` first (NDK 27 + cmake + ninja) |
+| Modules and generated assets | products of `build_modules.sh` / `gen_overlay.sh`; missing ones fail or warn explicitly |
+| A signing key | defaults to `~/.android/debug.keystore` and is **created if absent** (standard debug spec); or set `DM_KEYSTORE=/path/to.jks` |
+
+macOS's stock bash 3.2 and BSD `sort` (no `-V`) are both handled; no GNU tooling needed.
+
+
 ---
 
 ## 3. Controls

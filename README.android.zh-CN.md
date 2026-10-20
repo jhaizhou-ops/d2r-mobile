@@ -78,6 +78,35 @@ ADB=adb ANDROID_SERIAL=<你的设备> dm/android/tools/deploy_apk.sh
 
 首次启动会做一次较慢的初始化（解包/索引资源），之后进游戏约 1 秒。
 
+### 2.3 产物命名与换机器打包
+
+产物名（`dm/android/build/apk/` 下）：
+
+```
+d2r-mobile-android-<versionName>+<构建号>.apk
+例：d2r-mobile-android-0.2-native-android-port+20261020.apk
+```
+
+- `<versionName>` 从 `dm/android/AndroidManifest.xml` 读（当前 `0.2-native-android-port`），不另立一份来源；
+  空格、`/` 这类不适合进文件名的字符会换成 `-`
+- `<构建号>` 缺省是**当天日期** `YYYYMMDD`（所以同一天连打两次名字一样，覆盖前一份）；
+  要区分就 `DM_APK_BUILD=a1 dm/android/tools/build_apk.sh`
+- 中间产物用同一个基名（`….aligned.apk`），不再出现 `dodola.*`；`deploy_apk.sh` 不带参数时取目录里最新的那份
+
+换一台机器只要满足这几件事，脚本会自己找路径（都是环境变量优先，然后按平台常见位置探测，找不到就报一句人话停下）：
+
+| 需要 | 怎么给 |
+|---|---|
+| Android SDK（build-tools 里的 aapt2/d8/zipalign/apksigner + `platforms/android-*/android.jar`）| `ANDROID_SDK_ROOT` 或 `ANDROID_HOME`；否则探 `~/Android/Sdk`、`~/Library/Android/sdk` 等 |
+| JDK 17+ | `JAVA_HOME`；否则 macOS 的 `/usr/libexec/java_home`，再否则从 PATH 上的 `javac` 反推 |
+| python3 + Pillow | 生成启动图标（方/圆各 5 档）用 |
+| 已编好的原生库 | 先 `cd dm/android/build && ninja`（NDK 27 + cmake + ninja）|
+| 模块与生成资源 | `build_modules.sh` / `gen_overlay.sh` 的产物；缺了会明确报错或警告 |
+| 签名密钥 | 缺省用 `~/.android/debug.keystore`，**没有会自动建一个**（标准调试规格）；也可 `DM_KEYSTORE=/path/to.jks` |
+
+macOS 自带的 bash 3.2 与 BSD `sort`（没有 `-V`）都已兜底，不需要额外装 GNU 工具。
+
+
 ---
 
 ## 3. 操作方式
