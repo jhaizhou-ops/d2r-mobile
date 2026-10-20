@@ -45,7 +45,9 @@
      现役大文件都这么干（hle_oe.c 17 处、hle_fs.c 41 处、hle_thread.c 21 处、nvn_dirty.c 5 处、
      hle_nvn.c 19 处）。
    - **小钩子**：上游文件里只留一两行"如果是 Android，就调用我们的函数"，实现在 `dm/android/`
-     的新文件里。
+     的新文件里。**钩子本身也必须带 `#ifdef __ANDROID__`**——只要那个函数的实现在 `dm/android/` 下，
+     它就是 Android 独有的，Apple 侧那几个构建（`dm/host/Makefile`、`dm/ios`、`dm/tvos`）收不到那个
+     文件，裸调用会让 Mac / iOS 链接挂在 `undefined symbols`。见下面第 6 条。
    - **追加区段**：头文件/枚举里加东西，必须放进标了 `ANDROID-BEGIN / ANDROID-END` 的块
      （已建：`nvn_obj.h`、`nvn_dirty.h`、`nvn_mtl.h`；新加的地方照此建块）。
      **枚举类编号严禁往中间插**——那是"主程序 + 改写后的游戏模块"两端共享的暗号。
@@ -55,6 +57,27 @@
 4. **"声明式分歧"要登记**：像 `resolve_import_optional` 这种直接改上游函数签名的（宏隔离不了），
    登记进本文档的策略表，合并时按登记的策略处理（这次就是这么处理上游 #66 的）。
 5. 本文档文末的**策略表是唯一权威**：撞车先查表；处理完把表更新。
+6. **Android 独有符号，引用处必须守**（2026-10-20 新增，由一次真实翻车换来的）：
+   凡是只由 `dm/android/` 下某个 `.c` 提供实现的符号（`dm_android_nvn_clock_ns`、
+   `dm_android_platform_setting`、`dm_android_nvn_*`……），**在上游共享文件里每一次引用都要进
+   `#ifdef __ANDROID__`**，或者收成一个带双分支的宏再用（例：`hle_nvn.c` 的 `REC_CLOCK_NS()`——
+   Android 转真实时钟，`#else` 返回 0）。
+
+   **为什么**：Android 的 `dm/android/CMakeLists.txt` 是逐条列文件的，那几个 `.c` 都在里面；
+   而 Apple 侧走 `dm/host/Makefile` 的 `GFX` 通配（只收 `dm/gfx/**`）与 `dm/ios/tools/gen_build.py`，
+   根本收不到 `dm/android/`。于是同一个裸调用在 Android 上没事、在 Mac / iOS 上必挂链接。
+   2026-10-19 的 `26cb673`（录制路径计时）就是这么挂的：`_dm_android_nvn_clock_ns, referenced from _rec`，
+   Mac 宿主与 iOS 全部编不出来，而 Android 一切正常——**这种"只在别人机器上炸"的坑最难被发现**，
+   所以规矩定成"引用即守"，不靠记性。
+
+   只丢诊断数字的（计时、计数）用 `#else 0` 即可，不必补 Apple 实现；真要那份数据的，才在
+   `dm/gfx/nvn/` 下新建一个同名实现的独立文件（通配会自动收，且不会与 Android 那份同时编）。
+7. **新文件的平台归属要自己声明**：我们自己新建的文件如果只属于某个平台（如 `nvn_vk.c` 只属于
+   Android），**由文件自己用 `#ifdef` 挡住其它平台**，不要依赖构建脚本的列表——因为宿主 Makefile 和
+   `gfx/tests` 都按 `../gfx/nvn/*.c` 通配收源，任何新文件都会先进 Apple 的编译行列。
+   反向也要钉住：若该文件在其平台的构建入口里被显式列出，就在那个入口定义
+   `DM_EXPECT_<something>` 并让文件在"走错分支"时 `#error`，免得平台宏失效时静默编出空对象、
+   把错误拖到链接期才以一堆 `undefined` 出现（例：`nvn_vk.c` + `DM_EXPECT_VULKAN_BACKEND`）。
 
 ## 为什么会打架
 
@@ -162,6 +185,8 @@ Metal，我们走 Vulkan，得有人分岔）。钩子不挂在上游文件里�
 | **区段标记**（本次补标） | `nvn_obj.h`、`nvn_dirty.h`、`nvn_mtl.h`、`hle.h`、`dm.h`、`t_dirty_slots.c` | 加行必须进 `ANDROID-BEGIN/END` 区段；撞车 = 用上游版 + 把我们那几行贴回去 |
 | **工具（内建双目标）** | `patch_nso.py` | 改写器自己用 `DM_TARGET` 分流（`if ANDROID:`），追加式改动；无需宏隔离 |
 | **声明式分歧**（已登记 → **当日已合流**） | `hle.c`、`loader.c` 的 `resolve_import` 族 | 原分歧：我们把"可选导入"拆成两个函数，上游 #66 做成"单函数 + `weak` 参数"。**2026-10-17 已合流**：改回与上游完全同形（单函数 + `weak`），验证=与上游 diff 只剩 `#ifdef __ANDROID__` 的段定位块（合规双分支）、构建通过。**该文件以后不再有此类冲突** |
+| **新增：平台归属自守卫**（2026-10-20） | `nvn_vk.c`（我们的新文件，上游没有） | 文件自己 `#ifdef __ANDROID__` 包住全文，非 Android 编成空翻译单元（留一条 `typedef`）。原因：宿主 Makefile 的 `GFX` 通配和 `gfx/tests` 都按 `../gfx/nvn/*.c` 收源，新文件会先进 Apple 编译行列，而 Apple 侧没有 Vulkan 头。反向由 `dm/android/CMakeLists.txt` 定义 `DM_EXPECT_VULKAN_BACKEND`，走到空分支就 `#error`，避免 NDK 宏失效时静默编出空对象。**合并策略**：上游永远没有此文件，无冲突 |
+| **新增：双分支小钩子修正**（2026-10-20） | `hle_nvn.c` 的 `REC_CLOCK_NS()` | `26cb673` 加的录制计时裸调 `dm_android_nvn_clock_ns()`（实现在 `dm/android/nvn_platform_clock.c`，Apple 构建收不到），导致 Mac / iOS 链接挂 `_dm_android_nvn_clock_ns, referenced from _rec`。已按双分支整理成宏：Android 转真实时钟、`#else` 返回 0。**合并策略**：同 `hle_nvn.c` 其余 19 处双分支——保住我们的分支、上游改动进 `#else` |
 
 **结论**：隔离工作到此完成——不是"把代码搬出去"，而是**把 35 个文件全部收敛到四种合规形态**
 （双分支 / 区段标记 / 工具内建 / 登记分歧）。以后每次迭代按「硬性规矩」执行并用
@@ -189,3 +214,35 @@ Metal，我们走 Vulkan，得有人分岔）。钩子不挂在上游文件里�
 **最终状态：代码无需再搬。** 按决策表重审之后，全树已是四种合规形态
 （双分支 / 小钩子 / ANDROID-BEGIN 区段 / 工具内建双目标）；剩余只有两个待提 PR 的改进。
 以后每次迭代：先按「硬性规矩」动手，收尾跑 `sync_surface_audit.sh` 复查。
+
+---
+
+### 2026-10-20：一次"Android 全绿、Apple 全红"的翻车复盘
+
+**现象**：Mac 宿主 `make dmhost` 和 iOS 工程都编不出来，而 Android 真机一切正常。
+
+**两个独立病因**（都不是上游的，都是这条 Android 分支自己带进来的）：
+
+| # | 病因 | 引入提交 | 报错 |
+|---|---|---|---|
+| 1 | `nvn_vk.c` 进了 `GFX` 通配，Apple 侧没有 Vulkan 头 | `893c69b`（dodola，Android/Vulkan 层） | `fatal error: 'vulkan/vulkan.h' file not found` |
+| 2 | `hle_nvn.c` 裸调 `dm_android_nvn_clock_ns()` | `26cb673`（录制路径计时） | `_dm_android_nvn_clock_ns, referenced from _rec` |
+
+**为什么会漏掉**：两个都在 Android 上**完全不报错**——`nvn_vk.c` 被 CMake 显式收走，`nvn_platform_clock.c`
+也在列表里，符号齐、头文件齐。只有在 Apple 的构建入口下才暴露。而日常验证几乎都在 Android 上跑，
+所以"编译通过"这个信号骗了人整整一周。
+
+**沉淀成规矩**：见「硬性规矩」第 6、7 条。要点是——**只要符号实现在 `dm/android/` 下，引用它的每一处
+都必须守；只要新文件只属于一个平台，就由文件自己挡住别的平台**。两条都指向同一个事实：
+`dm/android/` 不在 Apple 的收源路径里，而 `dm/gfx/**` 在所有人的收源路径里。
+
+**验证清单**（改完这三处后的实测）：
+
+- Mac 宿主 `make dmhost` → 链接成功，2,169,912 字节；
+- iOS 目标文件里 `dm_android_nvn_clock_ns` 的未定义引用 → 0 处（修复前 2 处）；
+- `nvn_vk.c` 在 Apple 侧编出空对象（1 个符号），不会与 `nvn_mtl.m` 的 `mtl_*` 重复定义；
+- `DM_EXPECT_VULKAN_BACKEND` 断言：模拟"无 `__ANDROID__` 的 Android 入口"能准确 `#error`；
+- `t_nvn` 75 项全过。
+
+**代价**：Apple 侧从此拿不到"录制路径耗时"这一个诊断数字（`REC_CLOCK_NS()` 返回 0）。
+这是纯诊断量，不影响任何渲染或录制行为。

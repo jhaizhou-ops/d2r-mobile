@@ -669,7 +669,20 @@ NVN(nvnCommandBufferUpdateUniformBuffer, void, NVNcommandBuffer *c, NVNbufferAdd
 // ---------- Render commands: parameters are recorded into command memory in the payload format of nvn_obj.h; for replay see nvn_mtl.m ----------
 /* 录制路径成本（诊断）：rec() 的次数与耗时，含命令内存分配与清零。 */
 /* Recording-path cost (diagnostic): rec() call count and time, including command-memory allocation and clearing. */
+// 耗时只取 Android 的单调时钟（实现在 dm/android/nvn_platform_clock.c）。Apple 侧那几个构建没有这个文件，
+// 也就不该有这个名字：否则 hle_nvn.c 会引用一个不存在的符号，Mac / iOS 链接直接挂在
+// "_dm_android_nvn_clock_ns, referenced from _rec"。这里按隔离规矩做双分支：非 Android 取 0，
+// 只是拿不到这个纯诊断数字，录制行为一个字都不变。
+// The timing uses Android's monotonic clock only (implemented in dm/android/nvn_platform_clock.c). The Apple builds do not
+// have that file, so they must not reference that name either: otherwise hle_nvn.c references a symbol that does not exist
+// and the Mac / iOS link dies at "_dm_android_nvn_clock_ns, referenced from _rec". Double branch per the isolation rules:
+// 0 on non-Android, so only this purely diagnostic number is lost; the recording behaviour is unchanged in every way.
+#ifdef __ANDROID__
 uint64_t dm_android_nvn_clock_ns(void);
+#define REC_CLOCK_NS() dm_android_nvn_clock_ns()
+#else
+#define REC_CLOCK_NS() 0
+#endif
 static _Atomic uint64_t g_rec_calls, g_rec_ns;
 uint64_t dm_rec_take(uint64_t out[2]) {
     out[0]=atomic_exchange(&g_rec_calls,0);out[1]=atomic_exchange(&g_rec_ns,0);return out[0];
@@ -680,10 +693,10 @@ static void *rec(NVNcommandBuffer *c, uint32_t op, size_t payload) {
     /* Sample 1 in 16: timing every record would swamp the cost being measured. */
     static _Atomic uint32_t tick;
     int timed = ((atomic_fetch_add_explicit(&tick,1,memory_order_relaxed)&15u)==0);
-    uint64_t t=timed?dm_android_nvn_clock_ns():0;
+    uint64_t t=timed?REC_CLOCK_NS():0;
     uint8_t *p = cmd_alloc(CB(c), sz); put_hdr(p, op, sz);
     memset(p + 8, 0, sz - 8);
-    if(timed)atomic_fetch_add(&g_rec_ns,(dm_android_nvn_clock_ns()-t)*16);
+    if(timed)atomic_fetch_add(&g_rec_ns,(REC_CLOCK_NS()-t)*16);
     atomic_fetch_add(&g_rec_calls,1);
     return p + 8;
 }

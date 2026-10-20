@@ -23,12 +23,23 @@ if(NOT ANDROID OR NOT ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_PLATFORM_LEVEL
 endif()
 add_library(dm_android_gfx OBJECT
   ../gfx/nvn/hle_nvn.c ../gfx/nvn/nvn_entry.S ../gfx/nvn/nvn_thunks.S
-  ../gfx/nvn/nvn_tex.c ../gfx/nvn/nvn_dirty.c ../gfx/nvn/nvn_vk.c
+  ../gfx/nvn/nvn_tex.c ../gfx/nvn/nvn_dirty.c
   ../gfx/tex/nvn_deswizzle.c ../gfx/tex/nvn_bcdec.c nvn_platform_clock.c
-  ../gfx/hle_vi.c ../gfx/hle_nv.c movie_start.c)
+  ../gfx/hle_vi.c ../gfx/hle_nv.c movie_start.c
+# Vulkan 回放后端从通用那一行挪出来，单独一行：它只属于 Android（对门是 Metal 的 nvn_mtl.m，两边同一组 mtl_* 符号）。
+# nvn_vk.c 自己还有一层 #ifdef __ANDROID__ 守卫（见该文件头部），为的是 Mac / iOS / tvOS 那些按 ../gfx/nvn/*.c 通配收源的
+# 构建不被它拖死；那层守卫有个隐患：万一 NDK 工具链没定义 __ANDROID__，这里会静默编出空对象，报错要拖到链接期才以
+# 一堆 undefined mtl_* 出现。所以下面给这个目标定义 DM_EXPECT_VULKAN_BACKEND：nvn_vk.c 走到空翻译单元那条支路时会 #error 当场停下。
+# The Vulkan replay backend is moved off the shared line onto its own line: it belongs to Android only (its counterpart is the
+# Metal nvn_mtl.m; the two implement the same mtl_* symbols). nvn_vk.c also carries an #ifdef __ANDROID__ guard of its own (see
+# its file header) so that the builds collecting sources by the ../gfx/nvn/*.c wildcard (Mac / iOS / tvOS) are not dragged down
+# by it. That guard has one hazard: if the NDK toolchain did not define __ANDROID__, this would silently build an empty object
+# and the failure would only surface at link time as a pile of undefined mtl_*. So the target defines DM_EXPECT_VULKAN_BACKEND
+# below: nvn_vk.c hits #error and stops right there if it ever reaches the empty-translation-unit branch.
+  ../gfx/nvn/nvn_vk.c)
 target_include_directories(dm_android_gfx PRIVATE ../host . ../gfx/nvn ../gfx/nvn/include)
 target_compile_options(dm_android_gfx PRIVATE -Wall -Wextra -Werror -Wno-format -Wno-unused-function -ffixed-x18)
-target_compile_definitions(dm_android_gfx PRIVATE _GNU_SOURCE TARGET_OS_IPHONE=0)
+target_compile_definitions(dm_android_gfx PRIVATE _GNU_SOURCE TARGET_OS_IPHONE=0 DM_EXPECT_VULKAN_BACKEND=1)
 set_target_properties(dm_android_gfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(dm_android_gfx PUBLIC vulkan android log dl z m)
 set(DM_HOST ../host)

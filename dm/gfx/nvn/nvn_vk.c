@@ -4,6 +4,21 @@
  * The initial queue is deliberately synchronous. Guest-visible writes/events
  * are published only after a real fence has completed.
  */
+// 只在 Android 上编：这一支的对手是 nvn_mtl.m（Metal），两者实现同一组 mtl_* 符号，同时编会重复定义。
+// 但宿主 Makefile（dm/host/Makefile 的 GFX 通配）和 gfx/tests 的 Makefile 是按 ../gfx/nvn/*.c 收源的，
+// Mac / iOS / tvOS 构建也会把它一起编进来，而那边没有 Vulkan 头，于是整棵树的 Mac 构建直接死在
+// #include <vulkan/vulkan.h>（"fatal error: 'vulkan/vulkan.h' file not found"）。
+// 这里由文件自己挡掉：非 Android 编译出一条空翻译单元，不碰任何上游构建脚本，Apple 侧一个字都不用改。
+// Android 侧行为完全不变——__ANDROID__ 由 NDK 工具链预定义，进来照原样编。
+//
+// Android-only: this branch's counterpart is nvn_mtl.m (Metal); both implement the same set of mtl_* symbols, so compiling
+// both would duplicate definitions. But the host Makefile (the GFX wildcard in dm/host/Makefile) and the gfx/tests Makefile
+// collect sources by ../gfx/nvn/*.c, so the Mac / iOS / tvOS builds pull this file in too, and those have no Vulkan headers,
+// so the whole tree's Mac build died at #include <vulkan/vulkan.h> ("fatal error: 'vulkan/vulkan.h' file not found").
+// The file guards itself: a non-Android compile yields an empty translation unit, no upstream build script is touched, and
+// nothing on the Apple side changes. Android behaviour is untouched -- __ANDROID__ is predefined by the NDK toolchain, so
+// that build compiles exactly as written below.
+#ifdef __ANDROID__
 #define VK_USE_PLATFORM_ANDROID_KHR
 #include <vulkan/vulkan.h>
 #include <android/native_window.h>
@@ -4533,3 +4548,18 @@ int mtl_link_wait_tick(uint64_t timeout) { (void)timeout;return 0; }
 void mtl_xv_window_tex(uint64_t serial) { (void)serial; } /* No cross-frame store-elision ledger exists. */
 void mtl_ub_present(double ms) { (void)ms; } /* Disabled diagnostic experiment. */
 uint64_t mtl_upload_bytes(void) { uint64_t n=0;for(int i=0;i<G.ntexture;i++)if(G.textures[i].cpu_owned)n+=(uint64_t)G.textures[i].width*G.textures[i].height*G.textures[i].bpp;return n; }
+
+#else   // 非 Android：空翻译单元（Mac / iOS / tvOS 的图形后端是 nvn_mtl.m） | Non-Android: empty translation unit (the graphics backend on Mac / iOS / tvOS is nvn_mtl.m)
+// 但如果这次编译来自 Android 的图形构建入口（dm/android/CMakeLists.txt 定义了 DM_EXPECT_VULKAN_BACKEND），
+// 走到这里就说明工具链没定义 __ANDROID__：那会静默编出一个空对象，报错拖到链接期才以一堆 "undefined mtl_*" 出现。
+// 与其那样，不如当场停下，并直接说清是哪个开关没生效。
+// But if this compile comes from Android's graphics build entry (dm/android/CMakeLists.txt defines DM_EXPECT_VULKAN_BACKEND),
+// reaching this branch means the toolchain did not define __ANDROID__: that would silently produce an empty object and only
+// surface at link time as a pile of "undefined mtl_*". Stop right here instead, and say plainly which switch did not take.
+#ifdef DM_EXPECT_VULKAN_BACKEND
+#error "nvn_vk.c 是 Android 的 Vulkan 后端，但本次编译没有定义 __ANDROID__：编出来会是空对象，链接期才会以 undefined mtl_* 报错。检查 NDK 工具链。 | nvn_vk.c is Android's Vulkan backend but this compile has no __ANDROID__: it would produce an empty object and only fail at link time with undefined mtl_*. Check the NDK toolchain."
+#endif
+/* C 要求一个翻译单元至少有一条声明，留一条无害的；也免得 -Wempty-translation-unit 之类较真口径在这里翻车。
+ * C requires at least one declaration in a translation unit; this harmless one also keeps pedantic empty-TU diagnostics quiet. */
+typedef int nvn_vk_is_android_only;
+#endif  // __ANDROID__
