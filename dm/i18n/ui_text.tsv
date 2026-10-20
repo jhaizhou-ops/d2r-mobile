@@ -377,6 +377,16 @@ dmTcNavBack	返回	Back	Atrás		Назад	同上
 dmTcNavAction	操作	Action	Acción		Действие	同上
 dmTcNavBind	绑定	Bind	Asignar		Привязка	同上
 dmTcNavNext	下一页	Next Page	Pág. sig.		Дальше	同上
+dmCustomLangTw	中文字体	Chinese script	Escritura china		Китайская письменность	自定义页中文字体单选（lang_tw）
+dmCustomLangTwSimp	中文：简体	Chinese: Simplified	Chino: simplificado		Китайский: упрощённый	lang_tw=0（缺省）
+dmCustomLangTwSimpHint	语言选「中文」时用；重启后生效	Used with Chinese text; after restart	Con texto en chino; tras reiniciar		Для китайского текста; после перезапуска	中文字体简体说明
+dmCustomLangTwTrad	中文：繁體	Chinese: Traditional	Chino: tradicional		Китайский: традиционный	lang_tw=1
+dmCustomLangTwTradHint	本 App 加的字自动转繁；物品注释只有简体	Our added text converted; notes Simplified only	Nuestro texto convertido; notas solo simplificado		Наш текст конвертируется; заметки — упрощённые	中文字体繁体说明
+dmCustomVoiceEn	语音	Voice	Voces		Озвучка	自定义页语音单选（voice_en）
+dmCustomVoiceEnMatch	语音：跟文字	Voice: match text	Voces: según el texto		Озвучка: по языку текста	voice_en=0（缺省，hle_fs.c voice_for）
+dmCustomVoiceEnMatchHint	有该语言配音就用，没有就英文；重启后生效	That language if present, else English; after restart	Ese idioma si existe, si no inglés; tras reiniciar		Язык текста, если есть, иначе английский; после перезапуска	语音跟文字说明
+dmCustomVoiceEnEn	语音：English	Voice: English	Voces: inglés		Озвучка: английская	voice_en=1
+dmCustomVoiceEnEnHint	英文配音，可与任何文字搭配；重启后生效	English voice with any text; after restart	Voces en inglés con cualquier texto; tras reiniciar		Английская с любым текстом; после перезапуска	语音英文说明
 dmCustomTouchSwapAbove	换组键位置	Skill-set switch position	Posición del cambio de grupo		Место переключателя наборов	自定义页换组位置单选
 dmCustomTouchSwapNear	换组键：传送门左侧	Skill-set switch: left of portal	Cambio de grupo: izq. del portal		Переключатель: слева от портала	默认位置，touch_swap_above=0
 dmCustomTouchSwapNearHint	沿传送门外侧弧线排布，松手后切换	On the portal arc; release to switch	En el arco del portal; suelta y cambia		По дуге портала, отпустить — переключение	换组近位说明

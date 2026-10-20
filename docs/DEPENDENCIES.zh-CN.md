@@ -32,8 +32,9 @@ English: [DEPENDENCIES.md](DEPENDENCIES.md)
 | lz4 | 4.4.5 | 解开主程序文件 | <https://pypi.org/project/lz4/> |
 | capstone | 5.0.9 | 反汇编，用于改写主程序与验证 | <https://pypi.org/project/capstone/> |
 | unicorn | 2.1.4 | 逐处核对改写前后行为等价 | <https://pypi.org/project/unicorn/> |
+| opencc-python-reimplemented | 0.1.7 | 把我们自己加的界面文字转成繁体（可选：没装时繁中下显示简体） | <https://pypi.org/project/opencc-python-reimplemented/> |
 
-一次装齐：`python3 -m pip install pillow numpy lz4 capstone unicorn`（`./setup.sh` 会自动建独立环境并装好，不用手动执行）
+一次装齐：`python3 -m pip install pillow numpy lz4 capstone unicorn opencc-python-reimplemented`（`./setup.sh` 会自动建独立环境并装好，不用手动执行）
 
 ## 可选
 

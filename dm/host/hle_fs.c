@@ -353,11 +353,13 @@ static void low_vision_off(const char *save_dir) {
 // Voice language follows the text language, but the resources may not hold that voice-over: our packaging (dm/ios/tools/testflight.sh) strips the voice chunks 06–16 of 11 languages, keeping only Simplified Chinese (17) and English (base);
 // builds made from complete data (the public repository's way) keep them all. The Russian voice-over is in chunk 16 (all 1689 files under locales/audio/ruRU in build_manifest.psv have Chunk 16):
 // Simplified Chinese (8) gets its own voice-over; Russian (7) gets the Russian voice-over when chunk 16 is present in the resources, otherwise English; everything else gets English (0) - Spanish text gets the English voice-over
-static int ru_voice_present(void) {
-    char b[1024], p[1100]; snprintf(p, sizeof p, "%s/data/16-00000001.data", envdir("DM_ROMFS", "data/switch/3.3.94012/Update/RomFS", b, sizeof b));
+// 繁中（9）配音在分块 12（locales/audio/zhTW 的 Chunk 列全是 12）：有就配繁中配音，没有就配简中配音（同是普通话，比英文配音近）
+// The Traditional Chinese (9) voice-over is in chunk 12 (every locales/audio/zhTW file has Chunk 12): with it, Traditional text gets that voice-over, without it the Simplified Chinese one (both Mandarin, closer than English)
+static int chunk_present(int chunk) {
+    char b[1024], p[1100]; snprintf(p, sizeof p, "%s/data/%02d-00000001.data", envdir("DM_ROMFS", "data/switch/3.3.94012/Update/RomFS", b, sizeof b), chunk);
     return !access(p, F_OK);
 }
-static int voice_for(int lang) { return lang == 8 ? 8 : lang == 7 && ru_voice_present() ? 7 : 0; }
+static int voice_for(int lang) { return lang == 8 ? 8 : lang == 9 ? (chunk_present(12) ? 9 : 8) : lang == 7 && chunk_present(16) ? 7 : 0; }
 static void settings_seed(const char *save_dir) {
     const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE; if (!on) return;
     static const char *kv[][2] = {{"\"Item Name Display\"", "1"}, {"\"Item Tooltip Hotkey Appender\"", "0"},
@@ -391,6 +393,10 @@ static void settings_seed(const char *save_dir) {
 // use it to fix Language (text) and VoiceLanguage (voice; voice follows the switch, see voice_for) in the original settings file. Change only when it "disagrees with the switch":
 // if the text language already falls within this option (Chinese = Simplified / Traditional Chinese, English = English, Español = esES / esMX, Russian = ruRU), leave the text alone, so when the switch is Chinese, Traditional Chinese chosen by the player in the original game is not changed back to Simplified;
 // when Español is chosen, change only if needed, picking esES (2) or esMX (10) by system region; Russian = 7 ruRU (the original has only one Russian). Add whichever of the two keys is missing. Never tapped Apply (-1) = change nothing at all
+// 语言行下面的「中文字体」（lang_tw）与「语音」（voice_en）两行（dm_custom.c）：点过应用才算数。中文字体：中文项落在简中还是繁中（点过就要对上，不再「繁中不改回」）；
+// 语音：English = VoiceLanguage 0，配哪种文字都行；跟文字 = 按上面的 voice_for。两行任一点过而语言行没点过：文字按设置文件里现有的算
+// The "Chinese script" (lang_tw) and "Voice" (voice_en) rows under the language row (dm_custom.c) count only once applied. Chinese script: whether the Chinese option means Simplified or Traditional (once applied it must match; no more "Traditional is left alone");
+// voice: English = VoiceLanguage 0 with any text; match text = voice_for above. If either row was applied but the language row was not: the text is taken as it currently is in the settings file
 static int json_int_set(char *buf, size_t cap, const char *key, int val) {   // 把 "key": N 的 N 换成 val（没有这个键就插在第一个 { 之后）；返回 1 = 改了 | Replace the N of "key": N with val (if the key is absent, insert it after the first {); returns 1 = changed
     char *k = strstr(buf, key); char num[16]; snprintf(num, sizeof num, "%d", val);
     if (!k) { char *b = strchr(buf, '{'); char ins[96]; int m = snprintf(ins, sizeof ins, "\n    %s: %s,", key, num); if (!b || strlen(buf) + (size_t)m + 1 >= cap) return 0;
@@ -399,20 +405,22 @@ static int json_int_set(char *buf, size_t cap, const char *key, int val) {   // 
     if (e == v || atoi(v) == val) return 0; size_t nl = strlen(num); if (strlen(buf) + nl + 1 >= cap) return 0;
     memmove(v + nl, e, strlen(e) + 1); memcpy(v, num, nl); return 1; }
 static void settings_lang_apply(const char *save_dir) {
-    int dm_custom_lang_explicit(void); int sel = dm_custom_lang_explicit(); if (sel < 0 || sel > 3) return;
+    int dm_custom_lang_explicit(void), dm_custom_tw_explicit(void), dm_custom_voice_explicit(void);
+    int sel = dm_custom_lang_explicit(), tw = dm_custom_tw_explicit(), ve = dm_custom_voice_explicit(); if (sel > 3 || (sel < 0 && ve < 0 && tw < 0)) return;
     char path[1200]; snprintf(path, sizeof path, "%s/Settings/Settings.json", save_dir); static char buf[66000]; FILE *f = fopen(path, "rb"); if (!f) return;
     size_t n = fread(buf, 1, 65535, f); fclose(f); if (n == 65535) return; buf[n] = 0;
     const char *k = strstr(buf, "\"Language\""), *c = k ? strchr(k + 10, ':') : NULL; int cur = c ? atoi(c + 1) : 8;   // 没写 = 游戏缺省（宿主报简中） | Not written = game default (the host reports Simplified Chinese)
-    int in = sel == 0 ? (cur == 8 || cur == 9) : sel == 1 ? cur == 0 : sel == 3 ? cur == 7 : (cur == 2 || cur == 10);   // 文字语言已落在选中的那一项里 | The text language already falls within the selected option
-    int dm_sys_lang(void); int want = in ? cur : sel == 0 ? 8 : sel == 1 ? 0 : sel == 3 ? 7 : (dm_sys_lang() == 10 ? 10 : 2);
+    if (sel < 0) sel = cur == 8 || cur == 9 ? 0 : cur == 0 ? 1 : cur == 7 ? 3 : cur == 2 || cur == 10 ? 2 : -1;   // 语言行没点过：文字按现在的算（只为下面的中文字体 / 语音） | Language row never applied: take the text as it is now (only for the Chinese script / voice below)
+    int in = sel == 0 ? (tw >= 0 ? cur == (tw ? 9 : 8) : cur == 8 || cur == 9) : sel == 1 ? cur == 0 : sel == 3 ? cur == 7 : sel == 2 ? (cur == 2 || cur == 10) : 1;   // 文字语言已落在选中的那一项里（中文项点过中文字体就要对上那一种） | The text language already falls within the selected option (with the Chinese script applied, the Chinese option must match that one)
+    int dm_sys_lang(void); int want = in ? cur : sel == 0 ? (tw > 0 ? 9 : 8) : sel == 1 ? 0 : sel == 3 ? 7 : (dm_sys_lang() == 10 ? 10 : 2);
     const char *vk = strstr(buf, "\"VoiceLanguage\""), *vc = vk ? strchr(vk + 15, ':') : NULL; int vcur = vc ? atoi(vc + 1) : -1;
-    int voice = in && sel == 0 && vcur > 0 ? vcur : voice_for(want);   // 文字已在中文项里：语音只要不是英文就不动（玩家在原版里选的繁中语音照旧）；其余按 voice_for | Text is already within the Chinese option: leave voice alone as long as it is not English (Traditional Chinese voice chosen by the player in the original game stays); otherwise follow voice_for
+    int voice = ve > 0 ? 0 : in && sel == 0 && vcur > 0 && ve < 0 ? vcur : voice_for(want);   // 语音行选了 English = 0；文字已在中文项里且语音行没点过：语音只要不是英文就不动；其余按 voice_for | Voice row English = 0; text already within the Chinese option and voice row never applied: leave voice alone unless it is English; otherwise voice_for
     int ch = json_int_set(buf, sizeof buf, "\"Language\"", want) | json_int_set(buf, sizeof buf, "\"VoiceLanguage\"", voice); if (!ch) return;
     char tmp[1300]; snprintf(tmp, sizeof tmp, "%s.lang", path); f = fopen(tmp, "wb"); size_t m = strlen(buf);
     if (!f || fwrite(buf, 1, m, f) != m) { if (f) fclose(f); LOG("【红】语言开关：写 %s 失败", tmp); return; }
     fclose(f); if (rename(tmp, path)) { LOG("【红】语言开关：改名到 %s 失败", path); return; }
     static const char *const nm[4] = { "中文", "English", "Español", "Русский" };
-    LOG("语言开关：设置文件的 Language / VoiceLanguage 改成 %d / %d（%s；原文字语言 %d）", want, voice, nm[sel], cur);
+    LOG("语言开关：设置文件的 Language / VoiceLanguage 改成 %d / %d（%s；原文字语言 %d；中文字体 %d、语音行 %d）", want, voice, sel >= 0 ? nm[sel] : "?", cur, tw, ve);
 }
 // 事务式存档当前的工作目录（游戏读写的那份；宿主自己的旁路文件写在这里才会随 Commit 进已提交版）。没挂载存档时返回 NULL
 // The current working directory of the transactional save (the copy the game reads and writes; the host's own side files must be written here to enter the committed version with Commit). Returns NULL when no save is mounted

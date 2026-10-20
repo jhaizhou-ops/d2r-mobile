@@ -25,7 +25,7 @@ Download the shell from this repository's [Releases page](https://github.com/jha
 
 - The files of the game you bought: `ExeFS` and `RomFS` of the Switch release 1.0.34.0 (corresponding to PC version 3.3.94012), see [GAME_FILES.md](GAME_FILES.md)
 - The source of this repository, at the same release as the shell (the tool checks and says so if they differ)
-- Python 3.9 or later, plus: `python3 -m pip install pillow numpy lz4 capstone unicorn`
+- Python 3.9 or later, plus: `python3 -m pip install pillow numpy lz4 capstone unicorn opencc-python-reimplemented`
 - A C compiler (`clang`; on Windows, installing LLVM is enough) and the .NET SDK. Apple's Metal shader compiler is **not** required: if it is there (a Mac with Xcode) the shaders are compiled into libraries on the computer, otherwise they are compiled on the phone
 - `spirv-cross`, **version 1.4.357.0** (release tag `vulkan-sdk-1.4.357.0`). A different version may translate shaders differently -- we measured 231 shaders differing between the latest source and this one. The shell carries a digest of all shader sources; the tool compares after translating and stops with an explanation on a mismatch, rather than producing a package that may render wrong
   - macOS: `brew install spirv-cross`, then check with `brew list --versions spirv-cross`
