@@ -226,8 +226,10 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-pso-last-cache");
     if(access(driver_option,F_OK)==0)setenv("DM_PSO_LAST_CACHE","1",1);
     /* 翻译队列 + 25ms 出图节拍（2026-10-19 实测，营地标准档）：
-         同步模式（DM_NVN_SYNC=1）下 replay 直接跑在游戏线程里，游戏线程每帧 25.2ms 全花在
-         nvnQueueSubmitCommands 内部等自己把 replay 做完；开启队列后同一项降到 0.020ms。
+         同步模式（DM_NVN_SYNC=1）下 replay 直接跑在游戏线程里，游戏线程每帧 25.2ms 花在
+         nvnQueueSubmitCommands 内部当场执行 replay；开启队列后同一项降到 0.020ms——那不是
+         变快，是把这份 CPU 工作搬到另一根核上。总 CPU 反而升高（197% → 223%），但帧时间从
+         "逻辑 + replay 相加"变成两核取 max，且 GPU 不再等喂料（util 84% → 93%）。
          但只开队列不够——默认节拍是 33.3ms（游戏 interval 2 @60Hz），本身就封顶 30fps。
          两个一起开才是收益点：交替两轮 A/B 中位 36.11/35.90 fps vs 同步 30.50/30.12（+18~19%），
          GPU util 97–100%（此时是 GPU 打满，CPU 有余量）。
