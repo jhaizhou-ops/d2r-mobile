@@ -207,6 +207,8 @@ iOS 版能稳定 60 fps，Android 目前视档位在 **30–40 fps**（高清 30
 | `quality.txt` | 画质档：`low` / `standard` / `high` |
 | `flag-*` | 各种预设开关（分块大小、比例、呈现频率等） |
 | `loadstore.txt` / `planstate.txt` / `prereset.txt` / `nooccl.txt` / `chunkd.txt` … | **运行中 A/B** 开关：内容 0/1（或档位值），每个统计窗口读一次，不必重启 |
+| `enable-att-load-table` / `disable-att-load-table` | 开/关逐通道 `loadOp` 覆盖率表（默认关；原理与实测见 `docs/android-resolution-plan.zh-CN.md` 附二十） |
+| `pass-sentinel` / `pass-sentinel-selftest` | 开哨兵探针给覆盖率表填数据（很慢，7–18fps；`selftest` 让探针自证会报红） |
 
 常用环境变量：
 
@@ -216,6 +218,9 @@ iOS 版能稳定 60 fps，Android 目前视档位在 **30–40 fps**（高清 30
 | `DM_3D_SCALE=0.88` | 直接指定世界比例（允许 0.70–1.0） |
 | `DM_PROFILE_DETAIL=1` | 打开逐阶段计时（`RENDER_*_PROFILE` 日志） |
 | `DM_VK_DEBUG=1` | 打开驱动侧报错回调（`VK_EXT_debug_utils`，不需要 validation layer） |
+| `DM_ATT_LOAD_TABLE=1` | 开逐通道覆盖率表（种子在 `dm/gfx/nvn/pass-coverage.tsv`，部署时推到 shader 目录） |
+| `DM_PASS_SENTINEL=1` + `DM_PASS_SENTINEL_WINDOW=1` | 填覆盖率表：逐通道序号扫全，每帧回读上限 4 MB |
+| `DM_COV_MIN_SAMPLES=8` | 一条 green 至少要被探针独立命中几次才敢用（缺省 8，调低更激进） |
 | `DM_SUB_RING=0` | 关掉主提交上下文双缓冲（默认开，回退用） |
 | `DM_UI_NO_QUERY=0` / `DM_SHADOW_NO_QUERY=0` | 恢复 UI / 阴影通道的遮挡查询（默认跳过） |
 | `DM_AFFINITY_ALL=1` | 放宽渲染线程亲和性到全部核心（默认关） |

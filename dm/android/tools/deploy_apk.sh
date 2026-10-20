@@ -42,5 +42,17 @@ else
 fi
 
 echo "== 启动"
+# 附件覆盖率表种子（可选）：仓库里验证过的 pass-coverage.tsv 随部署推到 shader 目录，
+# app 启动时读 <shader_root>/pass-coverage.tsv，再与运行目录（diagnostics/）里的实测表按行合并。
+# 权限必须 664：adb push 默认 660，游戏进程能 stat 但读不到内容（见 docs/android-perf-lessons.zh-CN.md 第 1 条）。
+# Coverage-table seed (optional): the validated pass-coverage.tsv from the repo is pushed next to the
+# shaders; the app reads <shader_root>/pass-coverage.tsv at startup and merges it line by line with the
+# runtime table in diagnostics/. It must be 664: adb push creates 660, which the game can stat but not read.
+COV=$SRC/dm/gfx/nvn/pass-coverage.tsv
+if [ -f "$COV" ]; then
+    "$ADB" push "$COV" "$EXT/d2r-mobile/shaders/pass-coverage.tsv" >/dev/null
+    "$ADB" shell chmod 664 "$EXT/d2r-mobile/shaders/pass-coverage.tsv" || true
+    echo "== 覆盖率表种子已推送（pass-coverage.tsv）"
+fi
 "$ADB" shell am force-stop $PKG
 "$ADB" shell am start -n $PKG/.GameActivity

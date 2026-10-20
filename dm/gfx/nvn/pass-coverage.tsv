@@ -1,0 +1,20 @@
+# d2r-mobile 附件覆盖率表 | attachment coverage table
+# green = 探针实测该通道首绘画满整个附件，颜色附件可以 loadOp=DONT_CARE
+# red   = 测到过未覆盖像素，或没测过（保守）；这类键一律 LOAD
+# green 至少要有 DM_COV_MIN_SAMPLES（缺省 8）次独立采样；表里有 green 但探针又测到漏像素时，
+# 本局立即改判 red 并停用查表（COV_CONFLICT），下一次运行从这里读到的是 red。
+# 种子只收颜色附件（is_depth=0）：深度 load 还没开——哨兵清 0.5 会改变 z-test，green 不可信。
+# Seed lists color attachments only (is_depth=0): depth load is still guarded off, and the depth
+# sentinel (clear to 0.5) changes z-test outcomes, so a depth green would not be trustworthy.
+pk	w	h	format	is_depth	verdict	samples	uncovered	total
+b5c020fc81e86657	800	600	37	0	green	10	0	4800000
+49a218eaaa264a25	2322	1080	37	0	red	26	9214102	65201760
+8531cc185715c7be	1625	756	98	0	green	4	0	4914000
+fa078e9151117d0d	1625	756	122	0	green	20	0	24570000
+9ff7c4666408b1a8	812	378	122	0	green	15	0	4604040
+bb854c223030776c	406	189	122	0	green	13	0	997542
+799bdde960e495f5	203	94	122	0	green	13	0	248066
+c3927032b59ae46a	101	47	122	0	green	13	0	61711
+a0672187cf96a2f5	50	23	122	0	green	13	0	14950
+8bf38593b7f6ddf2	25	11	122	0	green	10	0	2750
+f6fc268dbad25799	12	5	122	0	green	4	0	240

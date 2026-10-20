@@ -224,6 +224,8 @@ them):
 | `quality.txt` | quality tier: `low` / `standard` / `high` |
 | `flag-*` | preset switches (chunk size, scale, present rate, …) |
 | `loadstore.txt`, `planstate.txt`, `prereset.txt`, `nooccl.txt`, `chunkd.txt`, … | **in-session A/B** switches: content 0/1 (or a step value), read once per statistics window, no restart needed |
+| `enable-att-load-table` / `disable-att-load-table` | turn the per-pass `loadOp` coverage table on/off (default off; see appendix 20 of `docs/android-resolution-plan.zh-CN.md`) |
+| `pass-sentinel` / `pass-sentinel-selftest` | sentinel probe used to fill the coverage table (slow, 7–18 fps; `selftest` proves the probe can report red) |
 
 Frequently used environment variables:
 
@@ -233,6 +235,9 @@ Frequently used environment variables:
 | `DM_3D_SCALE=0.88` | set the world scale directly (0.70–1.0) |
 | `DM_PROFILE_DETAIL=1` | enable the per-stage timers (`RENDER_*_PROFILE` lines) |
 | `DM_VK_DEBUG=1` | enable the driver-side message callback (`VK_EXT_debug_utils`, no validation layer needed) |
+| `DM_ATT_LOAD_TABLE=1` | enable the per-pass coverage table (seed: `dm/gfx/nvn/pass-coverage.tsv`, pushed next to the shaders by `deploy_apk.sh`) |
+| `DM_PASS_SENTINEL=1` + `DM_PASS_SENTINEL_WINDOW=1` | fill the coverage table: sweep every pass index, 4 MB readback budget per submission |
+| `DM_COV_MIN_SAMPLES=8` | independent green samples required before a key may be used (default 8; lower is more aggressive) |
 | `DM_SUB_RING=0` | disable double-buffered submission contexts (on by default; for A/B) |
 | `DM_UI_NO_QUERY=0` / `DM_SHADOW_NO_QUERY=0` | restore occlusion queries on the UI / shadow passes (skipped by default) |
 | `DM_AFFINITY_ALL=1` | widen the render thread's affinity to every core (off by default) |
