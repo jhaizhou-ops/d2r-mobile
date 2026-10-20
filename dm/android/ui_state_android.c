@@ -8,6 +8,7 @@
  * Android UI state machine (P1): subscribes to the OBS_UIMSG gate, drives scene/panel mode like front_ios.m. */
 #include "../host/hle.h"
 #include "../host/dm.h"
+#include "../host/dm_cursor.h"
 #include "../ios/Sources/dm_touch_controls.h"
 #include "ui_state_android.h"
 #include <stdatomic.h>
@@ -159,3 +160,13 @@ void dm_android_ui_state_install(void) {
 int dm_android_ui_frontend(void) { return atomic_load(&g_frontend); }
 int dm_android_ui_panel_mode(void) { return atomic_load(&g_panel_mode); }
 unsigned dm_android_ui_rev(void) { return atomic_load(&g_rev); }
+
+/* dm_bright.c 的读取画面信号：安卓 v1 的弱定义恒 0，问题在于进洞 / 换图的读取期间 dm_uiscreen_ingame() 先掉成 0，
+ * 3D 画面加亮于是把曝光往 1 拉、撤屏后再拉回来（进洞先暗一下）。这里接 dm_cursor 的面板台账——与局内 / 局外是同一路
+ * 面板消息，dm_cursor.c 在安卓也编（P2 起）。Mac 宿主由 diag.c 定义同一个强符号，不会撞。
+ * The loading-screen signal for dm_bright.c: Android v1's weak definition always returned 0, and the catch is that while a cave / map
+ * change is loading, dm_uiscreen_ingame() drops to 0 first, so the 3D picture brightening pulled the exposure toward 1 and back after
+ * the screen was taken down (entering a cave dimmed briefly). Wire it to dm_cursor's panel ledger -- the same panel messages as the
+ * in-run / out-of-run signal, and dm_cursor.c is compiled on Android too (since P2). On the Mac host diag.c defines the same strong
+ * symbol, so there is no clash. */
+int dm_loadscreen_up(void) { return dm_ui_loadscreen_up(); }

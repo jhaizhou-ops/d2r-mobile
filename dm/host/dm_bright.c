@@ -51,10 +51,13 @@ static int rd(uint64_t a, void *buf, size_t n) {
     struct iovec local = {buf, n}, remote = {(void *)(uintptr_t)a, n};
     return syscall(SYS_process_vm_readv, getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;
 }
-/* 安卓暂缺做局内/区域/读取画面判定的宿主设施：v1 一律按“局内”处理（规则 ④ 按原版环境亮度）。
- * 宿主若将来提供强定义，链接时自动覆盖这里。 | Android lacks the host facilities for the in-run /
- * area / loading-screen decisions for now: v1 always treats the session as "in a run" (rule (4),
- * original ambient brightness). Strong host definitions would override these at link time. */
+/* 安卓早期缺做局内 / 区域 / 读取画面判定的宿主设施，所以这里给弱定义。现在三样在安卓侧都有强定义了：区域来自
+ * dm_hud.c + hud_read_android.c（hud_tick 每拍发布），局内来自 dm_uiscreen.c，读取画面来自 dm_cursor.c
+ * （dm_ui_loadscreen_up）+ ui_state_android.c。弱定义只剩图形单测 / 不链宿主的构建用。
+ * Android used to lack the host facilities for the in-run / area / loading-screen decisions, hence these weak definitions. All three
+ * now have strong definitions on Android: the area comes from dm_hud.c + hud_read_android.c (hud_tick publishes it every tick), in-run
+ * from dm_uiscreen.c, and the loading screen from dm_cursor.c (dm_ui_loadscreen_up) + ui_state_android.c. The weak definitions remain
+ * only for graphics unit tests / builds that do not link the host. */
 __attribute__((weak)) int dm_uiscreen_ingame(void) { return 1; }
 __attribute__((weak)) void dm_hud_get(dm_hud_info *out) { memset(out, 0, sizeof *out); out->area = -1; }
 __attribute__((weak)) int dm_loadscreen_up(void) { return 0; }

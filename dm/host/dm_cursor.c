@@ -2040,6 +2040,12 @@ int dm_ui_minimap_tap_hit(float nx, float ny) {
 // In the in-run / out-of-run signal, "whether the loading screen is present" goes by the panel message, flips at the very moment the message arrives, and reconciles the top lift on the spot: within one frame the game processes messages before laying out the UI,
 // and if the flip waited for the per-frame check of the panel tree in the next frame, the UI would still be laid out centered in the frame the loading screen is removed (in that frame the health globe is at the centered position and the area name is not lifted). -1 = no message received yet, go by the panel tree.
 static _Atomic int g_load_up = -1;
+// 读取画面此刻开着（面板消息台账，任意线程可读；-1 = 还没收到过消息，按「没开」）——安卓侧的 dm_loadscreen_up 就是这个
+// （dm/android/ui_state_android.c），3D 画面加亮在进洞 / 换图的读取期间靠它把曝光保持住，不先掉回 1。
+// The loading screen is up right now (panel-message ledger, readable from any thread; -1 = no message yet, treated as not up) -- this is
+// what dm_loadscreen_up is on Android (dm/android/ui_state_android.c); the 3D picture brightening uses it to hold the exposure while a
+// cave / map change is loading instead of dropping back to 1 first.
+int dm_ui_loadscreen_up(void) { return atomic_load(&g_load_up) > 0; }
 static uint64_t g_lift_next;
 // 系统提示框（NotificationPanel）的停靠高度分两态。布局里写的是没开面板时的高度（gen_romfs_overlay.py：上提到让开底栏上方的生命 / 法力数值）；
 // 开着大面板时那行数值被面板盖住，上提后的框反而压在背包格子上，所以面板态改停到 NOTE_PANEL_Y（布局单位，同 json 的 y）：大面板底边框那一带，在金币 / 存放那排下面。

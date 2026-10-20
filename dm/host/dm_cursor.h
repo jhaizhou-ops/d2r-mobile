@@ -74,6 +74,7 @@ int dm_ui_panel_shown(const char *name);   // 这个面板此刻在游戏面板�
 int dm_ui_tap_box(void);   // 最近一次单击的物品是不是魔盒 | Whether the most recently single-tapped item is the Horadric Cube
 uint32_t dm_ui_cur_stack_id(void);   // 仓库开着时光标此刻指着的若是背包里的物品 = 它的单位 id，否则 0 | While the stash is open, if the cursor is pointing at an item in the inventory right now = its unit id, otherwise 0
 int dm_ui_free_cursor(void);   // 当前页有没有自由光标 | Whether the current page has a free cursor
+int dm_ui_loadscreen_up(void);   // 读取画面此刻开着（面板消息台账；任意线程读，-1 未收到过消息按没开） | Whether the loading screen is up right now (panel-message ledger; readable from any thread, -1 = no message yet counts as not up)
 void dm_ui_use_item(void);                       // 物品区双击：光标下是商人的货 → 买；能装备的 → 原版「按住确认键」那条（自动穿上）；其余 → 当场使用（喝药 / 读卷轴 / 开魔盒） | Double-tap in an item area: a vendor's goods under the cursor -> buy; equippable -> the original game's 'hold the confirm button' path (auto-equip); everything else -> use on the spot (drink a potion / read a scroll / open the Horadric Cube)
 void dm_ui_long_press(void);                     // 物品区长按 = 补充到腰带：手柄光标指着的若是背包里能进腰带的药水且腰带有位，放进腰带；别的不动 | Long-press in an item area = refill the belt: if the controller cursor points at a potion in the inventory that can go into the belt and the belt has room, put it into the belt; anything else is left alone
 void dm_ui_tab_go(void);                         // 最近一次命中是页签且这次是点按：按够次数的 ZL / ZR（顶部 L / R）切过去 | The most recent hit was a tab and this time it is a tap: press ZL / ZR (L / R at the top) enough times to switch to it
