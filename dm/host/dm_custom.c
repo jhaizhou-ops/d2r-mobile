@@ -213,7 +213,13 @@ void dm_custom_ui_pump(unsigned long long root) {
       if (any) { int pd0 = atomic_load(&g_pend[K_QRES]), shown = pd0 >= 0 ? pd0 : atomic_load(&g_val[K_QRES]);
           if (dm_wref_get(&seen_q) != b[0]) { dm_wref_set(&seen_q, b[0]); for (int k = 0; k < 3; k++) if (b[k]) set_toggle(b[k], k == shown); }
           else for (int k = 0; k < 3; k++) if (b[k]) { int on = TOGGLED(b[k]);
-              if (on && k != shown) { shown = k; atomic_store(&g_pend[K_QRES], k); for (int j = 0; j < 3; j++) if (b[j]) set_toggle(b[j], j == k);
+              if (on && k != shown) { shown = k;
+                  /* 分辨率档要重启才生效，所以点选即落盘：原来只写「待定值」，玩家点暂停菜单的
+                     「保存并退出」（不走本页「应用」）就丢了这次改动（实测 sw_custom.txt 里没有 q_res）。
+                     The tier needs a restart, so persist on tap; previously it stayed pending and was
+                     lost when the player used the pause menu's Save & Exit. */
+                  atomic_store(&g_val[K_QRES], k); atomic_store(&g_pend[K_QRES], -1); save();
+                  LOG("自定义设置：分辨率 → %s（已落盘，重启游戏后生效）", k == 0 ? "800p" : k == 2 ? "原生" : "1080p"); for (int j = 0; j < 3; j++) if (b[j]) set_toggle(b[j], j == k);
                   LOG("自定义设置：分辨率 → %s（点「应用」生效；重启游戏后生效）", k == 0 ? "省电" : k == 2 ? "高清" : "标准"); break; }
               if (!on && k == shown) set_toggle(b[k], 1);   /* 点已选中的那一项：摆回勾上 | tapping the already-selected item: put it back on */
           } } }

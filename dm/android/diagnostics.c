@@ -262,11 +262,15 @@ static void quality_out_compute(unsigned *ow, unsigned *oh) {
     dm_android_window_state ws; dm_android_platform_get_window(&ws);
     unsigned W = ws.width, H = ws.height;
     if (W < 640 || H < 360) return;                       /* 窗口还没到位：调用方兜底 1280x720 | surface not ready yet: caller falls back to 1280x720 */
-    int tier = dm_custom_res_tier();                      /* 0 省电 / 1 标准 / 2 高清 | 0 saver / 1 standard / 2 high */
-    double budget = tier == 0 ? 1.8e6 : tier == 2 ? 0.0 : 2.4e6;   /* 0 = 不缩（屏幕原生） | 0 = do not shrink (screen native) */
-    double k = 1.0;
-    if (budget > 0.0 && (double)W * H > budget) k = sqrt(budget / ((double)W * H));
-    unsigned h = ((unsigned)(H * k)) & ~1u;
+    /* 三档改成**按纵向像素**定义（800p / 1080p / 原生）：宽度由高度反推，比例严格保持，
+       所以任何屏幕比例下都不会拉伸。纵向像素是用户对清晰度最直观的量，也和"1080p"这类
+       常规叫法对得上。高度不超过面板高度（原生档）。
+       Tiers are defined by vertical pixels (800p / 1080p / native): width is derived from the height,
+       so the aspect ratio is always preserved and nothing is stretched. */
+    int tier = dm_custom_res_tier();                      /* 0=800p / 1=1080p / 2=原生 | native */
+    unsigned target_h = tier == 0 ? 800u : tier == 1 ? 1080u : H;
+    if (target_h > H) target_h = H;                        /* 不超过面板 | never above the panel */
+    unsigned h = target_h & ~1u;
     unsigned w = ((unsigned)(h * (double)W / H + 0.5)) & ~1u;   /* 宽由高推：比例严格不变 | width from height: aspect exactly preserved */
     if (w < 320 || h < 180) return;
     *ow = w; *oh = h;
