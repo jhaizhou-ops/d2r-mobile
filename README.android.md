@@ -234,6 +234,10 @@ them):
 | `flag-*` | preset switches (chunk size, scale, present rate, …) |
 | `loadstore.txt`, `planstate.txt`, `prereset.txt`, `nooccl.txt`, `chunkd.txt`, … | **in-session A/B** switches: content 0/1 (or a step value), read once per statistics window, no restart needed |
 | `att-load-table.txt` | **in-session** switch for the coverage table: `1` on / `0` off, read once per window; refused after a conflict quarantine |
+| `attskip.txt` | attachment store elision: `5` default (depth + green color) / `1` depth only / `0` off; delete the file to restore the default |
+| `depthload.txt` | depth load elision: `1` default on / `0` off; delete the file to restore the default |
+| `enable-att-skip` / `disable-att-skip` | startup store-elision switch (default `5`; disable -> `0`) |
+| `disable-cov-depth` | startup rollback for depth load elision (default on; create the file and restart) |
 | `enable-att-load-table` / `disable-att-load-table` | turn the per-pass `loadOp` coverage table on/off at startup (default on; rollback and evidence in appendix 20 of `docs/android-resolution-plan.zh-CN.md`) |
 | `pass-sentinel` / `pass-sentinel-selftest` | sentinel probe used to fill the coverage table (slow, 7–18 fps; `selftest` proves the probe can report red) |
 

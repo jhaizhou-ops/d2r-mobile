@@ -1057,12 +1057,13 @@ NVN → Vulkan 移植在 **22081212C / Adreno 730** 上，营地标准档（2270
 
 ## 已知限制
 
-- **`loadOp=DONT_CARE` 默认开**（2026-10-20 晚）：全屏 UI 合成通道（2322×1080）只覆盖约 8%，换 DONT_CARE 会出花点，
-  而截图肉眼看不出。逐通道查表已经做完并上机验证（种子 `dm/gfx/nvn/pass-coverage.tsv`，
-  营地 load 421.8 → 390.3 MB/帧）。89 张图/25,552 次探针 0 条新增颜色假绿后已改成默认开；act 片头/商店等未扫场景看出花点就回退；
-  回退与继续验证见**附二十 §五**。
-- **深度 load 约 200 MB/帧没动**：深度跨通道续用，DONT_CARE 会让 z-test 读垃圾；深度哨兵本身也不可信
-  （清 0.5 会改变 z-test），见附二十 §五。
+- **带宽削减默认开**（2026-10-21）：颜色 load 表 + 绿色颜色 store 跳过 + 深度 load 跳过。
+  营地总流量 617.4 → 470.5 MB/帧（−24%），深坑复杂场景 750.2 → 474.9（−37%）；fps/GPU busy 基本不变，
+  收益是带宽/热余量。颜色 load 有 89 图/25,552 探针证据；深度 load 是经验验证（Arcane 开/关像素差
+  mean 0.59、营地 1.4），仍不如颜色表硬。出现遮挡/花点先 `depthload.txt=0`（深度）或 `attskip.txt=1/0`
+  （store），再按附二十二记录。
+- **深度 load 不是“没动”了**：3 条深度键（1625×756 ×2、128×128）已默认跳；深度 z-test 仍缺形式证明，
+  异常时按上面回退。
 - **act 片头视频、商店/创建角色等 UI 页未扫**（四场景 + 两局怪群 + 五页 UI + 89 张图已验）。
 - 高负载下热降频会把 fps 压到 34 左右（`cpu7` 787 MHz），这是设备功耗策略，不是代码问题。
 
@@ -1441,8 +1442,13 @@ python3 dm/android/tools/coverage_scan_report.py --scan coverage-scan
 - CPU 绑定全路径 ~9.3ms 的墙要靠更深的命令/描述符复用，不是一行开关能解决的；`DM_PLAN_PRECISE_STATE`
   之前实测平局。
 
-### 默认与试点
+### 默认（2026-10-21 起）
 
-- 默认：`DM_ATT_LOAD_TABLE=1`；`DM_ATT_STORE_SKIP=1`（只跳深度 store）；
-  颜色 store、深度 load、通道合并不默认。
-- 试点（手动）：`attskip.txt=5` 开绿色颜色 store 跳过；`DM_COV_DEPTH=1` + 深度 green 种子开深度 load。
+- `DM_ATT_LOAD_TABLE=1`（颜色 load 表）；`DM_ATT_STORE_SKIP=5`（深度 + 绿色颜色 store）；
+  `DM_COV_DEPTH=1`（深度 load，种子带 3 条深度 green）。
+- 营地 617.4 → **470.5 MB/帧（−24%）**；深坑复杂场景 750.2 → **474.9（−37%）**；
+  fps/GPU busy 基本不变，收益是带宽/热余量/持续稳定性，不是瞬时帧率。
+- 回退：`depthload.txt=0`（深度）、`attskip.txt=1`（只深度 store）/`0`（全不跳）；
+  启动期 marker：`disable-cov-depth`、`disable-att-skip`。
+- 风险：深度 load 是经验验证（Arcane/营地/深坑/UI），不是 z-test 形式证明；颜色 store 也只验证了
+  已测场景。出现异常先关对应项，再把键/场景记进本文档。

@@ -215,6 +215,10 @@ iOS 版能稳定 60 fps，Android 目前视档位在 **30–40 fps**（高清 30
 | `flag-*` | 各种预设开关（分块大小、比例、呈现频率等） |
 | `loadstore.txt` / `planstate.txt` / `prereset.txt` / `nooccl.txt` / `chunkd.txt` … | **运行中 A/B** 开关：内容 0/1（或档位值），每个统计窗口读一次，不必重启 |
 | `att-load-table.txt` | 逐通道覆盖率表的**运行中开关**：`1` 开 / `0` 关，每窗口读一次；冲突隔离后拒绝再开 |
+| `attskip.txt` | 附件 store 跳过：`5` 默认（深度+绿色颜色）/`1` 只深度/`0` 全不跳；删文件回默认 |
+| `depthload.txt` | 深度 load 跳过：`1` 默认开 /`0` 关；删文件回默认 |
+| `enable-att-skip` / `disable-att-skip` | 启动时 store 跳过开关（默认 `5`；disable → `0`） |
+| `disable-cov-depth` | 启动时关掉深度 load 跳过（默认开；建文件后重启生效） |
 | `enable-att-load-table` / `disable-att-load-table` | 启动时开/关逐通道 `loadOp` 覆盖率表（默认开；回退与实测见 `docs/android-resolution-plan.zh-CN.md` 附二十） |
 | `pass-sentinel` / `pass-sentinel-selftest` | 开哨兵探针给覆盖率表填数据（很慢，7–18fps；`selftest` 让探针自证会报红） |
 

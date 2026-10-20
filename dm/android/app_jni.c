@@ -246,21 +246,18 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-nvn-queue");
     if(access(driver_option,F_OK)==0)setenv("DM_NVN_SYNC","1",1);
     if(!getenv("DM_PRESENT_HZ"))setenv("DM_PRESENT_HZ","80",1);
-    /* 附件 store 跳过（深度通道）：同 fps 下把附件流量从 891.8 降到 691.8 MB/帧（−22%），
-       给复杂场景留 GPU 余量。营地/营地外静态对拍无可检测差异（分区热力图与噪声同形态），
-       但战斗/特效/过场未验证，且 Vulkan 规范允许 DONT_CARE 内容为任意值——所以**默认关**，
-       仅在 diagnostics/enable-att-skip 存在时打开。删掉该文件即回退。
-       Attachment store elision for depth passes: same fps, attachment traffic 891.8 -> 691.8 MB/frame
-       (-22%), leaving GPU headroom for heavy scenes. No detectable difference in static camp/field
-       shots (the per-cell diff map matches the noise shape), but combat/effects/cutscenes are not
-       validated and Vulkan allows DONT_CARE to leave arbitrary contents -- so off by default,
-       enabled only when diagnostics/enable-att-skip exists. Delete the file to roll back. */
-    /* 附件冗余带宽削减现在**默认开**（哨兵探针已证明颜色附件全覆盖；深度 store 跳过在
-       营地/野外静态对拍无可检测差异）。两个回退文件见下，删/建即切。
-       Attachment-bandwidth elision now defaults to ON; see the rollback files below. */
-    setenv("DM_ATT_STORE_SKIP","1",1);
+    /* 附件 store 跳过默认 5：bit1 跳深度 store，bit4 只跳“查表已判 DONT_CARE”的绿色颜色。
+       全局颜色跳（bit2/3）会把 LOAD 的 UI 合成也跳掉、面板画不出来，不要用。
+       营地/Den/深坑/UI/死亡界面已验证无差异；运行中 attskip.txt 可回退：1=只深度，0=全不跳。
+       Default 5 = depth store skip + green-only color store skip (LOAD passes keep STORE).
+       Global color skip (bit2/3) breaks UI. Runtime rollback: attskip.txt 1/0. */
+    setenv("DM_ATT_STORE_SKIP","5",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-skip");
     if(access(driver_option,F_OK)==0)setenv("DM_ATT_STORE_SKIP","0",1);
+    /* 深度 load 跳过默认开；万一某个场景出现遮挡异常，建这个文件重启即可整局关掉。 */
+    setenv("DM_COV_DEPTH","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-cov-depth");
+    if(access(driver_option,F_OK)==0)setenv("DM_COV_DEPTH","0",1);
     /* loadOp=DONT_CARE 默认关：哨兵探针实测某个 2270x1056 通道只覆盖 8%，换 DONT_CARE 会露未定义内容。
        要试就写 env.txt 的 DM_ATT_LOAD_SKIP=1。 */
     setenv("DM_ATT_LOAD_SKIP","0",1);

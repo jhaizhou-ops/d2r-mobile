@@ -9,11 +9,14 @@
 # 场景（2026-10-20，DM_TEST_WARP_LV 造现场）：营地、邪恶洞穴（8）、精华荒地（2）、洞穴一层（9）、
 # 神秘避难所（74），另批量扫了 89 张图（Act 1–5）。神秘避难所抓到 800x600 加载键假绿
 # （278/480000），已改红；批量扫 89 图 / 25,552 次探针后 0 条新增颜色假绿。
-# 默认已打开（可回退：diagnostics/att-load-table.txt=0 或 disable-att-load-table）。
+# 默认已打开（2026-10-21）：颜色 load 表 + 绿色颜色 store 跳过 + 深度 load 跳过；
+# 深度 load 可用 diagnostics/depthload.txt=0 运行中回退，绿色 store 用 attskip.txt=1 回退。
 # Scenes (2026-10-20, DM_TEST_WARP_LV): Rogue Encampment, Den of Evil (8), Rocky Waste (2),
 # Cave Level 1 (9), Arcane Sanctuary (74), plus an 89-map sweep (Act 1-5). The 800x600
 # loading key was exposed as a false green (278/480000) and is red; after 89 maps / 25,552
 # probes there were no new color false greens. Default is ON (roll back with
+# 2026-10-21: green color store skip and depth load skip are on by default; rollback with
+# diagnostics/depthload.txt=0 (depth) or attskip.txt=1 (store).
 # diagnostics/att-load-table.txt=0 or disable-att-load-table).
 pk	w	h	format	is_depth	verdict	samples	uncovered	total
 b5c020fc81e86657	800	600	37	0	red	33	479722	480000
@@ -28,3 +31,6 @@ c3927032b59ae46a	101	47	122	0	green	91	0	431977
 a0672187cf96a2f5	50	23	122	0	green	88	0	101200
 8bf38593b7f6ddf2	25	11	122	0	green	64	0	17600
 f6fc268dbad25799	12	5	122	0	green	22	0	1320
+9c581c95eac6b7a7	1625	756	129	1	green	91	0	4914000
+dfcf80490a8ee5e5	1625	756	129	1	green	53	0	4914000
+bc0b503dc9991ac6	128	128	124	1	green	24	0	65536
