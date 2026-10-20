@@ -2945,11 +2945,51 @@ static void warm_flush(void) {
     else fprintf(stderr,"[nvn-vulkan] PSO_WARM 清单写入失败 %s\n",path);
 }
 
+/* ── 图形管线创建的唯一入口 ────────────────────────────────────────────────
+   绘制路径与预热都调用它。此前两条路径各写一份 VkGraphicsPipelineCreateInfo，
+   正是"预热漏了 gp.layout 导致驱动崩"那类 bug 的温床。
+   固定状态全部从 PsoKey 取（key 是唯一事实来源），着色器与渲染通道由参数传入。
+   Single entry point for graphics pipeline creation, shared by the draw path and the
+   prewarm path. Having two copies of the create-info is exactly what let the warm path
+   miss gp.layout and crash the driver. */
+static int pso_create_graphics(const PsoKey *key,VShader *vs,VShader *ps,VkRenderPass rp,Pso *out) {
+    memset(out,0,sizeof(*out));
+    VkDescriptorSetLayout set_layouts[2]={vs->layout,ps?ps->layout:VK_NULL_HANDLE};
+    VkPipelineLayoutCreateInfo li={.sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=ps?2u:1u,.pSetLayouts=set_layouts};
+    if(vkCreatePipelineLayout(G.device,&li,NULL,&out->layout)!=VK_SUCCESS)return 0;
+    VkPipelineVertexInputStateCreateInfo vi={.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount=key->binding_count,.pVertexBindingDescriptions=key->bindings,
+        .vertexAttributeDescriptionCount=key->attribute_count,.pVertexAttributeDescriptions=key->attributes};
+    VkPipelineInputAssemblyStateCreateInfo ai={.sType=VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,.topology=(VkPrimitiveTopology)key->topology};
+    VkPipelineViewportStateCreateInfo vp={.sType=VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,.viewportCount=1,.scissorCount=1};
+    VkPipelineRasterizationStateCreateInfo raster={.sType=VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,.polygonMode=VK_POLYGON_MODE_FILL,
+        .cullMode=(VkCullModeFlags)key->cull,.frontFace=(VkFrontFace)key->front,.lineWidth=1};
+    VkPipelineMultisampleStateCreateInfo ms={.sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT};
+    VkPipelineDepthStencilStateCreateInfo ds={.sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,.depthTestEnable=key->depth_test,
+        .depthWriteEnable=key->depth_write,.depthCompareOp=(VkCompareOp)key->depth_compare,.stencilTestEnable=key->stencil_test,
+        .front=key->stencil[0],.back=key->stencil[1]};
+    VkPipelineColorBlendStateCreateInfo cb={.sType=VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,.attachmentCount=key->color_count,.pAttachments=key->blend};
+    VkDynamicState dynamic[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_BLEND_CONSTANTS};
+    VkPipelineDynamicStateCreateInfo dy={.sType=VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,.dynamicStateCount=3,.pDynamicStates=dynamic};
+    VkSpecializationMapEntry bm[2][LIMIT_BINDINGS];VkSpecializationInfo bias[2];
+    bias[0]=storage_specialization_ex(vs,bm[0],key->storage_bias[0]);
+    if(ps)bias[1]=storage_specialization_ex(ps,bm[1],key->storage_bias[1]);
+    VkPipelineShaderStageCreateInfo stages[2]={
+        {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_VERTEX_BIT,.module=vs->module,.pName="main"},
+        {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=ps?ps->module:VK_NULL_HANDLE,.pName="main"}};
+    if(bias[0].mapEntryCount)stages[0].pSpecializationInfo=&bias[0];
+    if(ps&&bias[1].mapEntryCount)stages[1].pSpecializationInfo=&bias[1];
+    VkGraphicsPipelineCreateInfo gp={.sType=VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,.flags=(VkPipelineCreateFlags)key->flags,
+        .stageCount=ps?2u:1u,.pStages=stages,.pVertexInputState=&vi,.pInputAssemblyState=&ai,.pViewportState=&vp,
+        .pRasterizationState=&raster,.pMultisampleState=&ms,.pDepthStencilState=&ds,.pColorBlendState=&cb,
+        .pDynamicState=&dy,.layout=out->layout,.renderPass=rp};
+    if(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&out->pipeline)!=VK_SUCCESS){
+        vkDestroyPipelineLayout(G.device,out->layout,NULL);out->layout=VK_NULL_HANDLE;return 0; }
+    return 1;
+}
 /* 后台重建一条：着色器按内容键建（与正常路径同一个函数，索引因此一致），
    PassKey 自包含所以能独立重建渲染通道，其余固定状态全部来自 PsoKey。 */
 static int warm_build_one(WarmRec *rec) {
-    static unsigned dbg; int trace=dbg<1;
-    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u enter vs=%s ps=%s\n",dbg,rec->vs,rec->has_ps?rec->ps:"-");
     VShader *vs=shader_create_by_key(rec->vs,rec->vs_stage);
     VShader *ps=rec->has_ps?shader_create_by_key(rec->ps,rec->ps_stage):NULL;
     if(!vs||(rec->has_ps&&!ps))return 0;
@@ -2961,43 +3001,9 @@ static int warm_build_one(WarmRec *rec) {
     VkRenderPassCreateInfo ri={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,.attachmentCount=k.pass.count,
         .pAttachments=k.pass.attachments,.subpassCount=1,.pSubpasses=&sub,
         .dependencyCount=k.pass.dependency_count,.pDependencies=k.pass.dependencies};
-    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u shaders ok, building rp\n",dbg);
     VkRenderPass rp=render_pass_get(&k.pass,&ri);
-    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u rp ok\n",dbg);
-    VkDescriptorSetLayout set_layouts[2]={vs->layout,ps?ps->layout:VK_NULL_HANDLE};
-    VkPipelineLayoutCreateInfo li={.sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=ps?2u:1u,.pSetLayouts=set_layouts};
-    Pso pso={0};
-    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u creating layout\n",dbg);
-    if(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout)!=VK_SUCCESS)return 0;
-    VkPipelineVertexInputStateCreateInfo vi={.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .vertexBindingDescriptionCount=k.binding_count,.pVertexBindingDescriptions=k.bindings,
-        .vertexAttributeDescriptionCount=k.attribute_count,.pVertexAttributeDescriptions=k.attributes};
-    VkPipelineInputAssemblyStateCreateInfo ai={.sType=VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,.topology=(VkPrimitiveTopology)k.topology};
-    VkPipelineViewportStateCreateInfo vp={.sType=VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,.viewportCount=1,.scissorCount=1};
-    VkPipelineRasterizationStateCreateInfo raster={.sType=VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,.polygonMode=VK_POLYGON_MODE_FILL,
-        .cullMode=(VkCullModeFlags)k.cull,.frontFace=(VkFrontFace)k.front,.lineWidth=1};
-    VkPipelineMultisampleStateCreateInfo ms={.sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT};
-    VkPipelineDepthStencilStateCreateInfo ds={.sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,.depthTestEnable=k.depth_test,
-        .depthWriteEnable=k.depth_write,.depthCompareOp=(VkCompareOp)k.depth_compare,.stencilTestEnable=k.stencil_test,
-        .front=k.stencil[0],.back=k.stencil[1]};
-    VkPipelineColorBlendStateCreateInfo cb={.sType=VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,.attachmentCount=k.color_count,.pAttachments=k.blend};
-    VkDynamicState dynamic[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_BLEND_CONSTANTS};
-    VkPipelineDynamicStateCreateInfo dy={.sType=VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,.dynamicStateCount=3,.pDynamicStates=dynamic};
-    VkSpecializationMapEntry bm[2][LIMIT_BINDINGS];VkSpecializationInfo bias[2];
-    bias[0]=storage_specialization_ex(vs,bm[0],k.storage_bias[0]);
-    if(ps)bias[1]=storage_specialization_ex(ps,bm[1],k.storage_bias[1]);
-    VkPipelineShaderStageCreateInfo stages[2]={
-        {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_VERTEX_BIT,.module=vs->module,.pName="main"},
-        {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=ps?ps->module:VK_NULL_HANDLE,.pName="main"}};
-    if(bias[0].mapEntryCount)stages[0].pSpecializationInfo=&bias[0];
-    if(ps&&bias[1].mapEntryCount)stages[1].pSpecializationInfo=&bias[1];
-    VkGraphicsPipelineCreateInfo gp={.sType=VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,.flags=(VkPipelineCreateFlags)k.flags,
-        .stageCount=ps?2u:1u,.pStages=stages,.pVertexInputState=&vi,.pInputAssemblyState=&ai,.pViewportState=&vp,
-        .pRasterizationState=&raster,.pMultisampleState=&ms,.pDepthStencilState=&ds,.pColorBlendState=&cb,
-        .pDynamicState=&dy,.layout=pso.layout,.renderPass=rp};   /* layout 必须给：漏了驱动会空指针崩 */
-    if(trace)fprintf(stderr,"[nvn-vulkan] WARM_STEP %u creating pipeline (attrs=%u binds=%u colors=%u)\n",dbg,k.attribute_count,k.binding_count,k.color_count);
-    if(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline)!=VK_SUCCESS){ vkDestroyPipelineLayout(G.device,pso.layout,NULL); return 0; }
-    if(trace){fprintf(stderr,"[nvn-vulkan] WARM_STEP %u pipeline ok\n",dbg);dbg++;}
+    Pso pso;
+    if(!pso_create_graphics(&k,vs,ps,rp,&pso))return 0;
     /* 建成的键要按当前索引重算 hash——运行时用同一个算法算出来的值才对得上。 */
     uint64_t h=pso_key_hash(&k);
     pthread_mutex_lock(&g_warm_mu);
@@ -3005,42 +3011,6 @@ static int warm_build_one(WarmRec *rec) {
     if(g_warm_psos && g_warm_npsos<WARM_MAX){ g_warm_psos[g_warm_npsos].key=k; g_warm_psos[g_warm_npsos].hash=h; g_warm_psos[g_warm_npsos].pso=pso; g_warm_npsos++; g_warm_built++; }
     pthread_mutex_unlock(&g_warm_mu);
     return 1;
-}
-
-/* 分帧预热：在渲染线程上一帧建 budget 条，直到清单走完。
-   不在后台线程建——VkPipelineCache 不允许并发使用，且实测后台线程会让驱动崩（空指针 +0xE8）。
-   实测建一条约 5ms，所以只在前 1200 帧（约 30 秒，菜单/读盘阶段）做，玩家进局前就完成。 */
-static void warm_step(int budget) {
-    if(!g_warm_done_loaded) return;
-    while(budget-- > 0 && g_warm_next < g_warm_nrec) {
-        WarmRec *rec=&g_warm_recs[g_warm_next];
-        if(!warm_build_one(rec)) g_warm_failed++;
-        g_warm_next++;
-    }
-    if(g_warm_next>=g_warm_nrec && !atomic_load(&g_warm_done)) {
-        atomic_store(&g_warm_done,1);
-        fprintf(stderr,"[nvn-vulkan] PSO_WARM 完成：清单 %u 条，重建 %llu 条，失败 %llu 条\n",
-            g_warm_nrec,(unsigned long long)g_warm_built,(unsigned long long)g_warm_failed);
-    }
-}
-
-/* 读一个清单文件并合并进 g_warm_recs（按 hash + vs/ps 内容键去重）。
-   种子里已有的不重复加，用户自学习的追加在后面。 */
-static void warm_read_file(const char *path) {
-    FILE *f=fopen(path,"rb"); if(!f)return;
-    uint32_t hdr[3]={0,0,0};
-    if(fread(hdr,sizeof hdr,1,f)!=1 || hdr[0]!=WARM_MAGIC || hdr[1]!=1 || !hdr[2] || hdr[2]>WARM_MAX){ fclose(f); return; }
-    static WarmRec tmp[WARM_MAX];
-    size_t got=fread(tmp,sizeof(WarmRec),hdr[2],f); fclose(f);
-    if(!g_warm_recs){ g_warm_recs=calloc(WARM_MAX,sizeof(*g_warm_recs)); if(!g_warm_recs)return; }
-    unsigned added=0;
-    for(size_t i=0;i<got && g_warm_nrec<WARM_MAX;i++){
-        WarmRec *r=&tmp[i]; int dup=0;
-        for(unsigned j=0;j<g_warm_nrec;j++){ WarmRec *q=&g_warm_recs[j];
-            if(q->hash==r->hash && q->has_ps==r->has_ps && !strcmp(q->vs,r->vs) && (!r->has_ps||!strcmp(q->ps,r->ps))){dup=1;break;} }
-        if(!dup){ g_warm_recs[g_warm_nrec++]=*r; added++; }
-    }
-    fprintf(stderr,"[nvn-vulkan] PSO_WARM 读入 %s：%u 条（新增 %u，累计 %u）\n",path,(unsigned)got,added,g_warm_nrec);
 }
 
 /* 后台线程重建（与 Metal 侧 warm_worker 同构）：每条单独拿 G.lock——渲染线程的管线创建也在
@@ -3071,6 +3041,25 @@ static void warm_start_thread(void) {
     if(pthread_create(&th,&at,warm_thread,NULL)==0)pthread_detach(th);
     else fprintf(stderr,"[nvn-vulkan] PSO_WARM 线程创建失败，退回渲染线程分帧\n");
     pthread_attr_destroy(&at);
+}
+
+/* 读一个清单文件并合并进 g_warm_recs（按 hash + vs/ps 内容键去重）。
+   种子里已有的不重复加，用户自学习的追加在后面。 */
+static void warm_read_file(const char *path) {
+    FILE *f=fopen(path,"rb"); if(!f)return;
+    uint32_t hdr[3]={0,0,0};
+    if(fread(hdr,sizeof hdr,1,f)!=1 || hdr[0]!=WARM_MAGIC || hdr[1]!=1 || !hdr[2] || hdr[2]>WARM_MAX){ fclose(f); return; }
+    static WarmRec tmp[WARM_MAX];
+    size_t got=fread(tmp,sizeof(WarmRec),hdr[2],f); fclose(f);
+    if(!g_warm_recs){ g_warm_recs=calloc(WARM_MAX,sizeof(*g_warm_recs)); if(!g_warm_recs)return; }
+    unsigned added=0;
+    for(size_t i=0;i<got && g_warm_nrec<WARM_MAX;i++){
+        WarmRec *r=&tmp[i]; int dup=0;
+        for(unsigned j=0;j<g_warm_nrec;j++){ WarmRec *q=&g_warm_recs[j];
+            if(q->hash==r->hash && q->has_ps==r->has_ps && !strcmp(q->vs,r->vs) && (!r->has_ps||!strcmp(q->ps,r->ps))){dup=1;break;} }
+        if(!dup){ g_warm_recs[g_warm_nrec++]=*r; added++; }
+    }
+    fprintf(stderr,"[nvn-vulkan] PSO_WARM 读入 %s：%u 条（新增 %u，累计 %u）\n",path,(unsigned)got,added,g_warm_nrec);
 }
 
 static void warm_load(void) {
@@ -3450,10 +3439,8 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     G.profile_bind_ns+=prof_now()-bind_started;
     if(G.profile_detail){int n=0;G.last_uses[0]=0;for(unsigned u=0;u<S.nimage_uses&&n<90;u++)n+=snprintf(G.last_uses+n,sizeof G.last_uses-n,"%llu%s ",(unsigned long long)S.image_uses[u].serial,(S.image_uses[u].roles&2)?"w":"");}
     G.xition_vertex=0;
-    VkDescriptorSetLayout set_layouts[2]={vs->layout,ps?ps->layout:VK_NULL_HANDLE};
     if(S.active_occlusion==UINT32_MAX)query_reserve(S.occlusion,&S.occlusion_reset_count,S.nocc,1,LIMIT_WRITES);
     uint64_t render_started=prof_now();VkRenderPass renderpass=render_begin();G.profile_render_ns+=prof_now()-render_started;
-    VkPipelineLayoutCreateInfo li={.sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=ps?2u:1u,.pSetLayouts=set_layouts};
     uint64_t vertex_started=prof_now();
     VkVertexInputAttributeDescription attributes[32];VkVertexInputBindingDescription bindings[16];uint32_t nbindings=0;uint8_t used[16]={0};
     for(uint32_t i=0;i<vs->h.na;i++) { unsigned location=vs->attr[i][0];if(location>=16)die("vertex attribute count",location);
@@ -3465,18 +3452,14 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
         NVNbufferRange r=G.state.vbuf[i];if(!r.address || !r.size)die("unbound vertex stream",i);uint64_t offset=0;VPool *p=pool_read_memo(r.address,r.size,&offset);
         command_bind_profile(NVN_VK_CMD_VERTEX,nvn_vk_cmd_vertex(&S.command_state,G.enable_command_cache&&!G.trace_frame,S.command,i,p->v.b,offset)); }
     G.profile_vertex_ns+=prof_now()-vertex_started;
-    VkPipelineVertexInputStateCreateInfo vi={.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,.vertexBindingDescriptionCount=nbindings,
-        .pVertexBindingDescriptions=bindings,.vertexAttributeDescriptionCount=vs->h.na,.pVertexAttributeDescriptions=attributes};
     VkPipelineInputAssemblyStateCreateInfo ai={.sType=VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .topology=topology(a?a->prim:idx->prim)};
-    VkPipelineViewportStateCreateInfo vp={.sType=VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,.viewportCount=1,.scissorCount=1};
     VkPipelineRasterizationStateCreateInfo raster={.sType=VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,.polygonMode=VK_POLYGON_MODE_FILL,
        .cullMode=G.state.polygon.cull==NVN_FACE_FRONT?VK_CULL_MODE_FRONT_BIT:G.state.polygon.cull==NVN_FACE_BACK?VK_CULL_MODE_BACK_BIT:
           G.state.polygon.cull==NVN_FACE_FRONT_AND_BACK?VK_CULL_MODE_FRONT_AND_BACK:VK_CULL_MODE_NONE,
        // An upper-left NVN window retains NDC y upwards; a negative Vulkan
        // viewport restores that mapping. Facing follows the same inversion.
        .frontFace=(G.state.polygon.front==NVN_FRONT_FACE_CCW)==upper_left?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE,.lineWidth=1};
-    VkPipelineMultisampleStateCreateInfo ms={.sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT};
     VkPipelineDepthStencilStateCreateInfo ds={.sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,.depthTestEnable=G.state.ds.dt,
         .depthWriteEnable=G.state.ds.dw,.depthCompareOp=(VkCompareOp)(G.state.ds.df-1),.stencilTestEnable=G.state.ds.st};
     ds.front=(VkStencilOpState){.failOp=(VkStencilOp)(G.state.ds.fail_f-1),.passOp=(VkStencilOp)(G.state.ds.zpass_f-1),
@@ -3493,22 +3476,11 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
            blends[i].dstColorBlendFactor=blend_factor(b.dst_rgb);blends[i].srcAlphaBlendFactor=blend_factor(b.src_a);
            blends[i].dstAlphaBlendFactor=blend_factor(b.dst_a);blends[i].colorBlendOp=blend_op(b.eq_rgb);blends[i].alphaBlendOp=blend_op(b.eq_a);} }
     VkPipelineColorBlendStateCreateInfo cb={.sType=VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,.attachmentCount=G.state.rt.n,.pAttachments=blends};
-    VkDynamicState dynamic[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_BLEND_CONSTANTS};
-    VkPipelineDynamicStateCreateInfo dy={.sType=VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,.dynamicStateCount=3,.pDynamicStates=dynamic};
-    VkPipelineShaderStageCreateInfo stages[2]={
-       {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_VERTEX_BIT,.module=vs->module,.pName="main"},
-       {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=ps?ps->module:VK_NULL_HANDLE,.pName="main"}};
-    VkSpecializationMapEntry bias_maps[2][LIMIT_BINDINGS];VkSpecializationInfo bias[2];
-    bias[0]=storage_specialization(vs,bias_maps[0]);if(bias[0].mapEntryCount)stages[0].pSpecializationInfo=&bias[0];
-    if(ps){bias[1]=storage_specialization(ps,bias_maps[1]);if(bias[1].mapEntryCount)stages[1].pSpecializationInfo=&bias[1];}
-    VkGraphicsPipelineCreateInfo gp={.sType=VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,.flags=S.feedback_flags,.stageCount=ps?2u:1u,.pStages=stages,
-        .pVertexInputState=&vi,.pInputAssemblyState=&ai,.pViewportState=&vp,.pRasterizationState=&raster,.pMultisampleState=&ms,
-        .pDepthStencilState=&ds,.pColorBlendState=&cb,.pDynamicState=&dy,.renderPass=renderpass};
     uint64_t pso_started=prof_now();
     PsoKey key;memset(&key,0,sizeof(key));
     key.shader[0]=(uint32_t)(vs-G.shaders)+1;key.shader[1]=ps?(uint32_t)(ps-G.shaders)+1:0;
     memcpy(key.storage_bias[0],S.storage_bias[0],sizeof key.storage_bias[0]);if(ps)memcpy(key.storage_bias[1],S.storage_bias[1],sizeof key.storage_bias[1]);
-    key.flags=gp.flags;key.topology=ai.topology;key.cull=raster.cullMode;key.front=raster.frontFace;
+    key.flags=S.feedback_flags;key.topology=ai.topology;key.cull=raster.cullMode;key.front=raster.frontFace;
     key.attribute_count=vs->h.na;key.binding_count=nbindings;key.color_count=cb.attachmentCount;
     memcpy(key.attributes,attributes,vs->h.na*sizeof(*attributes));memcpy(key.bindings,bindings,nbindings*sizeof(*bindings));
     key.depth_test=ds.depthTestEnable;key.depth_write=ds.depthWriteEnable;key.depth_compare=ds.depthCompareOp;key.stencil_test=ds.stencilTestEnable;
@@ -3516,8 +3488,8 @@ static void draw(const p_draw *a,const p_draw_idx *idx) {
     uint64_t hash=0;Pso pso,*cached=pso_lookup(&key,&hash);
     if(cached)pso=*cached;
     else{
-        uint64_t pipeline_start=dm_android_nvn_clock_ns();CHECK(vkCreatePipelineLayout(G.device,&li,NULL,&pso.layout));gp.layout=pso.layout;
-        CHECK(vkCreateGraphicsPipelines(G.device,G.pipeline_cache,1,&gp,NULL,&pso.pipeline));{uint64_t pns=dm_android_nvn_clock_ns()-pipeline_start;G.profile_pipeline_ns+=pns;g_pso_cache_dirty=1;pso_create_account("gfx",pns,hash,G.present_count+1);warm_record(&key,hash,vs,ps);}
+        uint64_t pipeline_start=dm_android_nvn_clock_ns();
+        if(!pso_create_graphics(&key,vs,ps,renderpass,&pso))die("graphics pipeline creation",0);{uint64_t pns=dm_android_nvn_clock_ns()-pipeline_start;G.profile_pipeline_ns+=pns;g_pso_cache_dirty=1;pso_create_account("gfx",pns,hash,G.present_count+1);warm_record(&key,hash,vs,ps);}
         pso=pso_remember(&key,hash,pso);
     }
     G.profile_pso_ns+=prof_now()-pso_started;
