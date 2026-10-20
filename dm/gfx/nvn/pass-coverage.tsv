@@ -8,7 +8,8 @@
 # sentinel (clear to 0.5) changes z-test outcomes, so a depth green would not be trustworthy.
 # 场景（2026-10-20，DM_TEST_WARP_LV 造现场）：营地、邪恶洞穴（8）、精华荒地（2）、洞穴一层（9）、
 # 神秘避难所（74）。前四个场景表开 + 探针 0 冲突；神秘避难所抓到 800x600 加载键假绿（278/480000），
-# 已改红。这说明「同一个键在别的场景可能不成立」——种子只保留多场景验过的键，默认不开。
+# 已改红。2026-10-20 晚又批量扫了 43 张图（Act 1–5，12,810 次探针）：0 条新增颜色假绿；
+# 但加载画面键的这次反例说明默认仍不能开。
 # Scenes (2026-10-20, DM_TEST_WARP_LV): Rogue Encampment, Den of Evil (8), Rocky Waste (2),
 # Cave Level 1 (9), Arcane Sanctuary (74). The first four had 0 conflicts; Arcane Sanctuary
 # exposed a false-green 800x600 loading key (278/480000), now red. This is exactly why the
