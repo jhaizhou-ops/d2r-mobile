@@ -261,7 +261,9 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     setenv("DM_ATT_STORE_SKIP","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-skip");
     if(access(driver_option,F_OK)==0)setenv("DM_ATT_STORE_SKIP","0",1);
-    setenv("DM_ATT_LOAD_SKIP","1",1);
+    /* loadOp=DONT_CARE 默认关：哨兵探针实测某个 2270x1056 通道只覆盖 8%，换 DONT_CARE 会露未定义内容。
+       要试就写 env.txt 的 DM_ATT_LOAD_SKIP=1。 */
+    setenv("DM_ATT_LOAD_SKIP","0",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-load-skip");
     if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_SKIP","0",1);
     setenv("DM_WRITEBACK_PREPARE","1",1);

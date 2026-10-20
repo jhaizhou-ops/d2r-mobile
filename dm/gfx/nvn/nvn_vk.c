@@ -701,7 +701,7 @@ static void backend_init(void) {
     G.control_cache=calloc(CONTROL_CACHE,sizeof(*G.control_cache));
     if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
-     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;{const char *vl=getenv("DM_ATT_LOAD_SKIP");g_load_skip=vl?atoi(vl):1;}if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
+     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;{const char *vl=getenv("DM_ATT_LOAD_SKIP");g_load_skip=vl?atoi(vl):0;}   /* 默认关：哨兵探针实测有通道只覆盖 8%（见附十六） */if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
      fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}
@@ -978,6 +978,7 @@ static void pass_end_at(int line) { if(S.in_pass) {
             VTexture *pt=(VTexture *)S.sentinel[q].tex; if(!pt) continue;
             uint32_t w=S.sentinel[q].w,h=S.sentinel[q].h;
             VBuffer *rb=temporary((uint64_t)w*h*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+            VkImageAspectFlags asp=S.sentinel[q].depth?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT;
             /* 自检：回读前把整张图清成品红 → 探针必须报 ~100%。报 0 就说明链路假绿。 */
             if(getenv("DM_PASS_SENTINEL_SELFTEST")){
                 VkClearColorValue mg={{0}};mg.float32[0]=1.0f;mg.float32[1]=0.0f;mg.float32[2]=1.0f;mg.float32[3]=1.0f;
@@ -986,7 +987,7 @@ static void pass_end_at(int line) { if(S.in_pass) {
                 vkCmdClearColorImage(S.command,pt->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&mg,1,&s2);
             }
             texture_transition(pt,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-            VkBufferImageCopy region={.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},.imageExtent={w,h,1}};
+            VkBufferImageCopy region={.imageSubresource={asp,0,0,1},.imageExtent={w,h,1}};
             vkCmdCopyImageToBuffer(S.command,pt->image,pt->layout,rb->b,1,&region);
             S.sentinel[q].buf=rb;
         }
@@ -1232,8 +1233,14 @@ static void sentinel_complete(VkSubmission *sub) {
         VBuffer *rb=(VBuffer *)sub->sentinel[i].buf;
         uint32_t w=sub->sentinel[i].w,h=sub->sentinel[i].h;
         if(!rb||!rb->map) continue;
-        uint64_t n=(uint64_t)w*h,dirty=0;const uint8_t *px=rb->map;
-        for(uint64_t k=0;k<n;k++,px+=4) if(px[0]==255&&px[1]==0&&px[2]==255) dirty++;
+        uint64_t n=(uint64_t)w*h,dirty=0;
+        if(sub->sentinel[i].depth){
+            const float *fp=(const float *)rb->map;
+            for(uint64_t k=0;k<n;k++) if(fp[k]>0.4999f&&fp[k]<0.5001f) dirty++;
+        } else {
+            const uint8_t *px=rb->map;
+            for(uint64_t k=0;k<n;k++,px+=4) if(px[0]==255&&px[1]==0&&px[2]==255) dirty++;
+        }
         g_sent_passes++;g_sent_pixels+=n;
         if(dirty){g_sent_dirty_passes++;g_sent_dirty_pixels+=dirty;}
         fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_PROBE slot=%u rt=%ux%u serial=%llu uncovered=%llu/%llu (%.3f%%)%s\n",
@@ -3245,7 +3252,7 @@ static VkRenderPass render_begin(void) {
         query_reset(S.occlusion,S.occlusion_reset_count,LIMIT_WRITES-S.occlusion_reset_count);S.occlusion_reset_count=LIMIT_WRITES;G.profile_query_preresets++; }
     G.profile_rp_chunk_ns+=prof_now()-rp_t0b;uint64_t rp_t1=prof_now();
     VkAttachmentDescription attachments[9];VkAttachmentReference color[8],depth;VkImageView views[9];uint32_t n=0,width=0,height=0;
-    int probe_slot=-1;VTexture *probe_tex=NULL;
+    int probe_slot=-1;VTexture *probe_tex=NULL;int probe_tex_is_depth=0;
     unsigned long long seq_ser[4]={0,0,0,0};   /* 通道序列诊断：前 4 个附件的 serial | pass-sequence diagnostic: serials of the first 4 attachments */
     memset(attachments,0,sizeof(attachments));
     for(int i=0;i<rt->n;i++)color[i]=(VkAttachmentReference){VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -3280,9 +3287,10 @@ static VkRenderPass render_begin(void) {
         int skip_store = G.diag_loadstore>=1 ||
             ((g_att_store_skip&1) && is_depth) || ((g_att_store_skip&2) && !is_depth);
         if(g_sent_on){ if(G.present_count!=g_sent_frame_seen){g_sent_frame_seen=G.present_count;g_sent_pass0=G.pass_count;g_sent_target=(g_sent_target+1)%160;} }
-        if(g_sent_on && !is_depth && n==0 && t->bpp==4 && (uint64_t)t->width*t->height<=1024ull*1024 && S.nsentinel<1
+        int sent_depth_ok = is_depth && (rt->n==0 ? n==0 : n==1) && (uint64_t)t->width*t->height<=1024ull*1024;
+        if(g_sent_on && (is_depth?sent_depth_ok:(!is_depth && n==0 && t->bpp==4)) && S.nsentinel<1
            && (G.pass_count-g_sent_pass0)==g_sent_target){
-            probe_slot=n; probe_tex=t;
+            probe_slot=n; probe_tex=t; probe_tex_is_depth=is_depth;
         }
         attachments[n]=(VkAttachmentDescription){.format=t->format,.samples=VK_SAMPLE_COUNT_1_BIT,
            .loadOp=(G.diag_loadstore>=2||(g_load_skip&&!is_depth))?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -3367,11 +3375,14 @@ static VkRenderPass render_begin(void) {
     G.profile_rp_key_ns+=prof_now()-rp_t2;uint64_t rp_t3=prof_now();
     S.active_pass_rp=rp;G.pass_draws0=G.draws;{const tex_t *f0=rt->n>0?rt->color[0]:rt->depth;snprintf(G.pass_desc,sizeof G.pass_desc,"%ux%u c%d d%d s%llu",f0?f0->d.width:0,f0?f0->d.height:0,rt->n,rt->depth!=NULL,(unsigned long long)(f0?f0->serial:0));}
     VkClearValue sent_clear[9];memset(sent_clear,0,sizeof sent_clear);
-    if(probe_slot>=0){ sent_clear[probe_slot].color.float32[0]=1.0f;sent_clear[probe_slot].color.float32[1]=0.0f;
-        sent_clear[probe_slot].color.float32[2]=1.0f;sent_clear[probe_slot].color.float32[3]=1.0f;
+    if(probe_slot>=0){ int dep=probe_tex_is_depth;
+        if(dep){ sent_clear[probe_slot].depthStencil.depth=0.5f;sent_clear[probe_slot].depthStencil.stencil=0; }
+        else { sent_clear[probe_slot].color.float32[0]=1.0f;sent_clear[probe_slot].color.float32[1]=0.0f;
+               sent_clear[probe_slot].color.float32[2]=1.0f;sent_clear[probe_slot].color.float32[3]=1.0f; }
         S.sentinel[S.nsentinel].buf=NULL;S.sentinel[S.nsentinel].tex=probe_tex;S.sentinel[S.nsentinel].w=probe_tex->width;
-        S.sentinel[S.nsentinel].h=probe_tex->height;S.sentinel[S.nsentinel].pass=G.pass_count;S.sentinel[S.nsentinel].serial=probe_tex->serial;S.sentinel[S.nsentinel].slot=(uint32_t)(G.pass_count-g_sent_pass0);S.nsentinel++;
-        if(!g_sent_seen){g_sent_seen=1;fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_FIRST rt=%ux%u bpp=%u serial=%llu\n",probe_tex->width,probe_tex->height,probe_tex->bpp,(unsigned long long)probe_tex->serial);} }
+        S.sentinel[S.nsentinel].h=probe_tex->height;S.sentinel[S.nsentinel].pass=G.pass_count;S.sentinel[S.nsentinel].serial=probe_tex->serial;
+        S.sentinel[S.nsentinel].slot=(uint32_t)(G.pass_count-g_sent_pass0);S.sentinel[S.nsentinel].depth=dep;S.sentinel[S.nsentinel].fmt=(uint32_t)probe_tex->format;S.nsentinel++;
+        if(!g_sent_seen){g_sent_seen=1;fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_FIRST rt=%ux%u bpp=%u depth=%d fmt=%d serial=%llu\n",probe_tex->width,probe_tex->height,probe_tex->bpp,dep,(int)probe_tex->format,(unsigned long long)probe_tex->serial);} }
     VkRenderPassBeginInfo begin={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=rp,.framebuffer=fb,
        .renderArea={{0,0},{(G.diag_shape&4)&&width>16?16:width,(G.diag_shape&4)&&height>16?16:height}},
        .clearValueCount=probe_slot>=0?n:0,.pClearValues=probe_slot>=0?sent_clear:NULL};
