@@ -98,6 +98,7 @@ typedef struct {
     unsigned ntrace_captures;
     struct { void *buf; void *tex; uint32_t w,h,pass,slot,fmt; int depth; uint64_t serial,pk; } sentinel[16];
     unsigned nsentinel;
+    uint64_t sentinel_bytes;   /* 本提交已回读的字节数，用于限内存（每帧上限见 SENT_BUDGET） */
 } VkSubmission;
 
 #endif

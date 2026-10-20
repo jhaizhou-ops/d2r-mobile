@@ -511,6 +511,7 @@ static void trace_capture_queue(VBuffer *buffer,uint64_t bytes,const char *name)
    通道结束后在同一条命令缓冲里回读，提交完成后数剩余哨兵像素。
    自检：DM_PASS_SENTINEL_SELFTEST=1 时回读前再清一次 → 必然全哨兵；报 0 即链路是假绿。 */
 #define SENT_MAX 16
+#define SENT_BUDGET (4ull*1024*1024)   /* 每提交回读上限：小通道可多探，大通道自动少探 */
 static int g_sent_on;
 static int g_load_skip;   /* DM_ATT_LOAD_SKIP：颜色附件 loadOp=DONT_CARE（哨兵探针已证全覆盖） */
 static uint64_t g_sent_passes,g_sent_dirty_passes,g_sent_pixels,g_sent_dirty_pixels,g_sent_frames;
@@ -3286,10 +3287,12 @@ static VkRenderPass render_begin(void) {
         if(g_att_audit_on && !(G.diag_loadstore>=2)) att_audit_read(t->serial);
         int skip_store = G.diag_loadstore>=1 ||
             ((g_att_store_skip&1) && is_depth) || ((g_att_store_skip&2) && !is_depth);
-        if(g_sent_on){ if(G.present_count!=g_sent_frame_seen){g_sent_frame_seen=G.present_count;g_sent_pass0=G.pass_count;g_sent_target=(g_sent_target+1)%160;} }
-        int sent_depth_ok = is_depth && (rt->n==0 ? n==0 : n==1) && (uint64_t)t->width*t->height<=1024ull*1024;
-        if(g_sent_on && (is_depth?sent_depth_ok:(!is_depth && n==0 && t->bpp==4)) && S.nsentinel<1
-           && (G.pass_count-g_sent_pass0)==g_sent_target){
+        if(g_sent_on){ if(G.present_count!=g_sent_frame_seen){g_sent_frame_seen=G.present_count;g_sent_pass0=G.pass_count;S.sentinel_bytes=0;g_sent_target=(unsigned)((G.present_count*8)%160);} }
+        int sent_depth_ok = is_depth && (rt->n==0 ? n==0 : n==1);
+        uint64_t need=(uint64_t)t->width*t->height*4;
+        if(g_sent_on && (is_depth?sent_depth_ok:(!is_depth && n==0 && t->bpp==4))
+           && S.nsentinel<SENT_MAX && (S.nsentinel==0 || S.sentinel_bytes+need<=SENT_BUDGET)
+           && (G.pass_count-g_sent_pass0)>=g_sent_target && (G.pass_count-g_sent_pass0)<g_sent_target+8){
             probe_slot=n; probe_tex=t; probe_tex_is_depth=is_depth;
         }
         attachments[n]=(VkAttachmentDescription){.format=t->format,.samples=VK_SAMPLE_COUNT_1_BIT,
@@ -3385,6 +3388,7 @@ static VkRenderPass render_begin(void) {
         { const uint8_t *pb=(const uint8_t *)&S.pass_key;uint64_t h=1469598103934665603ULL;
           for(size_t bi=0;bi<sizeof(S.pass_key);bi++){h^=pb[bi];h*=1099511628211ULL;}
           S.sentinel[S.nsentinel].pk=h; }
+        S.sentinel_bytes+=(uint64_t)probe_tex->width*probe_tex->height*4;
         S.nsentinel++;
         if(!g_sent_seen){g_sent_seen=1;fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_FIRST rt=%ux%u bpp=%u depth=%d fmt=%d serial=%llu\n",probe_tex->width,probe_tex->height,probe_tex->bpp,dep,(int)probe_tex->format,(unsigned long long)probe_tex->serial);} }
     VkRenderPassBeginInfo begin={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=rp,.framebuffer=fb,
