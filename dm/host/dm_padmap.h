@@ -14,3 +14,12 @@
 static inline uint64_t dm_padmap_face(int a, int b, int x, int y) {   // 四个参数 = 系统 buttonA / B / X / Y 按着没有 | The four parameters = whether the system's buttonA / B / X / Y are pressed
     return (a ? DM_BTN_A : 0) | (b ? DM_BTN_B : 0) | (x ? DM_BTN_X : 0) | (y ? DM_BTN_Y : 0);
 }
+// 自定义页「Xbox 键位」（pad_xbox）：按物理位置排，与 PC / Xbox 版同位置同功能——下 = A 确认、右 = B 返回、上 = X（放进堆叠仓库）、左 = Y。
+//   任天堂手柄（及切到 Switch 模式、被系统认成 Switch Pro 的第三方手柄）系统按 Switch 字母给：右 = buttonA、下 = buttonB、上 = buttonX、左 = buttonY → 只换 A/B。
+//   其余手柄系统按菱形位置给：下 = buttonA、右 = buttonB、左 = buttonX、上 = buttonY → 只换 X/Y。
+// "Xbox layout" on the Custom page (pad_xbox): by physical position, same position = same function as the PC / Xbox version -- bottom = A confirm, right = B back, top = X (into the stack stash), left = Y.
+//   Nintendo controllers (and third-party ones in Switch mode, recognized as Switch Pro) are reported by Switch letters: right = buttonA, bottom = buttonB, top = buttonX, left = buttonY -> only A/B swap.
+//   Every other controller is reported by diamond position: bottom = buttonA, right = buttonB, left = buttonX, top = buttonY -> only X/Y swap.
+static inline uint64_t dm_padmap_face_xbox(int a, int b, int x, int y, int nintendo) {
+    return nintendo ? dm_padmap_face(b, a, x, y) : dm_padmap_face(a, b, y, x);
+}

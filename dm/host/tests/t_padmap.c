@@ -26,6 +26,15 @@ int main(void) {
     static const char *const nm[] = { "A", "B", "X", "Y" };
     for (unsigned i = 0; i < sizeof r / sizeof *r; i++)
         CHECK(dm_padmap_face(r[i].sys == GA, r[i].sys == GB, r[i].sys == GX, r[i].sys == GY) == r[i].want, "%s：按%s键（印 %s，系统给 button%s）→ 游戏 %s", r[i].cat, r[i].pos, r[i].cap, nm[r[i].sys], nm[__builtin_ctzll(r[i].want)]);
+    // 「Xbox 键位」（pad_xbox）：按物理位置，下 A、右 B、上 X、左 Y；任天堂类别（含 Switch 模式的第三方手柄）系统按 Switch 字母给
+    // "Xbox layout" (pad_xbox): by physical position, bottom A, right B, top X, left Y; Nintendo category (incl. third-party pads in Switch mode) reported by Switch letters
+    static const struct { const char *cat, *pos; int sys, nin; uint64_t want; } x[] = {
+        { "Switch Pro Controller", "下", GB, 1, DM_BTN_A }, { "Switch Pro Controller", "右", GA, 1, DM_BTN_B },
+        { "Switch Pro Controller", "上", GX, 1, DM_BTN_X }, { "Switch Pro Controller", "左", GY, 1, DM_BTN_Y },
+        { "Xbox One", "下", GA, 0, DM_BTN_A }, { "Xbox One", "右", GB, 0, DM_BTN_B },
+        { "Xbox One", "上", GY, 0, DM_BTN_X }, { "Xbox One", "左", GX, 0, DM_BTN_Y } };
+    for (unsigned i = 0; i < sizeof x / sizeof *x; i++)
+        CHECK(dm_padmap_face_xbox(x[i].sys == GA, x[i].sys == GB, x[i].sys == GX, x[i].sys == GY, x[i].nin) == x[i].want, "Xbox 键位 %s：按%s键（系统给 button%s）→ 游戏 %s", x[i].cat, x[i].pos, nm[x[i].sys], nm[__builtin_ctzll(x[i].want)]);
     CHECK(dm_padmap_face(1, 1, 0, 0) == (DM_BTN_A | DM_BTN_B), "两颗同时按：各算各的"); CHECK(dm_padmap_face(0, 0, 0, 0) == 0, "都没按 = 0");
     printf("== %d 项，失败 %d ==\n", checks, fails);
     return fails != 0;

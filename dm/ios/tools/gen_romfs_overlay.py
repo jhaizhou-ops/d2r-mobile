@@ -51,6 +51,17 @@ with tempfile.TemporaryDirectory() as t:
     import merc_slots; REPL.update(merc_slots.build(romfs,t,REPL))   # 佣兵面板加六个装备位（底图 + 布局；要在 build_ingame 给它插关闭钮之后） | Add six equipment slots to the mercenary panel (base image + layout; must come after build_ingame has inserted the close button into it)
     REPL.update(touch_layout.build_cursor(romfs,t))   # 面板里的手柄光标圆环换成透明 | The controller cursor ring in panels replaced with a transparent one
     REPL.update(touch_layout.build_glyphs(romfs,t))   # 22 张手柄键图标换成透明 | 22 controller button icons replaced with transparent ones
+    import romfs_art
+    # 「Xbox 键位」（自定义页 pad_xbox）的键位图标：原版 Xbox 那套 22 张，文件名「<平台>x<名字>」（宿主 dm_padmode.c 的 Ztouch_controller_buttons_ui/%sX%s）。
+    # 图标按游戏键取名（switch/ButtonRight = 游戏 A）；开关打开后游戏 A 在下方、B 在右边，所以右 / 下两张对调，上 / 左与其余同名照搬
+    # Icons for "Xbox layout" (Custom page pad_xbox): the original 22 Xbox images, file names "<platform>x<name>" (the host dm_padmode.c path Ztouch_controller_buttons_ui/%sX%s).
+    # Icons are named per game button (switch/ButtonRight = game A); with the switch on game A is at the bottom and B on the right, so the right / bottom images swap, top / left and the rest are copied by the same name
+    for line in open(os.path.join(romfs,'data','build_manifest.psv'),encoding='utf-8'):
+        f=line.rstrip('\n').split('|')
+        if len(f)<11 or line.startswith('#') or '/ui/controller/controllerbuttons/switch/' not in f[9].lower(): continue
+        nm=os.path.basename(f[9]); src={'ButtonRight.sprite':'ButtonBottom.sprite','ButtonBottom.sprite':'ButtonRight.sprite'}.get(nm,nm)
+        o=os.path.join(t,'xbox_'+nm); open(o,'wb').write(romfs_art.read(romfs,'data/hd/global/ui/Controller/ControllerButtons/xbox/'+src))
+        REPL['data/hd/global/ui/ztouch_controller_buttons_ui/switchx'+nm.lower()]=o
     if os.environ.get('DM_OVERLAY_MAC'):   # Mac App：再出一套键盘键帽，放在触屏键帽同一个目录、文件名「<平台>k<名字>」（宿主 dm_padmode.c 的键盘键帽路径 Ztouch_controller_buttons_ui/%sK%s） | Mac App: additionally produce a set of keyboard key caps, placed in the same directory as the touch key caps with file names "<platform>k<name>" (the keyboard key-cap path of the host's dm_padmode.c is Ztouch_controller_buttons_ui/%sK%s)
         import kbd_glyphs; REPL.update({'data/hd/global/ui/ztouch_controller_buttons_ui/switchk'+os.path.basename(k):v for k,v in kbd_glyphs.build(romfs,t).items()})
     REPL.update(touch_layout.build_profile(romfs,t))   # 大字号 | Large font size

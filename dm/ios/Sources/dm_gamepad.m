@@ -105,9 +105,11 @@ void dm_gamepad_reset(void) {   // 前端：失活 / 进后台 / 来电 | Front 
 void dm_gamepad_inject_n(int n, uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) { put((const void *)(intptr_t)(n == 2 ? 2 : 1), b, lx, ly, rx, ry); }
 void dm_gamepad_drop_n(int n) { LOG("手柄：断开（虚拟手柄 %d）", n == 2 ? 2 : 1); drop((const void *)(intptr_t)(n == 2 ? 2 : 1)); }
 void dm_gamepad_inject(uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) { dm_gamepad_inject_n(1, b, lx, ly, rx, ry); }
+static int is_nintendo(GCController *c) { NSString *k = c.productCategory ?: @""; return [k containsString:@"Switch"] || [k containsString:@"Joy-Con"]; }   // 系统按 Switch 字母给的那类（dm_padmap.h） | The kind the system reports by Switch letters (dm_padmap.h)
 static void publish(GCController *c, GCExtendedGamepad *g) {
-    uint64_t b = 0;
-    b |= dm_padmap_face(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed);   // 系统给哪个字母发哪个字母（dm_padmap.h） | Send whichever letter the system reports (dm_padmap.h)
+    uint64_t b = 0; int dm_custom_get(const char *key);
+    if (dm_custom_get("pad_xbox")) b |= dm_padmap_face_xbox(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed, is_nintendo(c));   // 自定义页「Xbox 键位」：按位置排（dm_padmap.h） | Custom page "Xbox layout": by position (dm_padmap.h)
+    else b |= dm_padmap_face(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed);   // 系统给哪个字母发哪个字母（dm_padmap.h） | Send whichever letter the system reports (dm_padmap.h)
     if (g.leftShoulder.pressed) b |= DM_BTN_L; if (g.rightShoulder.pressed) b |= DM_BTN_R; if (g.leftTrigger.pressed) b |= DM_BTN_ZL; if (g.rightTrigger.pressed) b |= DM_BTN_ZR;
     if (g.leftThumbstickButton.pressed) b |= DM_BTN_LS; if (g.rightThumbstickButton.pressed) b |= DM_BTN_RS;
     if (g.buttonMenu.pressed) b |= DM_BTN_PLUS; if (g.buttonOptions.pressed) b |= DM_BTN_MINUS;

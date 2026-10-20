@@ -383,6 +383,7 @@ static const struct { const char *k, *zh, *en, *es, *mx, *ru; } k_dm_i18n[] = {
     { "dmCustomTouchSwapNear", "换组键：传送门左侧", "Skill-set switch: left of portal", "Cambio de grupo: izq. del portal", "Cambio de grupo: izq. del portal", "Переключатель: слева от портала" },
     { "dmCustomTouchSwapNearHint", "沿传送门外侧弧线排布，松手后切换", "On the portal arc; release to switch", "En el arco del portal; suelta y cambia", "En el arco del portal; suelta y cambia", "По дуге портала, отпустить — переключение" },
     { "dmCustomTouchSwapFar", "换组键：技能区上方", "Skill-set switch: above skills", "Cambio de grupo: sobre habilidades", "Cambio de grupo: sobre habilidades", "Переключатель: над скиллами" },
+    { "dmCustomPadXbox", "手柄 Xbox 键位（下确认、右返回）", "Xbox button layout (bottom confirms)", "Botones estilo Xbox (abajo confirma)", "Botones estilo Xbox (abajo confirma)", "Кнопки как на Xbox (нижняя — ОК)" },
     { "dmCustomTouchSwapFarHint", "位于技能区左上，松手后切换", "Above-left of skills; release to switch", "Arriba-izq. de habilidades; suelta y cambia", "Arriba-izq. de habilidades; suelta y cambia", "Слева над скиллами, отпустить — переключение" },
     { "dmDoorRift", "大秘境", "Greater Rift", "Grieta superior", "Grieta mayor", "Великий рифт" },
     { "dmDoorRiftTown", "回城", "Return to Town", "Volver a la ciudad", "Volver a la ciudad", "Портал в город" },

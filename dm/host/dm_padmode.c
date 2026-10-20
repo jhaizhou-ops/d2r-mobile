@@ -89,13 +89,22 @@ static int kbd_swap_ok(uint8_t *b) {
     return !(*(volatile uint8_t *)(b + 0x2d5ff51) | *(volatile uint8_t *)(b + 0x2d5ff67)) && !dm_ui_panel_state();
 }
 #endif
+// 自定义页「Xbox 键位」（pad_xbox，dm_padmap.h）开着时，手柄版键位图标取覆盖层里那套 Xbox 图（gen_romfs_overlay.py，原版 ControllerButtons/xbox/ 按新位置排，
+// 文件名「<平台>X<名字>」）。只在写前缀时看开关：选项页里点「应用」后，下一次手柄 / 触屏切换（或重启）才换图——开着面板时重载布局会把设置页重建坏（见 kbd_swap_ok）
+// With "Xbox layout" (pad_xbox, dm_padmap.h) on the Custom page, the controller layout's button icons come from the overlay's Xbox set (gen_romfs_overlay.py, the original ControllerButtons/xbox/ arranged by the new positions,
+// file names "<platform>X<name>"). The switch is only read when the prefixes are written: after Apply on the options page, the icons change at the next controller / touch switch (or restart) -- reloading the layout with a panel open would break the settings page (see kbd_swap_ok)
+#define XBOX_GLYPH_OFF 0x1d0f5b8
+static const char k_xbox_glyph[] = "Ztouch_controller_buttons_ui/%sX%s";
 static int pfx_write(uint8_t *b, int pad) {
     for (unsigned i = 0; i < sizeof k_pfx / sizeof *k_pfx; i++) { const char *p = (const char *)(b + k_pfx[i].off);
+        if (k_pfx[i].off == XBOX_GLYPH_OFF && !strcmp(p, k_xbox_glyph)) continue;
 #if TARGET_OS_OSX
         if (k_pfx[i].off == KBD_GLYPH_OFF && !strcmp(p, k_kbd_glyph)) continue;
 #endif
         if (strcmp(p, k_pfx[i].pad) && strcmp(p, k_pfx[i].touch)) { LOG("【红】手柄 / 触屏布局：main+%#x 不是预期的「%s」（是「%.32s」），不改", k_pfx[i].off, k_pfx[i].pad, p); return 0; } }
     for (unsigned i = 0; i < sizeof k_pfx / sizeof *k_pfx; i++) memcpy(b + k_pfx[i].off, pad ? k_pfx[i].pad : k_pfx[i].touch, strlen(k_pfx[i].pad));
+    _Static_assert(sizeof k_xbox_glyph == sizeof "Controller/ControllerButtons/%s/%s", "Xbox 键帽路径要与原版路径等长");
+    { int dm_custom_get(const char *key); if (pad && dm_custom_get("pad_xbox")) memcpy(b + XBOX_GLYPH_OFF, k_xbox_glyph, sizeof k_xbox_glyph - 1); }
 #if TARGET_OS_OSX
     _Static_assert(sizeof k_kbd_glyph == sizeof "Controller/ControllerButtons/%s/%s", "键盘键帽路径要与原版路径等长");
     if (pad && g_kbd_next) memcpy(b + KBD_GLYPH_OFF, k_kbd_glyph, sizeof k_kbd_glyph - 1);
