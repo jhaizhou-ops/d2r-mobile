@@ -1401,31 +1401,48 @@ python3 dm/android/tools/coverage_scan_report.py --scan coverage-scan
 4. 回退：`diagnostics/disable-att-load-table`（重启）或 `diagnostics/att-load-table.txt=0`（运行中）；
    真在没扫过的场景看到花点，先关表复现，再把对应键改红并复跑。
 
-## 附二十二：未开的四项逐个重试（2026-10-20 晚）
+## 附二十二：四项未开的带宽优化——逐个重试与根因（2026-10-20 晚 / 10-21 凌晨）
 
-附二十一定稿时还有四项没开：颜色 store 跳过、深度 load 跳过、清屏折叠、通道合并。
-这一节是把它们逐个打开实测的结果——三项判负，一项本来就没有可做的对象。
+结论先行：**全局**颜色 store 跳过会坏 UI，因为它把 `loadOp=LOAD` 的合成通道也跳了；只跳绿色通道的
+精确版本可用，但只有约 5% 流量收益、没有 fps。深度 load 第一次 SIGABRT 是启动期偶发，复验后能跑，
+省 23% 流量但同样没有 fps，且 z-test 仍缺证明。通道合并/清屏折叠维持原判。
 
-| 项 | 开关/做法 | 实测 | 结论 |
-|---|---|---|---|
-| 颜色/中间缓冲 store 跳过 | `diagnostics/attskip.txt=3`（0 关 / 1 深度 / 2 颜色 / 3 全部） | 记账 store **230 → 0**、总流量 617 → 387 MB/帧；但打开物品栏/选项后**面板画不出来**，HUD 也会消失 | ❌ 判负。UI 合成附件后续还要读，不能全局跳 store；保持缺省 `1`（只跳深度） |
-| 深度 load 跳过 | 测试开关 + 带深度 green 的种子（深度键也走 DONT_CARE） | 启动加载阶段 **SIGABRT**：`STOP unimplemented NVN command opcode (257)`；恢复普通种子后正常 | ❌ 判负。深度 z-test 依赖上一帧内容，深度 green 本身也不可信；深度 load 保持 LOAD，测试开关已从代码回退 |
-| 清屏折叠 | 把独立清屏并进 `loadOp=CLEAR` | 独立清屏 **0 次/帧**；清屏都在通道内直接写（29 次/帧） | ✅ 无对象可折。清屏首绘的通道会被覆盖率表判 green，load 已由附二十省掉 |
-| 连续同目标通道合并 | 没有合并开关；用 `DM_QUERY_PRERESET=1` 做“更少更长通道”的近似 | 通道 126 → **93**/帧、总流量 617 → **397** MB/帧，但 fps 39.1 / 39.2 / 35.5（基线 37.6–39.9），GPU wait 213–228 ms 反而更高 | ❌ 判负。和附十三一致：这块 Adreno 上更少更长的通道不划算 |
+### 一、颜色 store：全局跳是错的，精确跳可行
 
-### 结论
+- `attskip.txt=3`（全局颜色+深度）：记账 store **230→0**、总流量 617→387 MB/帧；但打开物品栏/选项后
+  **面板画不出来**、HUD 消失。
+- 根因：它把 `loadOp=LOAD` 的 UI 合成/全屏合成也跳了 store；这些附件下一帧/下一通道还要读。
+- 精确版 `attskip.txt=5`（深度 + **只跳查表已判 DONT_CARE 的绿色颜色**）：LOAD 的 UI 合成保持 STORE。
+  - 营地 store **230→197**、总 617→586 MB/帧；Den 475→443；深坑战斗/死亡界面正常；
+    营地开/关像素差 mean 0、max 14（单点噪声）。
+  - 仍保持 opt-in（缺省 `1`）：收益只有 ~5%，且没有 fps 证据；`5` 的绿色 store 跳过在更多特效场景
+    验证前不作为默认。
 
-- 四项里只有 **loadOp 覆盖率表**（附二十）是真正能留的：颜色附件 load 421.8 → 387.4 MB/帧。
-- 颜色 store 和深度 load 是**正确性**问题，不是“再调调参数就能开”：前者 UI 直接消失，后者启动崩溃。
-- 通道合并方向在当前机器上稳定负收益；清屏折叠没有对象。
-- 默认路径仍是：`DM_ATT_LOAD_TABLE=1`（附二十），`DM_ATT_STORE_SKIP=1`（只跳深度 store），
-  深度 load 保持 LOAD，不做通道合并。
+### 二、深度 load：第一次 SIGABRT 是启动偶发，不是深度本身
 
-复现命令：
+- 第一次崩溃日志里**没有 `COV_DEPTH`/`COV_TABLE`** 就 abort（`STOP unimplemented NVN command opcode (257)`）；
+  这是启动期 guest opcode 偶发，和深度表无关，不能据此判死。
+- 复验：`COV_DEPTH on`、`COV_TABLE 15 条 green=13 red=2`；营地/神秘避难所/深坑都正常加载。
+  神秘避难所（浮空平台/楼梯）开/关像素差 **mean 0.59、p99 14、>128 仅 34 px**，营地 1.4。
+- 流量：营地 load **387→233**、总 **617→477 MB/帧（−23%）**；深坑总 750→477（−36%）。
+- 但 fps **36.0 vs 38 左右**、GPU busy 92% vs 95%，**没有帧率收益**；深度哨兵对 z-test 不可信，
+  仍缺“首绘必然写满深度”的证明。故默认关；`DM_COV_DEPTH=1` + 带深度 green 的测试种子可 opt-in。
 
-```bash
-# 颜色 store 跳过（会坏 UI，仅复现用）
-printf '3\n' > diagnostics/attskip.txt && chmod 664 diagnostics/attskip.txt
-# 恢复
-printf '1\n' > diagnostics/attskip.txt
-```
+### 三、通道合并 / 清屏折叠
+
+- `DM_QUERY_PRERESET=1`（更少更长通道）：通道 126→93、总 617→397 MB/帧，但 fps 39.1/39.2/35.5、
+  GPU wait 更高；负收益。
+- 独立清屏 0 次/帧，没有可折对象；清屏首绘的 load 已由覆盖率表省掉。
+
+### 四、绑定计划
+
+- 代码里的 binding plan 已经支持图像精确比对（descriptor_id / incarnation / layout / sampler），
+  full bind 是**真实资源变化**，不存在“漏掉图像”的缓存键可捡。
+- CPU 绑定全路径 ~9.3ms 的墙要靠更深的命令/描述符复用，不是一行开关能解决的；`DM_PLAN_PRECISE_STATE`
+  之前实测平局。
+
+### 默认与试点
+
+- 默认：`DM_ATT_LOAD_TABLE=1`；`DM_ATT_STORE_SKIP=1`（只跳深度 store）；
+  颜色 store、深度 load、通道合并不默认。
+- 试点（手动）：`attskip.txt=5` 开绿色颜色 store 跳过；`DM_COV_DEPTH=1` + 深度 green 种子开深度 load。

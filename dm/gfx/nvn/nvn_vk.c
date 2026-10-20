@@ -114,7 +114,7 @@ static int8_t g_rtf_grp[RT_FSEG_MAX];static int g_rtf_n,g_rtf_print;static uint6
    Runtime A/B: rtseg.txt = 0 off (default) / 1 group stats / 2 + segment table / 3 + dependency probe. */
 static int g_rtseg_on;
 static int g_att_audit_on;
-static int g_att_store_skip;   /* DM_ATT_STORE_SKIP：1=深度通道 storeOp DONT_CARE，2=颜色通道（试验） */   /* DM_ATT_AUDIT：附件 store 后是否被读（诊断） | attachment store audit */
+static int g_att_store_skip;   /* DM_ATT_STORE_SKIP：1=深度，2=颜色全部（试验，会坏 UI），4=仅查表判 DONT_CARE 的绿色颜色（试验） */   /* DM_ATT_AUDIT：附件 store 后是否被读（诊断） | attachment store audit */
 static int g_rtgrp_cur=2;
 /* 跨组依赖探针：T2T 拷贝的源/目标按自身尺寸归类（>2000x900 = 全屏组），统计跨组拷贝。
    跨组拷贝就是并行两组之间必须插同步的点。 | Cross-group dependency probe: T2T copies classified
@@ -566,6 +566,7 @@ typedef struct {
 static CovRec *g_cov; static unsigned g_cov_n; static int g_cov_dirty;
 static uint32_t g_cov_slot[COV_SLOTS];
 static int g_cov_table;        /* DM_ATT_LOAD_TABLE：查表决定颜色 loadOp（默认开）| default on */
+static int g_cov_depth;        /* DM_COV_DEPTH：试验，允许深度键也走 DONT_CARE（默认关） */
 static int g_cov_quarantined;  /* 冲突后本局禁用；运行中开关不得把它重新打开 | set on COV_CONFLICT; the runtime switch must not re-enable it */
 static unsigned g_cov_min_samples=8;   /* 一条 green 至少要被独立探针命中几次才敢用（DM_COV_MIN_SAMPLES）；8 次是为了过滤「某个场景碰巧全覆盖」——实测有过 6 次全绿、第 10 次漏 1 像素的键 | samples before a green may be trusted: one key looked green 6 times and leaked a pixel on the 10th */
 static int g_cov_loaded;
@@ -884,6 +885,7 @@ static void backend_init(void) {
      const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;{const char *vl=getenv("DM_ATT_LOAD_SKIP");g_load_skip=vl?atoi(vl):0;}   /* 默认关：哨兵探针实测有通道只覆盖 8%（见附十六） */if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
      {const char *ct=getenv("DM_ATT_LOAD_TABLE");g_cov_table=ct?atoi(ct):0;}   /* 注意：必须读值，不能只看 getenv 非空——app_jni 会把它设成 "0" */if(g_cov_table)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_TABLE on：按覆盖率表逐通道决定颜色 loadOp（表外一律 LOAD）\n");
      {const char *ms=getenv("DM_COV_MIN_SAMPLES");if(ms){long v=strtol(ms,NULL,10);if(v>0)g_cov_min_samples=(unsigned)v;}}
+     {const char *cd=getenv("DM_COV_DEPTH");g_cov_depth=cd&&atoi(cd)!=0;if(g_cov_depth)fprintf(stderr,"[nvn-vulkan] COV_DEPTH on（试验）：深度键也允许 DONT_CARE\n");}
      {const char *bm=getenv("DM_PASS_SENTINEL_BUDGET_MB");if(bm){long v=strtol(bm,NULL,10);if(v>0)g_sent_budget=(uint64_t)v*1024*1024;}}
      {const char *wd=getenv("DM_PASS_SENTINEL_WINDOW");if(wd){long v=strtol(wd,NULL,10);if(v>0&&v<=(long)SENT_MAX)g_sent_window=(unsigned)v;}}
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
@@ -3529,13 +3531,23 @@ static VkRenderPass render_begin(void) {
             CovRec *r=cov_lookup(ck,att_w[i],att_h[i],att_fmt[i],att_dep[i],0);
             uint64_t plane=att_plane[i];
             if(!r){g_cov_miss_bytes+=plane;g_cov_miss_n++;}
-            else if(r->verdict==COV_RED||att_dep[i]||r->uncovered||r->samples<g_cov_min_samples){
+            else if(r->verdict==COV_RED||(att_dep[i]&&!g_cov_depth)||r->uncovered||r->samples<g_cov_min_samples){
                 if(r->verdict==COV_GREEN&&!r->uncovered&&r->samples<g_cov_min_samples){g_cov_weak_bytes+=plane;g_cov_weak_n++;}
                 else {g_cov_red_bytes+=plane;g_cov_red_n++;}
             }
             else if(attachments[i].loadOp==VK_ATTACHMENT_LOAD_OP_LOAD){
                 attachments[i].loadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;changed=1;
                 g_cov_green_bytes+=plane;g_cov_green_n++;
+            }
+        }
+        /* 精确 store 跳过（试验 bit 4）：只跳「本通道 loadOp 已经被表降成 DONT_CARE」的绿色颜色附件。
+           LOAD 的 UI 合成/全屏合成保持 STORE，避免 2322x1080 面板被跳没。 */
+        if((g_att_store_skip&4) && g_cov_table){
+            for(uint32_t i=0;i<n;i++){
+                if(!att_dep[i] && attachments[i].loadOp==VK_ATTACHMENT_LOAD_OP_DONT_CARE &&
+                   attachments[i].storeOp==VK_ATTACHMENT_STORE_OP_STORE){
+                    attachments[i].storeOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;changed=1;
+                }
             }
         }
         if(changed){   /* loadOp 是 PassKey 的一部分，改完重建 | loadOp is part of the PassKey */
@@ -4771,7 +4783,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
            用于同进程内相邻帧对拍，避免两次运行的状态漂移。 */
         { static const char *asdir; if(!asdir)asdir=getenv("DM_FRAME_DIR"); char asf[1300];
           if(asdir&&*asdir&&snprintf(asf,sizeof asf,"%s/attskip.txt",asdir)<(int)sizeof asf){FILE *fp=fopen(asf,"r");
-            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=3&&m!=g_att_store_skip){g_att_store_skip=m;
+            if(fp){int m=-1;if(fscanf(fp,"%d",&m)==1&&m>=0&&m<=7&&m!=g_att_store_skip){g_att_store_skip=m;
                 fprintf(stderr,"[nvn-vulkan] ATT_STORE_SKIP 运行中切换 → %d\n",m);}fclose(fp);}}}
         /* 分段统计运行时 A/B：rtseg.txt = 0 关（默认，零成本）/ 1 组别 / 2 组别+分段表。
            RT segment stats runtime A/B: rtseg.txt = 0 off (default) / 1 groups / 2 + segment table. */
