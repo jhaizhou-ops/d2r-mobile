@@ -184,7 +184,37 @@ bash dm/android/tools/sync_surface_audit.sh       # 表面同步审计（冲突�
 
 ---
 
-## 8. 许可
+## 8. 致谢
+
+**没有 [@jhaizhou-ops](https://github.com/jhaizhou-ops) 就没有这个 Android 项目。** 他做的是整个项目的
+源头：把 Switch 版的 aarch64 程序直接跑在手机宿主上这条路，NVN 接口接管、命令录制/回放分层、着色器
+离线翻译链、触屏与前端那一整套，都出自他：[jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)。
+Android 端是这条技术路线的延伸，不是另起一摊。他本人这条线主要做 iOS / Mac（Metal）。
+
+在这之上是另外两层：
+
+- **[@dodola](https://github.com/dodola)** —— Android 的图形化渲染：在 Android 上跑通原生游戏宿主，
+  并做出 **Vulkan 回放后端**（`dm/gfx/nvn/nvn_vk.c` 那整套：把 NVN 的录制流重放到 Vulkan、BC 流式
+  一致性、比较深度别名、附件反馈、左上原点映射、设备本地管线缓存、16 KB 对齐）。这是 Android 能出
+  第一帧图形的地基。UI 侧他搭的是最初始的骨架（`GameActivity` / `TouchControlsView` 的原型），
+  可用但只是原生控件级的"能显示、能点"。
+- **本分支（Android 移植、UI 与性能）** —— 在这两份工作之上，Android 端的打磨基本都在这里：
+  - **UI**：底栏与各面板（储藏箱、百宝囊、选角、技能图集、小地图终点等）、新触摸外观与操作、
+    HUD、自定义设置页、分辨率档、国际化文案。`touch_controls_android.c` 从 125 行长到 442 行、
+    `TouchControlsView.java` 从 78 行长到 465 行，绝大多数提交都在本分支。
+  - **性能**：管线预热与清单自学习、附件带宽削减（营地 917 → 446 MB/帧）、翻译队列与出图节拍
+    （营地 30 → 36.6 fps）、绑定计划与命令状态缓存、通道/查询/帧缓冲三线优化等。
+  - 实测数据与取舍记录见 [docs/ANDROID_PERF_NOTES.zh-CN.md](docs/ANDROID_PERF_NOTES.zh-CN.md)、
+    [docs/android-perf-lessons.zh-CN.md](docs/android-perf-lessons.zh-CN.md)，UI 与两端对齐见
+    [docs/ANDROID_UI_PARITY.zh-CN.md](docs/ANDROID_UI_PARITY.zh-CN.md)。
+
+也感谢上游 [deko3d](https://github.com/devkitPro/deko3d)（`nvn_tex.c` 的块线性布局与对齐由它移植）、
+[Ryujinx](https://github.com/Ryujinx/Ryujinx)（着色器翻译库）与 [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)
+（SPIR-V → Metal Shading Language）。
+
+---
+
+## 9. 许可
 
 MIT。游戏本体、资料片、素材与商标归各自权利人所有；本项目只提供在你自己的设备上运行你自己
 购买的游戏的兼容层，不提供、也不分发任何游戏文件。

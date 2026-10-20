@@ -194,7 +194,44 @@ bash dm/android/tools/sync_surface_audit.sh       # surface-sync audit (conflict
 
 ---
 
-## 8. License
+## 8. Credits
+
+**Without [@jhaizhou-ops](https://github.com/jhaizhou-ops) there would be no Android project at all.** He is
+where the whole project starts: the very idea of running the Switch build's aarch64 program directly on a
+phone host, the NVN interface takeover, the record/replay split, the offline shader translation chain, and the
+touch and front-end layers all come from him: [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile).
+The Android port is an extension of that line, not a separate effort. His own line is mainly iOS / Mac (Metal).
+
+On top of that there are two more layers:
+
+- **[@dodola](https://github.com/dodola)** -- Android's graphical renderer: getting the native game host
+  running on Android and building the **Vulkan replay backend** (the whole of `dm/gfx/nvn/nvn_vk.c`:
+  replaying NVN's recorded command stream onto Vulkan, BC streaming coherence, comparison depth aliases,
+  attachment feedback, upper-left origin mapping, device-local pipeline cache, 16 KB alignment). That is the
+  ground Android's first frame of graphics stands on. On the UI side he built the very first skeleton
+  (`GameActivity` / `TouchControlsView` prototypes) -- usable, but at the level of native widgets that simply
+  display and respond to taps.
+- **This branch (Android port, UI and performance)** -- on top of those two, most of the Android polish
+  happened here:
+  - **UI**: the bottom bar and the panels (stash, pouch, character select, skill atlas, minimap goal, ...),
+    the new touch look and controls, the HUD, the custom settings page, resolution tiers, localisation.
+    `touch_controls_android.c` grew from 125 to 442 lines and `TouchControlsView.java` from 78 to 465, with
+    the great majority of the commits made on this branch.
+  - **Performance**: pipeline warm-up with a self-learning manifest, attachment bandwidth cuts (camp
+    917 -> 446 MB/frame), the translation queue and present pacing (camp 30 -> 36.6 fps), binding-plan and
+    command-state caching, and optimisations along the pass/query/framebuffer lines.
+  - The measurements and the decisions behind them are in
+    [docs/ANDROID_PERF_NOTES.zh-CN.md](docs/ANDROID_PERF_NOTES.zh-CN.md) and
+    [docs/android-perf-lessons.zh-CN.md](docs/android-perf-lessons.zh-CN.md); UI and iOS parity are covered in
+    [docs/ANDROID_UI_PARITY.zh-CN.md](docs/ANDROID_UI_PARITY.zh-CN.md) (all Chinese).
+
+Thanks also to upstream [deko3d](https://github.com/devkitPro/deko3d) (the block-linear layout and alignment
+in `nvn_tex.c` are ported from it), [Ryujinx](https://github.com/Ryujinx/Ryujinx) (the shader translation
+library) and [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) (SPIR-V to Metal Shading Language).
+
+---
+
+## 9. License
 
 MIT. The game, its expansion, its assets and its trademarks belong to their respective owners. This
 project only provides a compatibility layer that runs the game you own on your own device; it does not
