@@ -266,16 +266,15 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     setenv("DM_ATT_LOAD_SKIP","0",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-load-skip");
     if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_SKIP","0",1);
-    /* 逐通道查表（DM_ATT_LOAD_TABLE）默认关。开之前先跑探针把 pass-coverage.tsv 填出来；
-       表里没有的通道一律 LOAD，所以开着也不会出现「没证据就跳」的通道。
-       验证充分再把默认改成 1（见 docs/android-resolution-plan.zh-CN.md 附十七）。
-       Per-key coverage-table lookup defaults OFF. Fill pass-coverage.tsv with the probe first;
-       entries absent from the table always stay LOAD, so enabling this cannot skip an unmeasured
-       channel. Flip the default only after the scene rounds are validated. */
-    setenv("DM_ATT_LOAD_TABLE","0",1);
-#ifdef DM_ATT_LOAD_TABLE_DEFAULT_ON
+    /* 逐通道查表（DM_ATT_LOAD_TABLE）默认开（2026-10-20 晚）。开之前已经用探针把
+       pass-coverage.tsv 填出来并扫过 89 张图、25,552 次探针：颜色键 0 条新增假绿，唯一已知反例
+       （800x600 加载键）已判红。表里没有的通道一律 LOAD，所以没证据的通道不会被跳过。
+       回退：diagnostics/disable-att-load-table（重启生效）或 diagnostics/att-load-table.txt=0（运行中）。
+       Per-key coverage-table lookup defaults ON as of 2026-10-20. The seed was filled by the probe
+       and swept across 89 maps / 25,552 probes with no new color false greens; the one known false
+       green (an 800x600 loading key) is red. Keys absent from the table always stay LOAD.
+       Rollback: diagnostics/disable-att-load-table (restart) or att-load-table.txt=0 (in-session). */
     setenv("DM_ATT_LOAD_TABLE","1",1);
-#endif
     path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-att-load-table");
     if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_TABLE","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-load-table");
