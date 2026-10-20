@@ -404,7 +404,7 @@ static void android_scale_configure(void) {
          World (3D) pixel budget: all three tiers now use absolute megapixels. The high tier used to be
          0.55 x output (a relative amount, inconsistent with the absolute low/standard budgets);
          1.75 MP matches what 0.55 x 3.20 MP produced on the reference device. */
-      double wb = tier == 0 ? 1.0e6 : tier == 2 ? 1.75e6 : 1.25e6;
+      double wb = tier == 0 ? 0.85e6 : tier == 2 ? 1.75e6 : 1.10e6;   /* 800p 做成真省电档：1.0 → 0.85 MP */   /* 1080p 档 1.25 → 1.10 MP：世界通道约 −12% */
       if (out && wb > 0.0) { double s = sqrt(wb / (double)out);
           if (s < 0.70) { static int once; if (!once++) LOG("【黄】世界预算需 3D 比例 %.3f < 0.70，按 0.70 截断", s); s = 0.70; }
           if (s > 1.0) s = 1.0;
