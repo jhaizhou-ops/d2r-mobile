@@ -7,14 +7,51 @@ BUILD=$SRC/dm/android/build
 MODULES=${DM_MODULES:-$BUILD/modules-touch}
 CMAKE=$BUILD
 OUT=$BUILD/apk
-SDK=${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}
-BT=$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)
-PLATFORM_JAR=$(ls -d "$SDK"/platforms/android-* | sort -V | tail -1)/android.jar
-JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}
+# 工具位置：一律先看环境变量，再按各平台常见安装位置探测，都没有就报一句人话停下来。
+# 不写死任何人的家目录——这个脚本要能在 Linux、Mac、CI 上跑，写死路径等于只对一台机器有效。
+# Tool locations: the environment variable wins first, then the usual install location on each platform is probed, and if
+# neither turns one up the script stops with a plain sentence. No machine's home directory is hardcoded -- this script has to
+# run on Linux, Mac and CI, and a hardcoded path only ever works on one machine.
+# SDK：ANDROID_SDK_ROOT / ANDROID_HOME 都认（前者是官方变量，后者是历史名，很多环境只设后者）。
+# SDK: both ANDROID_SDK_ROOT and ANDROID_HOME are honoured (the former is the official variable, the latter the legacy name
+# that many environments still set).
+SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
+if [ -z "$SDK" ]; then
+    for c in "$HOME/Android/Sdk" "$HOME/Library/Android/sdk" "$HOME/Library/Android/Sdk" /usr/local/share/android-sdk /opt/android-sdk; do
+        [ -d "$c" ] && { SDK=$c; break; }
+    done
+fi
+[ -n "$SDK" ] && [ -d "$SDK" ] || { echo "找不到 Android SDK：设 ANDROID_SDK_ROOT（或 ANDROID_HOME）指过去" >&2; exit 2; }
+# 注意 `|| true`：本脚本是 set -euo pipefail，而 `ls -d <不存在的目录>/*` 会以非零退出；
+# 经过管道时 pipefail 会把这个失败带上来，set -e 于是就地退出——连下面那句"找不到 X"都打不出来，
+# 只剩一个干巴巴的退出码。加 `|| true` 把失败吃掉，交给下面显式的 [ -n ... ] 检查去报错。
+# Note the `|| true`: this script runs under set -euo pipefail, and `ls -d <missing dir>/*` exits non-zero; pipefail carries
+# that failure up the pipeline and set -e exits on the spot -- so not even the "missing X" message below gets printed, and all
+# that is left is a bare exit code. `|| true` swallows it and leaves the explicit [ -n ... ] check to report the problem.
+BT=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)
+[ -n "$BT" ] && [ -x "$BT/aapt2" ] || { echo "SDK 里没有 build-tools（缺 aapt2）：用 sdkmanager 装一份，SDK=$SDK" >&2; exit 2; }
+PLATFORM_JAR=$(ls -d "$SDK"/platforms/android-* 2>/dev/null | sort -V | tail -1 || true)/android.jar
+[ -f "$PLATFORM_JAR" ] || { echo "SDK 里没有 platforms/android-*/android.jar：用 sdkmanager 装一个 platform，SDK=$SDK" >&2; exit 2; }
+# JDK：JAVA_HOME 优先；其次用 macOS 的 /usr/libexec/java_home（Apple 自带，能挑到已装的 JDK）；再退到 PATH 上的 javac 反推。
+# JDK: JAVA_HOME first; then macOS's /usr/libexec/java_home (shipped by Apple, picks an installed JDK); finally derive it from
+# the javac on PATH.
+if [ -z "${JAVA_HOME:-}" ] && [ -x /usr/libexec/java_home ]; then
+    JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || true)
+fi
+if [ -z "${JAVA_HOME:-}" ]; then
+    _jc=$(command -v javac 2>/dev/null || true)
+    if [ -n "$_jc" ]; then
+        # 解符号链接：旧 macOS 的 readlink 没有 -f，所以用 python3 兜底（打包流程本来就要 python3）。
+        # Resolve the symlink: old macOS readlink has no -f, so fall back to python3 (the packaging flow needs python3 anyway).
+        _real=$(readlink -f "$_jc" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$_jc")
+        JAVA_HOME=$(cd "$(dirname "$_real")/.." && pwd)
+    fi
+fi
+[ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/javac" ] || { echo "找不到 JDK：设 JAVA_HOME 指到 JDK 21+ 的根目录" >&2; exit 2; }
 AAPT2="$BT/aapt2"; D8="$BT/d8"; ZIPALIGN="$BT/zipalign"; APKSIGNER="$BT/apksigner"
 
 [ -f "$CMAKE/libd2r_mobile_android.so" ] || { echo "先编 native：cd dm/android/build && ninja" >&2; exit 2; }
-[ -f "$MODULES/main.patched.bin" ] || { echo "缺模块产物 $MODULES（先跑 dm/android/tools/build_modules.sh）" >&2; exit 2; }
+[ -f "$MODULES/main.patched.bin" ] || { echo "缺模块产物 ${MODULES}（先跑 dm/android/tools/build_modules.sh）" >&2; exit 2; }
 
 rm -rf "$OUT"; mkdir -p "$OUT"/{classes,dex,gen,assets/modules,stage/lib/arm64-v8a}
 
@@ -30,7 +67,7 @@ APK_VER=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$MANIFEST" | head
 APK_BUILD=${DM_APK_BUILD:-$(date +%Y%m%d)}
 APK_STEM=d2r-mobile-android-$(printf '%s' "${APK_VER:-dev}" | tr ' /' '--')+${APK_BUILD}
 APK_NAME=$APK_STEM.apk
-echo "产物名: $APK_NAME（版本 $APK_VER，构建 $APK_BUILD）"
+echo "产物名: ${APK_NAME}（版本 ${APK_VER}，构建 ${APK_BUILD}）"
 
 # 1) assets: 模块 + 清单 + 底栏 v4 素材（gen_assets 产物）
 python3 "$SRC/dm/android/tools/gen_module_manifest.py" "$MODULES" "$OUT/assets"
@@ -62,7 +99,7 @@ RES=$OUT/res
 if [ -f "$APPICON" ]; then
     python3 "$SRC/dm/android/tools/gen_icons.py" "$APPICON" "$RES" || { echo "🔴 图标生成失败" >&2; exit 1; }
 else
-    echo "警告：缺 iOS 图标 $APPICON，APK 将没有启动图标"
+    echo "警告：缺 iOS 图标 ${APPICON}，APK 将没有启动图标"
 fi
 AAPT_RES=()
 [ -d "$RES" ] && AAPT_RES=(-R "$RES")
@@ -73,7 +110,13 @@ AAPT_RES=()
 find "$SRC/dm/android/src" "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
 "$JAVA_HOME/bin/javac" -encoding UTF-8 -nowarn -Xlint:-options -source 17 -target 17 \
     -classpath "$PLATFORM_JAR" -d "$OUT/classes" @"$OUT/sources.txt"
-mapfile -t CLASSES < <(find "$OUT/classes" -name '*.class')
+# 收集 .class 到数组：不用 mapfile（bash 4 才有，macOS 自带的是 3.2，会报 "mapfile: command not found"）。
+# 用 while read 从 find 的输出逐行读——路径里没有换行，这种读法对空格是安全的（逐行，不做分词）。
+# Collect the .class files into an array without mapfile (bash 4 only; macOS ships 3.2, where it is "command not found").
+# Read find's output line by line -- paths contain no newlines, and reading per line is safe with spaces (no word splitting).
+CLASSES=()
+while IFS= read -r _c; do CLASSES+=("$_c"); done < <(find "$OUT/classes" -name '*.class')
+[ "${#CLASSES[@]}" -gt 0 ] || { echo "javac 没有产出任何 .class（检查上面的编译输出）" >&2; exit 1; }
 "$D8" --lib "$PLATFORM_JAR" --min-api 29 --output "$OUT/dex" "${CLASSES[@]}"
 
 # 4) 组装
@@ -82,8 +125,21 @@ cp "$OUT/dex/classes.dex" "$OUT/stage/classes.dex"
 cp "$CMAKE/libd2r_mobile_android.so" "$OUT/stage/lib/arm64-v8a/"
 # ASan 构建时把运行时库一起打进 APK（否则进程加载会因 NEEDED 缺失而起不来）。缺省没有这个文件，跳过。
 # An ASan build also ships the sanitizer runtime, otherwise the process cannot resolve the NEEDED lib.
-ASAN_RT=$(ls /home/vick/Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/libclang_rt.asan-aarch64-android.so 2>/dev/null | head -1)
-if [ -n "$ASAN_RT" ] && [ "${DM_PACK_ASAN:-0}" = "1" ]; then cp "$ASAN_RT" "$OUT/stage/lib/arm64-v8a/"; echo "packed ASan runtime: $(basename "$ASAN_RT")"; fi
+# 从 SDK 里的 NDK 自己找：取最新一版 NDK，主机三元组按当前系统算（linux-x86_64 / darwin-aarch64 …），
+# 不再写死某台机器的绝对路径和 NDK 版本号。找不到就跳过——只有 DM_PACK_ASAN=1 时才真的需要它。
+# Find it in the SDK's NDK: take the newest NDK and compute the host triple from the current system (linux-x86_64,
+# darwin-aarch64, ...), instead of hardcoding one machine's absolute path and NDK version. If it is not there, skip --
+# only DM_PACK_ASAN=1 actually needs it.
+if [ "${DM_PACK_ASAN:-0}" = "1" ]; then
+    NDK=$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1 || true)   # 同上：没有 ndk/ 目录时别让 pipefail 立刻退出 | same as above: a missing ndk/ must not trip pipefail
+    case "$(uname -s)" in
+        Darwin) HOST_TAG=darwin-$(uname -m);;
+        *)      HOST_TAG=linux-$(uname -m);;
+    esac
+    ASAN_RT=$(ls "$NDK"/toolchains/llvm/prebuilt/"$HOST_TAG"/lib/clang/*/lib/linux/libclang_rt.asan-aarch64-android.so 2>/dev/null | head -1 || true)   # 同上 | same as above
+    if [ -n "$ASAN_RT" ]; then cp "$ASAN_RT" "$OUT/stage/lib/arm64-v8a/"; echo "packed ASan runtime: $(basename "$ASAN_RT")"
+    else echo "警告：DM_PACK_ASAN=1 但没找到 ASan 运行时（NDK=${NDK:-未安装}，host=${HOST_TAG}）" >&2; fi
+fi
 python3 - "$OUT/$APK_STEM.apk" "$OUT/stage" <<'EOF'
 import os, sys, zipfile
 apk, stage = sys.argv[1], sys.argv[2]
