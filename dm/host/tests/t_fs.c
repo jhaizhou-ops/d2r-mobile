@@ -209,6 +209,18 @@ int main(void) {
       LANGCASE(3, "{ \"Language\": 7, \"VoiceLanguage\": 7 }", "{ \"Language\": 7, \"VoiceLanguage\": 7 }", "开关 = 俄语、文件已是俄文配俄语语音：不动");
       LANGCASE(3, "{ \"Language\": 7, \"VoiceLanguage\": 0 }", "{ \"Language\": 7, \"VoiceLanguage\": 7 }", "开关 = 俄语、文件是俄文配英文语音：语音跟上");
       LANGCASE(1, "{ \"Language\": 7, \"VoiceLanguage\": 7 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文件是俄文：文字与语音都改英文");
+      // 中文字体（lang_tw）与语音行（voice_en）：繁中配音在分块 12，资源里没有就配简中配音；语音行 English = 0、跟文字 = voice_for；点过就要对上，没点过照旧
+      // Chinese script (lang_tw) and voice row (voice_en): the Traditional voice-over is in chunk 12, without it the Simplified one; voice row English = 0, match text = voice_for; applied = must match, never applied = as before
+      { extern int g_t_tw, g_t_voice; char rd[1300];
+        g_t_tw = 1; LANGCASE(0, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 9, \"VoiceLanguage\": 8 }", "中文 + 繁體、资源里没有繁中配音分块：文字 9，语音配简中");
+        snprintf(rd, sizeof rd, "%s/romfs_ru/data/12-00000001.data", root); put(rd, "x");
+        LANGCASE(0, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "中文 + 繁體、资源里有繁中配音：文字与语音都改成 9");
+        g_t_voice = 1; LANGCASE(0, "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "{ \"Language\": 9, \"VoiceLanguage\": 0 }", "繁體文字 + 语音行 English：语音 0");
+        g_t_tw = 0; LANGCASE(0, "{ \"Language\": 9, \"VoiceLanguage\": 0 }", "{ \"Language\": 8, \"VoiceLanguage\": 0 }", "中文字体点了简体：繁中改回简中，语音仍 English");
+        g_t_tw = -1; LANGCASE(-1, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 8, \"VoiceLanguage\": 0 }", "语言行没点过、语音行点了 English：只改语音");
+        g_t_voice = 0; LANGCASE(-1, "{ \"Language\": 8, \"VoiceLanguage\": 0 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "语音行点回跟文字：语音回到简中");
+        LANGCASE(1, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "英文 + 跟文字：同原来");
+        g_t_tw = g_t_voice = -1; }
       unsetenv("DM_ROMFS");
       g_t_lang = -1; }
 

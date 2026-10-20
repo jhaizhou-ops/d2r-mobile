@@ -14,7 +14,7 @@ All UI text we added on top of the original game exists in Chinese, English, Spa
 
 The table is read by `dm/ios/tools/dm_i18n.py`, which does two things with it:
 
-- **Text drawn inside the game**: when the overlay is built, every row is appended to the game's string table, with Chinese in the Simplified and Traditional Chinese columns, Spanish in esES / esMX, Russian in ruRU and English in all the remaining languages. Layouts write `@key`, and the host fetches by key with `dm_str`. Switching language is done by the game itself.
+- **Text drawn inside the game**: when the overlay is built, every row is appended to the game's string table, with Chinese in the Simplified Chinese column and the same text converted to Traditional (OpenCC s2tw, optional) in the Traditional Chinese column, Spanish in esES / esMX, Russian in ruRU and English in all the remaining languages. Layouts write `@key`, and the host fetches by key with `dm_str`. Switching language is done by the game itself.
 - **Text drawn outside the game** (system alerts, the resource download page and so on): it generates `dm/host/dm_i18n_tab.h`, which is compiled in and read by key with `dm_ui`.
 
 The lookup interface is in `dm/host/dm_i18n.h`.

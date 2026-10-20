@@ -25,7 +25,7 @@ English: [NO_XCODE.md](NO_XCODE.md)
 
 - 你自己购买的游戏的文件：Switch 版 1.0.34.0（对应 PC 版 3.3.94012）的 `ExeFS` 与 `RomFS`，见 [GAME_FILES.zh-CN.md](GAME_FILES.zh-CN.md)
 - 这个仓库的源码，版本要与壳是同一个发布版本（工具会核对，不一致会直说）
-- Python 3.9 以上，以及这几个包：`python3 -m pip install pillow numpy lz4 capstone unicorn`
+- Python 3.9 以上，以及这几个包：`python3 -m pip install pillow numpy lz4 capstone unicorn opencc-python-reimplemented`
 - 一个 C 编译器（`clang`；Windows 上装 LLVM 即可）、.NET SDK。**不需要**苹果的 Metal 着色器编译器：有它（装了 Xcode 的 Mac）就在电脑上把着色器编成库，没有就走手机上现编
 - `spirv-cross`，**版本要是 1.4.357.0**（发布标签 `vulkan-sdk-1.4.357.0`）。换个版本，翻译出的着色器就可能不同——我们实测最新源码版与它差 231 个着色器。壳里带着全部着色器源码的摘要，工具翻译完会比对，对不上就停下来告诉你，不会做出一个画面可能出错的包
   - macOS：`brew install spirv-cross`，再用 `brew list --versions spirv-cross` 看版本

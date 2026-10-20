@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """我们自己加的界面文字的多语表：唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / Español / Español MX / Русский / 用在哪）。
-做法 = 把每一行作为新条目追加进原版字符串表 ui.json（RomFS 覆盖层，与 touch_strings 同一套机制）：zhCN / zhTW 列 = 中文（繁体玩家读简体比读英文顺），
+做法 = 把每一行作为新条目追加进原版字符串表 ui.json（RomFS 覆盖层，与 touch_strings 同一套机制）：zhCN 列 = 中文、zhTW 列 = 中文转繁（to_traditional），
 esES 列 = Español，esMX 列 = Español MX（空 = 同 Español；只在拉美官方用词与 esES 不同时填），ruRU 列 = Русский，其余 8 种语言列 = English。
 这样布局里写「@键」、宿主用原版取串 main+0x7f5630 取，语言切换由原版自己重装字符串表完成（SetLanguage，r34 起不剪），不用我们另跟语言。
 '''Multilingual table for UI text we added ourselves: single source dm/i18n/ui_text.tsv (key / Chinese / English / Español / Español MX / Russian / where used).
-Method = append each row as a new entry to the original string table ui.json (RomFS overlay, same mechanism as touch_strings): zhCN / zhTW columns = Chinese (Traditional Chinese players read Simplified more easily than English),
+Method = append each row as a new entry to the original string table ui.json (RomFS overlay, same mechanism as touch_strings): zhCN column = Chinese, zhTW column = Chinese converted to Traditional (to_traditional),
 esES column = Español, esMX column = Español MX (empty = same as Español; filled only where official Latin American wording differs from esES), ruRU column = Russian, the other 8 language columns = English.
 So layouts write "@key", the host looks up via the original main+0x7f5630, and language switching is done by the original game reloading the string table (SetLanguage, not cut since r34); we don't track language separately.'''"""
 import csv, json, os, re
@@ -64,6 +64,14 @@ def rows():
     if len(set(ks)) != len(ks): raise SystemExit('dm_i18n：键重复：%s' % sorted({k for k in ks if ks.count(k) > 1}))
     return out
 
+def to_traditional():
+    """zhTW 列：中文按 OpenCC s2tw 逐字转繁（只换字形与台湾用字，不换词，免得和原版繁中的游戏用语对不上）。没装 opencc-python-reimplemented 就照旧放简体并提示。
+    zhTW column: the Chinese converted character by character with OpenCC s2tw (glyph forms and Taiwan variants only, no phrase replacement, so terms stay in line with the original game's Traditional Chinese). Without opencc-python-reimplemented installed, Simplified is kept as before with a notice."""
+    try: from opencc import OpenCC
+    except ImportError:
+        print('dm_i18n：没装 opencc-python-reimplemented，繁中下我们的字显示简体（pip install opencc-python-reimplemented 后重新构建）'); return lambda s: s
+    return OpenCC('s2tw').convert
+
 def build(romfs, outdir, repl):
     """repl：前面步骤已换的 {包内逻辑路径: 本地文件}。返回 ({包内逻辑路径: 本地文件}, 条数)。 | repl: {logical path in the package: local file} already replaced by earlier steps. Returns ({logical path in the package: local file}, entry count)."""
     import touch_layout   # 用时再导：touch_layout 自己在模块层要读本表（自定义页行数），顶层互导会半初始化 | imported at use time: touch_layout itself reads this table at module level (row count of the Custom page), and a top-level mutual import would leave it half-initialized
@@ -74,7 +82,8 @@ def build(romfs, outdir, repl):
     rs = rows()
     clash = [r[0] for r in rs if r[0] in have]
     if clash: raise SystemExit('dm_i18n：键和原版重名：%s' % clash)
-    col = lambda l, zh, en, es, mx, ru: zh if l in ('zhCN', 'zhTW') else es if l == 'esES' else mx if l == 'esMX' else ru if l == 'ruRU' else en
+    tw = to_traditional()
+    col = lambda l, zh, en, es, mx, ru: zh if l == 'zhCN' else tw(zh) if l == 'zhTW' else es if l == 'esES' else mx if l == 'esMX' else ru if l == 'ruRU' else en
     add = [{'id': ID0 + i, 'Key': k, **{l: col(l, zh, en, es, mx, ru) for l in LANGS}} for i, (k, zh, en, es, mx, ru) in enumerate(rs)]
     end = text.rstrip().rindex(']')
     body = ',\n'.join('  ' + json.dumps(e, ensure_ascii=False) for e in add)

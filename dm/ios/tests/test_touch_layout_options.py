@@ -34,4 +34,9 @@ assert keys == [key for key, _ in layout._CUSTOM_ALL]
 defaults = [int(x) for x in re.search(r'k_def\[NK\].*?=\s*\{(.*?)\}', host, re.S)[1].split(',')]
 assert len(defaults) == len(keys) and defaults[keys.index('touch_swap_above')] == 0
 assert 'TouchCustom_touch_swap_above_near' in host
+for key, inv in (('lang_tw', '_simp'), ('voice_en', '_match')):   # 中文字体 / 语音：同样是上下两项单选，缺省 0，宿主认反面那一格 | Chinese script / voice: also stacked radios, default 0, the host knows the inverse cell
+    for name in ('TouchCustom_' + key, 'TouchCustom_' + key + inv):
+        assert nodes[name]['type'] == 'ToggleButtonWidget' and nodes[name]['fields']['onClickMessage'].endswith(name)
+    assert defaults[keys.index(key)] == 0 and 'TouchCustom_' + key + inv in host
+assert keys[:3] == ['lang', 'lang_tw', 'voice_en']
 print('PASS touch layout options: generated radio pair, labels, defaults, host order and scrolling row extent')

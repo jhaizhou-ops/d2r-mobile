@@ -32,8 +32,9 @@ Everything the build needs is on this page: what each item is, what it is for, w
 | lz4 | 4.4.5 | Unpacking the program files | <https://pypi.org/project/lz4/> |
 | capstone | 5.0.9 | Disassembly, for rewriting the program and for verification | <https://pypi.org/project/capstone/> |
 | unicorn | 2.1.4 | Checking, site by site, that rewritten code behaves the same | <https://pypi.org/project/unicorn/> |
+| opencc-python-reimplemented | 0.1.7 | Converting our own interface text to Traditional Chinese (optional: without it Traditional Chinese shows it in Simplified) | <https://pypi.org/project/opencc-python-reimplemented/> |
 
-All at once: `python3 -m pip install pillow numpy lz4 capstone unicorn` (`./setup.sh` creates an isolated environment and installs them for you)
+All at once: `python3 -m pip install pillow numpy lz4 capstone unicorn opencc-python-reimplemented` (`./setup.sh` creates an isolated environment and installs them for you)
 
 ## Optional
 

@@ -114,7 +114,7 @@ if [ "${1:-}" = check ]; then echo; m "体检通过。下一步：./setup.sh（�
 
 step() { local name=$1; shift; local t0; t0=$(date +%s); say "$name"; "$@" || die "$name 没成功"; say "$name 完成（$(( $(date +%s) - t0 )) 秒）"; }
 
-py_env() { python3 -m venv "$DM_ROOT/build/cache/dm/venv" && "$PY" -m pip install -q pillow numpy lz4 capstone unicorn; }
+py_env() { python3 -m venv "$DM_ROOT/build/cache/dm/venv" && "$PY" -m pip install -q pillow numpy lz4 capstone unicorn opencc-python-reimplemented; }
 [ -x "$PY" ] && "$PY" -c 'import PIL, numpy, lz4, capstone, unicorn' 2> /dev/null || step "Python 环境与包" py_env
 
 P=$(head -1 "$HERE/dm/PRODUCT")
