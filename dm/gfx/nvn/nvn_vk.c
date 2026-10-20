@@ -517,6 +517,153 @@ static int g_load_skip;   /* DM_ATT_LOAD_SKIP：颜色附件 loadOp=DONT_CARE（
 static uint64_t g_sent_passes,g_sent_dirty_passes,g_sent_pixels,g_sent_dirty_pixels,g_sent_frames;
 static unsigned g_sent_seen;static uint64_t g_sent_pass0,g_sent_frame_seen;static unsigned g_sent_target;
 static void sentinel_complete(VkSubmission *sub);
+
+/* ── 附件覆盖率表（pass-coverage.tsv）──────────────────────────────────────
+   把探针测到的「这个通道在这个尺寸/格式上是否被画满」落盘成持久表，render_begin 查表：
+   只有表里判 green 的颜色附件才用 loadOp=DONT_CARE，**表里没有的一律 LOAD**。
+   键必须是 (归一化 PassKey, w, h, format, is_depth)——PassKey 只含附件格式/loadOp/layout，
+   不含尺寸：同一个 PassKey 在 2270×1056 上 19.9% 未覆盖、在 800×600 上却是 green
+   （docs/android-resolution-plan.zh-CN.md 附十六）。归一化 = 把 load/store op 置零再哈希，
+   否则探针自己把 loadOp 改成 CLEAR 会让键变来变去、永远查不中。
+   落盘是 TSV（不是二进制）：能 diff、能 grep、能手工删掉可疑行，和 pso_manifest.tsv 同一套习惯。
+   来源两个：随包种子 <shader_root>/pass-coverage.tsv + 运行目录追加（读时按行合并）。
+   Probe-derived attachment coverage table, stored as TSV so it can be diffed, grepped and
+   hand-edited (same habit as pso_manifest.tsv). Key = normalized PassKey hash + w/h/format/is_depth;
+   the PassKey alone carries no extent, and the same pass key is RED at one extent and green at
+   another. Normalization zeroes the load/store ops so the probe's own CLEAR cannot move the key.
+   Seed ships next to the shaders; the runtime file appends to it, merged line by line on load. */
+#define COV_MAX 4096
+#define COV_SLOTS 8192
+#define COV_GREEN 1
+#define COV_RED 0
+/* 列：pk / w / h / format / is_depth / verdict / samples / uncovered / total */
+#define COV_COLUMNS "pk\tw\th\tformat\tis_depth\tverdict\tsamples\tuncovered\ttotal"
+typedef struct {
+    uint64_t key;             /* 归一化 PassKey 哈希 | normalized PassKey hash */
+    uint32_t w,h,format;      /* 附件实际尺寸 + Vulkan 格式（PassKey 里没有尺寸） | extent + format */
+    uint8_t is_depth,verdict; /* COV_GREEN / COV_RED（一旦判红不再变绿）| sticky red */
+    uint32_t samples;
+    uint64_t uncovered,total;
+} CovRec;
+static CovRec *g_cov; static unsigned g_cov_n; static int g_cov_dirty;
+static uint32_t g_cov_slot[COV_SLOTS];
+static int g_cov_table;        /* DM_ATT_LOAD_TABLE：查表决定颜色 loadOp（默认关）| default off */
+static int g_cov_loaded;
+static uint64_t g_cov_green_bytes,g_cov_red_bytes,g_cov_miss_bytes;   /* 查表决策记账 | decision accounting, windowed */
+static uint64_t g_cov_green_n,g_cov_red_n,g_cov_miss_n;
+static uint64_t cov_key_of(const PassKey *pk,uint32_t w,uint32_t h,uint32_t format,int is_depth) {
+    PassKey c=*pk;
+    for(uint32_t i=0;i<c.count&&i<9;i++){
+        c.attachments[i].loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;c.attachments[i].storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+        c.attachments[i].stencilLoadOp=VK_ATTACHMENT_LOAD_OP_LOAD;c.attachments[i].stencilStoreOp=VK_ATTACHMENT_STORE_OP_STORE;}
+    uint64_t x=1469598103934665603ULL;const uint8_t *b=(const uint8_t *)&c;
+    for(size_t i=0;i<sizeof c;i++){x^=b[i];x*=1099511628211ULL;}
+    const uint64_t tail[3]={(uint64_t)w<<32|h,(uint64_t)format,(uint64_t)(is_depth?1:0)};
+    const uint8_t *t=(const uint8_t *)tail;
+    for(size_t i=0;i<sizeof tail;i++){x^=t[i];x*=1099511628211ULL;}
+    return x?x:1;
+}
+static CovRec *cov_lookup(uint64_t key,uint32_t w,uint32_t h,uint32_t format,int is_depth,int create) {
+    uint64_t x=key^((uint64_t)w*0x9e3779b97f4a7c15ULL)^((uint64_t)h*0xc2b2ae3d27d4eb4fULL)
+              ^((uint64_t)format*0x165667b19e3779f9ULL)^(uint64_t)(is_depth?1:0);
+    uint32_t s=(uint32_t)(x^(x>>29))&(COV_SLOTS-1);
+    for(uint32_t p=0;p<64;p++){
+        uint32_t i=(s+p)&(COV_SLOTS-1),idx=g_cov_slot[i];
+        if(!idx){
+            if(!create||g_cov_n==COV_MAX)return NULL;
+            if(!g_cov){g_cov=calloc(COV_MAX,sizeof(*g_cov));if(!g_cov)return NULL;}
+            CovRec *r=&g_cov[g_cov_n];memset(r,0,sizeof *r);
+            r->key=key;r->w=w;r->h=h;r->format=format;r->is_depth=(uint8_t)(is_depth!=0);r->verdict=COV_GREEN;
+            g_cov_slot[i]=++g_cov_n;return r;
+        }
+        CovRec *r=&g_cov[idx-1];
+        if(r->key==key&&r->w==w&&r->h==h&&r->format==format&&r->is_depth==(uint8_t)(is_depth!=0))return r;
+    }
+    return NULL;   /* 64 次探测都满：放弃这条（保守路径会用 LOAD）| table full at this cluster */
+}
+/* 探针结果入表。规则：只要有过一个未覆盖像素就判红且不再回绿——800x450 漏 26 个像素就会出
+   花点（附十五），按像素比例给容差是在赌运气。 | Any uncovered pixel latches RED: 26 leaked
+   pixels on an 800x450 buffer produced visible speckles, so ratio-based tolerances are gambling. */
+static void cov_note(uint64_t key,uint32_t w,uint32_t h,uint32_t format,int is_depth,uint64_t uncovered,uint64_t total) {
+    CovRec *r=cov_lookup(key,w,h,format,is_depth,1); if(!r)return;
+    r->samples++; r->uncovered+=uncovered; r->total+=total;
+    if(uncovered && r->verdict!=COV_RED){
+        r->verdict=COV_RED;
+        fprintf(stderr,"[nvn-vulkan] COV_RED pk=%016llx rt=%ux%u fmt=%u d=%d uncovered=%llu/%llu 该键保持 LOAD\n",
+            (unsigned long long)key,w,h,format,is_depth,(unsigned long long)uncovered,(unsigned long long)total);
+    }
+    g_cov_dirty=1;
+}
+/* 一行 TSV → CovRec。列顺序见 COV_COLUMNS；缺列按 0 处理，verdict 只认首字母 g/G 为 green，
+   其他一律当红（保守）。返回 0 = 不是数据行（注释/表头/坏行）。 */
+static int cov_parse_line(char *line,CovRec *r) {
+    while(*line==' '||*line=='\t')line++;
+    if(!*line||*line=='#'||*line=='\n'||*line=='\r')return 0;
+    char *f[9]={0};int nf=0;
+    for(char *p=line;;){
+        f[nf++]=p;char *t=strchr(p,'\t');if(!t)break;*t=0;p=t+1;if(nf==9)break;
+    }
+    if(nf<6)return 0;
+    memset(r,0,sizeof *r);
+    r->key=strtoull(f[0],NULL,16);
+    r->w=(uint32_t)strtoul(f[1],NULL,10);
+    r->h=(uint32_t)strtoul(f[2],NULL,10);
+    r->format=(uint32_t)strtoul(f[3],NULL,10);
+    r->is_depth=(uint8_t)(strtoul(f[4],NULL,10)!=0);
+    r->verdict=(uint8_t)((f[5][0]=='g'||f[5][0]=='G')?COV_GREEN:COV_RED);
+    if(nf>6)r->samples=(uint32_t)strtoul(f[6],NULL,10);
+    if(nf>7)r->uncovered=strtoull(f[7],NULL,10);
+    if(nf>8)r->total=strtoull(f[8],NULL,10);
+    return r->key!=0;
+}
+static void cov_read_file(const char *path) {
+    FILE *f=fopen(path,"r"); if(!f)return;
+    char line[512];unsigned rows=0,added=0;CovRec r;
+    while(fgets(line,sizeof line,f)){
+        if(!cov_parse_line(line,&r))continue;
+        rows++;
+        CovRec *e=cov_lookup(r.key,r.w,r.h,r.format,r.is_depth,1); if(!e)continue;
+        if(!e->samples){ *e=r; added++; }
+        else{ e->samples+=r.samples; e->uncovered+=r.uncovered; e->total+=r.total;
+              if(r.verdict==COV_RED)e->verdict=COV_RED; }
+    }
+    fclose(f);
+    fprintf(stderr,"[nvn-vulkan] 覆盖率表读入 %s：%u 行（新增 %u，累计 %u）\n",path,rows,added,g_cov_n);
+}
+static void cov_load(void) {
+    if(g_cov_loaded)return; g_cov_loaded=1;
+    if(G.shader_root[0]){ char seed[1200];
+        if(snprintf(seed,sizeof seed,"%s/pass-coverage.tsv",G.shader_root)<(int)sizeof seed) cov_read_file(seed); }
+    if(g_pso_cache_path[0]){ char path[sizeof g_pso_cache_path]; snprintf(path,sizeof path,"%s",g_pso_cache_path);
+        char *slash=strrchr(path,'/');
+        if(slash){ snprintf(slash+1,(size_t)(sizeof path-(size_t)(slash+1-path)),"pass-coverage.tsv"); cov_read_file(path); } }
+    if(g_cov_n){ unsigned green=0; for(unsigned i=0;i<g_cov_n;i++)if(g_cov[i].verdict==COV_GREEN)green++;
+        fprintf(stderr,"[nvn-vulkan] COV_TABLE 载入 %u 条：green=%u red=%u%s\n",g_cov_n,green,g_cov_n-green,
+                g_cov_table?"（查表已开：green 的颜色附件用 DONT_CARE）":"（只读表，未启用查表）"); }
+    else if(g_cov_table) fprintf(stderr,"[nvn-vulkan] COV_TABLE 空表：本次所有颜色附件一律 LOAD\n");
+}
+static void cov_flush(void) {
+    if(!g_cov_dirty||!g_cov||!g_cov_n||!g_pso_cache_path[0])return;
+    char path[sizeof g_pso_cache_path]; snprintf(path,sizeof path,"%s",g_pso_cache_path);
+    char *slash=strrchr(path,'/'); if(!slash)return;
+    snprintf(slash+1,(size_t)(sizeof path-(size_t)(slash+1-path)),"pass-coverage.tsv");
+    char tmp[sizeof path+8]; snprintf(tmp,sizeof tmp,"%s.tmp",path);
+    FILE *f=fopen(tmp,"w"); if(!f)return;
+    int ok=fprintf(f,"# d2r-mobile 附件覆盖率表 | attachment coverage table\n"
+                     "# green = 探针实测该通道首绘画满整个附件，颜色附件可以 loadOp=DONT_CARE\n"
+                     "# red   = 测到过未覆盖像素，或没测过（保守）；这类键一律 LOAD\n"
+                     "%s\n",COV_COLUMNS)>0;
+    for(unsigned i=0;ok&&i<g_cov_n;i++){
+        CovRec *r=&g_cov[i];
+        if(fprintf(f,"%016llx\t%u\t%u\t%u\t%d\t%s\t%u\t%llu\t%llu\n",
+            (unsigned long long)r->key,r->w,r->h,r->format,r->is_depth?1:0,
+            r->verdict==COV_GREEN?"green":"red",r->samples,
+            (unsigned long long)r->uncovered,(unsigned long long)r->total)<0)ok=0;
+    }
+    if(fclose(f)!=0)ok=0;
+    if(ok){ rename(tmp,path); g_cov_dirty=0; }
+    else fprintf(stderr,"[nvn-vulkan] 覆盖率表写入失败 %s\n",path);
+}
 static void texture_transition(VTexture *t,VkImageLayout layout);
 static void trace_capture_complete(VkSubmission *sub) {
     for(unsigned i=0;i<sub->ntrace_captures;i++){TraceCapture *c=&sub->trace_captures[i];FILE *out=fopen(c->path,"wb");if(!out)die("GPU trace output",0);
@@ -703,6 +850,7 @@ static void backend_init(void) {
     if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
      const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;{const char *vl=getenv("DM_ATT_LOAD_SKIP");g_load_skip=vl?atoi(vl):0;}   /* 默认关：哨兵探针实测有通道只覆盖 8%（见附十六） */if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
+     g_cov_table=getenv("DM_ATT_LOAD_TABLE")!=NULL;if(g_cov_table)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_TABLE on：按覆盖率表逐通道决定颜色 loadOp（表外一律 LOAD）\n");
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
      fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}
@@ -1244,9 +1392,11 @@ static void sentinel_complete(VkSubmission *sub) {
         }
         g_sent_passes++;g_sent_pixels+=n;
         if(dirty){g_sent_dirty_passes++;g_sent_dirty_pixels+=dirty;}
-        fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_PROBE slot=%u rt=%ux%u serial=%llu pk=%016llx d=%d uncovered=%llu/%llu (%.3f%%)%s\n",
-            sub->sentinel[i].slot,w,h,(unsigned long long)sub->sentinel[i].serial,(unsigned long long)sub->sentinel[i].pk,sub->sentinel[i].depth,(unsigned long long)dirty,(unsigned long long)n,
+        fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_PROBE slot=%u rt=%ux%u fmt=%u serial=%llu pk=%016llx d=%d uncovered=%llu/%llu (%.3f%%)%s\n",
+            sub->sentinel[i].slot,w,h,sub->sentinel[i].fmt,(unsigned long long)sub->sentinel[i].serial,(unsigned long long)sub->sentinel[i].pk,sub->sentinel[i].depth,(unsigned long long)dirty,(unsigned long long)n,
             100.0*(double)dirty/(double)n,dirty?" [RED]":"");
+        /* 入表：green 才允许该 (PassKey,尺寸,格式,深度) 的颜色附件用 DONT_CARE。 */
+        cov_note(sub->sentinel[i].pk,w,h,sub->sentinel[i].fmt,sub->sentinel[i].depth,dirty,n);
     }
     sub->nsentinel=0;
     if(g_sent_frames%16==0)
@@ -3254,6 +3404,7 @@ static VkRenderPass render_begin(void) {
     G.profile_rp_chunk_ns+=prof_now()-rp_t0b;uint64_t rp_t1=prof_now();
     VkAttachmentDescription attachments[9];VkAttachmentReference color[8],depth;VkImageView views[9];uint32_t n=0,width=0,height=0;
     int probe_slot=-1;VTexture *probe_tex=NULL;int probe_tex_is_depth=0;
+    uint32_t att_w[9]={0},att_h[9]={0},att_fmt[9]={0};int att_dep[9]={0};   /* 覆盖率表键的附件侧字段 | attachment side of the coverage key */
     unsigned long long seq_ser[4]={0,0,0,0};   /* 通道序列诊断：前 4 个附件的 serial | pass-sequence diagnostic: serials of the first 4 attachments */
     memset(attachments,0,sizeof(attachments));
     for(int i=0;i<rt->n;i++)color[i]=(VkAttachmentReference){VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -3302,6 +3453,7 @@ static VkRenderPass render_begin(void) {
            .stencilStoreOp=G.diag_loadstore>=1?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
            .initialLayout=layout,.finalLayout=layout};
         if(probe_slot==(int)n) attachments[n].loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att_w[n]=tw;att_h[n]=th;att_fmt[n]=(uint32_t)t->format;att_dep[n]=is_depth;
         VkImageViewCreateInfo view={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.image=t->image,
             .viewType=VK_IMAGE_VIEW_TYPE_2D,.format=t->format,.subresourceRange=range};
         views[n]=G.fb_cache_enabled?attachment_view(&view):submission_image_view(&view);
@@ -3338,6 +3490,32 @@ static VkRenderPass render_begin(void) {
     memcpy(S.pass_key.attachments,attachments,n*sizeof(*attachments));
     memcpy(S.pass_key.color,color,rt->n*sizeof(*color));if(rt->depth)S.pass_key.depth=depth;
     memcpy(S.pass_key.dependencies,deps,ri.dependencyCount*sizeof(*deps));
+    /* 查覆盖率表：只有表里判 green 的颜色附件才降到 DONT_CARE，表外/判红一律保持 LOAD。
+       键含尺寸——PassKey 本身不含尺寸，同一个 PassKey 在不同分辨率上判定可以相反（附十六）。
+       Depth keeps LOAD regardless: z-test reads the previous contents (附十五遗留项)。
+       Coverage-table lookup: only a green entry may drop the color loadOp to DONT_CARE; anything
+       absent from the table stays LOAD. The key carries the extent, which the PassKey does not. */
+    if(g_cov_table){
+        int changed=0;
+        for(uint32_t i=0;i<n;i++){
+            uint64_t ck=cov_key_of(&S.pass_key,att_w[i],att_h[i],att_fmt[i],att_dep[i]);
+            CovRec *r=cov_lookup(ck,att_w[i],att_h[i],att_fmt[i],att_dep[i],0);
+            uint64_t plane=(uint64_t)att_w[i]*att_h[i]*4;
+            if(!r){g_cov_miss_bytes+=plane;g_cov_miss_n++;}
+            else if(r->verdict==COV_RED||att_dep[i]){g_cov_red_bytes+=plane;g_cov_red_n++;}
+            else if(attachments[i].loadOp==VK_ATTACHMENT_LOAD_OP_LOAD){
+                attachments[i].loadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;changed=1;
+                g_cov_green_bytes+=plane;g_cov_green_n++;
+            }
+        }
+        if(changed){   /* loadOp 是 PassKey 的一部分，改完重建 | loadOp is part of the PassKey */
+            memset(&S.pass_key,0,sizeof(S.pass_key));
+            S.pass_key.count=n;S.pass_key.color_count=rt->n;S.pass_key.has_depth=rt->depth!=NULL;S.pass_key.dependency_count=ri.dependencyCount;
+            memcpy(S.pass_key.attachments,attachments,n*sizeof(*attachments));
+            memcpy(S.pass_key.color,color,rt->n*sizeof(*color));if(rt->depth)S.pass_key.depth=depth;
+            memcpy(S.pass_key.dependencies,deps,ri.dependencyCount*sizeof(*deps));
+        }
+    }
     FramebufferKey key;memset(&key,0,sizeof key);key.pass=S.pass_key;key.width=width;key.height=height;memcpy(key.views,views,n*sizeof(*views));
     /* 通道序列诊断（DM_PASS_SEQ=1，只打一帧）：看同一目标是不是连续出现——连续才有合并空间。
      * 载荷：序号 / 尺寸 / 颜色数 / 是否有深度 / 首附件 load-store / 前 2 个附件 serial。
@@ -3385,9 +3563,10 @@ static VkRenderPass render_begin(void) {
         S.sentinel[S.nsentinel].buf=NULL;S.sentinel[S.nsentinel].tex=probe_tex;S.sentinel[S.nsentinel].w=probe_tex->width;
         S.sentinel[S.nsentinel].h=probe_tex->height;S.sentinel[S.nsentinel].pass=G.pass_count;S.sentinel[S.nsentinel].serial=probe_tex->serial;
         S.sentinel[S.nsentinel].slot=(uint32_t)(G.pass_count-g_sent_pass0);S.sentinel[S.nsentinel].depth=dep;S.sentinel[S.nsentinel].fmt=(uint32_t)probe_tex->format;
-        { const uint8_t *pb=(const uint8_t *)&S.pass_key;uint64_t h=1469598103934665603ULL;
-          for(size_t bi=0;bi<sizeof(S.pass_key);bi++){h^=pb[bi];h*=1099511628211ULL;}
-          S.sentinel[S.nsentinel].pk=h; }
+        /* 键 = 归一化 PassKey + 附件尺寸/格式/深度标志；与 render_begin 查表用的键同一个函数，
+           否则「测的是 A、用的是 B」。归一化后探针自己的 CLEAR 不会改变键。
+           Same key function as the render_begin lookup, so measurements and decisions cannot drift. */
+        S.sentinel[S.nsentinel].pk=cov_key_of(&S.pass_key,probe_tex->width,probe_tex->height,(uint32_t)probe_tex->format,dep);
         S.sentinel_bytes+=(uint64_t)probe_tex->width*probe_tex->height*4;
         S.nsentinel++;
         if(!g_sent_seen){g_sent_seen=1;fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_FIRST rt=%ux%u bpp=%u depth=%d fmt=%d serial=%llu\n",probe_tex->width,probe_tex->height,probe_tex->bpp,dep,(int)probe_tex->format,(unsigned long long)probe_tex->serial);} }
@@ -4312,6 +4491,13 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
               g_att_clear_bytes? g_att_clear_bytes/1048576.0/fr:0.0, g_att_skip_bytes? g_att_skip_bytes/1048576.0/fr:0.0,
               (g_att_load_bytes+g_att_store_bytes+g_att_clear_bytes)/1048576.0/fr, g_att_passes/fr);
           g_att_load_bytes=g_att_store_bytes=g_att_clear_bytes=g_att_skip_bytes=0; g_att_passes=0; }
+        /* 覆盖率表查表决策（窗口汇总）：green = 真的降成 DONT_CARE 的附件，red/miss = 保守保持 LOAD。
+           Coverage-table decisions per window: green really dropped to DONT_CARE; red/miss stayed LOAD. */
+        { double fr=G.profile_frames? (double)G.profile_frames:1.0;
+          fprintf(stderr,"[nvn-vulkan] COV_DECISION frame=%llu entries=%u green_mb_per_frame=%.1f red_mb_per_frame=%.1f miss_mb_per_frame=%.1f green_n=%.1f red_n=%.1f miss_n=%.1f\n",
+              (unsigned long long)G.present_count+1,g_cov_n,g_cov_green_bytes/1048576.0/fr,g_cov_red_bytes/1048576.0/fr,g_cov_miss_bytes/1048576.0/fr,
+              (double)g_cov_green_n/fr,(double)g_cov_red_n/fr,(double)g_cov_miss_n/fr);
+          g_cov_green_bytes=g_cov_red_bytes=g_cov_miss_bytes=0; g_cov_green_n=g_cov_red_n=g_cov_miss_n=0; }
         { double fr=G.profile_frames? (double)G.profile_frames:1.0;
           { char line[512]; int n=0; n+=snprintf(line+n,sizeof line-n,"TOPOP");
             for(int rank=0;rank<8;rank++){ int best=-1; uint64_t bestc=0;
@@ -4569,11 +4755,12 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
             fprintf(stderr,"[nvn-vulkan] TRACE_NEXT_FRAME frame=%llu\n",(unsigned long long)G.present_count+2);}}
     if(g_sent_on&&S.nsentinel==0){/* 上一帧探针已处理 */}
     warm_load();   /* 方案 A：首次出图时读清单 */
+    cov_load();    /* 附件覆盖率表：随包种子 + 运行目录合并 */
     { static int thr; if(g_warm_done_loaded&&!thr){thr=1;warm_start_thread();} }
-    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();}pthread_mutex_unlock(&G.lock);return pticket;}
+    if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();cov_flush();}pthread_mutex_unlock(&G.lock);return pticket;}
     if(S.nwrites || S.nevents || S.ncounter)die("present has unpublished guest effects",S.epoch);
     submission_publish(&S);submission_released(&S);
-    uint64_t ticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();}pthread_mutex_unlock(&G.lock);return ticket;
+    uint64_t ticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();cov_flush();}pthread_mutex_unlock(&G.lock);return ticket;
 }
 void mtl_present_wait(uint64_t ticket) { if(ticket>G.present_count)die("unknown present ticket",ticket); }
 void mtl_present_flush(void) { mtl_finish(); }

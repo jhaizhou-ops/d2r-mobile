@@ -266,6 +266,28 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     setenv("DM_ATT_LOAD_SKIP","0",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-load-skip");
     if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_SKIP","0",1);
+    /* 逐通道查表（DM_ATT_LOAD_TABLE）默认关。开之前先跑探针把 pass-coverage.tsv 填出来；
+       表里没有的通道一律 LOAD，所以开着也不会出现「没证据就跳」的通道。
+       验证充分再把默认改成 1（见 docs/android-resolution-plan.zh-CN.md 附十七）。
+       Per-key coverage-table lookup defaults OFF. Fill pass-coverage.tsv with the probe first;
+       entries absent from the table always stay LOAD, so enabling this cannot skip an unmeasured
+       channel. Flip the default only after the scene rounds are validated. */
+    setenv("DM_ATT_LOAD_TABLE","0",1);
+#ifdef DM_ATT_LOAD_TABLE_DEFAULT_ON
+    setenv("DM_ATT_LOAD_TABLE","1",1);
+#endif
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/enable-att-load-table");
+    if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_TABLE","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-load-table");
+    if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_TABLE","0",1);
+    /* 哨兵探针也走 marker 文件：env.txt 在这台机器上读不到（属主 shell、0660，fopen 失败），
+       而 access(F_OK) 只看目录项，不受文件权限影响。
+       The sentinel probe gets a marker file too: env.txt is not readable here (owned by shell,
+       0660), while access(F_OK) only needs the directory entry. */
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/pass-sentinel");
+    if(access(driver_option,F_OK)==0)setenv("DM_PASS_SENTINEL","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/pass-sentinel-selftest");
+    if(access(driver_option,F_OK)==0)setenv("DM_PASS_SENTINEL_SELFTEST","1",1);
     setenv("DM_WRITEBACK_PREPARE","1",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-writeback-prepare");
     if(access(driver_option,F_OK)==0)setenv("DM_WRITEBACK_PREPARE","0",1);
