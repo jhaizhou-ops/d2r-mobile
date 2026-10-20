@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.d2r.binaryprobe"
     android:versionCode="2" android:versionName="0.2-native-android-port">
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="33" />
-    <application android:label="D2R Mobile" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
+    <application android:label="D2R Mobile" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round"
         android:debuggable="true" android:allowBackup="false"
         android:extractNativeLibs="true" android:theme="@android:style/Theme.Material.NoActionBar">
         <activity android:name="org.d2r.binaryprobe.GameActivity" android:exported="true"
