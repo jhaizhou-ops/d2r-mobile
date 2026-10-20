@@ -96,6 +96,8 @@ typedef struct {
     struct {uint32_t q0,q1,w,h,n;uint64_t key,draws;} pt[512];
     TraceCapture trace_captures[512];
     unsigned ntrace_captures;
+    struct { void *buf; void *tex; uint32_t w,h,pass; uint64_t serial; } sentinel[16];
+    unsigned nsentinel;
 } VkSubmission;
 
 #endif

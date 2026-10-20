@@ -504,6 +504,18 @@ static void trace_capture_queue(VBuffer *buffer,uint64_t bytes,const char *name)
     TraceCapture *c=&S.trace_captures[S.ntrace_captures++];c->buffer=buffer;c->bytes=bytes;c->offset=0;
     snprintf(c->path,sizeof(c->path),"%s/%s.bin",root,name);
 }
+/* ── 哨兵探针：证明「通道首绘是否覆盖整个附件」 ──────────────────────────────
+   只有证明覆盖，才能把 loadOp 从 LOAD 换掉（省整块附件读带宽）。靠推断会错：参考实现
+   在一张 800x450 中间缓冲上每次漏 26 个像素，按"可省"处理后画面出现零星花点。
+   这里用 loadOp=CLEAR + 品红 clearValue 当哨兵（不额外做 layout 转换，最不容易出错），
+   通道结束后在同一条命令缓冲里回读，提交完成后数剩余哨兵像素。
+   自检：DM_PASS_SENTINEL_SELFTEST=1 时回读前再清一次 → 必然全哨兵；报 0 即链路是假绿。 */
+#define SENT_MAX 16
+static int g_sent_on;
+static uint64_t g_sent_passes,g_sent_dirty_passes,g_sent_pixels,g_sent_dirty_pixels,g_sent_frames;
+static unsigned g_sent_seen;
+static void sentinel_complete(VkSubmission *sub);
+static void texture_transition(VTexture *t,VkImageLayout layout);
 static void trace_capture_complete(VkSubmission *sub) {
     for(unsigned i=0;i<sub->ntrace_captures;i++){TraceCapture *c=&sub->trace_captures[i];FILE *out=fopen(c->path,"wb");if(!out)die("GPU trace output",0);
         if(fwrite(c->buffer->map+c->offset,1,c->bytes,out)!=c->bytes)die("GPU trace write",c->bytes);fclose(out);
@@ -688,7 +700,7 @@ static void backend_init(void) {
     G.control_cache=calloc(CONTROL_CACHE,sizeof(*G.control_cache));
     if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
-     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;
+     const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
      fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}
@@ -958,6 +970,26 @@ static void pass_end_at(int line) { if(S.in_pass) {
                 att_audit_store(t->serial,(uint32_t)G.draws,(uint64_t)t->width*t->height*(t->bpp?t->bpp:4),0);
             }
         } G.pass_end_sites[line&8191]++;G.pass_end_draws[line&8191]+=G.draws-G.pass_draws0;if(G.profile_detail&&G.profile_frames==30)fprintf(stderr,"[nvn-vulkan] PASSLOG seg=%u rt=%s ps=%.6s n=%d bb=%#x uses=%s draws=%llu end_line=%d\n",G.seg_index,G.pass_desc,G.last_ps,G.last_count,G.last_barrier_bits,G.last_uses,(unsigned long long)(G.draws-G.pass_draws0),line);occlusion_end();vkCmdEndRenderPass(S.command); S.in_pass=0;S.pass_attach_n=0;
+    /* 回读必须在 vkCmdEndRenderPass 之后：附件还绑着通道时不能对同一图像做传输拷贝
+       （Vulkan 违规，驱动直接崩）。 */
+    if(g_sent_on&&S.nsentinel){
+        for(unsigned q=0;q<S.nsentinel;q++){
+            VTexture *pt=(VTexture *)S.sentinel[q].tex; if(!pt) continue;
+            uint32_t w=S.sentinel[q].w,h=S.sentinel[q].h;
+            VBuffer *rb=temporary((uint64_t)w*h*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+            /* 自检：回读前把整张图清成品红 → 探针必须报 ~100%。报 0 就说明链路假绿。 */
+            if(getenv("DM_PASS_SENTINEL_SELFTEST")){
+                VkClearColorValue mg={{0}};mg.float32[0]=1.0f;mg.float32[1]=0.0f;mg.float32[2]=1.0f;mg.float32[3]=1.0f;
+                texture_transition(pt,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                VkImageSubresourceRange s2={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(S.command,pt->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&mg,1,&s2);
+            }
+            texture_transition(pt,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy region={.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},.imageExtent={w,h,1}};
+            vkCmdCopyImageToBuffer(S.command,pt->image,pt->layout,rb->b,1,&region);
+            S.sentinel[q].buf=rb;
+        }
+    }
     if(S.pt_open){S.pt_open=0;vkCmdWriteTimestamp(S.command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,S.pass_ts,S.pt[S.npt].q0+1);S.pt[S.npt].q1=S.pt[S.npt].q0+1;S.pt[S.npt].draws=G.draws-S.pt_draws0;S.npt++;} } }
 #define pass_end() pass_end_at(__LINE__)
 static void query_reset(VkQueryPool pool,uint32_t first,uint32_t count) {
@@ -1192,11 +1224,34 @@ static void wb_stage_invalidate(VkSubmission *sub) {
     VkMappedMemoryRange range={.sType=VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,.memory=sub->wb_stage.m,.offset=0,.size=size<sub->wb_stage.allocation_size?size:VK_WHOLE_SIZE};
     CHECK(vkInvalidateMappedMemoryRanges(G.device,1,&range));
 }
+static void sentinel_complete(VkSubmission *sub) {
+    if(!g_sent_on) return;
+    g_sent_frames++;
+    for(unsigned i=0;i<sub->nsentinel;i++){
+        VBuffer *rb=(VBuffer *)sub->sentinel[i].buf;
+        uint32_t w=sub->sentinel[i].w,h=sub->sentinel[i].h;
+        if(!rb||!rb->map) continue;
+        uint64_t n=(uint64_t)w*h,dirty=0;const uint8_t *px=rb->map;
+        for(uint64_t k=0;k<n;k++,px+=4) if(px[0]==255&&px[1]==0&&px[2]==255) dirty++;
+        g_sent_passes++;g_sent_pixels+=n;
+        if(dirty){g_sent_dirty_passes++;g_sent_dirty_pixels+=dirty;
+            fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_RED pass=%u rt=%ux%u serial=%llu uncovered=%llu/%llu (%.3f%%)\n",
+                sub->sentinel[i].pass,w,h,(unsigned long long)sub->sentinel[i].serial,(unsigned long long)dirty,(unsigned long long)n,100.0*(double)dirty/(double)n);}
+    }
+    sub->nsentinel=0;
+    if(g_sent_frames%16==0)
+        fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_SUMMARY frames=%llu passes=%llu dirty_passes=%llu dirty_pixels=%llu/%llu (%.4f%%)\n",
+            (unsigned long long)g_sent_frames,(unsigned long long)g_sent_passes,(unsigned long long)g_sent_dirty_passes,
+            (unsigned long long)g_sent_dirty_pixels,(unsigned long long)g_sent_pixels,
+            g_sent_pixels?100.0*(double)g_sent_dirty_pixels/(double)g_sent_pixels:0.0);
+}
+
 static void submission_complete_effects(VkSubmission *sub) {
     if(sub->phase!=SUBMISSION_GPU_DONE || !(G.active||G.completing) || !pthread_equal(sub->recorder,pthread_self()))
         die("guest effects before owned GPU completion",sub->epoch);
     pass_timing_collect(sub);
     trace_capture_complete(sub);
+    sentinel_complete(sub);
     uint64_t wb_cpu=0,wb_faults=0,wb_preps=0,wb_mp_calls=0,wb_mp_pages=0,wb_mp_ns=0;
     if(sub->nwrites){nvn_dirty_stats(&wb_faults,&wb_preps);nvn_dirty_mp_stats(&wb_mp_calls,&wb_mp_pages,&wb_mp_ns);wb_cpu=dm_android_nvn_thread_cpu_ns();}
     size_t copy_count=(size_t)sub->nwrites;uint64_t raw_bytes=0,copied_bytes=0;
@@ -1414,7 +1469,7 @@ static uint64_t commit_after_gpu(CommitInfo ci,uint64_t waited) {
     uint64_t ticket=S.ticket;submission_released(&S);G.profile_retire_cpu_ns+=dm_android_nvn_thread_cpu_ns()-retire_cpu;return ticket;
 }
 static void present_after_gpu(void) {
-    submission_gpu_done(&S);pass_timing_collect(&S);trace_capture_complete(&S);
+    submission_gpu_done(&S);pass_timing_collect(&S);trace_capture_complete(&S);sentinel_complete(&S);
     vkDestroySemaphore(G.device,S.present_available,NULL);S.present_available=VK_NULL_HANDLE;
     for(int i=0;i<S.nview;++i)vkDestroyImageView(G.device,S.temporary_views[i],NULL);
     temporaries_retire(&S);
@@ -1451,7 +1506,7 @@ static void async_enqueue_locked(VkSubmission *ctx,int kind) {
 }
 /* Submit the recorded segment and return without waiting; the worker waits for the fence and publishes effects. */
 void mtl_sub_commit_async(void) {
-    if(!G.async_enabled){mtl_sub_commit();return;}
+    if(!G.async_enabled || g_sent_on){mtl_sub_commit();return;}
     CommitInfo ci=commit_submit();
     memcpy(&S.commit_info,&ci,sizeof ci);G.active=0;
     async_enqueue_locked(&S,0);
@@ -3188,6 +3243,7 @@ static VkRenderPass render_begin(void) {
         query_reset(S.occlusion,S.occlusion_reset_count,LIMIT_WRITES-S.occlusion_reset_count);S.occlusion_reset_count=LIMIT_WRITES;G.profile_query_preresets++; }
     G.profile_rp_chunk_ns+=prof_now()-rp_t0b;uint64_t rp_t1=prof_now();
     VkAttachmentDescription attachments[9];VkAttachmentReference color[8],depth;VkImageView views[9];uint32_t n=0,width=0,height=0;
+    int probe_slot=-1;VTexture *probe_tex=NULL;
     unsigned long long seq_ser[4]={0,0,0,0};   /* 通道序列诊断：前 4 个附件的 serial | pass-sequence diagnostic: serials of the first 4 attachments */
     memset(attachments,0,sizeof(attachments));
     for(int i=0;i<rt->n;i++)color[i]=(VkAttachmentReference){VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -3221,12 +3277,16 @@ static VkRenderPass render_begin(void) {
         if(g_att_audit_on && !(G.diag_loadstore>=2)) att_audit_read(t->serial);
         int skip_store = G.diag_loadstore>=1 ||
             ((g_att_store_skip&1) && is_depth) || ((g_att_store_skip&2) && !is_depth);
+        if(g_sent_on && !is_depth && n==0 && t->bpp==4 && (uint64_t)t->width*t->height<=1024ull*1024 && S.nsentinel<1 && G.pass_count==(uint32_t)(G.present_count%24)){
+            probe_slot=n; probe_tex=t;
+        }
         attachments[n]=(VkAttachmentDescription){.format=t->format,.samples=VK_SAMPLE_COUNT_1_BIT,
            .loadOp=G.diag_loadstore>=2?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
            .storeOp=skip_store?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
            .stencilLoadOp=G.diag_loadstore>=2?VK_ATTACHMENT_LOAD_OP_DONT_CARE:VK_ATTACHMENT_LOAD_OP_LOAD,
            .stencilStoreOp=G.diag_loadstore>=1?VK_ATTACHMENT_STORE_OP_DONT_CARE:VK_ATTACHMENT_STORE_OP_STORE,
            .initialLayout=layout,.finalLayout=layout};
+        if(probe_slot==(int)n) attachments[n].loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;
         VkImageViewCreateInfo view={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.image=t->image,
             .viewType=VK_IMAGE_VIEW_TYPE_2D,.format=t->format,.subresourceRange=range};
         views[n]=G.fb_cache_enabled?attachment_view(&view):submission_image_view(&view);
@@ -3302,8 +3362,15 @@ static VkRenderPass render_begin(void) {
     G.profile_rp_create_ns+=prof_now()-rp_k1;
     G.profile_rp_key_ns+=prof_now()-rp_t2;uint64_t rp_t3=prof_now();
     S.active_pass_rp=rp;G.pass_draws0=G.draws;{const tex_t *f0=rt->n>0?rt->color[0]:rt->depth;snprintf(G.pass_desc,sizeof G.pass_desc,"%ux%u c%d d%d s%llu",f0?f0->d.width:0,f0?f0->d.height:0,rt->n,rt->depth!=NULL,(unsigned long long)(f0?f0->serial:0));}
+    VkClearValue sent_clear[9];memset(sent_clear,0,sizeof sent_clear);
+    if(probe_slot>=0){ sent_clear[probe_slot].color.float32[0]=1.0f;sent_clear[probe_slot].color.float32[1]=0.0f;
+        sent_clear[probe_slot].color.float32[2]=1.0f;sent_clear[probe_slot].color.float32[3]=1.0f;
+        S.sentinel[S.nsentinel].buf=NULL;S.sentinel[S.nsentinel].tex=probe_tex;S.sentinel[S.nsentinel].w=probe_tex->width;
+        S.sentinel[S.nsentinel].h=probe_tex->height;S.sentinel[S.nsentinel].pass=G.pass_count;S.sentinel[S.nsentinel].serial=probe_tex->serial;S.nsentinel++;
+        if(!g_sent_seen){g_sent_seen=1;fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL_FIRST rt=%ux%u bpp=%u serial=%llu\n",probe_tex->width,probe_tex->height,probe_tex->bpp,(unsigned long long)probe_tex->serial);} }
     VkRenderPassBeginInfo begin={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=rp,.framebuffer=fb,
-       .renderArea={{0,0},{(G.diag_shape&4)&&width>16?16:width,(G.diag_shape&4)&&height>16?16:height}}};
+       .renderArea={{0,0},{(G.diag_shape&4)&&width>16?16:width,(G.diag_shape&4)&&height>16?16:height}},
+       .clearValueCount=probe_slot>=0?n:0,.pClearValues=probe_slot>=0?sent_clear:NULL};
     if(S.pass_ts&&S.npt<500){uint32_t q=S.npt*2;query_reserve(S.pass_ts,&S.pass_reset_count,q,2,1024);vkCmdWriteTimestamp(S.command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,S.pass_ts,q);
         S.pt[S.npt].q0=q;S.pt[S.npt].w=width;S.pt[S.npt].h=height;S.pt[S.npt].n=rt->n;
         S.pt[S.npt].key=(rt->color[0]?rt->color[0]->serial:0)*1315423911ULL^(rt->depth?rt->depth->serial:0);S.pt_draws0=G.draws;S.pt_open=1;}
@@ -4477,6 +4544,7 @@ uint64_t mtl_present(const tex_t *source,double period,const int crop[4]) {
                 memcpy(G.trace_shader,key,16);G.trace_shader[16]=0;
             }
             fprintf(stderr,"[nvn-vulkan] TRACE_NEXT_FRAME frame=%llu\n",(unsigned long long)G.present_count+2);}}
+    if(g_sent_on&&S.nsentinel==0){/* 上一帧探针已处理 */}
     warm_load();   /* 方案 A：首次出图时读清单 */
     { static int thr; if(g_warm_done_loaded&&!thr){thr=1;warm_start_thread();} }
     if(async_present){G.active=0;async_enqueue_locked(&S,1);uint64_t pticket=++G.present_count;if(g_pso_cache_dirty&&++g_pso_cache_presents>=300){g_pso_cache_presents=0;pso_cache_save();warm_flush();}pthread_mutex_unlock(&G.lock);return pticket;}
