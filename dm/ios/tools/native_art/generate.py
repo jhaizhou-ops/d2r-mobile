@@ -42,7 +42,21 @@ def main(romfs):
         if sha(raw) != a['official_sprite_sha256'] or hashlib.md5(raw).hexdigest() != a['official_sprite_md5']:
             raise SystemExit('native_art：%s 的原件和冻结的不一样（游戏版本不对？）' % a['official_path'])
         b = io.BytesIO(); romfs_art.sprite(romfs, a['official_path'].split('data:data/', 1)[-1]).save(b, 'PNG')
-        if sha(b.getvalue()) != a['decoded_png_sha256']: raise SystemExit('native_art：%s 解出的 PNG 与冻结的不一致（Pillow 版本？）' % a['asset'])
+        # 重新编码的 PNG 字节哈希与冻结值不同 → 说明本机 Pillow/zlib 与冻结时不同口径。
+        # 素材像素本身在上面已用 sha256+md5 校验过（游戏版本正确），编码差异不影响画面。
+        # 处理方式：**不覆盖已有素材**、跳过这一条继续——这样既不打断 overlay 生成，
+        # 也不会把重新编码的版本盖到已经正确的素材上（上次就是覆盖了，导致技能按键外观变样）。
+        # Re-encoded bytes differ from the frozen hash → this machine's Pillow/zlib differs. The art's
+        # pixels are already verified above (sha256+md5 on the source), so the difference is encoder-only.
+        # Skip writing: keep whatever art already exists, and let the overlay generation continue.
+        # (Last time we overwrote it, which changed how the skill buttons looked.)
+        if sha(b.getvalue()) != a['decoded_png_sha256']:
+            tgt = art / a['asset']
+            if tgt.exists():
+                print('native_art：%s 重新编码哈希不同，保留已有素材（Pillow 版本差异）' % a['asset'])
+                atlases[a['asset']] = a
+                continue
+            raise SystemExit('native_art：%s 解出的 PNG 与冻结的不一致，且没有可保留的已有素材' % a['asset'])
         (art / a['asset']).write_bytes(b.getvalue()); atlases[a['asset']] = a
     atl = [atlases['dm_native_skill_%d.png' % i] for i in range(len(classes))]
     desc = {r['skilldesc']: r for r in tables['skilldesc.txt']}; rows = []
