@@ -850,7 +850,7 @@ static void backend_init(void) {
     if(!G.control_cache)die("control cache allocation",0);
     {const char *d=getenv("DM_DIAG_BARRIER");G.diag_barrier=d?atoi(d):0;G.barrier_stats=getenv("DM_BARRIER_STATS")!=NULL;
      const char *ls=getenv("DM_DIAG_LOADSTORE");G.diag_loadstore=ls?atoi(ls):0;g_sent_on=getenv("DM_PASS_SENTINEL")!=NULL;{const char *vl=getenv("DM_ATT_LOAD_SKIP");g_load_skip=vl?atoi(vl):0;}   /* 默认关：哨兵探针实测有通道只覆盖 8%（见附十六） */if(g_load_skip)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_SKIP on：颜色附件 loadOp=DONT_CARE\n");if(g_sent_on)fprintf(stderr,"[nvn-vulkan] PASS_SENTINEL on（附件覆盖率哨兵探针）\n");
-     g_cov_table=getenv("DM_ATT_LOAD_TABLE")!=NULL;if(g_cov_table)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_TABLE on：按覆盖率表逐通道决定颜色 loadOp（表外一律 LOAD）\n");
+     {const char *ct=getenv("DM_ATT_LOAD_TABLE");g_cov_table=ct?atoi(ct):0;}   /* 注意：必须读值，不能只看 getenv 非空——app_jni 会把它设成 "0" */if(g_cov_table)fprintf(stderr,"[nvn-vulkan] ATT_LOAD_TABLE on：按覆盖率表逐通道决定颜色 loadOp（表外一律 LOAD）\n");
      if(G.diag_loadstore)fprintf(stderr,"[nvn-vulkan] DIAG_LOADSTORE mode=%d (timing diagnostic only; render output is intentionally incorrect)\n",G.diag_loadstore);
      fprintf(stderr,"[nvn-vulkan] DIAG_SWITCHES profile_detail=%d resource_stats=%d disable_resource_cache=%d diag_loadstore=%d query_batch=%d command_cache=%d\n",G.profile_detail,getenv("DM_RESOURCE_STATS")!=NULL,G.disable_resource_cache,G.diag_loadstore,!G.disable_query_batch,G.enable_command_cache);
      if(G.diag_barrier)fprintf(stderr,"[nvn-vulkan] DIAG_BARRIER mode=%d (timing diagnostic only; GPU synchronization is intentionally incorrect)\n",G.diag_barrier);}
