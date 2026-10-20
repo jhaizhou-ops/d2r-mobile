@@ -53,8 +53,16 @@ dm/android/tools/gen_overlay.sh
 #    If assets were generated before and you only want to repackage:
 #    DM_ASSETS_REUSE=1 dm/android/tools/gen_overlay.sh
 
-# 2) Build the native library
+# 2) Configure and build the native library (the build directory is not in the repository, so a new machine
+#    configures it once)
+SDK=${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}
+NDK=$SDK/ndk/27.2.12479018
+cmake -S dm/android -B dm/android/build -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+      -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release
 cd dm/android/build && ninja
+#    Configure checks for gen-assets/native_art/dm_touch_native_art.c from step 1; if the assets were generated
+#    elsewhere, point DM_GEN_ASSETS=/path/to/gen-assets at them (or copy dm/android/build/gen-assets wholesale).
 
 # 3) Package the APK (output: dm/android/build/apk/d2r-mobile-android-<version>+<build>.apk, e.g.
 #    d2r-mobile-android-0.2-native-android-port+20261020.apk; the version comes from AndroidManifest.xml, the build number

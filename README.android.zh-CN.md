@@ -53,8 +53,15 @@ dm/android/tools/gen_overlay.sh
 #    若资源已生成过、只想重打包，可用 DM_ASSETS_REUSE=1 跳过重复解包
 #    DM_ASSETS_REUSE=1 dm/android/tools/gen_overlay.sh
 
-# 2) 编译原生库
+# 2) 配置并编译原生库（构建目录不进仓库，新机器第一次要配置）
+SDK=${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}
+NDK=$SDK/ndk/27.2.12479018
+cmake -S dm/android -B dm/android/build -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+      -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release
 cd dm/android/build && ninja
+#    配置时会检查第 1 步产出的 gen-assets/native_art/dm_touch_native_art.c；资源若在别处生成，
+#    用 DM_GEN_ASSETS=/path/to/gen-assets 指过去（或把 dm/android/build/gen-assets 整块拷过来）。
 
 # 3) 打包 APK（产物：dm/android/build/apk/d2r-mobile-android-<版本>+<构建号>.apk，例 d2r-mobile-android-0.2-native-android-port+20261020.apk；
 #    版本号取自 AndroidManifest.xml，构建号缺省当天日期，可用 DM_APK_BUILD 覆盖）
