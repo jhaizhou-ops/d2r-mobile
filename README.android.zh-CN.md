@@ -6,6 +6,16 @@ English: [README.android.md](README.android.md) · 主仓库说明: [README.zh-C
 
 > **状态：开发中。** Android 端已经能完整游玩（进游戏、战斗、存档、设置、触屏操控全部可用），但性能尚未达到 iOS 端的 60 fps 水准——当前实测 **30–40 fps**（视分辨率档，见下文「实测性能」）。发版前的目标与已知限制都写在本文档里。
 
+## 截图
+
+*角色选择（触屏点选，右侧是存档位列表）*
+
+![角色选择](docs/images/android-character-select.jpg)
+
+*游戏内：左下虚拟摇杆、右下技能轮盘、底栏与快捷栏（营地，标准档 2322×1080）*
+
+![游戏内](docs/images/android-gameplay.jpg)
+
 ---
 
 ## 1. 你需要准备什么
@@ -22,7 +32,7 @@ English: [README.android.md](README.android.md) · 主仓库说明: [README.zh-C
 
 **已实测设备**：Xiaomi 22081212C（Snapdragon 8+ Gen 1 / Adreno 730 / Android 16，12 GB）——本文档中所有性能数据都来自这台。
 
-### 1.2 游戏文件
+### 1.2 游戏文件k
 
 **你必须拥有正版游戏。** 仓库里没有、以后也不会有任何游戏文件。需要 Switch 版 **1.0.34.0**（对应 PC 版 **3.3.94012**）的两部分：
 

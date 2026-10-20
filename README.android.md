@@ -6,6 +6,16 @@
 
 > **Status: in development.** The Android build is fully playable (into a game, combat, saves, settings, the complete touch scheme), but it does not yet reach the iOS build's 60 fps — it currently measures **30–40 fps** depending on the resolution tier (see "Measured performance" below). The release target and the known limits are both documented here.
 
+## Screenshots
+
+*Character select (tap to pick a save slot from the list on the right)*
+
+![Character select](docs/images/android-character-select.jpg)
+
+*In game: virtual stick bottom-left, skill wheel bottom-right, HUD and belt (camp, standard tier 2322×1080)*
+
+![In game](docs/images/android-gameplay.jpg)
+
 ---
 
 ## 1. What you need
