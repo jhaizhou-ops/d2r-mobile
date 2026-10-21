@@ -10,11 +10,11 @@ English: [README.android.md](README.android.md) · 主仓库说明: [README.zh-C
 
 *角色选择（触屏点选，右侧是存档位列表）*
 
-![角色选择](docs/images/android-character-select.jpg)
+![角色选择](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-character-select.jpg)
 
 *游戏内：左下虚拟摇杆、右下技能轮盘、底栏与快捷栏（营地，标准档 2322×1080）*
 
-![游戏内](docs/images/android-gameplay.jpg)
+![游戏内](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-gameplay.jpg)
 
 ---
 

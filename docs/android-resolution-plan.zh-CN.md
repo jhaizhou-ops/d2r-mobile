@@ -1021,11 +1021,11 @@ NVN → Vulkan 移植在 **22081212C / Adreno 730** 上，营地标准档（2270
 
 营地（角色与 NPC 交涉），标准档输出 2270×1056：
 
-![屏幕 1](images/android-camp.png)
+![屏幕 1](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-camp.png)
 
 营地向另一侧移动后（镜头跟随、小地图与技能栏正常）：
 
-![屏幕 2](images/android-field.png)
+![屏幕 2](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-field.png)
 
 ## 性能现状（营地，60 帧窗口）
 

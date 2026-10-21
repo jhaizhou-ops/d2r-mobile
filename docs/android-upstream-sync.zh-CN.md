@@ -60,8 +60,8 @@
   标准档勾选；点「高清」→ `sw_custom.txt` 里 `q_res=2`、日志「已落盘」，点回「标准」→ `q_res=1`。
 - 营地帧率 36–39 fps（标准档，与本文档记录一致）。
 
-![自定义页语言行](images/android-custom-language-2026-10-21.jpg)
-![自定义页分辨率行](images/android-custom-resolution-2026-10-21.jpg)
+![自定义页语言行](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-custom-language-2026-10-21.jpg)
+![自定义页分辨率行](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-custom-resolution-2026-10-21.jpg)
 
 ### 0.5 这次发现的问题
 

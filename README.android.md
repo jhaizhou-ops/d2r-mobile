@@ -10,11 +10,11 @@
 
 *Character select (tap to pick a save slot from the list on the right)*
 
-![Character select](docs/images/android-character-select.jpg)
+![Character select](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-character-select.jpg)
 
 *In game: virtual stick bottom-left, skill wheel bottom-right, HUD and belt (camp, standard tier 2322×1080)*
 
-![In game](docs/images/android-gameplay.jpg)
+![In game](https://github.com/vickwv/d2r-mobile/releases/download/assets/android-gameplay.jpg)
 
 ---
 
