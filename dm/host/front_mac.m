@@ -281,8 +281,9 @@ void front_run(void (*guest)(void)) {
             // again on the next mouse movement, so there is no hide / unhide count to balance. The timer runs in the default run-loop mode only, so menus, live resize and modal dialogs
             // (key mapping, name input box) never hide it. Hides only while the App is frontmost, the game window is key, the pointer is inside the window's content area and no mouse button is held.
             // Delay: defaults write org.d2rmobile.mac CursorHideSeconds -float <seconds> (the older-API build's bundle identifier is org.d2rmobile.mac.m3; 0 = off), default 3 seconds
-            { NSNumber *pref = [NSUserDefaults.standardUserDefaults objectForKey:@"CursorHideSeconds"]; double idle = pref ? pref.doubleValue : 3.0;
-              if (idle > 0) { __block NSPoint last = NSMakePoint(NAN, NAN); __block double since = 0; __block BOOL hid = NO;
+            { id pref = [NSUserDefaults.standardUserDefaults objectForKey:@"CursorHideSeconds"];   // 手写的设置可能是任何类型：只认数字或数字字符串，数组、日期等当没设 | a hand-written default can be any type: only a number or numeric string counts, an array, date etc. is treated as unset
+              double idle = [pref respondsToSelector:@selector(doubleValue)] ? [pref doubleValue] : 3.0;
+              if (idle > 0 && isfinite(idle)) { __block NSPoint last = NSMakePoint(NAN, NAN); __block double since = 0; __block BOOL hid = NO;
                   LOG("鼠标指针：静止 %.1f 秒自动隐藏 | pointer auto-hides after %.1f s at rest", idle, idle);
                   [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) { (void)t;
                       NSPoint m = NSEvent.mouseLocation; double now = NSProcessInfo.processInfo.systemUptime;
