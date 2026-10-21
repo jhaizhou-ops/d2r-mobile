@@ -261,6 +261,11 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
     /* loadOp=DONT_CARE 默认关：哨兵探针实测某个 2270x1056 通道只覆盖 8%，换 DONT_CARE 会露未定义内容。
        要试就写 env.txt 的 DM_ATT_LOAD_SKIP=1。 */
     setenv("DM_ATT_LOAD_SKIP","0",1);
+    /* 查询前缀预重置（更少更长通道）默认开：冷机营地/复杂死亡画面 fps 持平，总流量 −30~38%；
+       深坑热机战斗仍可能掉 1–2 fps。运行中 prereset.txt=0 或启动 marker 可回退。 */
+    setenv("DM_QUERY_PRERESET","1",1);
+    path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-prereset");
+    if(access(driver_option,F_OK)==0)setenv("DM_QUERY_PRERESET","0",1);
     path(driver_option,sizeof driver_option,port_root,"diagnostics/disable-att-load-skip");
     if(access(driver_option,F_OK)==0)setenv("DM_ATT_LOAD_SKIP","0",1);
     /* 逐通道查表（DM_ATT_LOAD_TABLE）默认开（2026-10-20 晚）。开之前已经用探针把

@@ -217,6 +217,8 @@ iOS 版能稳定 60 fps，Android 目前视档位在 **30–40 fps**（高清 30
 | `att-load-table.txt` | 逐通道覆盖率表的**运行中开关**：`1` 开 / `0` 关，每窗口读一次；冲突隔离后拒绝再开 |
 | `attskip.txt` | 附件 store 跳过：`5` 默认（深度+绿色颜色）/`1` 只深度/`0` 全不跳；删文件回默认 |
 | `depthload.txt` | 深度 load 跳过：`1` 默认开 /`0` 关；删文件回默认 |
+| `prereset.txt` | 查询预重置/更少长通道：`1` 默认开 /`0` 关；删文件回默认 |
+| `disable-prereset` | 启动时关掉通道合并（默认开；建文件后重启生效） |
 | `enable-att-skip` / `disable-att-skip` | 启动时 store 跳过开关（默认 `5`；disable → `0`） |
 | `disable-cov-depth` | 启动时关掉深度 load 跳过（默认开；建文件后重启生效） |
 | `enable-att-load-table` / `disable-att-load-table` | 启动时开/关逐通道 `loadOp` 覆盖率表（默认开；回退与实测见 `docs/android-resolution-plan.zh-CN.md` 附二十） |
