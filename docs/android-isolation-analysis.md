@@ -2,6 +2,7 @@
 
 > 写作约定：本仓库文档一律用大白话；中文不好说的词直接用英文（比如 git conflict、merge）。
 > 本文回答一个问题：**怎么别再让上游更新跟我们打架。**
+> 先看整体长什么样（分层、文件职责、启动链路）：[android-code-structure.zh-CN.md](android-code-structure.zh-CN.md)。
 
 ## 一句话总结
 
