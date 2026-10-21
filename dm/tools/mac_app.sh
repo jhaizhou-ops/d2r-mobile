@@ -67,6 +67,11 @@ fi
 # DM_MAC_ICON_SOURCE=<image>: the picture for the App icon, by default the repository's own iOS icon (ios/Assets.xcassets/AppIcon.appiconset/AppIcon1024.png); =none builds without an icon.
 # Use an opaque, full-bleed square: from macOS 26 on the system rounds the corners itself; a picture with transparent margins (the pre-macOS 26 way of drawing) was shown shrunk inside a gray frame on macOS 27
 ICON_SRC=${DM_MAC_ICON_SOURCE:-$DM/ios/Assets.xcassets/AppIcon.appiconset/AppIcon1024.png}; ICON_KEY=
+# 没设 DM_MAC_ICON_SOURCE、仓库里又没有缺省图（比如只拷了部分源码的目录）：照常出包、不带图标，只提示一句；设了却找不到图才算错
+# DM_MAC_ICON_SOURCE not set and the repository's default image is missing (e.g. a tree with only part of the sources): build as usual without an icon and just say so; only a set but missing image is an error
+if [ -z "${DM_MAC_ICON_SOURCE:-}" ] && [ ! -f "$ICON_SRC" ]; then
+  echo "提示：仓库里没有缺省图标 ${ICON_SRC}，这个包不带图标 | note: the repository's default icon ${ICON_SRC} is missing; building without an icon"; ICON_SRC=none
+fi
 if [ "$ICON_SRC" != none ]; then
   [ -f "$ICON_SRC" ] || { echo "🔴 DM_MAC_ICON_SOURCE 指的图不存在：$ICON_SRC"; exit 2; }
   ICONSET="$RES/AppIcon.iconset"; mkdir "$ICONSET"

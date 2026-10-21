@@ -91,6 +91,12 @@ class MacBundleTest(unittest.TestCase):
         self.assertIn('product=', (linked_res/'paths.txt').read_text())
         self.assertFalse((linked_res/'romfs').exists())
         self.assertFalse((linked_res/'product').exists())
+        self.assertNotIn('CFBundleIconFile', plistlib.loads((self.root/'linked/D2R Mobile.app/Contents/Info.plist').read_bytes()))
+        self.assertFalse((linked_res/'AppIcon.icns').exists())
+        missing_icon = subprocess.run(['bash', str(dm/'tools/mac_app.sh'), str(self.root/'no icon')],
+                                      env=dict(linked_env, DM_MAC_ICON_SOURCE=str(self.root/'missing.png')), capture_output=True, text=True)
+        self.assertNotEqual(missing_icon.returncode, 0)
+        self.assertIn('DM_MAC_ICON_SOURCE', missing_icon.stdout)
         (product/'external.link').symlink_to(self.root/'main.c')
         rejected = subprocess.run(['bash', str(dm/'tools/mac_app.sh'), str(self.root/'rejected')],
                                   env=env, capture_output=True, text=True)
