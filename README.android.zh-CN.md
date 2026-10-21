@@ -130,6 +130,10 @@ d2r-mobile-android-<versionName>+<构建号>.apk
 
 macOS 自带的 bash 3.2 与 BSD `sort`（没有 `-V`）都已兜底，不需要额外装 GNU 工具。
 
+### 2.4 代码结构
+
+分层（Java 壳 → JNI → 原生宿主 → 共享 `dm/host` → 原版模块）、`dm/android/` 每个文件的职责、启动装配顺序、
+与 iOS / 上游共享代码的边界和三条改法，都在 [docs/android-code-structure.zh-CN.md](docs/android-code-structure.zh-CN.md)。
 
 ---
 

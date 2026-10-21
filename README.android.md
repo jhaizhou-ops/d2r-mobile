@@ -139,6 +139,12 @@ macOS's stock bash 3.2 and BSD `sort` (no `-V`) are both handled; no GNU tooling
 
 ---
 
+### 2.4 Code structure
+
+The layering (Java shell → JNI → native host → shared `dm/host` → original modules), what every file under
+`dm/android/` does, the startup assembly order, and the boundary / update rules for the code shared with iOS and
+upstream are documented in [docs/android-code-structure.zh-CN.md](docs/android-code-structure.zh-CN.md) (Chinese).
+
 ## 3. Controls
 
 - **Touch**: the full scheme — virtual stick bottom-left, skill wheel bottom-right, a bottom bar with
