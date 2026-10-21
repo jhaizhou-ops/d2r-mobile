@@ -27,6 +27,11 @@ export DM_TOUCH_TWO_CARDS=1
 # Android-only: the Custom page gets one more row "Resolution" (Battery saver / Standard / High, writing dm_custom.c's q_res, effective at the next launch).
 # The iOS package does not set this variable, so its layout is unchanged word for word (the same additive platform switch as DM_TOUCH_TWO_CARDS).
 export DM_TOUCH_RES_TIER=1
+# Android 专属：自定义页语言行里「Русский」那一格加宽（西里尔字母比英文 / 西语宽，200 单位会折成「Русски / й」）。
+# iOS 出包不设这个变量，那边布局逐字不变（同 DM_TOUCH_TWO_CARDS 的加法式平台开关）。
+# Android-only: the 「Русский」cell of the Custom page's language row is widened (Cyrillic is wider than English / Spanish; 200 units wrap it into 「Русски / й」).
+# The iOS package does not set this variable, so its layout is unchanged word for word (the same additive platform switch as DM_TOUCH_TWO_CARDS).
+export DM_TOUCH_LANG_RU_WIDE=1
 
 # 原版衍生资源（底部 UI v4、加宽储藏箱、百宝囊框、选角面板、小地图终点…）的落点：dm/android/build/gen-assets，
 # 不再写 iOS 的源码树。gen_paths.gen_dir() 认这个环境变量（iOS 出包不设，缺省仍是 dm/ios/Gen/assets）。

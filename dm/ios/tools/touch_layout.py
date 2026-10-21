@@ -1264,7 +1264,14 @@ _CUSTOM_LANG_HINT = ''.join('        { "type": "TextBoxWidget", "name": "TouchCu
 # The language row is four side-by-side options "中文 / English / Español / Русский" (radio: host dm_custom.c makes the four checkboxes mutually exclusive, storing one key lang).
 # This row must show Chinese characters in every UI: the default Formal font of the English / Spanish / Russian UI has no Chinese glyphs, so these text widgets specify the original global font BlizzardGlobal
 # (the original title page, party names etc. likewise specify it per widget). The Русский checkbox stays in the checkbox column of the other rows (x 1315); Español, English and 中文 sit to its left in turn
-_LANG_ZH_X, _LANG_EN_X, _LANG_ES_X, _LANG_RU_X = (220, 430), (515, 725), (810, 1020), (1105, 1315)   # （文字 x，勾选框 x）；文字 200 宽：English / Español / Русский 在 180 宽里会被折成「Englis h」（真机截图）；四项一组，最后一格留在各行勾选框那一列（x 1315） | (text x, checkbox x); text 200 wide: at 180 wide English / Español / Русский wrap to "Englis h" (device screenshot); four options in a group, the last one stays in the checkbox column of the other rows (x 1315)
+_LANG_ZH_X, _LANG_EN_X, _LANG_ES_X, _LANG_RU_X = (220, 430), (515, 725), (810, 1020), (1105, 1315)   # （文字 x，勾选框 x）；文字 200 宽：English / Español 在 180 宽里会被折成「Englis h」（真机截图）；四项一组，最后一格留在各行勾选框那一列（x 1315） | (text x, checkbox x); text 200 wide: at 180 wide English / Español wrap to "Englis h" (device screenshot); four options in a group, the last one stays in the checkbox column of the other rows (x 1315)
+# 「Русский」是西里尔字母，比 English / Español 宽：200 单位的框装不下，会在词中间折成「Русски / й」（2026-10-21 安卓真机截图，
+# 见 docs/android-upstream-sync.zh-CN.md §0.5）。安卓打包传 DM_TOUCH_LANG_RU_WIDE=1，把俄语那一格的文字框往左让出 50 单位（250 宽）；
+# iOS 出包不带这个变量，布局逐字不变（与 DM_TOUCH_TWO_CARDS / DM_TOUCH_RES_TIER 同一套加法式平台开关）。
+# 「Русский」is Cyrillic, wider than English / Español: it does not fit in a 200-unit box and wraps mid-word into 「Русски / й」 (Android device screenshot, 2026-10-21,
+# see docs/android-upstream-sync.zh-CN.md §0.5). Android packaging passes DM_TOUCH_LANG_RU_WIDE=1, giving the Russian cell's text box 50 more units to the left (250 wide);
+# the iOS package does not set it, so its layout is unchanged word for word (the same additive platform switch as DM_TOUCH_TWO_CARDS / DM_TOUCH_RES_TIER).
+_RU_TEXT_X = _LANG_RU_X[0] - (50 if os.environ.get('DM_TOUCH_LANG_RU_WIDE') else 0)
 def _custom_lang_row():
     y, h = _CUSTOM_Y[0], 112; cy = y + (h - 70) // 2   # 标签、两个选项排在这一行的上 112，下面 68 留给提示那一句 | The label and the two options go in the top 112 of this row; the bottom 68 is left for the hint sentence
     def text(name, x, w, key): return ('        { "type": "TextBoxWidget", "name": "%s", "fields": { "rect": { "x": %d, "y": %d, "width": %d, "height": %d }, "text": "@%s", "style": "$StyleSettingsText", "style/fontFace": "BlizzardGlobal" } },\n' % (name, x, y, w, h, key))
@@ -1279,7 +1286,7 @@ def _custom_lang_row():
             + text('TouchCustomLangZh_Text', _LANG_ZH_X[0], _LANG_ZH_X[1] - _LANG_ZH_X[0] - 10, 'dmCustomLangZh') + box('TouchCustom_lang_zh', _LANG_ZH_X[1])
             + text('TouchCustomLangEn_Text', _LANG_EN_X[0], _LANG_EN_X[1] - _LANG_EN_X[0] - 10, 'dmCustomLangEnOpt') + box('TouchCustom_lang_en', _LANG_EN_X[1])
             + text('TouchCustomLangEs_Text', _LANG_ES_X[0], _LANG_ES_X[1] - _LANG_ES_X[0] - 10, 'dmCustomLangEsOpt') + box('TouchCustom_lang_es', _LANG_ES_X[1])
-            + text('TouchCustomLangRu_Text', _LANG_RU_X[0], _LANG_RU_X[1] - _LANG_RU_X[0] - 10, 'dmCustomLangRuOpt') + box('TouchCustom_lang_ru', _LANG_RU_X[1]))
+            + text('TouchCustomLangRu_Text', _RU_TEXT_X, _LANG_RU_X[1] - _RU_TEXT_X - 10, 'dmCustomLangRuOpt') + box('TouchCustom_lang_ru', _LANG_RU_X[1]))
 # 「分辨率」（仅 Android，DM_TOUCH_RES_TIER=1 时才有这一行）：省电 / 标准 / 高清 并排单选，存一个键 q_res（0/1/2）。
 # 改了这一项要**重启游戏**才生效：出图分辨率是启动时按预算一次算好的（docs/android-resolution-plan.zh-CN.md）。
 # "Resolution" (Android only, this row exists only when DM_TOUCH_RES_TIER=1): Battery saver / Standard / High side by side, storing one key q_res (0/1/2).
