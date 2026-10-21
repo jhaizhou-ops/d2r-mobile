@@ -1,5 +1,5 @@
 #include "../nvn/nvn_dirty.h"
-/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android-isolation-analysis.md）==== */
+/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android/isolation-analysis.zh-CN.md）==== */
 #include "../nvn/nvn_vk_pool_upload.h"
 /* ==== ANDROID-END ==== */
 #include "../../host/dm.h"

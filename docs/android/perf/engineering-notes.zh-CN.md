@@ -4,8 +4,8 @@
 > 写给以后接着干的人（或 AI）。
 > **写作约定**：一律用大白话；中文不好说的词直接用英文（比如 git conflict、merge、loadOp）。
 > 不写"密码本"式缩写，不堆看不懂的表格；一句话说不清就多写几句。
-> **配套文档**：`docs/android-perf-lessons.zh-CN.md`（踩过的坑和规矩）、
-> `docs/android-isolation-analysis.md`（怎么和上游代码隔离）。
+> **配套文档**：`docs/android/perf/lessons.zh-CN.md`（踩过的坑和规矩）、
+> `docs/android/isolation-analysis.zh-CN.md`（怎么和上游代码隔离）。
 
 ---
 
@@ -52,7 +52,7 @@
   摘了零收益；
 - 其余三个提交是 Mac 鼠标/iPhone 全屏之类的平台专属，或者互相抵消，没内容可摘。
 
-结论：等下一批。判断细节记在 `docs/android-isolation-analysis.md`。
+结论：等下一批。判断细节记在 `docs/android/isolation-analysis.zh-CN.md`。
 
 ### 0.5 上游作者给的六条建议，我们逐条的落实
 
@@ -71,7 +71,7 @@
 > 修掉该键后 0 条新增颜色假绿。2026-10-21 起颜色 load + 绿色颜色 store + 深度 load 默认开，
 > 营地总流量 −24%、深坑 −37%；冷机复测通道合并再把营地压到 −53%、深坑 −60%（fps 冷机持平，
 > 热机战斗仍可能 −1~2 fps），收益是带宽/热余量（附二十二）。
-> 细节与下一步在 `docs/android-resolution-plan.zh-CN.md` 附二十。
+> 细节与下一步在 `docs/android/resolution-plan.zh-CN.md` 附二十。
 > 第 2 条（动态 3D 降档）仍未重评；3 仍是测量欠账；第 4 条也没动。
 
 1. ~~**load/store 带宽优化重开**（最大项）~~ → 精确版已实现（按 PassKey+尺寸查表决定颜色 loadOp），
@@ -89,7 +89,7 @@
 
 ### 0.8 关于"第三方性能文档"的说明（历史）
 
-docs 下有一份 `ANDROID_PERF_NOTES.zh-CN.md`，是合并前快照时代的核对清单，**行号路径全过期**，
+docs 下有一份 `docs/android/perf/upstream-checklist.zh-CN.md`，是合并前快照时代的核对清单，**行号路径全过期**，
 只有历史价值，别拿它当最新指南。我们审计过：约 85% 内容属实，需修正的 6 点已并入本文档。
 
 ---

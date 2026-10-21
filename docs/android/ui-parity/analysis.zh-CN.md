@@ -5,13 +5,13 @@
 > 直接复用，工作量全在"写一个 Android 外壳 + 接线"。
 > **现在还有用吗**：当参考稿看。这套方案后来**已经实施了相当一部分**（触摸覆盖层等已在设备上
 > 实际运行），所以文中引用的旧路径/行号只是历史对照。要了解整机现状看
-> `docs/android-perf-notes.md`；要接着做这条线，先对照代码复核文中各子项的实际完成度。
+> `docs/android/perf/engineering-notes.zh-CN.md`；要接着做这条线，先对照代码复核文中各子项的实际完成度。
 
 > **状态：方案评审稿 —— 未动任何代码。** 评审定稿后才进入实施；实现开始前把本文转成英文版 `ANDROID_UI_PARITY.md`（仓库惯例：英文主文档 + 简体中文对照，见 ANDROID.md / ANDROID.zh-CN.md）。
 >
-> 实现级设计（接口快照 / JNI 面 / 分阶段伪码 / 验收钩子 / 陷阱清单）：[ANDROID_UI_PARITY_IMPL.zh-CN.md](ANDROID_UI_PARITY_IMPL.zh-CN.md)。
+> 实现级设计（接口快照 / JNI 面 / 分阶段伪码 / 验收钩子 / 陷阱清单）：[docs/android/ui-parity/implementation.zh-CN.md](implementation.zh-CN.md)。
 >
-> 相关文档：[ANDROID.zh-CN.md](ANDROID.zh-CN.md)（总体移植计划：图形层、平台探针、阶段划分）、[VK_RENDER_PROGRESS.zh-CN.md](VK_RENDER_PROGRESS.zh-CN.md)（渲染进度实测）、[VK_CORRECTNESS_PLAN.zh-CN.md](VK_CORRECTNESS_PLAN.zh-CN.md)（画面正确性）。
+> 相关文档：`ANDROID.zh-CN.md`（总体移植计划：图形层、平台探针、阶段划分）、`VK_RENDER_PROGRESS.zh-CN.md`（渲染进度实测）、`VK_CORRECTNESS_PLAN.zh-CN.md`（画面正确性）。
 >
 > 基线：分支 `android-ours`（单提交 `0149751`），merge-base `9f0c257`，`origin/main` 领先 **41** 个提交（2026-10-16 实测；上游持续提交，rebase 时以当日值为准）。本文所有结论带 `file:line` 证据，调研由 6 个并行子线程完成（触摸链路 / overlay / Android 现状 / iOS 外壳 / 提交审计 / 下游消费）。
 

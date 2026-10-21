@@ -18,7 +18,7 @@
   800p / 1080p / 原生，宽度由高度乘屏比）；老版本曾硬编码 2624×1220。`DM_GAME_RES` 仍最优先（上限 3840×2160）。
   本机默认档（标准）是 2322×1080，与旧的 2624×1220 比例相同（2.151）；**出图与 SurfaceView 严格同比例**，
   下面说的横向多拉只可能发生在 SurfaceView（2624 宽）→ 面板（2712 宽）这一段，与档位无关。
-  现行档位数值见 [android-resolution-plan.zh-CN.md](android-resolution-plan.zh-CN.md) 附十九。
+  现行档位数值见 [docs/android/resolution-plan.zh-CN.md](resolution-plan.zh-CN.md) 附十九。
 - **本机实测**（adb，2026-10-18）：`model 22081212C`，物理 **1220×2712**、density 480 → 横屏 2712×1220 = **20:9**；出图 2624×1220 = 19.35:9 → **横向多拉 3.3%**。
 - **安卓的呈现方式**：`vkCmdBlitImage` 的 `dstOffsets` = 整个 swap extent（`dm/gfx/nvn/nvn_vk.c:3443-3451`）→ **拉满整屏，不保比例、不留黑边**。iOS 相反：保比例居中留边（`dm/gfx/nvn/nvn_mtl.m:5928`），而且 iOS 的出图 = 屏幕原生尺寸，所以那边天然没这个问题。
 - **后果**：中心对齐（中线处误差为 0），**越靠屏幕边误差越大**。本机上底栏最右的雕像翼尖约差 17px、屏幕最右约差 40px——所以"底栏全对"的验收没错，只是差得看不出来。
@@ -28,10 +28,10 @@
 | 事实 | 位置 |
 |---|---|
 | 游戏 UI 坐标：**2160 单位 = 界面高**，原点在**屏幕水平中线** | `dm/host/dm_cursor.c:2751`（`ui_hit_rect` 的换算） |
-| 界面**画布宽度 = min(屏宽, 4560) 单位 = 19:9**，更宽的屏两侧留边柱（2624 宽时每侧约 26px） | `docs/android-perf-notes.md:280` |
+| 界面**画布宽度 = min(屏宽, 4560) 单位 = 19:9**，更宽的屏两侧留边柱（2624 宽时每侧约 26px） | `docs/android/perf/engineering-notes.zh-CN.md:280` |
 | 宽高比上限由宿主喂给游戏：`max(19/9, 出图宽/高)`；界面边柱着色器再 +0.15 把柔边推出屏 | `dm/host/thread.c:23-37`（Android 侧槽位见 `dm/android/thread_slots.c:22`） |
 | 出图默认档写死 2624×1220，`DM_GAME_RES` 可覆盖 | `dm/android/diagnostics.c:250-260` |
-| 画质档 `diagnostics/quality.txt` 一次写"出图 + 3D 比例"，默认 `2624-075`（世界 1968×915） | `dm/android/app_jni.c:384-397`、`docs/android-perf-notes.md` §7.5 |
+| 画质档 `diagnostics/quality.txt` 一次写"出图 + 3D 比例"，默认 `2624-075`（世界 1968×915） | `dm/android/app_jni.c:384-397`、`docs/android/perf/engineering-notes.zh-CN.md` §7.5 |
 | 呈现 = 拉伸拉满整屏（无黑边） | `dm/gfx/nvn/nvn_vk.c:3443-3451` |
 | 触摸层喂进去的是 **dp** + DisplayCutout / 手势条安全区 | `dm/android/src/org/d2r/binaryprobe/TouchControlsView.java:97`、`dm/ios/Sources/dm_touch_controls.c:35-39` |
 | 窄画面（16:9 / iPad 留边）已经处理过一例：换组键右移避开雕像翼尖 | `dm/ios/Sources/dm_touch_controls.c:72-78` |
@@ -41,7 +41,7 @@
 1. **出图分辨率跟着屏幕比例走**（核心，几行）
    把默认档从写死的 `2624×1220` 改成"高 1220 × 宽 = round(1220 × 屏宽/屏高) 取偶"。这正是档名"真窗口 1:1 无拉伸"本来想表达的意思，只是常量写死了。
    改完之后越宽的比例也不会拉伸：因为游戏画布被夹在 19:9（4560 单位）时，多出来的宽度由它自己的边柱吸收，游戏的横竖比例恢复 1:1（本机 0.5648 px/单位，两边同一把尺子）。
-   注意：窗口贴图是**启动时一次建好**的，之后只能改里面的"出图区域"（`docs/android-perf-notes.md` §7.1）——启动时给屏幕原生值即可，改这个默认值不受影响。
+   注意：窗口贴图是**启动时一次建好**的，之后只能改里面的"出图区域"（`docs/android/perf/engineering-notes.zh-CN.md` §7.1）——启动时给屏幕原生值即可，改这个默认值不受影响。
 2. **贴物理屏幕边的元素改成贴"界面画布边"**
    画布宽 = `min(屏宽, 屏高 × 19/9)`。受影响的是技能弧（`main_x = width − 56k`）与右上角地图键（`width − 30k`）：本机（20:9）差约 **23dp**，21:9 上约 **45dp**，会落进游戏的边柱里、离 HUD 变远。位置在 `dm/ios/Sources/dm_touch_controls.c` 的 `dm_tc_layout_make`。
 3. **参考系自检**（同一把尺子存了三份：生成器 / iOS / 安卓）
@@ -71,6 +71,6 @@ adb shell wm size reset; adb shell wm density reset
 
 ## 6. 相关文档
 
-- `docs/android-ios-parity-plan.zh-CN.md` §6 遗留（本条的登记处）
-- `docs/android-perf-notes.md` §7（出图分辨率机制与上限、窗口贴图的一次性）
-- `docs/ANDROID_UI_PARITY.zh-CN.md` §2.1（哪一层复用、哪一层必须按平台重写）
+- `docs/android/ui-parity/plan.zh-CN.md` §6 遗留（本条的登记处）
+- `docs/android/perf/engineering-notes.zh-CN.md` §7（出图分辨率机制与上限、窗口贴图的一次性）
+- `docs/android/ui-parity/analysis.zh-CN.md` §2.1（哪一层复用、哪一层必须按平台重写）

@@ -30,7 +30,7 @@ static const char *const k_keys[] = { "lang", "auto_mana", "merc_pot", "drop_lig
 #define NK (int)(sizeof k_keys / sizeof *k_keys)
 static const int k_def[NK] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
 #if defined(__ANDROID__)
-                               1,   // q_res 缺省 1 = 标准档（1080p，世界预算 1.10 MP；见 docs/android-resolution-plan.zh-CN.md 附十九） | q_res default 1 = standard tier (1080p, 1.10 MP world budget; see docs/android-resolution-plan.zh-CN.md appendix 19)
+                               1,   // q_res 缺省 1 = 标准档（1080p，世界预算 1.10 MP；见 docs/android/resolution-plan.zh-CN.md 附十九） | q_res default 1 = standard tier (1080p, 1.10 MP world budget; see docs/android/resolution-plan.zh-CN.md appendix 19)
 #endif
                                0, 1, 1, 0 };   // 缺省值：省电模式（30 帧）缺省关、3D 画质缺省流畅优先（q3d=0），换组默认在传送门左侧，其余缺省开 | Defaults: power-saving mode (30 fps) off, 3D quality smoothness first (q3d=0), switch left of portal by default, everything else on
 // q3d（3D 画质）：0 = 流畅优先（掉帧就自动降 3D 比例）、1 = 画质优先（不自动降）。生效 = 调 hle_oe.c 的 dm_3d_quality_mode_set，读盘与点「应用」时当场调，下一帧控制器就按新档走。
@@ -118,9 +118,9 @@ int dm_custom_lang_explicit(void) { load_once(); return atomic_load(&g_loaded) ?
 int dm_fps_setting(void) { return dm_custom_get("eco_fps") ? 30 : 60; }   // 图形层 nvn_mtl.m mtl_fps_target 每帧读（弱符号的强定义） | Read every frame by mtl_fps_target in the graphics layer nvn_mtl.m (strong definition of a weak symbol)
 #if defined(__ANDROID__)
 // 分辨率档（键 q_res）：0 = 省电、1 = 标准（缺省）、2 = 高清。启动时由 dm/android/diagnostics.c 的 front_game_res 与
-// dm/host/hle_oe.c 的 3D 比例反算读取（出图分辨率启动时定死，所以改了要重启游戏）。预算见 docs/android-resolution-plan.zh-CN.md。
+// dm/host/hle_oe.c 的 3D 比例反算读取（出图分辨率启动时定死，所以改了要重启游戏）。预算见 docs/android/resolution-plan.zh-CN.md。
 // Resolution tier (key q_res): 0 = battery saver, 1 = standard (default), 2 = high. Read at startup by front_game_res in
-// dm/android/diagnostics.c and by the 3D-scale derivation in dm/host/hle_oe.c (the output resolution is fixed at startup, so a change needs a restart). Budgets: docs/android-resolution-plan.zh-CN.md.
+// dm/android/diagnostics.c and by the 3D-scale derivation in dm/host/hle_oe.c (the output resolution is fixed at startup, so a change needs a restart). Budgets: docs/android/resolution-plan.zh-CN.md.
 int dm_custom_res_tier(void) {
     const char *e = getenv("DM_QUALITY_TIER");   /* quality.txt / flag / env.txt 的档位覆盖优先于界面设置 | the tier override from quality.txt / flag / env.txt wins over the UI setting */
     if (e && *e) { int t = atoi(e); return t < 0 ? 0 : t > 2 ? 2 : t; }

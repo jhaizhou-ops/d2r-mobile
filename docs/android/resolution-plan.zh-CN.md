@@ -1,7 +1,7 @@
 # 安卓分辨率与画质档：适配方案（v2 · 2026-10-18 晚，按真机实测修订）
 
 > **一句话**：**屏幕尺寸是唯一输入**，出图分辨率、3D 比例、UI 画布是**三个派生值**。目标是"任何比例的机器都等比（不拉伸、不加黑边）、任何性能的机器都落在同一成本带、玩家有 3 档可选"。
-> 配套的问题记录：[`docs/android-screen-adaptation.zh-CN.md`](android-screen-adaptation.zh-CN.md)；性能实测：[`docs/android-perf-notes.md`](android-perf-notes.md) §0.2 / §7.5 / §7.8。
+> 配套的问题记录：[`docs/android/screen-adaptation.zh-CN.md`](screen-adaptation.zh-CN.md)；性能实测：[`docs/android/perf/engineering-notes.zh-CN.md`](perf/engineering-notes.zh-CN.md) §0.2 / §7.5 / §7.8。
 
 ## v2 改了什么（相对 v1 的 5 处）
 
@@ -25,7 +25,7 @@
 2. **已完成功能不变**：`quality.txt` < `flag-*` < `env.txt` 的优先级、`DM_GAME_RES` / `DM_3D_SCALE` 的单值覆盖语义**全部保留**；老档名不再识别（见 §3②）。
 3. **出图分辨率只能在启动时定**（窗口贴图启动时一次建好）；**3D 比例可以运行中改**。
 4. **比例永远等于 SurfaceView 的比例**：宽高由同一个 `k` 推出，取偶误差 ≤1px；不允许拉伸，也不允许为某台机器加黑边。
-5. 推覆盖层到设备后必须 `chmod -R 777`，否则 App 进不去目录、游戏 UI 初始化直接挂（见 [`docs/android-upstream-sync.zh-CN.md`](android-upstream-sync.zh-CN.md) §5-3）。
+5. 推覆盖层到设备后必须 `chmod -R 777`，否则 App 进不去目录、游戏 UI 初始化直接挂（见 [`docs/android/upstream-sync.zh-CN.md`](upstream-sync.zh-CN.md) §5-3）。
 
 ## 1. 现状（实测 + 代码位置）
 
@@ -35,7 +35,7 @@
 | 出图分辨率 | **写死 2624×1220**（= Surface，1:1，无拉伸） | `dm/android/diagnostics.c:250-261` |
 | 呈现 | 出图 `vkCmdBlitImage` 拉满 Surface（同尺寸时 1:1） | `dm/gfx/nvn/nvn_vk.c` `mtl_present`（约 3443 行） |
 | 3D 比例 | 安卓缺省 **0.75**（iOS 同款），动态降档 0.72 → 0.70，**硬下限 0.70** | `dm/host/hle_oe.c:389-393` |
-| 游戏 UI 画布 | 宽度硬上限 **4560 单位 = 19:9**，高度 2160 单位 | `docs/android-perf-notes.md:280` |
+| 游戏 UI 画布 | 宽度硬上限 **4560 单位 = 19:9**，高度 2160 单位 | `docs/android/perf/engineering-notes.zh-CN.md:280` |
 | 画质档 | 6 个"出图×比例"组合（2624-075 / 2168-075 / 1080-080 / 2624-085 / 2624-100 / 1600-100） | `dm/android/app_jni.c:410-432` |
 | 窗口尺寸 | **已经拿得到**：`nativeSurface()` 存进 `window_state` | `dm/android/app_jni.c:457-470`、`services_platform.h:38` |
 | **写死清单**（本方案要清掉的） | `diagnostics.c:260` 默认 `2624×1220`；`app_jni.c:418-422` 档位表里的 6 个分辨率字面量 | 见 §3 ①② |
@@ -238,7 +238,7 @@ adb shell wm size reset
 
 每档看三件事：①有没有黑边/拉伸（出图比例必须等于 Surface 比例）；②底栏格子与药水格是否对齐；③技能弧/地图键是否在屏内。
 3. **帧率**（本机营地，冷机起测、热机取末 30 秒）：`standard` 应 ≥27、`low` ≥30；日志里 GPU 工作量应落在 25–29ms；
-4. **回归**：语言、建角、背包、选项、自定义页、暂停菜单各点一遍（清单见 `docs/android-ui-parity-lessons.zh-CN.md`）。
+4. **回归**：语言、建角、背包、选项、自定义页、暂停菜单各点一遍（清单见 `docs/android/ui-parity/lessons.zh-CN.md`）。
 
 ## 5. 风险与取舍
 

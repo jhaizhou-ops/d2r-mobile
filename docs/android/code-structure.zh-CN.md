@@ -3,9 +3,9 @@
 > **这份文档是什么（人话）**：Android 版从 Java 壳到底层 Vulkan 回放、再到原版游戏模块的完整落地图——哪个目录、哪个文件干什么，
 > 启动时按什么顺序装配，和上游 / iOS 共享的那一半边界在哪，想改一处东西该去哪个文件。
 > **给谁看**：第一次读 Android 代码的人（含 AI），以及加功能 / 调性能 / 同步上游之前要先定位的人。
-> **不在这里重复**：构建步骤见 [README.android.zh-CN.md](../README.android.zh-CN.md) §2，运行期开关见它 §5，
-> 改上游文件的硬性规矩见 [android-isolation-analysis.md](android-isolation-analysis.md)，每次同步的记录见
-> [android-upstream-sync.zh-CN.md](android-upstream-sync.zh-CN.md)，与 iOS 的功能对照见 [ANDROID_UI_PARITY.zh-CN.md](ANDROID_UI_PARITY.zh-CN.md)。
+> **不在这里重复**：构建步骤见 [README.android.zh-CN.md](../../README.android.zh-CN.md) §2，运行期开关见它 §5，
+> 改上游文件的硬性规矩见 [docs/android/isolation-analysis.zh-CN.md](isolation-analysis.zh-CN.md)，每次同步的记录见
+> [docs/android/upstream-sync.zh-CN.md](upstream-sync.zh-CN.md)，与 iOS 的功能对照见 [docs/android/ui-parity/analysis.zh-CN.md](ui-parity/analysis.zh-CN.md)。
 
 ---
 
@@ -174,7 +174,7 @@ APK 里的宿主代码**大部分不是 Android 目录写的**，而是与 iOS /
 | `hle_tact` | 同上（BLTE / 瞄准 / 渲染门） |
 | `hle_count` / `hle_fdstat` / `hle_table` | Mac 诊断 / `getdtablesize` / swhle 段，安卓编了没用 |
 
-往共享文件里写代码只有三种合法手法（细则见 [android-isolation-analysis.md](android-isolation-analysis.md)「硬性规矩」）：
+往共享文件里写代码只有三种合法手法（细则见 [docs/android/isolation-analysis.zh-CN.md](isolation-analysis.zh-CN.md)「硬性规矩」）：
 
 1. **双分支** `#ifdef __ANDROID__ … #else … #endif`；
 2. **小钩子**：共享文件里只留一两行带 `#ifdef __ANDROID__` 的调用，实现放 `dm/android/`；
@@ -283,5 +283,5 @@ python3 dm/host/tests/native_write_scan.py --selftest dm/host   # 不写原版�
 python3 dm/host/tests/widget_cache_scan.py --selftest dm/host
 ```
 
-真机自检、诊断开关与性能档见 [README.android.zh-CN.md](../README.android.zh-CN.md) §4–§6；
-性能经验与坑见 [android-perf-lessons.zh-CN.md](android-perf-lessons.zh-CN.md)。
+真机自检、诊断开关与性能档见 [README.android.zh-CN.md](../../README.android.zh-CN.md) §4–§6；
+性能经验与坑见 [docs/android/perf/lessons.zh-CN.md](perf/lessons.zh-CN.md)。

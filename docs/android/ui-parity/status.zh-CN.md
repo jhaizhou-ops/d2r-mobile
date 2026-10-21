@@ -50,7 +50,7 @@ Android 的**交互算法已经是 iOS 同一套**（`dm_touch_controls.c` 共�
    ① 给 Android 的文件层加"先查 overlay 目录、再查镜像"（照 hle_fs.c 的 DM_ROMFS_OVERLAY 语义）；
    ② 跑 iOS 那两个生成器（`gen_assets.py` / `gen_romfs_overlay.py`，需要玩家自己的 RomFS 源文件）；
    ③ 生成物推到设备或打进包。收益：底栏按键字母变透明、"按 A 使用"变"双击使用"、金色 X 等
-   16 项文案/图标差异（详见 `docs/ANDROID_UI_PARITY.zh-CN.md` §4.2）。
+   16 项文案/图标差异（详见 `docs/android/ui-parity/analysis.zh-CN.md` §4.2）。
 2. **面板开合自动切模式**：需要"当前场景/面板栈"读数。iOS 用 `dm_hud_stack_msg()` +
    `dm_tc_panel_mode()`（共享代码现成），但 Android 这条路要有原始游戏场景观察桥（91738 未映射，
    见 `touch_controls_android.c` 顶部注释）——做了这个，模式切换钮就可以退休。

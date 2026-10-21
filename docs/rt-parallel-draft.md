@@ -40,7 +40,7 @@ RENDER_RT_FRAME_SEG segments=5 ops=36326
 ```
 
 切分点：42（g1→UI 大段）、13088（→世界大段）、36254（→UI 尾段），每帧固定。
-实测数据与踩坑见 `android-resolution-plan.zh-CN.md` 附十；关键一条：组别只能在 `OP_SET_RT`
+实测数据与踩坑见 `docs/android/resolution-plan.zh-CN.md` 附十；关键一条：组别只能在 `OP_SET_RT`
 重算并缓存，逐条分类要 -3%。开关 `diagnostics/rtseg.txt`（0 关 / 1 组别 / 2 分段表）。
 
 ---
@@ -71,4 +71,4 @@ eager 两队列版进程 CPU 到 159%（两线程确在并行），但 GPU 侧�
 2. **延迟提交会摧毁 CPU/GPU 重叠**。任何「攒完再一起提交」的方案，都要先量这一项。
 3. 隔离实验（单线程复现同一个机制）比继续调两线程更省时间。
 
-详细数据见 `android-resolution-plan.zh-CN.md` 附十二、附十三。
+详细数据见 `docs/android/resolution-plan.zh-CN.md` 附十二、附十三。

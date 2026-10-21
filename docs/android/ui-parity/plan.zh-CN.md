@@ -128,7 +128,7 @@
 >
 > **明确不在本方案范围的（README 里其余部分）**：
 > - 性能数字（60 帧 / 1 秒进局 / 3.8W / 续航）：iPhone 实测值；Android 有独立性能线
->   （`docs/android-perf-notes.md`：默认档 2624-075、热包线等），本方案只负责把界面机制换成
+>   （`docs/android/perf/engineering-notes.zh-CN.md`：默认档 2624-075、热包线等），本方案只负责把界面机制换成
 >   iOS 那套，完成后性能线照旧跑。
 > - 安装/签名/游戏文件准备（`docs/GAME_FILES`、做包工具）：Android 是 APK + 外部数据目录
 >   （已就绪）。
@@ -423,7 +423,7 @@ P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插；P7 依赖 P
    要改两处：①出图分辨率跟屏幕比例走（核心，几行）；②贴物理屏边的元素（技能弧/地图键）改贴"界面画布边"
    = min(屏宽, 屏高×19/9)（20:9 差 23dp、21:9 差 45dp）。另加参考系自检 + 一行诊断日志。
    详情、已核实的事实清单（带 file:line）与一台机的测试方法（`adb shell wm size` 扫 7 档比例）：
-   [`docs/android-screen-adaptation.zh-CN.md`](android-screen-adaptation.zh-CN.md)。
+   [`docs/android/screen-adaptation.zh-CN.md`](../screen-adaptation.zh-CN.md)。
 
 ### 2026-10-18 补记：语言开关在安卓不生效 —— 已修，真机验过
 
@@ -446,7 +446,7 @@ P5 设置 / P6 文本 / P7 图标（互相独立，可并行穿插；P7 依赖 P
 ## 9. 教训与规矩（必读）
 
 做过一轮「建角 / 模式页 / 中文名 / 自动选怪 / 小地图」之后，把踩过的坑与由此定下的做事规矩单独记了一份：
-[`docs/android-ios-parity-lessons.zh-CN.md`](android-ios-parity-lessons.zh-CN.md)。
+[`docs/android/ui-parity/lessons.zh-CN.md`](lessons.zh-CN.md)。
 
 一句话：**iOS 那份就是规格 —— 改共享代码前先读上游怎么写；看不出问题就先拿读数把事实定住，别加代码去猜。**
 里面还有动手前的六条清单、共享文件"证明 iOS 逐字不变"的两种证法、以及地图那几层叠在一起的东西分别在哪。

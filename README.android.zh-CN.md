@@ -133,7 +133,7 @@ macOS 自带的 bash 3.2 与 BSD `sort`（没有 `-V`）都已兜底，不需要
 ### 2.4 代码结构
 
 分层（Java 壳 → JNI → 原生宿主 → 共享 `dm/host` → 原版模块）、`dm/android/` 每个文件的职责、启动装配顺序、
-与 iOS / 上游共享代码的边界和三条改法，都在 [docs/android-code-structure.zh-CN.md](docs/android-code-structure.zh-CN.md)。
+与 iOS / 上游共享代码的边界和三条改法，都在 [docs/android/code-structure.zh-CN.md](docs/android/code-structure.zh-CN.md)。
 
 ---
 
@@ -167,7 +167,7 @@ macOS 自带的 bash 3.2 与 BSD `sort`（没有 `-V`）都已兜底，不需要
 >
 > 热态自动降档在 Android 上**默认关**（`DM_3D_SCALE_DYN=1` 才开）：档位表 0.85 / 0.80 / 0.75 / 0.70 / 0.65，
 > 下限缺省 0.70；关着时 3D 比例就是上表那个固定值。详见
-> [docs/android-resolution-plan.zh-CN.md](docs/android-resolution-plan.zh-CN.md) 附十九。
+> [docs/android/resolution-plan.zh-CN.md](docs/android/resolution-plan.zh-CN.md) 附十九。
 
 改档需要重启游戏（出图分辨率在启动时定死）。
 
@@ -204,7 +204,7 @@ macOS 自带的 bash 3.2 与 BSD `sort`（没有 `-V`）都已兜底，不需要
 iOS 版能稳定 60 fps，Android 目前视档位在 **30–40 fps**（高清 30–35、标准/省电约 40）。
 标准档的瓶颈不在 GPU，而在**单条提交线程的串行工作量**（每帧约 1,977 笔绘制、3.6 万条指令）；
 世界像素拉高（3D 比例 0.90 以上 / 高清档）时更容易落到 30 fps 那一档。
-已做与已排除的优化项逐条记录在 [docs/android-resolution-plan.zh-CN.md](docs/android-resolution-plan.zh-CN.md)。
+已做与已排除的优化项逐条记录在 [docs/android/resolution-plan.zh-CN.md](docs/android/resolution-plan.zh-CN.md)。
 
 ---
 
@@ -225,7 +225,7 @@ iOS 版能稳定 60 fps，Android 目前视档位在 **30–40 fps**（高清 30
 | `disable-prereset` | 启动时关掉通道合并（默认开；建文件后重启生效） |
 | `enable-att-skip` / `disable-att-skip` | 启动时 store 跳过开关（默认 `5`；disable → `0`） |
 | `disable-cov-depth` | 启动时关掉深度 load 跳过（默认开；建文件后重启生效） |
-| `enable-att-load-table` / `disable-att-load-table` | 启动时开/关逐通道 `loadOp` 覆盖率表（默认开；回退与实测见 `docs/android-resolution-plan.zh-CN.md` 附二十） |
+| `enable-att-load-table` / `disable-att-load-table` | 启动时开/关逐通道 `loadOp` 覆盖率表（默认开；回退与实测见 `docs/android/resolution-plan.zh-CN.md` 附二十） |
 | `pass-sentinel` / `pass-sentinel-selftest` | 开哨兵探针给覆盖率表填数据（很慢，7–18fps；`selftest` 让探针自证会报红） |
 
 常用环境变量：
@@ -292,9 +292,9 @@ Android 端是这条技术路线的延伸，不是另起一摊。他本人这条
     `TouchControlsView.java` 从 78 行长到 465 行，绝大多数提交都在本分支。
   - **性能**：管线预热与清单自学习、附件带宽削减（营地 917 → 446 MB/帧）、翻译队列与出图节拍
     （营地 30 → 36.6 fps）、绑定计划与命令状态缓存、通道/查询/帧缓冲三线优化等。
-  - 实测数据与取舍记录见 [docs/ANDROID_PERF_NOTES.zh-CN.md](docs/ANDROID_PERF_NOTES.zh-CN.md)、
-    [docs/android-perf-lessons.zh-CN.md](docs/android-perf-lessons.zh-CN.md)，UI 与两端对齐见
-    [docs/ANDROID_UI_PARITY.zh-CN.md](docs/ANDROID_UI_PARITY.zh-CN.md)。
+  - 实测数据与取舍记录见 [docs/android/perf/upstream-checklist.zh-CN.md](docs/android/perf/upstream-checklist.zh-CN.md)、
+    [docs/android/perf/lessons.zh-CN.md](docs/android/perf/lessons.zh-CN.md)，UI 与两端对齐见
+    [docs/android/ui-parity/analysis.zh-CN.md](docs/android/ui-parity/analysis.zh-CN.md)。
 
 也感谢上游 [deko3d](https://github.com/devkitPro/deko3d)（`nvn_tex.c` 的块线性布局与对齐由它移植）、
 [Ryujinx](https://github.com/Ryujinx/Ryujinx)（着色器翻译库）与 [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)

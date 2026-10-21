@@ -4,11 +4,11 @@
 > 的性能经验逐条对照我们的仓库，列出"该做什么、优先级多高"。
 > **现在还有用吗**：基本只剩历史价值。清单里的事**到现在基本都做完了**（管线缓存落盘、带宽、
 > 翻译线程、测量工具……），而且当时引用的文件路径和行号是旧结构、早已对不上。
-> **别照这份干活。** 所有条目的最新结论都在 `docs/android-perf-notes.md`（大白话版）；踩坑规矩在
-> `docs/android-perf-lessons.zh-CN.md`。
+> **别照这份干活。** 所有条目的最新结论都在 `docs/android/perf/engineering-notes.zh-CN.md`（大白话版）；踩坑规矩在
+> `docs/android/perf/lessons.zh-CN.md`。
 
 > **状态：核对清单 v1 —— 未动任何代码。** 来源 = 上游来信（2026-10-16，iOS 实测经验）+ 5 路并发深度解剖（分块带宽 / 管线缓存 / 翻译线程 / 测量工具链 / 现成收益）。
-> 相关文档：[VK_RENDER_PROGRESS.zh-CN.md](VK_RENDER_PROGRESS.zh-CN.md)（实测日志）、[VK_CORRECTNESS_PLAN.zh-CN.md](VK_CORRECTNESS_PLAN.zh-CN.md)（正确性）、[ANDROID.zh-CN.md](ANDROID.zh-CN.md)（总体计划）、[ANDROID_UI_PARITY.zh-CN.md](ANDROID_UI_PARITY.zh-CN.md)（UI 对齐，独立工作线）。
+> 相关文档：`VK_RENDER_PROGRESS.zh-CN.md`（实测日志）、`VK_CORRECTNESS_PLAN.zh-CN.md`（正确性）、`ANDROID.zh-CN.md`（总体计划）、[docs/android/ui-parity/analysis.zh-CN.md](../ui-parity/analysis.zh-CN.md)（UI 对齐，独立工作线）。
 > **基线说明**：本文行号以本仓快照 `android-ours @ 0149751` 为准。你在跑 60fps 实验的树若领先于此快照，实施前先复核对应函数（尤其 `nvn_vk.c`）。
 > 所有"建议开关"遵循仓库既有风格（`DM_VK_*` env，启动时打印，便于 adb 核验）。
 

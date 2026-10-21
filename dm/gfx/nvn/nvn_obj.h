@@ -94,7 +94,7 @@ enum {
     OP_BIND_UBO, OP_BIND_SSBO, OP_BIND_TEX, OP_BIND_SAMP,
     OP_STENCIL, OP_POLY_OFFSET, OP_DRAW, OP_DRAW_IDX, OP_DISPATCH, OP_BARRIER,
     OP_SET_TEX_POOL, OP_SET_SAMP_POOL, OP_COPY_B2T, OP_COPY_STRIDE, OP_BLEND_COLOR, OP_COPY_T2B, OP_BIND_IMG, OP_COPY_T2T, OP_RESET_COUNTER, OP_CLEAR_TEX, OP_COPY_IMAGE_STRIDE,
-    /* ==== ANDROID-BEGIN（非上游新增区，见 docs/android-isolation-analysis.md）====
+    /* ==== ANDROID-BEGIN（非上游新增区，见 docs/android/isolation-analysis.zh-CN.md）====
      * 规矩：新的 op 一律追加在本区（保持在 OP_COUNT_ 之前、彼此相对顺序不变）；
      * 上游来合并时，他们的新 op 应插在 OP_CLEAR_TEX 之后、本区之前。严禁往枚举中间插——
      * 这些编号是"主程序 + 改写后的游戏模块"共用的暗号，两边必须同树一起重新生成（上游 #68 教训）。 */

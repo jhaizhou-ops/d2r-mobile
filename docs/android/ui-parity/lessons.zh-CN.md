@@ -13,7 +13,7 @@
 1. **上游 iOS 怎么做的？** —— `git show upstream/main:<文件>` 先读一遍。上游有就照上游，别自己发明。
    （「一比一对齐 iOS」是字面意思：iOS 的行为就是规格。）
 2. **这个文件是共享的吗？** —— `dm/host/**`、`dm/ios/tools/*.py`、`dm/ios/Sources/dm_touch_controls.c`、
-   `front.h` 都是**两端共用**（`docs/ANDROID_UI_PARITY.zh-CN.md` §3.2）。改它 = 改 iOS。
+   `front.h` 都是**两端共用**（`docs/android/ui-parity/analysis.zh-CN.md` §3.2）。改它 = 改 iOS。
 3. **iOS 会被我改坏吗？** —— 会的话，改成加法式平台开关，并**证明 iOS 产物逐字不变**（§2）。
 4. **我是在"读状态后动作"，还是在"跟游戏抢"？** —— 见 §3。
 5. **有没有读数能先证明我的假设？** —— 日志 / 诊断面板 / 截图量测，见 §4。
@@ -186,5 +186,5 @@ App（`u0_a214`）连目录都进不去 → 覆盖层整层读不到 → UI 初�
 | `1ce1e64` | 补上安卓缺的触屏点按自动选怪（`hle_target.c` 两端共用；入口少一句调用） |
 | `a8886e6` → `0a1999e` → `98d9c72` | 地图：先撤掉我自己发明的（替按/记状态/钉档位），回到上游；再修「点场景名把地图关了」与「进局地图是关的」 |
 | `7185abd` | 同步上游 10 个提交（到 v1.0.18）：2 个冲突都按「上游行 + ANDROID 区段」解；补 nvn 新 op 分发、触摸层接 `safe_bottom`/`swap_above`、摇杆浮动 |
-| `43394dc` | 同步收尾：`DM_ASSETS_REUSE`（只重出覆盖层、不重跑美术）+ `docs/android-upstream-sync.zh-CN.md`（下次照抄） |
+| `43394dc` | 同步收尾：`DM_ASSETS_REUSE`（只重出覆盖层、不重跑美术）+ `docs/android/upstream-sync.zh-CN.md`（下次照抄） |
 | `19c9a8d` | 新触摸外观一比一移植（Android 独占）+ 覆盖层推送 chmod 修进流程 |

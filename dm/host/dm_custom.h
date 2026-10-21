@@ -17,9 +17,9 @@ int dm_custom_lang_explicit(void);   // 语言开关（键 lang）在设置文�
 int dm_fps_setting(void);   // 省电模式（键 eco_fps，缺省关）：开 = 30 帧、关 = 60；nvn_mtl.m mtl_fps_target 读 | Power-saving mode (key eco_fps, off by default): on = 30 fps, off = 60; read by mtl_fps_target in nvn_mtl.m
 #if defined(__ANDROID__)
 // 分辨率档（键 q_res，Android 专属）：0 = 省电、1 = 标准（缺省）、2 = 高清。启动时读（出图分辨率启动时定死，改了要重启游戏）。
-// 预算见 docs/android-resolution-plan.zh-CN.md；front_game_res（dm/android/diagnostics.c）与 3D 比例（dm/host/hle_oe.c）各读一次。
+// 预算见 docs/android/resolution-plan.zh-CN.md；front_game_res（dm/android/diagnostics.c）与 3D 比例（dm/host/hle_oe.c）各读一次。
 // Resolution tier (key q_res, Android only): 0 = battery saver, 1 = standard (default), 2 = high. Read at startup (the output resolution is fixed then, so a change needs a restart).
-// Budgets: docs/android-resolution-plan.zh-CN.md; read once by front_game_res (dm/android/diagnostics.c) and by the 3D scale (dm/host/hle_oe.c).
+// Budgets: docs/android/resolution-plan.zh-CN.md; read once by front_game_res (dm/android/diagnostics.c) and by the 3D scale (dm/host/hle_oe.c).
 int dm_custom_res_tier(void);
 #endif
 

@@ -469,7 +469,7 @@ JNIEXPORT jint JNICALL Java_org_d2r_binaryprobe_GameActivity_nativeConfigure(JNI
       };
       /* 画质档（diagnostics/quality.txt，一行档名）：一次写好出图分辨率 + 3D 比例两个值。
          优先级：quality.txt < flag-* < env.txt（后两者都能覆盖单值）。2026-10-16 固化缺省档
-         = 2624-075（真窗口出图 1:1 + 世界 0.75 = 1968×915，docs/android-perf-notes.md §7）。
+         = 2624-075（真窗口出图 1:1 + 世界 0.75 = 1968×915，docs/android/perf/engineering-notes.zh-CN.md §7）。
          Quality tiers (diagnostics/quality.txt, one tier name per line): sets both the output
          resolution and the 3D scale at once. Precedence: quality.txt < flag-* < env.txt.
          Default since 2026-10-16 = 2624-075 (true-window 1:1 output + 0.75 world = 1968x915). */

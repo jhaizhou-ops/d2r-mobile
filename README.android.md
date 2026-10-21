@@ -143,7 +143,7 @@ macOS's stock bash 3.2 and BSD `sort` (no `-V`) are both handled; no GNU tooling
 
 The layering (Java shell → JNI → native host → shared `dm/host` → original modules), what every file under
 `dm/android/` does, the startup assembly order, and the boundary / update rules for the code shared with iOS and
-upstream are documented in [docs/android-code-structure.zh-CN.md](docs/android-code-structure.zh-CN.md) (Chinese).
+upstream are documented in [docs/android/code-structure.zh-CN.md](docs/android/code-structure.zh-CN.md) (Chinese).
 
 ## 3. Controls
 
@@ -180,7 +180,7 @@ from the tested phone (SurfaceView 2624×1220); other screens recompute with the
 >
 > Thermal downscaling is **off by default** on Android (it needs `DM_3D_SCALE_DYN=1`): levels
 > 0.85 / 0.80 / 0.75 / 0.70 / 0.65, floor 0.70. While it is off, the 3D scale is the fixed value in the
-> table above. Details: [docs/android-resolution-plan.zh-CN.md](docs/android-resolution-plan.zh-CN.md), appendix 19.
+> table above. Details: [docs/android/resolution-plan.zh-CN.md](docs/android/resolution-plan.zh-CN.md), appendix 19.
 
 Changing the tier requires restarting the game (the output resolution is fixed at startup).
 
@@ -224,7 +224,7 @@ iOS holds 60 fps; Android currently sits at **30–40 fps** depending on the tie
 and power saver about 40). At the standard tier the bottleneck is not the GPU but **the serial work of
 one submission thread** (about 1,977 draws and 36,000 commands per frame); with more world pixels
 (3D scale above 0.90, or the high tier) it more often lands in the 30 fps band. Every optimisation tried and every one ruled out is recorded in
-[docs/android-resolution-plan.zh-CN.md](docs/android-resolution-plan.zh-CN.md) (Chinese).
+[docs/android/resolution-plan.zh-CN.md](docs/android/resolution-plan.zh-CN.md) (Chinese).
 
 ---
 
@@ -246,7 +246,7 @@ them):
 | `disable-prereset` | startup rollback for the pass merge (default on; create and restart) |
 | `enable-att-skip` / `disable-att-skip` | startup store-elision switch (default `5`; disable -> `0`) |
 | `disable-cov-depth` | startup rollback for depth load elision (default on; create the file and restart) |
-| `enable-att-load-table` / `disable-att-load-table` | turn the per-pass `loadOp` coverage table on/off at startup (default on; rollback and evidence in appendix 20 of `docs/android-resolution-plan.zh-CN.md`) |
+| `enable-att-load-table` / `disable-att-load-table` | turn the per-pass `loadOp` coverage table on/off at startup (default on; rollback and evidence in appendix 20 of `docs/android/resolution-plan.zh-CN.md`) |
 | `pass-sentinel` / `pass-sentinel-selftest` | sentinel probe used to fill the coverage table (slow, 7–18 fps; `selftest` proves the probe can report red) |
 
 Frequently used environment variables:
@@ -323,9 +323,9 @@ On top of that there are two more layers:
     917 -> 446 MB/frame), the translation queue and present pacing (camp 30 -> 36.6 fps), binding-plan and
     command-state caching, and optimisations along the pass/query/framebuffer lines.
   - The measurements and the decisions behind them are in
-    [docs/ANDROID_PERF_NOTES.zh-CN.md](docs/ANDROID_PERF_NOTES.zh-CN.md) and
-    [docs/android-perf-lessons.zh-CN.md](docs/android-perf-lessons.zh-CN.md); UI and iOS parity are covered in
-    [docs/ANDROID_UI_PARITY.zh-CN.md](docs/ANDROID_UI_PARITY.zh-CN.md) (all Chinese).
+    [docs/android/perf/upstream-checklist.zh-CN.md](docs/android/perf/upstream-checklist.zh-CN.md) and
+    [docs/android/perf/lessons.zh-CN.md](docs/android/perf/lessons.zh-CN.md); UI and iOS parity are covered in
+    [docs/android/ui-parity/analysis.zh-CN.md](docs/android/ui-parity/analysis.zh-CN.md) (all Chinese).
 
 Thanks also to upstream [deko3d](https://github.com/devkitPro/deko3d) (the block-linear layout and alignment
 in `nvn_tex.c` are ported from it), [Ryujinx](https://github.com/Ryujinx/Ryujinx) (the shader translation

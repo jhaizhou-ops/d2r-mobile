@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 同步面审计：数一数"我们 vs 上游"改了哪些文件、动上游文件的数量有没有涨。
-# 每次迭代收尾跑一遍；规矩见 docs/android-isolation-analysis.md「硬性规矩」。
+# 每次迭代收尾跑一遍；规矩见 docs/android/isolation-analysis.zh-CN.md「硬性规矩」。
 set -u
 cd "$(git rev-parse --show-toplevel)"
 
@@ -44,4 +44,4 @@ echo "=== 规矩提醒 ==="
 echo "· 改动文件(冲突面)数量只许降或持平；涨了要在提交说明里写原因"
 echo "· 新代码进 dm/android/ 或新文件；动上游文件用：双分支 / 小钩子 / ANDROID-BEGIN 区段"
 echo "· 枚举编号严禁中间插；改编号必须同树重新生成游戏模块"
-echo "· 策略表（唯一权威）：docs/android-isolation-analysis.md 文末"
+echo "· 策略表（唯一权威）：docs/android/isolation-analysis.zh-CN.md 文末"

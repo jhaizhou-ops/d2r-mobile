@@ -11,14 +11,14 @@ int nvn_dirty_tracked(const void *addr, size_t len);
 void nvn_dirty_protect(const void *addr, size_t len);              // 覆盖页设只读 | Set the covered pages read-only
 uint64_t nvn_dirty_now(void);                                      // 当前代号：上传前取，作为该份内容的戳 | Current generation: taken before upload, as the stamp of that content
 int nvn_dirty_since(const void *addr, size_t len, uint64_t stamp); // 覆盖页在戳之后被写过 → 1 | Covered pages were written after the stamp -> 1
-/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android-isolation-analysis.md）==== */
+/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android/isolation-analysis.zh-CN.md）==== */
 int nvn_dirty_next_range(const void *addr, size_t len, uint64_t stamp, size_t *cursor, size_t *offset, size_t *range_len); // 下一个代号大于戳的连续页段（相对 addr；未跟踪时返回剩余全段） | Next contiguous page span newer than stamp (offset from addr; untracked ranges return the remaining span)
 /* ==== ANDROID-END ==== */
 void nvn_dirty_stats(uint64_t *faults, uint64_t *preps);           // 累计：游戏写触发的缺页次数、宿主写前解保护的页数 | Cumulative: number of page faults triggered by game writes, number of pages unprotected before host writes
 void nvn_dirty_mp_stats(uint64_t *calls, uint64_t *pages, uint64_t *ns);   // 累计：本模块 mprotect 调用次数、覆盖页数、耗时 | Cumulative: this module's mprotect call count, pages covered, time spent
 void nvn_dirty_slot_stats(int *live, int *used_slots, uint64_t *adds_total); // 当前存活槽、槽表高水位、登记总次数 | Currently live slots, slot table high-water mark, total number of registrations
 
-/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android-isolation-analysis.md）==== */
+/* ==== ANDROID-BEGIN（非上游新增区，见 docs/android/isolation-analysis.zh-CN.md）==== */
 typedef struct {
     uint64_t calls,page_reads,block_reads,skipped_pages,range_fast_paths;
 } NvnDirtyQueryStats;

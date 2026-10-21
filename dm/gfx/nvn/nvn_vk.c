@@ -95,7 +95,7 @@ static uint64_t g_writes_sum, g_writes_max, g_writes_n;
 static uint64_t g_op_hist[256];
 /* 按 RT 分类的组别统计 + 分段表：0 世界(3D) / 1 全屏(UI) / 2 其它。
    组别只随 OP_SET_RT 变化，所以结果缓存在 g_rtgrp_cur，绝不在逐条回放里解引用
-   RT→附件指针（实测那种逐条分类要 -0.9fps / 3%，见 docs/android-resolution-plan.zh-CN.md 附十）。
+   RT→附件指针（实测那种逐条分类要 -0.9fps / 3%，见 docs/android/resolution-plan.zh-CN.md 附十）。
    组间切换次数 = 并行可行性的关键；每段起始 op 序号用于确认切分点每帧稳定。
    RT-class group stats + segment table: 0 world (3D) / 1 full-screen (UI) / 2 other.
    The group changes only at OP_SET_RT, so it is cached in g_rtgrp_cur and never recomputed
@@ -542,7 +542,7 @@ static void sentinel_complete(VkSubmission *sub);
    只有表里判 green 的颜色附件才用 loadOp=DONT_CARE，**表里没有的一律 LOAD**。
    键必须是 (归一化 PassKey, w, h, format, is_depth)——PassKey 只含附件格式/loadOp/layout，
    不含尺寸：同一个 PassKey 在 2270×1056 上 19.9% 未覆盖、在 800×600 上却是 green
-   （docs/android-resolution-plan.zh-CN.md 附十六）。归一化 = 把 load/store op 置零再哈希，
+   （docs/android/resolution-plan.zh-CN.md 附十六）。归一化 = 把 load/store op 置零再哈希，
    否则探针自己把 loadOp 改成 CLEAR 会让键变来变去、永远查不中。
    落盘是 TSV（不是二进制）：能 diff、能 grep、能手工删掉可疑行，和 pso_manifest.tsv 同一套习惯。
    来源两个：随包种子 <shader_root>/pass-coverage.tsv + 运行目录追加（读时按行合并）。

@@ -2,7 +2,7 @@
 
 > **这份文档是什么**：在小米 22081212C（骁龙 8+ Gen 1 手机）上做 Android 移植性能优化时，
 > 我们踩过的坑。每条都写清楚：当时发生了什么、为什么、以后定什么规矩。
-> **详细的过程和数字**在 `docs/android-perf-notes.md` 里；这份只留"别再踩"的结论。
+> **详细的过程和数字**在 `docs/android/perf/engineering-notes.zh-CN.md` 里；这份只留"别再踩"的结论。
 > **怎么用**：动手调参数、做对比测试之前，先把文末的自检清单过一遍；遇到眼熟的现象，直接翻对应条目。
 
 ## 快速速查（一张表看完 16 个坑）
@@ -258,4 +258,4 @@ uniform 缓冲在内存池里的地址都不一样），不是"假失效"。校�
 | `dm/host/hle_oe.c`（`android_scale3d_tick` 调用点） | 3D 分辨率的应用时机 |
 | `dm/gfx/nvn/nvn_vk.c`（`cov_*` / `COV_DECISION`） | 逐通道覆盖率表：探针填表、查表改 loadOp、冲突停表 |
 | `dm/gfx/nvn/pass-coverage.tsv` | 随包种子（只收颜色附件；红键 = 实测漏过像素） |
-| `docs/android-perf-notes.md` | 所有数字、决定、实验过程的详细版 |
+| `docs/android/perf/engineering-notes.zh-CN.md` | 所有数字、决定、实验过程的详细版 |

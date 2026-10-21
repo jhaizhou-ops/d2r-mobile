@@ -3,10 +3,10 @@
 > **这份文档是什么（人话）**：上面那份"实施方案"的**细节版**——接口快照、要改哪些文件、
 > JNI 怎么接、伪代码、验收办法、容易踩的坑。同样写于"还没动代码"的时候。
 > **现在还有用吗**：当参考稿看；文中路径/行号是旧快照时代的，对不上现在的代码。
-> 现状看 `docs/android-perf-notes.md`；继续做这条线前先对照代码复核完成度。
+> 现状看 `docs/android/perf/engineering-notes.zh-CN.md`；继续做这条线前先对照代码复核完成度。
 
 > **状态：实现前置设计稿 —— 未动任何代码。**
-> 总纲（结论 / 差距矩阵 / 阶段划分 / 隔离协议 / 决策点）见 [ANDROID_UI_PARITY.zh-CN.md](ANDROID_UI_PARITY.zh-CN.md)。
+> 总纲（结论 / 差距矩阵 / 阶段划分 / 隔离协议 / 决策点）见 [docs/android/ui-parity/analysis.zh-CN.md](analysis.zh-CN.md)。
 > 本文给出**可直接照做的实现细节**：接口快照、文件级改动、JNI 面、伪码、iOS 参照行号、验收钩子、陷阱清单。
 >
 > - 实现目标契约 = **`origin/main` 版本**（rebase 后；当前分支的触摸模型是旧版）。
