@@ -2,6 +2,7 @@
 # devbattery.sh 单测：假读数（DEVBATTERY_FAKE）+ 临时目录，不碰设备。期望值按规则手算：不在充时 < 30 拒并落标记、标记在时 < 60 拒、≥ 60 撤标记放行；接电且在充时 ≥ 20 放行（撤标记）、< 20 拒；读不到拒
 # Unit test for devbattery.sh: fake readings (DEVBATTERY_FAKE) + a temporary directory, never touching a device. Expected values computed by hand from the rules: not charging < 30 refuses and drops the marker, with the marker < 60 refuses, >= 60 removes the marker and releases; plugged in and charging >= 20 releases (removing the marker), < 20 refuses; unreadable refuses
 cd "$(dirname "$0")"; T=$(mktemp -d); export DEVBATTERY_DIR=$T;   # 单测一律写临时目录，不碰 $DM_ROOT/run/ios 的真日志与告警 | Unit tests always write to a temporary directory and never touch the real logs and alerts in $DM_ROOT/run/ios
+: > $T/empty.env   # 空的本机配置：DM_LOCAL_ENV 要指向存在的普通文件才算数（/dev/null 不算，会落到 dm/ios/local.env） | An empty local configuration: DM_LOCAL_ENV only counts when it names an existing regular file (/dev/null does not, and would fall through to dm/ios/local.env)
  source ./devbattery.sh; bad=0
 ck() { local want=$1 got; shift; DEVBATTERY_FAKE="$*" devbattery_gate 2>/dev/null; got=$?; [ "$got" = "$want" ] && echo "通 $* → $got" || { echo "不通 $* → ${got}（期望 ${want}）"; bad=1; }; }
 ck 0 80 0 1 1          # 80%：放行 | 80%: pass
@@ -21,19 +22,14 @@ ck 0 20 1 1 0          # 接电在充、20%：等于门槛放行 | Plugged in an
 # 本机缺 timeout：与设备离线分开报，返回 3（PATH 换成只有基本命令的目录，UDID 给个假的；期望按规则：读电量前先找工具，找不到即 3）
 # timeout missing locally: reported separately from a device being offline, returns 3 (PATH is replaced by a directory with only basic commands, the UDID is a fake one; expected by rule: the tools are looked up before the battery is read, and not finding them gives 3)
 E=$T/emptybin; mkdir -p $E; for c in date mkdir dirname cat head awk; do ln -s "$(command -v $c)" $E/$c; done
-( PATH=$E DM_IOS_UDID=fake DM_DEVBATTERY=1; unset DEVBATTERY_FAKE; devbattery_gate > $T/miss.out 2>&1; echo $? > $T/miss.rc )
+( PATH=$E DM_IOS_UDID=fake; unset DEVBATTERY_FAKE; devbattery_gate > $T/miss.out 2>&1; echo $? > $T/miss.rc )
 [ "$(cat $T/miss.rc)" = 3 ] && grep -q "本机缺读电量要用的命令" $T/miss.out && ! grep -q "离线" $T/miss.out && echo "通 缺 timeout → 3，报缺命令不报离线" || { echo "不通 缺 timeout → $(cat $T/miss.rc)：$(head -1 $T/miss.out)"; bad=1; }
 out=$(DEVBATTERY_FAKE="50 0 1 0" devbattery_gate 2>&1); case "$out" in *供电跟不上*) echo "通 插电不充记红";; *) echo "不通 插电不充没记红"; bad=1;; esac
 out=$(DEVBATTERY_FAKE="99 0 1 0" devbattery_gate 2>&1); case "$out" in *供电跟不上*) echo "不通 99% 停充被当成供电跟不上"; bad=1;; *) echo "通 99% 停充不记红";; esac
-DEVBATTERY_FAKE= DM_DEVBATTERY=1 DM_IOS_UDID=00000000-0000000000000000 devbattery_gate 2>/dev/null && { echo "不通 读不到却放行"; bad=1; } || echo "通 读不到拒"
+DEVBATTERY_FAKE= DM_IOS_UDID=00000000-0000000000000000 devbattery_gate 2>/dev/null && { echo "不通 读不到却放行"; bad=1; } || echo "通 读不到拒"
 grep -q '读不到' $T/battery.log && echo "通 读不到记「读不到」" || { echo "不通 读不到没记对"; bad=1; }
-DEVBATTERY_FAKE= DM_DEVBATTERY=1 DM_IOS_UDID= DM_LOCAL_ENV=/dev/null HOME=$T devbattery_gate 2>/dev/null && { echo "不通 没配 UDID 却放行"; bad=1; } || echo "通 没配 UDID 拒"
+DEVBATTERY_FAKE= DM_IOS_UDID= DM_LOCAL_ENV=$T/empty.env HOME=$T devbattery_gate 2>/dev/null && { echo "不通 没配 UDID 却放行"; bad=1; } || echo "通 没配 UDID 拒"
 grep -q '没配 UDID' $T/battery.log && echo "通 没配 UDID 记「没配 UDID」" || { echo "不通 没配 UDID 没分开记"; bad=1; }
-# 上面三条读不了电量的用例都是严格模式（DM_DEVBATTERY=1，测试机）；缺省（不设）时没配 UDID、本机缺工具只提示一行放行，给自己的手机装包不被卡住
-# The three unreadable cases above run in strict mode (DM_DEVBATTERY=1, test devices); by default (unset) no UDID and missing local tools only print one notice line and release, so installing onto your own phone is not held up
-DEVBATTERY_FAKE= DM_DEVBATTERY= DM_IOS_UDID= DM_LOCAL_ENV=/dev/null HOME=$T devbattery_gate 2> $T/skip.out && grep -q '电量闸跳过' $T/skip.out && echo "通 缺省 没配 UDID → 提示放行" || { echo "不通 缺省 没配 UDID 没放行"; bad=1; }
-( PATH=$E DM_IOS_UDID=fake DM_DEVBATTERY=; unset DEVBATTERY_FAKE; devbattery_gate > $T/miss2.out 2>&1; echo $? > $T/miss2.rc )
-[ "$(cat $T/miss2.rc)" = 0 ] && grep -q '电量闸跳过' $T/miss2.out && echo "通 缺省 缺 timeout → 提示放行" || { echo "不通 缺省 缺 timeout → $(cat $T/miss2.rc)"; bad=1; }
 # 拔电走网络：ideviceinfo 换成必失败的假命令；App 读数文件新鲜按它判，过期且声明局内判 → 放行（有暂停标记仍拒），过期不声明 → 读不到拒
 # Unplugged over the network: ideviceinfo replaced with a command that always fails; a fresh App reading file is used, stale with an in-run check declared -> released (still refused with the pause marker), stale without -> unreadable, refused
 F=$T/fbin; mkdir -p $F; printf '#!/bin/sh\nexit 1\n' > $F/ideviceinfo; chmod +x $F/ideviceinfo; U=00000000-1111; rm -f $T/device_low_battery
@@ -57,7 +53,6 @@ L2=$T/device2.lock; rm -f $T/device_low_battery
 ( unset DM_DEVBATTERY; DM_DEVBATTERY_LOCKS="$T/x.lock $L2" DEVBATTERY_FAKE="25 0 1 0" DM_DEVBATTERY_WAIT_S=1 DM_DEVBATTERY_POLL_S=1 DM_DEVLOCK_DIR=$L2 bash -c 'source ./devlock.sh; devlock_acquire 单测 2>/dev/null; echo 不该走到这' >/dev/null ); r=$?
 [ $r = 4 ] && [ ! -d $L2 ] && [ -f $T/device_low_battery ] && echo "通 名单内锁 不在充 25% → 暂停（退出 4、落标记）" || { echo "不通 名单内锁 不在充 25% → $r"; bad=1; }
 ( unset DM_DEVBATTERY; DM_DEVBATTERY_LOCKS="$T/x.lock" DEVBATTERY_FAKE="25 0 1 0" DM_DEVLOCK_DIR=$L2 bash -c 'source ./devlock.sh; devlock_acquire 单测 2>/dev/null; [ -d "$DEVLOCK_DIR" ] && devlock_release' ) && echo "通 名单外锁不过闸" || { echo "不通 名单外锁被闸住"; bad=1; }
-# devlock 接入，缺省模式：真机锁、没配 UDID → 不等、直接取到锁（原先每分钟重试，等满一小时退出 4）
-# devlock integration, default mode: device lock, no UDID configured -> no waiting, the lock is taken directly (previously retried every minute and exited 4 after an hour)
-( unset DM_DEVBATTERY DEVBATTERY_FAKE; DM_IOS_UDID= DM_LOCAL_ENV=/dev/null HOME=$T DM_DEVBATTERY_LOCKS="$L2" DM_DEVBATTERY_WAIT_S=1 DM_DEVBATTERY_POLL_S=1 DM_DEVLOCK_DIR=$L2 bash -c 'source ./devlock.sh; devlock_acquire 单测 2>/dev/null; [ -d "$DEVLOCK_DIR" ] && devlock_release' ) && echo "通 devlock 缺省 没配 UDID → 直接取到锁" || { echo "不通 devlock 缺省 没配 UDID 没取到锁"; bad=1; }
+# DM_DEVBATTERY=0（run.sh install 装包时用）：真机锁不过闸，电量低也直接取到锁 | DM_DEVBATTERY=0 (used by run.sh install): the device lock skips the gate and is taken even with a low battery
+DM_DEVBATTERY=0 DEVBATTERY_FAKE="10 0 1 0" DM_DEVBATTERY_WAIT_S=1 DM_DEVBATTERY_POLL_S=1 DM_DEVLOCK_DIR=$L bash -c 'source ./devlock.sh; devlock_acquire 单测 2>/dev/null; [ -d "$DEVLOCK_DIR" ] && devlock_release' && echo "通 DM_DEVBATTERY=0 电量低也取到锁" || { echo "不通 DM_DEVBATTERY=0 仍被闸住"; bad=1; }
 rm -rf "$T"; [ $bad = 0 ] && echo "devbattery 单测全过" || { echo "devbattery 单测有不通"; exit 1; }

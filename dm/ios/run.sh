@@ -127,6 +127,9 @@ if [ "$1" = build ]; then
 fi
 if [ "$1" = install ]; then
   local_env_need DM_DEVICE || exit 1
+  # 装包只要二十来秒、不跑游戏：电量闸（防测试机在长时间跑局里没电）不拦装包，没配 UDID、本机缺工具、电量低都照常装；之后的真机局照旧过闸。DM_DEVBATTERY=1 时装包也过闸
+  # Installing takes about twenty seconds and runs no game: the battery gate (which keeps test devices from running flat during long runs) does not block it, so a missing UDID, missing local tools or a low battery still install; device runs afterwards are gated as before. With DM_DEVBATTERY=1 installs are gated too
+  [ "${DM_DEVBATTERY:-}" = 1 ] || DM_DEVBATTERY=0
   devlock_acquire "${SMOKE_OWNER:-${ACCEPT_OWNER:-run.sh install}}"
   trap devlock_release EXIT
   xcrun devicectl device install app --device $D "$APP" > $R/install.log 2>&1 || { t "🔴 装机失败"; tail -5 $R/install.log; exit 1; }

@@ -7,8 +7,6 @@
 #   插着电却没在充、且电量低于 90% 才记【红】提醒（供电跟不上），但不拦——系统在高电量下会自己停充（全天停在 99–100%、「充电=0」，旧判据「低于 100%」整下午误报）；读不到电量记【红】并拒绝（多半设备已离线）。
 # 放行时把「电量 N%（充电 / 未充电，电源 有 / 无）」写进 DEVBATTERY_LINE，调用方记进表头 / 日志；每次读数追加到 $DM_ROOT/run/ios/battery.log。
 # 测试开关：DEVBATTERY_FAKE="<电量> <充电 0/1> <电源 0/1>" 不读设备，直接用这组数（单测 devbattery_test.sh 用）。
-# 读不了电量的两种本机原因——没配 DM_IOS_UDID、本机缺 timeout / ideviceinfo——缺省只记一行提示、放行：给自己的手机装包（run.sh install）用不着这道闸，原先会每分钟重试一小时后失败，或者立刻失败。
-#   DM_DEVBATTERY=1 是严格模式（测试机上设）：这两种情况照旧拒绝 / 返回 3。
 # Battery gate for the test device (the test iPhone ran flat and shut down at 01:46 and stayed off until 09:26 - plugged into a Mac whose power could not keep up, the screen on for 10 hours drained it to 1%).
 # Usage: after sourcing this file, devbattery_gate || exit 1 (call it before taking the device lock for a device run). Reading: ideviceinfo battery domain (over the network with -n when USB is unreachable).
 #   Level < 30%: drop the pause marker $DM_ROOT/run/ios/device_low_battery, log a failure, record it in $DM_ROOT/run/ios/device_alert.txt and refuse to start (return 1); every device run is refused from then on;
@@ -18,8 +16,6 @@
 #   Plugged in but not charging with the level below 90% only logs a warning (power cannot keep up) without blocking - the system stops charging by itself at high levels (all day at 99–100% with "charging=0"; the old "below 100%" rule raised false alarms all afternoon); an unreadable level logs a failure and refuses (the device is most likely offline).
 # On release, "level N% (charging / not charging, power yes / no)" is written to DEVBATTERY_LINE for the caller to put in its header / log; each reading is appended to $DM_ROOT/run/ios/battery.log.
 # Test switch: DEVBATTERY_FAKE="<level> <charging 0/1> <power 0/1>" skips the device and uses these numbers (used by the unit test devbattery_test.sh).
-# The two local reasons the level cannot be read - DM_IOS_UDID not configured, timeout / ideviceinfo missing on this machine - by default only log one notice line and release: installing onto your own
-#   phone (run.sh install) does not need this gate, which used to retry every minute for an hour and then fail, or fail at once. DM_DEVBATTERY=1 is strict mode (set it on test devices): both cases refuse / return 3 as before.
 DEVBATTERY_LOW=${DEVBATTERY_LOW:-30}; DEVBATTERY_RESUME=${DEVBATTERY_RESUME:-60}; DEVBATTERY_CHARGING_MIN=${DEVBATTERY_CHARGING_MIN:-20}
 DEVBATTERY_DIR=${DEVBATTERY_DIR:-${DM_ROOT:-$HOME/dm-work}/run/ios}
 devbattery_read() {   # 输出「电量 充电 电源 充满」四个数（0/1），读不到返回 1，没配 UDID 返回 2，本机缺工具返回 3，USB 不通且交局内判返回 6 | Prints four numbers "level charging power full" (0/1); returns 1 if unreadable, 2 if no UDID is configured, 3 if a tool is missing on this machine, 6 if USB is unreachable and the check is left to the run
@@ -47,15 +43,9 @@ devbattery_gate() {
   r=$(devbattery_read); local rc=$?
   if [ $rc = 2 ]; then
     echo "$now 没配 UDID" >> "$log"; DEVBATTERY_LINE="电量 没配 UDID"
-    if [ "${DM_DEVBATTERY:-}" != 1 ]; then   # 非严格模式：自己的手机不过闸，提示一行放行 | not strict: your own phone is not gated, release with one notice line
-      DEVBATTERY_LINE="电量 没配 UDID，不过闸 | battery not checked (no DM_IOS_UDID)"
-      echo "电量闸跳过：没配 DM_IOS_UDID，读不了电量；测试机上设 DM_DEVBATTERY=1 照旧拒绝 | battery gate skipped: DM_IOS_UDID is not set, so the battery cannot be read; set DM_DEVBATTERY=1 on a test device to refuse as before" >&2; return 0; fi
     echo "【红】没配测试机 UDID（本机配置 ~/.config/dm-ios/local.env 的 DM_IOS_UDID 为空），读不了电量，这局不跑" >&2; devbattery_notify "没配测试机 UDID，真机局已拒绝"; return 1; fi
   if [ $rc = 3 ]; then
     echo "$now 本机缺工具" >> "$log"; DEVBATTERY_LINE="电量 读不了：本机缺 timeout 或 ideviceinfo"
-    if [ "${DM_DEVBATTERY:-}" != 1 ]; then   # 非严格模式：缺的是可选工具（docs/DEPENDENCIES 只给冒烟用），提示一行放行 | not strict: the missing tools are optional (only smoke tests need them per docs/DEPENDENCIES), release with one notice line
-      DEVBATTERY_LINE="电量 本机缺 timeout / ideviceinfo，不过闸 | battery not checked (timeout / ideviceinfo missing)"
-      echo "电量闸跳过：本机缺 timeout（brew install coreutils）或 ideviceinfo（brew install libimobiledevice），读不了电量；测试机上设 DM_DEVBATTERY=1 照旧拒绝 | battery gate skipped: timeout (brew install coreutils) or ideviceinfo (brew install libimobiledevice) is missing, so the battery cannot be read; set DM_DEVBATTERY=1 on a test device to refuse as before" >&2; return 0; fi
     echo "【红】本机缺读电量要用的命令：timeout（brew install coreutils）$(command -v timeout gtimeout > /dev/null && echo 有 || echo 没有)，ideviceinfo（brew install libimobiledevice）$(command -v ideviceinfo > /dev/null && echo 有 || echo 没有)。与设备无关，装好再跑" >&2; return 3; fi
   if [ $rc = 6 ]; then
     echo "$now USB 读不到、无新鲜 App 读数，交局内判" >> "$log"; DEVBATTERY_LINE="电量 USB 读不到（网络连接），交执行器局内判：开局 ≥ ${DEVBATTERY_RESUME}%、局中 < ${DEVBATTERY_LOW}% 停局"
