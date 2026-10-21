@@ -22,27 +22,38 @@ die() { echo "✗ $*" >&2; exit 1; }
 HT=${HACTOOL:-$(command -v hactool || true)}; [ -n "$HT" ] && [ -x "$HT" ] || die "没找到 hactool：装好后放进 PATH，或设 HACTOOL=<路径>（见本文件开头）"
 for PKG in "${PKGS[@]}"; do [ -f "$PKG" ] || die "没有这个游戏包：$PKG"; done; [ -f "$KEYS" ] || die "没有这个密钥文件：$KEYS"
 [ ! -e "$OUT" ] || die "已有 ${OUT}，不覆盖。要重做先自己把它移走"
-# hactool 只从 $HOME/.switch/title.keys 读标题密钥：给它一个临时 HOME，里面的 title.keys = 你原有的那份 + 从票据取的，不动你自己的 ~/.switch
-# hactool only reads title keys from $HOME/.switch/title.keys: give it a temporary HOME whose title.keys = your existing one + the keys taken from the tickets, leaving your own ~/.switch untouched
-ht() { HOME="$T/home" "$HT" -k "$KEYS" --disablekeywarns --suppresskeys "$@"; }
-T=$DM_ROOT/build/cache/dm/extract.$$; mkdir -p "$T/nca" "$T/home/.switch" || die "建不了中间目录 $T"; trap 'rm -rf "$T"' EXIT
-[ -f "$HOME/.switch/title.keys" ] && cat "$HOME/.switch/title.keys" > "$T/home/.switch/title.keys"
-ln -s "$(cd "$(dirname "$KEYS")" && pwd)/$(basename "$KEYS")" "$T/home/.switch/prod.keys"   # 只是链接，免得 hactool 报「prod.keys 不存在」盖住真正的错 | only a link, so hactool does not warn "prod.keys does not exist" over the real error
+# hactool 只从 $HOME/.switch/title.keys 读标题密钥：给它一个临时 HOME，里面的 title.keys = 你原有的那份 + 从票据取的，不动你自己的 ~/.switch。
+# 这个 HOME 单独建在系统临时目录里，只有你自己能读，密钥不进工作区；9 GB 的中间文件仍在工作区
+# hactool only reads title keys from $HOME/.switch/title.keys: give it a temporary HOME whose title.keys = your existing one + the keys taken from the tickets, leaving your own ~/.switch untouched.
+# That HOME is created on its own in the system temporary folder and only you can read it, so keys never land in the workspace; the 9 GB of intermediate files stay in the workspace
+ht() { HOME="$KH" "$HT" -k "$KEYS" --disablekeywarns --suppresskeys "$@"; }
+T=$DM_ROOT/build/cache/dm/extract.$$; KH=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/dm-keys.XXXXXX") || die "建不了放密钥的临时目录 | cannot create the temporary folder for the keys"
+trap 'rm -rf "$T" "$KH"' EXIT; mkdir -p "$T/nca" "$KH/.switch" || die "建不了中间目录 $T | cannot create the intermediate folder $T"
+TK=$KH/.switch/title.keys
+if [ -f "$HOME/.switch/title.keys" ]; then
+  cat "$HOME/.switch/title.keys" > "$TK"; [ -z "$(tail -c1 "$TK")" ] || echo >> "$TK"   # 原文件末尾没换行时补一个，免得下面接上的票据密钥并进它的最后一行 | add a newline if the file does not end with one, so the ticket keys appended below do not join its last line
+fi
+ln -s "$(cd "$(dirname "$KEYS")" && pwd)/$(basename "$KEYS")" "$KH/.switch/prod.keys"   # 只是链接，免得 hactool 报「prod.keys 不存在」盖住真正的错 | only a link, so hactool does not warn "prod.keys does not exist" over the real error
 say() { echo "[$(date +%T)] $*"; }
-# 拆不开时：hactool 嫌密钥文件里某一行长度不对，报的是那行的值；按值找回是哪个键，免得只看到一串十六进制
-# When unpacking fails: if hactool rejects a line of the key file for its length it reports that line's value; find which key it is by the value, rather than showing only a hex string
-keyhint() { local v n; v=$(sed -n 's/.*Key (\([0-9a-fA-F]*\)) must be.*/\1/p' "$1" | head -1); [ -n "$v" ] || return 0
-  n=$(grep -i "=[[:space:]]*$v[[:space:]]*$" "$KEYS" | head -1 | sed 's/[[:space:]]*=.*//')
-  echo "（密钥文件里 ${n:-有一行} 长度不对，hactool 不接受：删掉这行或换一份密钥文件 | ${n:-a line} in the key file has the wrong length and hactool refuses it: remove that line or use another key file）"; }
+# 拆不开时：hactool 嫌某一行密钥长度不对，报的是那行的值（一个密钥）。不把值打出来，按值找回是哪个文件的哪个键：prod.keys，或标题密钥（你的 ~/.switch/title.keys 加票据里取的）
+# When unpacking fails: if hactool rejects a key line for its length it reports that line's value (a key). Don't print the value; find by it which key of which file it is: prod.keys, or the title keys (your ~/.switch/title.keys plus those taken from the tickets)
+keyhint() { local v n f w; v=$(sed -n 's/.*Key (\([0-9a-fA-F]*\).*) must be.*/\1/p' "$1" | head -1); [ -n "$v" ] || return 0
+  for f in "$KEYS" "$TK"; do n=$(grep -is "=[[:space:]]*$v" "$f" | head -1 | sed 's/[[:space:]]*=.*//'); [ -n "$n" ] && break; done
+  if [ -z "$n" ]; then w="密钥文件里有一行 | a line in a key file"
+  elif [ "$f" = "$TK" ]; then w="标题密钥里 $n 这一行（~/.switch/title.keys 或票据） | the title key line $n (~/.switch/title.keys or a ticket)"
+  else w="$(basename "$KEYS") 里的 $n  | $n in $(basename "$KEYS")"; fi
+  echo "（${w%% | *}长度不对，hactool 不接受：删掉这行或换一份密钥文件 | ${w#* | } has the wrong length and hactool refuses it: remove that line or use another key file）"; }
+# hactool 日志的最后一行报错；是密钥长度错时只说是哪一行（keyhint），不原样打出 | the last error line of a hactool log; for a key length error only say which line it is (keyhint), never print it as is
+hterr() { if grep -q 'Key (.*) must be' "$1"; then keyhint "$1"; else tail -1 "$1"; fi; }
 
 say "拆游戏包（约 9 GB）"
 n=0
 for PKG in "${PKGS[@]}"; do
   n=$((n + 1)); L=$T/unpack$n.log
   case "$PKG" in
-    *.xci|*.XCI) ht -t xci --securedir="$T/nca" "$PKG" > "$L" 2>&1 || die "游戏包拆不开（密钥不对或文件损坏），日志 $L：$(tail -1 "$L")$(keyhint "$L")";;
-    *.nsp|*.NSP) ht -t pfs0 --outdir="$T/nca" "$PKG" > "$L" 2>&1 || die "游戏包拆不开（密钥不对或文件损坏）：$(tail -1 "$L")$(keyhint "$L")";;
-    *) die "只认 .xci 或 .nsp：$PKG";;
+    *.xci|*.XCI) ht -t xci --securedir="$T/nca" "$PKG" > "$L" 2>&1 || die "游戏包拆不开（密钥不对或文件损坏） | cannot unpack the game package (wrong keys or a damaged file): $(hterr "$L")";;
+    *.nsp|*.NSP) ht -t pfs0 --outdir="$T/nca" "$PKG" > "$L" 2>&1 || die "游戏包拆不开（密钥不对或文件损坏） | cannot unpack the game package (wrong keys or a damaged file): $(hterr "$L")";;
+    *) die "只认 .xci 或 .nsp | only .xci or .nsp packages are accepted: $PKG";;
   esac
 done
 
@@ -62,7 +73,7 @@ for tik in "$T"/nca/*.tik; do
   kind=$(od -An -tu1 -j $((base + 0x141)) -N1 "$tik" | tr -d ' ')
   rid=$(od -An -tx1 -j $((base + 0x160)) -N16 "$tik" | tr -d ' \n')
   if [ "$kind" != 0 ]; then say "票据 $(basename "$tik") 是个人票据（绑定主机），取不出标题密钥 | personalized ticket, its title key cannot be read"; continue; fi
-  echo "$rid = $(od -An -tx1 -j $((base + 0x40)) -N16 "$tik" | tr -d ' \n')" >> "$T/home/.switch/title.keys"; tk=$((tk + 1))
+  echo "$rid = $(od -An -tx1 -j $((base + 0x40)) -N16 "$tik" | tr -d ' \n')" >> "$TK"; tk=$((tk + 1))
 done
 [ $tk = 0 ] || say "从游戏包的票据取到 $tk 个标题密钥"
 
@@ -70,16 +81,16 @@ done
 # 更新的程序内容报的也是本体的程序号；区别是它的资源段是「补丁」格式（BKTR），要叠在本体上才读得出
 # Find the program content of the base game and of the update: identify them by the type and program id each content file reports, not by file name.
 # The update's program content also reports the base game's program id; the difference is that its asset section is in "patch" format (BKTR) and can only be read when layered on top of the base game
-BASE=; UPD=
+BASE=; UPD=; NERR=
 for f in "$T"/nca/*.nca; do
   case "$f" in *.cnmt.nca) continue;; esac
-  info=$(ht -t nca "$f" 2>&1)
+  info=$(ht -t nca "$f" 2>&1) || { [ -n "$NERR" ] || { echo "$info" > "$T/nca_err.log"; NERR=$(hterr "$T/nca_err.log"); }; }   # 记下第一个读不开的内容文件的报错 | keep the error of the first content file that cannot be read
   echo "$info" | grep -q "Content Type: *Program" || continue
   echo "$info" | grep -q "^Title ID: *0100726014352000" || continue
   if echo "$info" | grep -q "BKTR"; then UPD=$f; else BASE=$f; fi
 done
-[ -n "$BASE" ] || die "游戏包里没找到这个游戏的本体（本体与更新分开的话，两个包都要给）"
-[ -n "$UPD" ] || die "游戏包里没有更新：本项目要 3.3.94012 的更新，只有本体不行（更新是单独的包的话，一起给上）"
+[ -n "$BASE" ] || die "游戏包里没找到这个游戏的本体（本体与更新分开的话，两个包都要给） | the base game is not in the game package (if base game and update are separate packages, give both)${NERR:+；hactool 读内容文件时报错 | hactool error while reading the content files: $NERR}"
+[ -n "$UPD" ] || die "游戏包里没有更新：本项目要 3.3.94012 的更新，只有本体不行（更新是单独的包的话，一起给上） | the package has no update: this project needs the 3.3.94012 update, the base game alone is not enough (if the update is a separate package, give it too)"
 
 say "取程序文件与资源（约 9 GB）"
 mkdir -p "$OUT.part" || die "建不了 $OUT.part"
