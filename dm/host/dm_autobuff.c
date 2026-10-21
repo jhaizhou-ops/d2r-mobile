@@ -9,29 +9,29 @@
 // 什么时候放（都是为了不打扰玩家）：人物站立那一拍（客户端与服务端模式都是 1）——走路会被施法打断，攻击 / 施法中原版自己拒；不在城里（喊叫类在城里
 //   调用会被拒、还会把人重置成站立）；没死；手上没拿东西；法力够（宿主先自己比，不够不调——原版在法力不足时会出语音）；一拍只做一件事。
 // 节流：发出后 2 秒内状态没出现算一次失败，同一技能隔 3 秒再试（DM_AUTOBUFF_RETRY，拍），连败 3 次本局不再补它并记红。
-// 开关：「自定义」设置 auto_buff（缺省开）。只在 iOS 包上缺省生效（Mac 宿主的对拍闸门回放的是真机录制，不该多出施法）；DM_AUTOBUFF=1 / 0 强制。
+// 开关：「自定义」设置 auto_buff（缺省开）。在 iOS 和 Mac App 生效；Mac 命令行对拍回放不自动施法；DM_AUTOBUFF=1 / 0 强制。
 // 第二笔：副手那套武器给的增益（典型：战争召唤给的战斗指挥 / 战斗体制）。装备给的非职业技能（属性 97，层 = 技能号）只在那套武器在手时才有节点，
 //   所以要「换到副手 → 把该补的全放完 → 换回」。换走期间主手与盾的属性全没了，条件比第一笔严：站立、不在城里、没死、手上没拿东西、
 //   副手组技能的连招没在进行、周围 DM_AUTOBUFF_SAFE 格（缺省 40）内没有活着的敌对怪。换武器调游戏自己的 main+0x41db90(当前组)（同 dm_actions.c）。
 //   任何情况下不把玩家留在副手：换过去后最多等 6 秒（DM_AUTOBUFF_SWAPMAX，拍），到点不管放没放完都换回；换回一直重试到成（每 8 拍一次，死了等复活）。
 //   同一个技能本局经换武器补失败 2 次就不再为它换；两轮之间至少隔 10 秒。
-// Buff auto-recast (what players call the "monkey show"): when a self-buff the player has cast drops (expired / depleted by hits), recast it for the player on a tick when the character is standing. Part 1 only covers skills the character learned itself and never swaps weapons.
-// The list (filtered from the game's skill table skills.txt: not passive, not an aura, puts a state on the caster, needs no target, has no cooldown, not a shapeshift / curse / summon) is k_ab:
-//   skill id, the state id it puts on the caster (states.txt row), mutex group (members replace each other; only the one the player cast last is recast; 0 = none), whether it can be cast in town.
-// How we know it dropped: read the client player's state bitmap ([unit+0x88] stat table from +0xb30, same as auto-drink reading potion effects). Remaining time cannot be read, hence "recast after it drops".
-// What gets recast: no key binding and no manual first cast needed. If the character learned it (or gear currently in hand grants it: a non-class skill also creates an ordinary node with source -1), effective level > 0, and it is not active, recast it.
-//   Skills with downsides are not auto-cast: see k_skip (an exclusion table with reasons: skill id, name, reason). Mutex groups: recast whichever was seen active this game (cast by the player manually); if none was seen, the highest-level one.
-// How it is cast: in the server tick, through the game's right-click cast step main+0x6e77f0(game, player, x, y, 1 = right hand, skill node) (same as free town portal dm_freetp.c): Mana check and deduction, the cast animation,
-//   and town rules are all the game's own; it takes no skill bar slot and does not change the player's left / right bindings (the right-click skill node is pointed at it for the duration of the call and put back after).
+// Automatic self-buff recast: when a self-buff you cast yourself drops (expired / dispelled), recast it for the player on a tick where the character is standing. Part 1 only covers skills the character learned and does not swap weapons.
+// The list (filtered from the game's skills.txt: not passive, not an aura, puts a state on yourself, needs no target, no cooldown, not a shapeshift / curse / summon) is in k_ab:
+//   skill id, the state it puts on yourself (row in states.txt), mutual-exclusion group (skills in one group replace each other; only the one the player cast last is recast; 0 = none), and whether it can be cast in town.
+// How we know it dropped: read the client player's state bitmap ([unit+0x88] stat list from +0xb30, same as auto-drink reading potion effects). The remaining time is not readable, so it is "recast after it drops".
+// What gets recast: no key binding needed and no manual first cast - if the character has the skill (learned, or granted by the gear in hand: non-class skills from gear are ordinary nodes with source -1), its effective level > 0 and the state is not on, it is recast.
+//   Skills with downsides are never auto-cast: see k_skip (an exclusion table with reasons: skill id, name, reason). Mutual-exclusion groups: recast whichever one was seen on the character this game (cast by the player); if none was seen, the highest-level one.
+// How it is cast: in the server tick, through the game's own right-hand cast step main+0x6e77f0(game, player, x, y, 1 = right hand, skill node) (same as free town portal, dm_freetp.c): mana check and cost, cast animation
+//   and town rules are all the game's own; it takes no skill slot and does not change the player's left / right bindings (the right-hand skill node is pointed at it during the call and restored afterwards).
 // When it is cast (all so as not to disturb the player): on a tick when the character is standing (client and server mode both 1), since walking would be interrupted by the cast and the game itself refuses during attack / cast; not in town (warcries called in town
 //   are refused and also reset the character to standing); not dead; nothing on the cursor; enough Mana (the host compares first and does not call if short: the game plays a voice line on insufficient Mana); one thing per tick.
 // Throttle: if the state has not appeared within 2 seconds of the request it counts as one failure; the same skill is retried 3 seconds later (DM_AUTOBUFF_RETRY, ticks); after 3 failures in a row it is not recast again this game and a failure is logged.
-// Switch: "Custom" setting auto_buff (default on). On by default only in the iOS app (the Mac host's parity gate replays device recordings and must not gain extra casts); DM_AUTOBUFF=1 / 0 forces it.
+// Switch: "Custom" setting auto_buff (default on). Active in iOS and the Mac App; Mac command-line parity replays do not auto-cast; DM_AUTOBUFF=1 / 0 forces it.
 // Part 2: buffs granted by the off-hand weapon set (typical: Battle Command / Battle Orders from Call to Arms). A gear-granted non-class skill (stat 97, layer = skill id) only has a node while that set is in hand,
-//   so it takes "swap to off-hand → cast everything due → swap back". While swapped away all main-hand and shield stats are gone, so the conditions are stricter than part 1: standing, not in town, not dead, nothing on the cursor,
+//   so it takes "swap to off-hand -> cast everything due -> swap back". While swapped away all main-hand and shield stats are gone, so the conditions are stricter than part 1: standing, not in town, not dead, nothing on the cursor,
 //   no off-hand-set skill combo in progress, no living hostile monster within DM_AUTOBUFF_SAFE tiles (default 40). The weapon swap calls the game's own main+0x41db90(current set) (same as dm_actions.c).
-//   The player is never left on the off-hand set: after swapping over wait at most 6 seconds (DM_AUTOBUFF_SWAPMAX, ticks), then swap back whether or not everything was cast; the swap back retries until it succeeds (every 8 ticks; if dead, wait for the revive).
-//   A skill whose weapon-swap recast has failed twice this game is no longer swapped for; at least 10 seconds between two rounds.
+//   The player is never left on the off-hand: after swapping, wait at most 6 seconds (DM_AUTOBUFF_SWAPMAX, ticks), then swap back whether or not everything was cast; swapping back is retried until it succeeds (every 8 ticks; if dead, wait for resurrection).
+//   A skill that fails twice this game through a weapon swap is no longer swapped for; at least 10 seconds between two rounds.
 #include "dm.h"
 #include "dm_custom.h"
 #include "dm_hud.h"
@@ -99,7 +99,8 @@ static int skipped(int skill) { if (getenv("DM_TEST_BUFF_NOSKIP")) return 0;   /
 uint32_t dm_cur_tick(void);
 
 static int enabled(void) { static int env = -2; if (env == -2) { const char *e = getenv("DM_AUTOBUFF"); env = e ? e[0] != '0' : -1; }
-    return env >= 0 ? env : (TARGET_OS_IPHONE && dm_custom_get("auto_buff")); }
+    const char *app = getenv("DM_APP");
+    return env >= 0 ? env : ((TARGET_OS_IPHONE || (app && app[0] && app[0] != '0')) && dm_custom_get("auto_buff")); }
 static int cfg(const char *nm, int def) { const char *e = getenv(nm); return e && atoi(e) > 0 ? atoi(e) : def; }
 static int has_state(uint64_t u, int st) {
     uint64_t sl = *(uint64_t *)(u + 0x88); if (!sl || !(*(uint32_t *)(sl + 0x1c) >> 31)) return 0;

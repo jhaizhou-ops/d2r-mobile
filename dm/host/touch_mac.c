@@ -55,10 +55,21 @@ int dm_touch_host_world_active(void) {
 #include <stdatomic.h>
 static uint32_t g_live_tick0; static int g_live_based; static uint64_t g_live_btn; static uint32_t g_live_btn_until;
 static struct { _Atomic unsigned head, tail; struct { int op; float nx, ny; } q[64]; } g_live;
+// 悬停只留最新位置，不占点击队列；位 63 = 待处理，位 62 = 已离开画面。游戏线程才读界面树。
+// Coalesce hover positions outside the click queue; bit 63 = pending, bit 62 = outside the picture. Only the game thread reads UI widgets.
+static _Atomic uint64_t g_live_hover;
 // 世界手势从按下到抬起独占；点选答案只用于空地回退，不能让抬起再触发一次。
 // Own a world gesture from down through up; the pick result only supplies the ground fallback, never a second click on release.
 static struct { int owned, down, repeat; uint32_t last; float x, y; unsigned tap_seq; float tap_x, tap_y; } g_lm;
-void dm_touch_host_live(int op, float nx, float ny) {   // 前端线程：op 0 按下 1 移动 2 抬起；坐标 = 游戏画面归一化 [0,1] | Front-end thread: op 0 down, 1 move, 2 up; coordinates = normalized to the game picture [0,1]
+void dm_touch_host_live(int op, float nx, float ny) {   // 前端线程：op 0 按下 1 拖动 2 抬起 3 悬停；坐标 = 界面归一化，悬停可在画面外 | Front-end thread: op 0 down, 1 drag, 2 up, 3 hover; coordinates = UI-normalized, hover may be outside the picture
+    if (!g_live_on) return;
+    if (op == 3) {
+        uint64_t p = 1ull << 63;
+        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) p |= (uint64_t)(uint32_t)(nx * 65535 + .5f) << 16 | (uint32_t)(ny * 65535 + .5f);
+        else p |= 1ull << 62;
+        atomic_store(&g_live_hover, p); return;
+    }
+    atomic_store(&g_live_hover, 0);
     if (!g_live_on) return; unsigned t = atomic_load(&g_live.tail); if (t - atomic_load(&g_live.head) >= 64) return;
     g_live.q[t % 64].op = op; g_live.q[t % 64].nx = nx; g_live.q[t % 64].ny = ny; atomic_store(&g_live.tail, t + 1);
 }
@@ -160,7 +171,7 @@ static void *live_test_thread(void *arg) {
     char line[160]; double t0 = (double)now_ns() / 1e9; int n = 0;
     while (fgets(line, sizeof line, f)) { double sec; char op[8]; float x = 0, y = 0; if (line[0] == '#' || sscanf(line, "%lf %7s %f,%f", &sec, op, &x, &y) < 2) continue;
         double wait = sec - ((double)now_ns() / 1e9 - t0); if (wait > 0) usleep((useconds_t)(wait * 1e6));
-        dm_touch_host_live(!strcmp(op, "down") ? 0 : !strcmp(op, "move") ? 1 : 2, x / 2868, y / 1320); n++; }
+        dm_touch_host_live(!strcmp(op, "hover") ? 3 : !strcmp(op, "down") ? 0 : !strcmp(op, "move") ? 1 : 2, x / 2868, y / 1320); n++; }
     fclose(f); fprintf(stderr, "[dm] DM_TEST_LIVE：%d 条发完\n", n); return NULL;
 }
 void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);
@@ -262,6 +273,14 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
           if (g_lm.down && g_lm.repeat && tk != g_lm.last && dm_ui_item_at_now(g_lm.x, g_lm.y) == 3) {
               g_lm.last = tk; dm_world_walk(g_lm.x, ui_y_to_screen(g_lm.y));
           } }
+    }
+    if (g_live_on) {
+        uint64_t h = atomic_exchange(&g_live_hover, 0);
+        if (h && getenv("DM_TEST_HOVER_LOG")) fprintf(stderr, "[dm] 鼠标悬停派发：%#llx 手势 %d 槽 %d 队列 %d/%d 脉冲 %llu\n", (unsigned long long)h, g_lm.owned, g_touch.state.pointer_slot, g_touch.next, g_touch.count, (unsigned long long)g_touch.state.pulse_button);
+        if (h && !g_live_btn && !g_lm.owned && g_touch.next == g_touch.count && g_touch.state.pointer_slot == DM_TC_NONE && !g_touch.state.buttons && !g_touch.state.pulse_button && !*buttons && !*lx && !*ly && !*rx && !*ry) {
+            float x = h & (1ull << 62) ? -1 : (float)((h >> 16) & 0xffff) / 65535, y = h & (1ull << 62) ? -1 : (float)(h & 0xffff) / 65535;
+            if (dm_ui_mouse_hover_now(x, y)) { g_touch.state.pointer_valid = 0; dm_cursor_clear(); }
+        }
     }
     if (g_live_btn) { if ((int32_t)(g_live_btn_until - touch_cur_tick()) > 0) *buttons |= g_live_btn; else g_live_btn = 0; }
     if (!g_touch.enabled || !g_touch.started) return;

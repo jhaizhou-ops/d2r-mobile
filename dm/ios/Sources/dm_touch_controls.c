@@ -153,7 +153,7 @@ static void update_aim(dm_tc_state *s) {
     float radius = 60 * scale_for(&s->layout);
     if (s->aim_slot == DM_TC_NONE || radius <= 0) return;
     const dm_tc_finger *f = &s->finger[s->aim_slot];
-    if (f->target != DM_TC_MAIN && hypotf(f->x-f->aim_origin_x, f->y-f->aim_origin_y) <= 10 * scale_for(&s->layout)) return;   /* 技能钮：拖动不过 10 点 = 点按，不给方向，原版自动选目标 | Skill button: a drag of no more than 10 points = tap, no direction given, the original game auto-targets */
+    if (hypotf(f->x-f->aim_origin_x, f->y-f->aim_origin_y) <= 10 * scale_for(&s->layout)) return;   /* 主钮与技能钮同一死区：拖动不过 10 点 = 不给方向，原版自动选目标；长按连射时手指的小抖动不再改射击方向（公开 issue #92） | The main button and skill buttons share one dead zone: a drag under 10 points gives no direction and the game auto-targets; small finger jitter while holding to attack no longer changes the shooting direction (public issue #92) */
     float dx = (f->x-f->aim_origin_x)/radius;
     float dy = (f->aim_origin_y-f->y)/radius;
     s->rx = (int32_t)lroundf(fmaxf(-1, fminf(1, dx))*DM_STICK_MAX);

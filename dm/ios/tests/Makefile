@@ -48,8 +48,10 @@ test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL
 	./t_skill_aim
 	./t_joy_travel
 	./t_native_art
+	python3 test_slowframe.py
 	python3 test_native_art_capture.py
 	python3 test_touch_layout_options.py
+	python3 test_touch_layout_language.py
 	$(call fixture_test,t_native_binding)
 	$(call fixture_test,t_game_bridge)
 	./t_binding_freshness
@@ -57,6 +59,7 @@ test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL
 	./t_binding_group
 	./t_native_hud_identity
 	$(call fixture_test,t_native_hud_bridge)
+	python3 test_skill_live.py
 	python3 test_portal_receipt.py
 	python3 test_native_binding_seam.py
 	python3 test_skill_aim_front.py

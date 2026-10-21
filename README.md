@@ -4,9 +4,9 @@
 
 This is not a tech demo that "sort of runs". It is a mobile version polished for daily play, from your first character all the way through the endgame.
 
-Platforms: iPhone / iPad (iOS 26 and later; iOS 18 – 25 with the older-API build) · Mac (Apple silicon, macOS 26 or later; macOS 15 – 25 with the older-API build) · Apple TV 4K (3rd generation, A15; community port, developer preview) · Game version: Switch release with Reign of the Warlock, 1.0.34.0 (corresponds to PC version 3.3.94012) · English / 中文 · License: MIT · **Bring your own game files**
+Platforms: iPhone / iPad (iOS 26 and later; iOS 18 – 25 with the older-API build) · Mac (Apple silicon, macOS 26 or later; macOS 15 – 25 with the older-API build) · Apple TV 4K (3rd generation, A15; community port, developer preview) · Game version: Switch release with Reign of the Warlock, 1.0.34.0 (corresponds to PC version 3.3.94012) · English / 中文 / Español / Русский · License: MIT · **Bring your own game files**
 
-中文: [README.zh-CN.md](README.zh-CN.md)
+中文: [README.zh-CN.md](README.zh-CN.md) · Español: [README.es.md](README.es.md)
 Android: [README.android.md](README.android.md) — native Android port, in development (about 30 fps today)
 
 <p align="center">
@@ -159,9 +159,9 @@ Most features can be toggled one by one in game under Options → Custom.
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/en_map.jpg" width="33%" alt="The full-screen map">
 </p>
 
-### English and Chinese
+### English, Chinese, Spanish and Russian
 
-The whole game switches between English and Chinese under Options → Custom; after a restart, both the interface and the voice acting are in the language you chose. In English, items, skills and monsters use the original Diablo II wording, and everything we added — Greater Rift, Chronicle, the settings page, controller prompts — is in English too.
+The whole game switches between English, Chinese, Spanish and Russian under Options → Custom; after a restart, the interface is in the language you chose. On first launch it follows your device language (Spanish from Spain uses the game's esES text, other Spanish regions use the Latin American esMX text). In English, Spanish and Russian, items, skills and monsters use the original Diablo II wording, and everything we added — Greater Rift, Chronicle, the settings page, gesture prompts, map name plates — is translated too (item notes are translated for Chinese and Spanish only). Russian is the game's single ruRU text, with no regional variants. Voice acting: Chinese UI gets Chinese voices; Russian gets the original Russian voices when your game files include them (a package built from the complete game data does), otherwise English; everything else is English.
 
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/en_game.jpg" width="58%" alt="Gameplay with the English interface">

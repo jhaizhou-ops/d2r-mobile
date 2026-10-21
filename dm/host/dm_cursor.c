@@ -173,6 +173,22 @@ static _Atomic uint64_t g_exact_xy = UINT64_MAX;   // 最近一次命中落在�
 static _Atomic int g_sn_new;   // 新一次按下（dm_ui_item_query 置）：上一次的吸附 / 停靠作废。只按「请求点没变」续用会跨触摸残留——同一落点再按，光标还在停靠点，长按判成空格去整理背包 | A new press (set by dm_ui_item_query): the previous snap / parking is invalidated. Reusing it only on 'the request point has not changed' would leave residue across touches -- pressing the same landing point again, the cursor is still at the parking point, and the long-press is classified as an empty cell and sorts the inventory
 static int sn_on; static _Atomic uint64_t g_snap;   // 就近吸附中；g_snap = 吸附记录（请求点 x | y<<16 | 落点 x<<32 | y<<48），长按据此分「贴着物品边」与「落在空格中间」 | Nearest snap in effect; g_snap = snap record (request point x | y<<16 | landing point x<<32 | y<<48); long-press uses it to tell 'next to an item's edge' from 'in the middle of an empty cell'
 static _Atomic int g_free_pub;
+// 真鼠标悬停复用原版焦点重算；不能套触屏的「胖手指」吸附，否则空格旁也会冒出邻格说明。
+// Real mouse hover reuses the game's focus refresh, bypassing touch's fat-finger snap so empty cells do not show a neighbor's tooltip.
+int dm_ui_mouse_hover_now(float nx, float ny) {
+    module_t *m = main_module();
+    uint64_t waiting = atomic_load(&g_a_wait);
+    if (!m || dm_hud_held() || dm_cursor_pending() || (waiting && now_ns() - waiting < 300000000ull) || !free_cursor_page(m)) return 0;
+    int w = *(int32_t *)(m->base + 0x211da38), h = *(int32_t *)(m->base + 0x211da3c);
+    if (w <= 0 || h <= 0) return 0;
+    int x, y;
+    if (!(nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1)) { x = w * 2 / 100; y = h / 2; }
+    else { x = (int)(nx * w); y = (int)(ny * h); if (x >= w) x = w - 1; if (y >= h) y = h - 1; }
+    { int dm_vault_ui_blocks(int, int); if ((dm_ui_panel_state() & DM_PS_VAULT) && dm_vault_ui_blocks(x, y)) return 0; }
+    int ok = dm_ui_hover_now(x, y);
+    if (getenv("DM_TEST_HOVER_LOG")) { dm_cursor_item_info ci = {0}; int found = dm_cursor_item(&ci); LOG("鼠标悬停刷新：(%d,%d) → %d 物品 %s id %u", x, y, ok, found ? ci.code : "-", ci.id); }
+    return ok;
+}
 int dm_ui_free_cursor(void) { return atomic_load(&g_free_pub); }   // 当前页有没有自由光标（物品栏 / 技能树 / 属性页这类） | Whether the current page has a free cursor (pages such as inventory / skill tree / attributes)
 void dm_cursor_apply(uint64_t *buttons, int32_t *lx, int32_t *ly) {
     cursor_apply(buttons, lx, ly);

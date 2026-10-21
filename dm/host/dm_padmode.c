@@ -102,7 +102,7 @@ static int pfx_write(uint8_t *b, int pad) {
 #endif
     return 1;
 }
-enum { NSTR = 64 };
+enum { NSTR = 160 };   // 中 / 英 / esES / esMX / ruRU 各一套（去重后 114 条） | One set each for Chinese / English / esES / esMX / ruRU (114 entries after dedup)
 static struct { char *key, *val; size_t klen; char sha[9]; uint64_t node, orig, olen; } g_str[NSTR];
 static int g_nstr;
 static uint8_t *g_b;
@@ -112,6 +112,7 @@ static void str_load(void) {   // 开机读旁路表 | Read the sidecar table at
     char p[1100], line[1024]; FILE *f = dm_overlay_file("touch_strings.tsv", p, sizeof p) ? fopen(p, "r") : NULL; if (!f) { LOG("【红】手柄 / 触屏布局：覆盖层有 ctrl_touch 却没有 touch_strings.tsv，字符串不换"); return; }
     while (g_nstr < NSTR && fgets(line, sizeof line, f)) { line[strcspn(line, "\r\n")] = 0; char *a = strchr(line, '\t'), *c = a ? strchr(a + 1, '\t') : NULL; if (!c || c - a - 1 != 8) continue;
         *a = 0; *c = 0; unesc(c + 1); g_str[g_nstr].key = strdup(line); g_str[g_nstr].klen = strlen(line); memcpy(g_str[g_nstr].sha, a + 1, 8); g_str[g_nstr].val = strdup(c + 1); g_nstr++; }
+    if (g_nstr == NSTR && fgets(line, sizeof line, f)) LOG("【红】手柄 / 触屏布局：touch_strings.tsv 超过 %d 条，后面的没读（调大 NSTR）", NSTR);
     fclose(f); LOG("手柄 / 触屏布局：触摸说法 %d 条（touch_strings.tsv）", g_nstr);
 }
 static uint64_t str_node(uint64_t map, const char *key, size_t n) {   // 串表里键为 key 的节点（同 dm_bossrush.c loc_has） | The node in the string table whose key is key (same as loc_has in dm_bossrush.c)
@@ -131,8 +132,8 @@ static void str_apply(int pad) {   // 游戏主线程：串表里这些键的串
         if (!g_str[i].orig) { nbad++; continue; }
         uint64_t want = pad ? g_str[i].orig : (uint64_t)(uintptr_t)g_str[i].val, wl = pad ? g_str[i].olen : strlen(g_str[i].val);
         if (v[0] != want) { v[1] = wl; v[0] = want; nset++; } }
-    if (nset) LOG("手柄 / 触屏布局：串表 %d 条换成%s说法（%d 条没换：不是简中 / 原文对不上 / 键不在）", nset, pad ? "手柄" : "触摸", nbad);
-    else if (nbad == g_nstr && g_nstr && !warned) { warned = 1; LOG("手柄 / 触屏布局：串表里 %d 条都没换（不是简中或原文对不上），照原版说法", nbad); }
+    if (nset) LOG("手柄 / 触屏布局：串表 %d 条换成%s说法（%d 条没换：不是这一种语言 / 原文对不上 / 键不在）", nset, pad ? "手柄" : "触摸", nbad);
+    else if (nbad == g_nstr && g_nstr && !warned) { warned = 1; LOG("手柄 / 触屏布局：串表里 %d 条都没换（语言不在表里或原文对不上），照原版说法", nbad); }
 }
 // 系统提示框在屏上时的功能键（观测门 OBS_NOTICE_INPUT，原版提示面板的消息处理入口 main+0x3d84a0，游戏主线程）：
 // 原版收到 InputMessage / ControllerActionBegin、动作号 9（功能键）就重发提示的回调并把界面消息总线标成「已消费」（[总线+0xb8] = 1）——

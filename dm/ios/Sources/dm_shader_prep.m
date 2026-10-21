@@ -18,7 +18,8 @@
 #include <string.h>
 
 static void pl(NSString *s) { fprintf(stderr, "[dm] %s\n", s.UTF8String); }
-static BOOL zh(void) { return [NSLocale.preferredLanguages.firstObject hasPrefix:@"zh"]; }
+static int lg(void) { NSString *l = NSLocale.preferredLanguages.firstObject; return [l hasPrefix:@"zh"] ? 1 : [l hasPrefix:@"es"] ? 2 : 0; }   // 系统首选语言：1 中文 / 2 西语 / 0 其余英文 | System preferred language: 1 Chinese / 2 Spanish / 0 English otherwise
+#define L3(zh, en, es) (lg() == 1 ? (zh) : lg() == 2 ? (es) : (en))
 static NSString *libdir(void) {   // <包>/msl/b-<链版本>：壳里只有一个版本目录 | <package>/msl/b-<chain version>: the shell has only one version directory
     NSString *msl = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
     for (NSString *d in [NSFileManager.defaultManager contentsOfDirectoryAtPath:msl error:nil] ?: @[]) if ([d hasPrefix:@"b-"]) return [msl stringByAppendingPathComponent:d];
@@ -50,9 +51,10 @@ int dm_shader_prep_begin(void (^done)(void)) {
     for (UILabel *l in @[title, sub, note]) { l.textColor = [UIColor colorWithWhite:0.85 alpha:1]; l.textAlignment = NSTextAlignmentCenter; l.numberOfLines = 0; l.translatesAutoresizingMaskIntoConstraints = NO; [v addSubview:l]; }
     title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold]; sub.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightRegular]; note.font = [UIFont systemFontOfSize:13]; note.textColor = [UIColor colorWithWhite:0.6 alpha:1];
     bar.translatesAutoresizingMaskIntoConstraints = NO; bar.progressTintColor = [UIColor colorWithRed:0.78 green:0.36 blue:0.16 alpha:1]; [v addSubview:bar];
-    title.text = zh() ? @"首次启动：正在准备着色器" : @"First launch: preparing shaders";
-    note.text = zh() ? @"只需要做这一次，做完以后游戏里不会因为着色器卡顿。\n系统更新或重装之后会再做一次。可以切到后台，回来接着做。"
-                     : @"This is only needed once; afterwards the game will not stutter because of shaders.\nIt runs again after a system update or a reinstall. You can switch away and it continues when you come back.";
+    title.text = L3(@"首次启动：正在准备着色器", @"First launch: preparing shaders", @"Primer inicio: preparando los shaders");
+    note.text = L3(@"只需要做这一次，做完以后游戏里不会因为着色器卡顿。\n系统更新或重装之后会再做一次。可以切到后台，回来接着做。",
+                   @"This is only needed once; afterwards the game will not stutter because of shaders.\nIt runs again after a system update or a reinstall. You can switch away and it continues when you come back.",
+                   @"Solo hace falta una vez; después, el juego no se trabará por los shaders.\nSe repite tras una actualización del sistema o una reinstalación. Puedes salir de la app y continuará al volver.");
     [NSLayoutConstraint activateConstraints:@[
         [title.centerXAnchor constraintEqualToAnchor:v.centerXAnchor], [title.bottomAnchor constraintEqualToAnchor:bar.topAnchor constant:-22],
         [bar.centerXAnchor constraintEqualToAnchor:v.centerXAnchor], [bar.centerYAnchor constraintEqualToAnchor:v.centerYAnchor], [bar.widthAnchor constraintEqualToAnchor:v.widthAnchor multiplier:0.5],
@@ -66,7 +68,7 @@ int dm_shader_prep_begin(void (^done)(void)) {
     CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent(); __block _Atomic int fin = 0, bad = 0;
     void (^tick)(void) = ^{ int n = atomic_load(&fin); double el = CFAbsoluteTimeGetCurrent() - t0, left = n > 20 ? el / n * (total - n) : -1;
         bar.progress = (float)n / total;
-        NSString *eta = left < 0 ? (zh() ? @"正在估算剩余时间" : @"estimating time left") : left >= 90 ? [NSString stringWithFormat:zh() ? @"预计还要 %.0f 分钟" : @"about %.0f min left", ceil(left / 60)] : [NSString stringWithFormat:zh() ? @"预计还要 %.0f 秒" : @"about %.0f s left", ceil(left / 5) * 5];
+        NSString *eta = left < 0 ? L3(@"正在估算剩余时间", @"estimating time left", @"calculando el tiempo restante") : left >= 90 ? [NSString stringWithFormat:L3(@"预计还要 %.0f 分钟", @"about %.0f min left", @"faltan unos %.0f min"), ceil(left / 60)] : [NSString stringWithFormat:L3(@"预计还要 %.0f 秒", @"about %.0f s left", @"faltan unos %.0f s"), ceil(left / 5) * 5];
         sub.text = [NSString stringWithFormat:@"%d / %d · %@", n, total, eta]; };
     tick();
     NSTimer *tm = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { tick(); }];

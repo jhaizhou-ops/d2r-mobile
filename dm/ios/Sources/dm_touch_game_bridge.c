@@ -62,6 +62,12 @@ void dm_touch_game_live_check(int on) { live_check=on; }
       The check follows the original game's code for selecting a skill at main+0x43f1ac–0x43f23c: in the skill linked list [player+0x100], find the node whose "skill number and item number (slot +4; -1 = self-learned) are both the same",
       level = node +0x38 (for a self-learned one, plus the gear bonus 0x5b1710), and it counts as owned only if > 0 after clamping to the version cap. Player unreadable / version not recognized = verdict unchanged. Called only on the game thread (inside the observation gate) */
 static int skill_live(const unsigned char *b,uint32_t id,int32_t item) {
+    /* 原版通用操作不在角色的已学 / 物品技能链里，可用性留给原版判断；不豁免怪物技能或已卸下装备的技能。 | Native general actions are not in the character's learned / item skill chain; leave their availability to the game. Monster skills and skills from removed gear are not exempted. */
+    switch(id) {
+    case 357: case 358: case 360: case 361: case 362: case 363: case 364: case 370:
+        return 1;
+    default: break;
+    }
     if(id==UINT32_MAX || id==359 || id==219 || id==220)return 1;   /* 空位、回城卷轴 / 书（原版取槽时自己换号，按数量判）不归这里 | Empty slots and town portal scrolls / tomes (the original game swaps the number itself when fetching the slot, judged by quantity) are not handled here */
     uint64_t pl=((uint64_t(*)(uint32_t))(b+0x45f9d0))(*(const uint32_t*)(b+0x2d20e4c)); if(!pl)return 1;
     uint8_t ver=*(uint8_t*)(pl+0x1bd); if(ver<1 || ver>3)return 1;

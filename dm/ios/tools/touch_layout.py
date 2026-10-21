@@ -979,7 +979,7 @@ def _chronicle_killboard(s):
     # All four tabs are widened uniformly and the row stays centered (the Chinese row gets wider as well, an intentional change); 4 × 320 + gaps = 1286,
     # panel inner width 1730, same units for the iPad profile
     for a, b in (('"tabSize": { "x": 266, "y": 121 },', '"tabSize": { "x": 320, "y": 121 },'), ('"tabCount": 3,', '"tabCount": 4,'), ('"inactiveFrames": [ 0, 0, 0],', '"inactiveFrames": [ 0, 0, 0, 0],'), ('"activeFrames": [ 1, 1, 1],', '"activeFrames": [ 1, 1, 1, 1],'),
-                 ('"textStrings": [ "@Unique", "@Sets", "@Runewords"],', '"textStrings": [ "@Unique", "@Sets", "@Runewords", "@Bosses"],'),
+                 ('"textStrings": [ "@Unique", "@Sets", "@Runewords"],', '"textStrings": [ "@Unique", "@Sets", "@dmChronRunewords", "@Bosses"],'),   # 第三项换表里的串：西语原版「Palabras rúnicas」在 320 宽里被截成「Palabras …」（西语截图），中英与原版同字 | The third item uses the string from our table: original Spanish "Palabras rúnicas" is truncated to "Palabras …" in 320 width (Spanish screenshot); Chinese and English match the original
                  ('"ChroniclePanelMessage:ToggleChildPanel:ChronicleRunewordsListPanel"', '"ChroniclePanelMessage:ToggleChildPanel:ChronicleRunewordsListPanel",\n                    "ChroniclePanelMessage:ToggleChildPanel:TouchKillBoard"')):
         if s.count(a) != 1: raise SystemExit('touch_layout：编年史页签条 %s 不是原样（原版布局变了？）' % a)
         s = s.replace(a, b); n += 1
@@ -1180,7 +1180,9 @@ def _settings_tabs(text):
     # Third item 「游戏设定」(Settings): the original English string Game Settings wraps to two lines in the 266-wide tab and the second line is truncated to "Se..." (English version audit); the touch tab bar uses the string from our table instead (Chinese unchanged, English Settings). The controller layout tab bar is the original and is left alone
     if new.count('"@GameSettingsTab"') != 1: raise SystemExit('touch_layout：页签条第三项不是原样「游戏设定」（原版布局变了？）')
     new = new.replace('"@GameSettingsTab"', '"@dmTabGameSettings"')
-    new = new.replace('"@Controls"', '"@KeyBindingTypeCustom"').replace('SettingsPanelMessage:CheckChanges:KeyBindingMenu', 'SettingsPanelMessage:CheckChanges:VideoOptionsPanel')
+    # 第四项「自定义」同理：原版串 KeyBindingTypeCustom 的西语「Personalizar」在页签里被截成「Persona…」（西语截图），页签用我们表里的短词（页面大标题仍用原版串）
+    # The fourth item "Custom" likewise: the original string KeyBindingTypeCustom in Spanish "Personalizar" is truncated to "Persona…" in the tab (Spanish screenshot), so the tab uses the short word from our table (the page heading still uses the original string)
+    new = new.replace('"@Controls"', '"@dmTabCustom"').replace('SettingsPanelMessage:CheckChanges:KeyBindingMenu', 'SettingsPanelMessage:CheckChanges:VideoOptionsPanel')
     return new, n + k + 1
 def _drop_rows(*rows):
     """把选项表里的整行（TableRowWidget "Row <名>"）删掉：表格按剩下的行重排，不留空行。每个名字必须恰好删到一行。 | Delete whole rows (TableRowWidget "Row <name>") from the options table: the table re-lays out the remaining rows and leaves no empty row. Each name must delete exactly one row."""
@@ -1218,8 +1220,7 @@ _CUSTOM_KEYS = (('auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes'
 def _custom_key(key): return 'dmCustom' + ''.join(w.capitalize() for w in key.split('_'))   # auto_mana → dmCustomAutoMana（布局里 @键 遇下划线就断，键名不能带 _） | auto_mana → dmCustomAutoMana (in layouts @key stops at an underscore, so key names cannot contain _)
 def _custom_label(key):
     import dm_i18n
-    t = {k: (zh, en) for k, zh, en in dm_i18n.rows()}[_custom_key(key)]
-    if t[0].count('\n') != t[1].count('\n'): raise SystemExit('touch_layout：自定义页 %s 的中英行数不同：%r / %r' % (key, t[0], t[1]))
+    t = {r[0]: r[1:] for r in dm_i18n.rows()}[_custom_key(key)]   # （中文, English, Español, Español MX）；各语言行数相同由 dm_i18n.rows() 把关 | (Chinese, English, Español, Español MX); equal line counts across languages enforced by dm_i18n.rows()
     return t[0]
 _CUSTOM_ROWS = tuple((k, '@' + _custom_key(k)) for k in _CUSTOM_KEYS)
 # 视频页的类会把它不认识的表格行整行隐藏（控件树：我们的行 +0x50 = 0，只剩没有勾选框的标题行可见），所以各行不进表格；
@@ -1233,7 +1234,7 @@ _CUSTOM_ROWS = tuple((k, '@' + _custom_key(k)) for k in _CUSTOM_KEYS)
 # Dimensions are taken from the values the table lays out in the same widget tree: row height 180; text 1000×180; checkbox at x 1315 within the row, 70×70, vertically centered. Header row 180 (the gold divider line below it is placed for a 180 row height).
 # The first row is the language switch (also first in the host's key table), followed by the rows of _CUSTOM_KEYS; adding a row = adding a key to _CUSTOM_KEYS (and to k_keys in the host's dm_custom.c in the same order)
 _CUSTOM_TITLE_H, _CUSTOM_LINE_H = 180, 180
-_CUSTOM_ALL = (('lang_en', '@dmCustomLang'),) + _CUSTOM_ROWS
+_CUSTOM_ALL = (('lang', '@dmCustomLang'),) + _CUSTOM_ROWS
 _CUSTOM_TEST_ROWS = int(os.environ.get('DM_CUSTOM_TEST_ROWS', '0'))   # 测试（造现场）：末尾多摆这么多行假行，验更多行时的滚动；产品不设 | test (test setup): append this many dummy rows at the end, to verify scrolling with more rows; not set in the product
 # 「3D 画质」（q3d）是单选的两项、每项下面一行说明小字，占两行高（_CUSTOM_Q3D_H）；其余各行一行高
 # "3D Quality" (q3d) is a radio with two options, each with a line of small description text below, taking two rows of height (_CUSTOM_Q3D_H); every other row is one row high
@@ -1251,19 +1252,19 @@ def _custom_toggle_row(i, key, label):
             '            "untoggledFrame": 0, "untoggledPressedFrame": 1, "untoggledHoveredFrame": 3, "untoggledDisabledFrame": 2,\n'
             '            "toggledFrame": 4, "toggledPressedFrame": 5, "toggledHoveredFrame": 6,\n'
             '            "onClickMessage": "PanelManager:ClosePanel:TouchCustom_%s" } },\n') % (key, y, h, label, key, y + (h - 70) // 2, key)
-# 语言开关（第一行，普通行）：勾上 = 英文界面 + 英文语音，下次启动生效（宿主 dm_custom.c 的 lang_en、hle_fs.c settings_lang_apply）。
+# 语言开关（第一行，普通行）：四项单选「中文 / English / Español / Русский」，下次启动生效（宿主 dm_custom.c 的 lang、hle_fs.c settings_lang_apply）。
 # 「重启游戏后生效」那句先放在屏外，勾选与当前语言不一致时宿主挪到这一行文字的下半（横坐标取标签的）
-# Language switch (first row, an ordinary row): checked = English UI + English voice, effective at the next launch (lang_en in the host's dm_custom.c, settings_lang_apply in hle_fs.c).
-# The line 「重启游戏后生效」(Takes effect after restarting the game) is first placed off screen; when the checkbox does not match the current language the host moves it to the lower half of this row's text (x taken from the label)
+# Language switch (first row, a regular row): four-option radio "中文 / English / Español / Русский", takes effect on next launch (host dm_custom.c lang, hle_fs.c settings_lang_apply).
+# The "takes effect after restart" sentence starts off-screen; when the checked option differs from the current language the host moves it to the lower half of this row (x taken from the label)
 _CUSTOM_LANG_HINT = ''.join('        { "type": "TextBoxWidget", "name": "TouchCustomLangHint%s", "fields": { "rect": { "x": 99999, "y": %d, "width": 1400, "height": 60 }, "text": "@dmCustomLangHint%s", "style": "$StyleSettingsText", "style/fontFace": "BlizzardGlobal" } },\n'
-                            % (n, _CUSTOM_Y[0] + 112, n) for n in ('Zh', 'En'))   # 两句各一个控件，宿主按选中的语言摆其中一句 | One control per sentence; the host places one of them according to the chosen language
-# 语言那一行是并排的两个选项「中文 / English」（单选：宿主 dm_custom.c 让两个勾选框互斥，存的仍是 lang_en 一个键）。
-# 这一行的字两种界面都要写汉字：英文界面缺省的 Formal 字体没有汉字（缺字画不出），所以这几个文字控件指定原版的全球字体 BlizzardGlobal
-# （原版标题页、队伍名等同样按控件指定它）。English 的勾选框留在各行勾选框那一列，「中文」的在它左边
-# The language row is two options side by side, 「中文 / English」 (single choice: the host dm_custom.c makes the two checkboxes mutually exclusive, and what is stored is still the one key lang_en).
-# The text of this row has to show Chinese characters in both UIs: the default Formal font of the English UI has no Chinese characters (missing glyphs cannot be drawn), so these text controls specify the original global font BlizzardGlobal
-# (the original title page, party names and so on specify it per control in the same way). The checkbox of English stays in the column where every row has its checkbox; the one of 「中文」 is to its left
-_LANG_ZH_X, _LANG_EN_X = (770, 905), (1100, 1315)   # （文字 x，勾选框 x） | (text x, checkbox x)
+                            % (n, _CUSTOM_Y[0] + 112, n) for n in ('Zh', 'En', 'Es', 'Ru'))   # 四句各一个控件，宿主按选中的语言摆其中一句 | One widget per sentence; the host shows the one for the selected language
+# 语言那一行是并排的四个选项「中文 / English / Español / Русский」（单选：宿主 dm_custom.c 让四个勾选框互斥，存的是 lang 一个键）。
+# 这一行的字各界面都要写汉字：英文 / 西语 / 俄语界面缺省的 Formal 字体没有汉字（缺字画不出），所以这几个文字控件指定原版的全球字体 BlizzardGlobal
+# （原版标题页、队伍名等同样按控件指定它）。Русский 的勾选框留在各行勾选框那一列（x 1315），Español、English、中文依次在它左边
+# The language row is four side-by-side options "中文 / English / Español / Русский" (radio: host dm_custom.c makes the four checkboxes mutually exclusive, storing one key lang).
+# This row must show Chinese characters in every UI: the default Formal font of the English / Spanish / Russian UI has no Chinese glyphs, so these text widgets specify the original global font BlizzardGlobal
+# (the original title page, party names etc. likewise specify it per widget). The Русский checkbox stays in the checkbox column of the other rows (x 1315); Español, English and 中文 sit to its left in turn
+_LANG_ZH_X, _LANG_EN_X, _LANG_ES_X, _LANG_RU_X = (220, 430), (515, 725), (810, 1020), (1105, 1315)   # （文字 x，勾选框 x）；文字 200 宽：English / Español / Русский 在 180 宽里会被折成「Englis h」（真机截图）；四项一组，最后一格留在各行勾选框那一列（x 1315） | (text x, checkbox x); text 200 wide: at 180 wide English / Español / Русский wrap to "Englis h" (device screenshot); four options in a group, the last one stays in the checkbox column of the other rows (x 1315)
 def _custom_lang_row():
     y, h = _CUSTOM_Y[0], 112; cy = y + (h - 70) // 2   # 标签、两个选项排在这一行的上 112，下面 68 留给提示那一句 | The label and the two options go in the top 112 of this row; the bottom 68 is left for the hint sentence
     def text(name, x, w, key): return ('        { "type": "TextBoxWidget", "name": "%s", "fields": { "rect": { "x": %d, "y": %d, "width": %d, "height": %d }, "text": "@%s", "style": "$StyleSettingsText", "style/fontFace": "BlizzardGlobal" } },\n' % (name, x, y, w, h, key))
@@ -1274,9 +1275,11 @@ def _custom_lang_row():
             '            "untoggledFrame": 0, "untoggledPressedFrame": 1, "untoggledHoveredFrame": 3, "untoggledDisabledFrame": 2,\n'
             '            "toggledFrame": 4, "toggledPressedFrame": 5, "toggledHoveredFrame": 6,\n'
             '            "onClickMessage": "PanelManager:ClosePanel:%s" } },\n') % (name, x, cy, name)
-    return (text('TouchCustom_lang_en_Text', 0, 700, 'dmCustomLang')
+    return (text('TouchCustom_lang_Text', 0, _LANG_ZH_X[0] - 20, 'dmCustomLang')   # 标签只占左半，右边让给四项 | The label takes only the left part; the right side is left to the four options
             + text('TouchCustomLangZh_Text', _LANG_ZH_X[0], _LANG_ZH_X[1] - _LANG_ZH_X[0] - 10, 'dmCustomLangZh') + box('TouchCustom_lang_zh', _LANG_ZH_X[1])
-            + text('TouchCustomLangEn_Text', _LANG_EN_X[0], _LANG_EN_X[1] - _LANG_EN_X[0] - 10, 'dmCustomLangEnOpt') + box('TouchCustom_lang_en', _LANG_EN_X[1]))
+            + text('TouchCustomLangEn_Text', _LANG_EN_X[0], _LANG_EN_X[1] - _LANG_EN_X[0] - 10, 'dmCustomLangEnOpt') + box('TouchCustom_lang_en', _LANG_EN_X[1])
+            + text('TouchCustomLangEs_Text', _LANG_ES_X[0], _LANG_ES_X[1] - _LANG_ES_X[0] - 10, 'dmCustomLangEsOpt') + box('TouchCustom_lang_es', _LANG_ES_X[1])
+            + text('TouchCustomLangRu_Text', _LANG_RU_X[0], _LANG_RU_X[1] - _LANG_RU_X[0] - 10, 'dmCustomLangRuOpt') + box('TouchCustom_lang_ru', _LANG_RU_X[1]))
 # 「分辨率」（仅 Android，DM_TOUCH_RES_TIER=1 时才有这一行）：省电 / 标准 / 高清 并排单选，存一个键 q_res（0/1/2）。
 # 改了这一项要**重启游戏**才生效：出图分辨率是启动时按预算一次算好的（docs/android-resolution-plan.zh-CN.md）。
 # "Resolution" (Android only, this row exists only when DM_TOUCH_RES_TIER=1): Battery saver / Standard / High side by side, storing one key q_res (0/1/2).

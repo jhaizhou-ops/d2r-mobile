@@ -39,7 +39,7 @@ Double-click the App. The first launch asks you to choose the **game resource fo
 
 A key reference is then shown once; afterwards it is under Help in the menu bar.
 
-Language: the first launch follows the system language (Chinese systems start in Chinese, everything else in English). To change it: Options → Custom, the language switch in the first row → Accept All → close and reopen the App.
+Language: the first launch follows the system language (Chinese systems start in Chinese, Spanish in Spanish, Russian in Russian, everything else in English). To change it: Options → Custom, the language switch in the first row → Accept All → close and reopen the App.
 
 ## Keyboard ↔ gamepad
 

@@ -145,10 +145,10 @@ _devlock_acquire() {
     return 0
   fi
   # 电量闸：取真机锁 device.lock 前过 devbattery.sh——低于 30% 暂停、充到 60% 放行；拒绝时每分钟重读，
-  # 一直不放行等满 DM_DEVBATTERY_WAIT_S（缺省 3600）秒就记【红】退出调用脚本（退出码 4）。只管真机锁 $DM_ROOT/run/ios/device.lock（单测的临时锁目录不过闸）；DM_DEVBATTERY=0 跳过、=1 强制过闸
-  # Battery gate: before taking the real-device lock device.lock, go through devbattery.sh - below 30% pause, charged to 60% pass; when refused, re-read every minute,
-  # and if it never passes after waiting the full DM_DEVBATTERY_WAIT_S (default 3600) seconds, log 【红】(red) and exit the calling script (exit code 4). Applies only to the real-device lock $DM_ROOT/run/ios/device.lock (temporary lock directories of unit tests do not go through the gate); DM_DEVBATTERY=0 skips, =1 forces the gate
-  if { [ "$DEVLOCK_DIR" = "${DM_ROOT:-$HOME/dm-work}/run/ios/device.lock" ] && [ "${DM_DEVBATTERY:-1}" != 0 ]; } || [ "${DM_DEVBATTERY:-}" = 1 ]; then
+  # 一直不放行等满 DM_DEVBATTERY_WAIT_S（缺省 3600）秒就记【红】退出调用脚本（退出码 4）。只管真机锁：DM_DEVBATTERY_LOCKS 列出的锁目录（空格分隔，缺省 $DM_ROOT/run/ios/device.lock；mini 的测试机2 锁 device2.lock 在那边的配置里加进来），单测的临时锁目录不过闸；DM_DEVBATTERY=0 跳过、=1 强制过闸
+  # Battery gate: go through devbattery.sh before taking the device lock device.lock - pause below 30%, release once charged to 60%; while refused, re-read every minute,
+  # and if still refused after DM_DEVBATTERY_WAIT_S (default 3600) seconds, log a failure and exit the calling script (exit code 4). Only device locks are gated: the lock directories listed in DM_DEVBATTERY_LOCKS (space-separated, default $DM_ROOT/run/ios/device.lock; the second test device's lock device2.lock is added in that machine's configuration); unit tests' temporary lock directories skip the gate; DM_DEVBATTERY=0 skips, =1 forces the gate
+  if { [[ " ${DM_DEVBATTERY_LOCKS:-${DM_ROOT:-$HOME/dm-work}/run/ios/device.lock} " == *" $DEVLOCK_DIR "* ]] && [ "${DM_DEVBATTERY:-1}" != 0 ]; } || [ "${DM_DEVBATTERY:-}" = 1 ]; then
     source "$(dirname "${BASH_SOURCE[0]}")/devbattery.sh"
     local bw0=$SECONDS bwmax=${DM_DEVBATTERY_WAIT_S:-3600}
     local brc

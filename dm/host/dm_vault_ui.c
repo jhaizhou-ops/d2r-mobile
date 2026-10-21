@@ -83,7 +83,7 @@ static void vu_color(uint8_t *b, uint64_t w, int r, int g, int bl) {   // 文字
     if (!vu_guard(w, "改字色") || *(uint64_t *)w - (uint64_t)(uintptr_t)b != 0x20ba4c8) return; int32_t *c = (int32_t *)(w + 0xbc); if (c[0] == r && c[1] == g && c[2] == bl) return;
     c[0] = r; c[1] = g; c[2] = bl; ((void (*)(uint64_t))(b + 0xadc434))(w);
 }
-static const char *vu_str(uint8_t *b, const char *key) { struct { const char *k; uint64_t n; } s = { key, strlen(key) }; const char *r = ((const char *(*)(void *))(b + 0x7f5630))(&s); return r && *r ? r : key; }   // 取本地化串（旧译名开着时游戏自己换） | Get a localized string (the game swaps it itself when legacy translations are on)
+static const char *vu_str(uint8_t *b, const char *key) { struct { const char *k; uint64_t n; } s = { key, strlen(key) }; const char *r = dm_untag(((const char *(*)(void *))(b + 0x7f5630))(&s)); return r && *r ? r : key; }   // 取本地化串（跳过西语串首的性别标记）（旧译名开着时游戏自己换） | Get the localized string (skipping the gender marker at the start of Spanish strings) (the game swaps it itself when old names are on)
 // 格子里只写名字本身：开了「物品注释」（自定义页，annot_strings.py）时名字串是多行「[范围行\n]ÿc2点评\n<名字色>名字」（游戏倒着画，最后一行在最上面），
 // 取最后一行、去掉开头的颜色码（ÿc + 一个字符：UTF-8 C3 BF 63，或游戏内部的 U+E07E = EE 81 BE），格子里放不下多行（Mac 上的 iOS 包实测整格被注释占满）
 // Only the name itself goes in the cell: with 「物品注释」(Item Annotations) on (custom page, annot_strings.py) the name string is the multi-line "[range line\
@@ -291,13 +291,20 @@ int dm_vault_ui_tip_gate(int x, int y) {
     if (vu_hit(vu_find(vt, "TouchV_TipBg", 0), x, y)) return 1;
     vu_tip(b, vt, NULL); g_tip_on = 0; LOG("编年史仓库：点了说明框外 → 收起说明框，这一下不做别的"); return 1;
 }
-// 名字里含搜索字，英文字母不分大小写（英文版：物品名是 Harlequin Crest 这种首字母大写的写法，玩家打小写也要搜到）；中文等多字节字符逐字节比，不受影响
-// The name contains the search text, case-insensitive for English letters (English version: item names are capitalized like Harlequin Crest,
-// and a player typing lowercase must still find them); multi-byte characters such as Chinese are compared byte by byte and are not affected
+// 名字里含搜索字：拉丁字母不分大小写、不分重音（物品名是 Harlequin Crest / Yelmo de Arlequín 这种写法，玩家打 arlequin 也要搜到）；
+// UTF-8 的 Latin-1 段（C3 xx：á é í ó ú ü ñ ç 及大写）折成不带重音的小写 ASCII 再比，中文等其余多字节字符原样比
+// Name contains the search text: Latin letters are case- and accent-insensitive (item names are written like Harlequin Crest / Yelmo de Arlequín, and a player typing arlequin must still find it);
+// the Latin-1 range of UTF-8 (C3 xx: á é í ó ú ü ñ ç and uppercase) is folded to unaccented lowercase ASCII before comparing; Chinese and other multibyte characters are compared as-is
+static void vu_fold(const char *s, char *o, size_t cap) {
+    static const char lat[64] = "aaaaaaaceeeeiiiidnooooo*ouuuuyts" "aaaaaaaceeeeiiiidnooooo/ouuuuyty";   // U+00C0–U+00FF 依次折成的字母 | Letters that U+00C0–U+00FF fold to, in order
+    size_t k = 0; for (const unsigned char *p = (const unsigned char *)s; *p && k + 1 < cap; p++) {
+        if (*p == 0xC3 && p[1] >= 0x80 && p[1] <= 0xBF) { o[k++] = lat[p[1] - 0x80]; p++; }
+        else o[k++] = (char)(*p < 0x80 ? tolower(*p) : *p); }
+    o[k] = 0; }
 static int vu_has(const char *name, const char *q) {
-    if (!name || !q) return 0; size_t n = strlen(q); if (!n) return 1;
-    for (; *name; name++) { size_t i = 0; while (i < n && name[i] && ((unsigned char)name[i] < 0x80 && (unsigned char)q[i] < 0x80 ? tolower((unsigned char)name[i]) == tolower((unsigned char)q[i]) : name[i] == q[i])) i++; if (i == n) return 1; }
-    return 0;
+    if (!name || !q) return 0; if (!*q) return 1;
+    char fn[512], fq[256]; vu_fold(name, fn, sizeof fn); vu_fold(q, fq, sizeof fq);
+    return strstr(fn, fq) != NULL;
 }
 // 搜索：名字包含搜索字（游戏此刻显示的名字：开了旧译名就是旧译名）的暗金与套装件，跨部位；存着 → 收录过 → 没遇到过，同状态按表里的次序。放在暗金那张 3×6 格里，套装件名字绿色
 // Search: unique and set items whose name contains the search text (the name the game currently displays: with legacy translations on, that is the legacy name), across slots; stored → recorded → never encountered, and within the same state in table order. Placed in the unique 3×6 grid, with set item names in green
@@ -456,7 +463,7 @@ void dm_vault_ui_pump(void) {
     int grid = g_sub == 0 || g_query[0]; vu_move(vu_find(vt, "TouchV_Uniq", 0), grid ? 156 : 99999, VU_UNIQ_Y); vu_move(vu_find(vt, "TouchV_Sets", 0), grid ? 99999 : 156, 296);
     if (dirty && g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; }   // 内容变了（翻页、切子页、搜索、存取）：说明框收起；每半秒的例行重画不收 | Contents changed (page flip, sub-page switch, search, store / withdraw): the tooltip is closed; the routine half-second redraw does not close it
     if (g_query[0]) vu_search(b, vt); else if (g_sub == 0) vu_uniques(b, vt); else vu_sets(b, vt);
-    { struct { const char *s; uint64_t n; } key = { "SharedStashPage", 15 }; uint64_t fmt = ((uint64_t (*)(void *))(b + 0x7f5630))(&key); char pt[256]; memset(pt, 0, sizeof pt);   // 原版共享页页码的写法「第 n/m 页」（同 dm_cursor.c pages_text）： | The original game's way of writing the shared page number, 「第 n/m 页」(Page n/m) (same as dm_cursor.c pages_text):
+    { struct { const char *s; uint64_t n; } key = { "dmVaultPage", 11 };   /* 我们表里的页码串（中英与原版 SharedStashPage 同字；西语原版「Página %u/%u」放不进 280 宽的页码框，用「Pág.」） | Page-number string from our table (Chinese and English match the original SharedStashPage text; the original Spanish "Página %u/%u" doesn't fit the 280-wide page box, so use "Pág.") */ uint64_t fmt = ((uint64_t (*)(void *))(b + 0x7f5630))(&key); char pt[256]; memset(pt, 0, sizeof pt);   // 原版共享页页码的写法「第 n/m 页」（同 dm_cursor.c pages_text）： | The original game's way of writing the shared page number, 「第 n/m 页」(Page n/m) (same as dm_cursor.c pages_text):
       ((void (*)(void *, uint64_t, int64_t, int64_t))(b + 0x399130))(pt, fmt, g_pg_cur, g_pg_tot); vu_text(b, vu_find(vt, "TouchV_Page", 0), pt);
       vu_frame(vu_find(vt, "TouchV_PgL", 0), g_pg_cur > 1 ? 0 : 3); vu_frame(vu_find(vt, "TouchV_PgR", 0), g_pg_cur < g_pg_tot ? 0 : 3); }   // 到头的那一侧箭头换成原版「不可用」那一帧   // 部位名已在下拉里，原先「鞋子与腰带 1 / 2」超出页码框被截成「鞋子与腰…」 | The arrow on the side that has reached the end switches to the original "disabled" frame   // the body location name is already in the dropdown; previously 「鞋子与腰带 1 / 2」(Boots & Belts 1 / 2) overflowed the page number box and was truncated to 「鞋子与腰…」(Boots and Be...)
 }

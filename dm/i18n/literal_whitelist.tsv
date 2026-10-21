@@ -77,8 +77,6 @@ ios/tools/gen_hud_v4.py	生命法力	生命 / 法力字形集的中文部分（�
 ios/tools/gen_hud_v4.py	攻击	lbl_main.png 烘了但前端画不到（主钮有图标时不写字，盘点待定 2）
 host/dm_beltauto.c	*	腰带读数（红 / 蓝 / 紫 / 列 N）只拼进日志行，不上屏
 host/dm_rift.c	@place_door	开门时的日志标签（哈洛加斯 / 结算处…），不上屏
-host/dm_rift.c	@dm_door_label	门名牌自带中英两个参数（挂进原版串表，跟游戏语言走），不走这张表
-host/dm_bossrush.c	@dm_door_label	同上
 ios/tools/gen_romfs_overlay.py	DM_ASTC_PACK 目录里缺	构建脚本的报错，不上屏
 ios/Sources/main.m	按测试开关 DM_TEST_NO_BC	只在测试开关下出现的日志行
 ios/Sources/main.m	不支持——不起游戏	只进日志
@@ -100,7 +98,7 @@ host/dm_kills.c	@DM_WIDGET_OK	控件类型核对的日志标签（dm_widget.h）
 host/dm_custom.c	@DM_WIDGET_OK	同上
 host/dm_rift_ui.c	@DM_WIDGET_OK	同上
 host/dm_autobuff.c	*	技能名、排除理由、测试读数都只进日志；这个功能屏上没有自己的文字（玩家看到的是原版的施法动作）
-ios/Sources/dm_shader_prep.m	*	公开版壳专用的「首次准备着色器」页（整个文件在 #ifdef DM_SHELL 里，内测包不编）：这时宿主与中英表还没起，中英两套文字就写在文件里、跟系统语言走
+ios/Sources/dm_shader_prep.m	*	公开版壳专用的「首次准备着色器」页（整个文件在 #ifdef DM_SHELL 里，内测包不编）：这时宿主与中英表还没起，中英西三套文字就写在文件里、跟系统语言走
 host/dm_rift.c	（第 1 波）	只进日志：刷守护者那行标第几波（分波时）
 host/dm_rift.c	（第 2 波）	同上
 host/dm_rift.c	（第 3 波）	同上

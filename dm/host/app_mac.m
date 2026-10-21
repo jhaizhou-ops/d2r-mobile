@@ -12,6 +12,8 @@
 #include <sys/stat.h>
 #include "hle.h"
 #include "dm_i18n.h"
+#include "dm_custom.h"
+#include "app_mac_overlay.h"
 #define T(k) (@(dm_ui(k)))
 
 #ifndef APP_NAME
@@ -122,7 +124,9 @@ int dm_app_bootstrap(int *argc, char ***argv) {
         // The bundle identifier has changed (the internal build switched to the same identifier as the iOS package for iCloud): preferences are scoped by bundle identifier, so the two items - the chosen resource folder and having seen the key reference - are carried over once from the old domain (the identifier of public builds), to avoid choosing again
         if (![ud stringForKey:kRomfsKey] && ![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"org.d2rmobile.mac"]) { NSUserDefaults *old = [[NSUserDefaults alloc] initWithSuiteName:@"org.d2rmobile.mac"]; NSString *r = [old stringForKey:kRomfsKey];
             if (r) { [ud setObject:r forKey:kRomfsKey]; if ([old boolForKey:@"KeysShown"]) [ud setBool:YES forKey:@"KeysShown"]; LOG("App：从旧包标识的偏好里接过资源文件夹 %s", r.UTF8String); } }
-        NSString *saved = [ud stringForKey:kRomfsKey], *why = nil, *rom = saved ? romfs_root(saved, &why) : nil;
+        NSString *saved = [ud stringForKey:kRomfsKey], *why = nil, *bundled = res_item(@"romfs");
+        NSString *rom = bundled ? romfs_root(bundled, &why) : saved ? romfs_root(saved, &why) : nil;
+        if (bundled && !rom) { alert(T("dmAppNotRomfsTitle"), why ?: T("dmAppNoRead")); exit(2); }
         if (getenv("DM_APP_ROMFS")) {   // 测试（没人点对话框时用）：直接给资源文件夹；不对就把同一句报错写进日志并退出，不弹框、不记进偏好 | Test (for when nobody is there to click the dialog): give the resource folder directly; if it is wrong, write the same error sentence to the log and exit, with no dialog and nothing saved to preferences
             rom = romfs_root(@(getenv("DM_APP_ROMFS")), &why);
             if (!rom) { LOG("【红】App：DM_APP_ROMFS 给的不是游戏资源文件夹：%s", why.UTF8String); exit(2); }
@@ -142,7 +146,9 @@ int dm_app_bootstrap(int *argc, char ***argv) {
         if ([fm fileExistsAtPath:shmap]) setenv("DM_NVN_SHMAP", shmap.fileSystemRepresentation, 1);
         NSString *msl = res_item(@"msl");   // 编好的着色器库（msl/b-<翻译链版本>/） | The compiled shader library (msl/b-<translation chain version>/)
         if (msl) setenv("DM_MSL_DIR", msl.fileSystemRepresentation, 1);
-        NSString *ov = res_item(@"romfs_overlay");
+        BOOL missing_overlay = NO;
+        NSString *ov = dm_mac_overlay(res_item(@"romfs_overlay"), res_item(@"romfs_overlay_variants"), dm_custom_get, &missing_overlay);
+        if (missing_overlay) LOG("App：缺少已启用自定义功能的覆盖层组合，暂用基础覆盖层；请重新生成并打包覆盖层");
         if (ov) setenv("DM_ROMFS_OVERLAY", ov.fileSystemRepresentation, 1);
         static char *av[5]; av[0] = (*argv)[0]; av[1] = strdup(prod.fileSystemRepresentation); av[2] = "main"; av[3] = "sdk"; av[4] = NULL;
         *argv = av; *argc = 4;

@@ -240,7 +240,14 @@ static int first_listing_ok(double deadline) {
     if (e) { sscanf(e, "%d,%d,%d,%d", &got, &listed, &present, &net); }
     else {
         __block int g = 0, n = 0, pr = 0; dispatch_semaphore_t sem = dispatch_semaphore_create(0); __block NSMetadataQuery *q = nil; __block id obs = nil;
-        dispatch_async(dispatch_get_main_queue(), ^{   // 元数据查询要挂在有运行循环的线程上 | the metadata query has to be attached to a thread with a run loop
+        // 元数据查询要挂在有运行循环的线程上。iOS 外壳在 boot 子线程上调 dm_cloud_boot，派发到主线程没问题；
+        // 但 Mac 宿主在 main() 主线程上直接调（main.c），此时主线程还没进 run loop——派发到主线程自己再等它就是死锁（永远「收集未完成」）。
+        // 所以：已经在主线程时就地起查询，用局部 run loop 驱动到收集完成或超时，不再派发。
+        // The metadata query must live on a thread with a run loop. The iOS shell calls dm_cloud_boot on a boot thread, so dispatching to the main thread is fine;
+        // but the Mac host calls it directly on the main thread in main() (main.c), where the main thread has not entered its run loop yet - dispatching to the main thread and then waiting on it deadlocks (always "gathering unfinished").
+        // So: when already on the main thread, start the query in place and drive a local run loop until gathering finishes or the deadline passes.
+        BOOL on_main = NSThread.isMainThread;
+        void (^startq)(void) = ^{
             q = [NSMetadataQuery new]; q.searchScopes = @[NSMetadataQueryUbiquitousDocumentsScope];
             q.predicate = [NSPredicate predicateWithFormat:@"%K LIKE '*.pack'", NSMetadataItemFSNameKey];
             obs = [NSNotificationCenter.defaultCenter addObserverForName:NSMetadataQueryDidFinishGatheringNotification object:q queue:nil usingBlock:^(NSNotification *note) { (void)note;
@@ -249,10 +256,19 @@ static int first_listing_ok(double deadline) {
                     NSString *ph = [u.path.stringByDeletingLastPathComponent stringByAppendingPathComponent:[NSString stringWithFormat:@".%@.icloud", u.lastPathComponent]];
                     if ([fm fileExistsAtPath:u.path] || [fm fileExistsAtPath:ph]) pr++; }
                 g = 1; [q stopQuery]; [NSNotificationCenter.defaultCenter removeObserver:obs]; dispatch_semaphore_signal(sem); }];
-            if (![q startQuery]) { [NSNotificationCenter.defaultCenter removeObserver:obs]; dispatch_semaphore_signal(sem); } });
+            if (![q startQuery]) { [NSNotificationCenter.defaultCenter removeObserver:obs]; dispatch_semaphore_signal(sem); } };
         double left = deadline - CFAbsoluteTimeGetCurrent(); if (left < 0.5) left = 0.5;
-        if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(left * NSEC_PER_SEC))))
-            dispatch_async(dispatch_get_main_queue(), ^{ if (q) { [q stopQuery]; if (obs) [NSNotificationCenter.defaultCenter removeObserver:obs]; } });
+        if (on_main) {
+            startq();
+            NSDate *until = [NSDate dateWithTimeIntervalSinceNow:left];
+            while (!g && until.timeIntervalSinceNow > 0)
+                [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:MIN(0.05, until.timeIntervalSinceNow)]];
+            if (!g) { [q stopQuery]; if (obs) [NSNotificationCenter.defaultCenter removeObserver:obs]; }
+        } else {
+            dispatch_async(dispatch_get_main_queue(), startq);
+            if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(left * NSEC_PER_SEC))))
+                dispatch_async(dispatch_get_main_queue(), ^{ if (q) { [q stopQuery]; if (obs) [NSNotificationCenter.defaultCenter removeObserver:obs]; } });
+        }
         got = g; listed = n; present = pr;
         __block int ns = 0; dispatch_semaphore_t ps = dispatch_semaphore_create(0); nw_path_monitor_t m = nw_path_monitor_create();
         nw_path_monitor_set_queue(m, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));

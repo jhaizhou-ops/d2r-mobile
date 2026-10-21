@@ -135,7 +135,7 @@ targets:
       CODE_SIGN_STYLE: Automatic
       TARGETED_DEVICE_FAMILY: $(DM_DEVICE_FAMILY)   # 设备族：缺省同时面向 iPhone 与 iPad（"1,2"）；只要 iPhone 时构建传 DM_DEVICE_FAMILY=1 | Device family: targets both iPhone and iPad by default ("1,2"); for iPhone only, pass DM_DEVICE_FAMILY=1 to the build
       DM_DEVICE_FAMILY: "1,2"
-      IPHONEOS_DEPLOYMENT_TARGET: "26.4"
+      IPHONEOS_DEPLOYMENT_TARGET: "26.0"
       SWIFT_VERSION: "6.0"
       MARKETING_VERSION: "1.0"
       CURRENT_PROJECT_VERSION: $(DM_BUILD_NUMBER)

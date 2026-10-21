@@ -30,7 +30,7 @@
 #          other off-CPU = interval − CPU − tick wait − queue wait (lock waits, preemption, guest synchronization, etc.)
 #   GPU    @gpu_ms sum of GPU busy time of this frame's command buffers; @gpu_end_ms − @call_ms = how long after the frame-output call the GPU finished;
 #          @pres_at_ms − @gpu_end_ms = from GPU finish to present; @drawable_ms the frame-output thread waiting on nextDrawable
-import re, sys, collections
+import re, sys, collections, math
 
 PERIOD = 1000 / 60
 DROP = PERIOD * 1.5
@@ -113,14 +113,21 @@ def main(argv):
     F, den, raw = load(src)
     ph = phases(open(args[1], errors="replace") if len(args) > 1 else raw)
     frames = sorted(F)
-    has_pres = any("@presented_ms" in F[f] for f in frames)
+    # 有上屏时刻但缺间隔仍是窗口日志，不能用 CPU 提交间隔代替上屏间隔。
+    # A present timestamp without an interval still identifies a windowed log; CPU submission intervals are not presentation intervals.
+    has_pres = any("@presented_ms" in F[f] or "@pres_at_ms" in F[f] for f in frames)
     if den is not None:   # 日志输入：只有掉帧帧的行，分母来自宿主每 300 帧的统计行 | Log input: only lines for dropped frames; the denominator comes from the host's stats line every 300 frames
         print(f"# 日志输入（DM_SLOWFRAME）：宿主判据 {den[2]}，宿主统计 可判 {den[0]} 帧、掉帧 {den[1]} 帧（截至最后一行分母）；日志里掉帧行 {len(frames)} 帧")
     key = "@presented_ms" if has_pres else "@frame_ms"
     def slow(d):
         v = d.get(key)
-        return v is not None and (v > DROP or (has_pres and v < 0))
-    judged = [f for f in frames if key in F[f]]
+        return v is not None and (v > DROP or (has_pres and v == -1))
+    # 0 / 缺值不可判；只接受有限正间隔及上屏丢弃标记 −1，避免稀释分母。
+    # Zero / missing values are unjudged; accept only finite positive intervals and the presentation discard marker -1, so the denominator is not diluted.
+    def valid(d):
+        v = d.get(key)
+        return v is not None and math.isfinite(v) and (v > 0 or (has_pres and v == -1))
+    judged = [f for f in frames if valid(F[f])]
     S = [f for f in judged if slow(F[f])]
     n_cpu = sum(1 for f in frames if F[f].get("@cpu_ms", -1) >= 0)
     print(f"# 帧 {len(frames)}（{frames[0] if frames else '-'}–{frames[-1] if frames else '-'}）；判据 {key} > {DROP:.1f} ms"

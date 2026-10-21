@@ -9,7 +9,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 X=${DM_ROOT:-$HOME/dm-work}
 PY=${DM_PY:-$X/build/cache/dm/venv/bin/python3}
-TR=${DM_RULE_TRUTH:-$X/run/verify/dm/v4_truth_bootstrap_1002/war13_v4}
+TR=${DM_RULE_TRUTH:-$X/data/switch/gate/rulegate_truth_war13_r44}   # 现役真值：data/ 下只读目录，README 有生成命令；不放 run/（会被当临时产物清掉，事故） | Live truth data: a read-only directory under data/ whose README has the generating command; not under run/ (it was wiped there as a temporary output once)
 N=${1:-400}
 OUT_ARG=${2:-out/$(bash "$(dirname "$0")/../tools/product.sh" name rules)}
 case "$N" in ''|*[!0-9]*) echo "RULEGATE RED 拍数非法：$N"; exit 2;; esac

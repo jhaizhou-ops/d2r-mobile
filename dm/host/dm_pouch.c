@@ -396,7 +396,7 @@ static void w_text(uint64_t w, const char *s) {   // 文字控件改字（虚表
     if (*(uint64_t *)(w + 0x90) == n && !memcmp(*(const char **)(w + 0x88), s, n)) return;
     ((void (*)(uint64_t, const char *, uint64_t))(B + 0x136e5c))(w + 0x88, s, n); ((void (*)(uint64_t))(B + 0xadc434))(w); }
 static const char *str_of(uint32_t code) { char k[5] = { 0 }; memcpy(k, &code, 4); for (int i = 3; i >= 0 && k[i] == ' '; i--) k[i] = 0;   // 物品名：原版字符串（键 = 物品码，同 dm_kills.c str_of） | Item name: original game string (key = item code, same as str_of in dm_kills.c)
-    struct { const char *k; uint64_t n; } s = { k, strlen(k) }; const char *r = ((const char *(*)(void *))(B + 0x7f5630))(&s); return r && *r ? r : "?"; }
+    struct { const char *k; uint64_t n; } s = { k, strlen(k) }; const char *r = dm_untag(((const char *(*)(void *))(B + 0x7f5630))(&s)); return r && *r ? r : "?"; }   /* 跳过西语串首的性别标记 | Skip the gender marker at the start of Spanish strings */
 static int g_tip;
 static void tip_show(uint64_t root, int on) {
     uint64_t tb = find_w(root, "TouchPouchTip", 1), bg = find_w(root, "TouchPouchTipBg", 1), box = find_w(root, "TouchPouch", 1); if (!tb || !bg || !box) return;

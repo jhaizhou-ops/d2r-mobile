@@ -67,6 +67,7 @@ static void loc_tb(uint8_t *b, const char *key, char *out, size_t n) {
     dm_textbox_ensure_loaded();   // 表由门 14 第一次触发时读；门没挂（DM_TEXTBOX_OFF / rules 产物）或清单比任何文字框先取名字时，这里先读 | The table is read when gate 14 first fires; when the gate is not hooked (DM_TEXTBOX_OFF / rules build output) or the list fetches names before any text box does, read it here first
     const char *s = loc_str(b, key); char *o = NULL; size_t on = 0;
     if (dm_textbox_rewrite(s, strlen(s), &o, &on) && o) { snprintf(out, n, "%s", o); free(o); } else snprintf(out, n, "%s", s);
+    { const char *u = dm_untag(out); if (u != out) memmove(out, u, strlen(u) + 1); }   // 串首的语法性别标记（西语）去掉 | Strip the grammatical gender marker at the start of the string (Spanish)
 }
 #define CC "\xee\x81\xbe"   // 颜色码前缀（游戏串里的 ÿc），后接颜色号：0 白 1 红 4 金 5 灰 | Color code prefix (ÿc in game strings), followed by the color number: 0 white 1 red 4 gold 5 gray
 static void send_pkt(uint8_t *b, const uint8_t *p, int n) { ((void (*)(const uint8_t *, int))(b + 0x2ceab0))(p, n); }

@@ -207,6 +207,10 @@ void front_run(void (*guest)(void)) {
         [v.layer addSublayer:g_layer]; layout_game();
         [win center];
         g_live = getenv("DM_APP") || getenv("DM_TOUCH_LIVE"); if (g_live) dm_touch_host_live_enable();
+        if (g_live) {
+            win.acceptsMouseMovedEvents = YES;
+            [v addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect owner:v userInfo:nil]];
+        }
         { // 菜单栏：应用（退出 ⌘Q）/ 显示（全屏 ⌃⌘F）/ 帮助（键位对照） | Menu bar: application (Quit ⌘Q) / View (Full Screen ⌃⌘F) / Help (key mapping)
           NSMenu *bar = [NSMenu new];
           NSMenu *(^add)(const char *) = ^NSMenu *(const char *t) { NSMenuItem *it = [NSMenuItem new]; [bar addItem:it]; NSMenu *m = [[NSMenu alloc] initWithTitle:@(t)]; it.submenu = m; return m; };
@@ -225,12 +229,17 @@ void front_run(void (*guest)(void)) {
             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
             return nil;   // 吃掉，免得系统提示音 | Swallow it to avoid the system beep
         }];
-        // 鼠标当单点触屏（本机测触屏用，front.h dm_touch_set）：左键按下 / 拖动 = 手指 0 在归一化坐标处，松开 = 抬起
-        // Mouse as a single-point touchscreen (for testing touch on the local machine, front.h dm_touch_set): left button down / drag = finger 0 at the normalized coordinates, release = lifted
-        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *e) {
+        // 左键沿用单点触屏；Mac App 的无按键悬停只交坐标，复用同一套窗口 / 全屏换算，不合成点击。
+        // Left clicks reuse single-point touch; Mac App button-free hover only submits coordinates using the same window / full-screen conversion, without synthesizing clicks.
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp | NSEventMaskMouseMoved | NSEventMaskMouseExited handler:^NSEvent *(NSEvent *e) {
             if (e.window != win) return e;
+            BOOL hover = e.type == NSEventTypeMouseMoved || e.type == NSEventTypeMouseExited;
+            if (hover && getenv("DM_TEST_HOVER_LOG")) LOG("鼠标悬停输入：类型 %ld", (long)e.type);
+            if (hover && !g_live) return e;
+            if (e.type == NSEventTypeMouseExited) { dm_touch_host_live(3, -1, -1); return e; }
             if (e.type == NSEventTypeLeftMouseUp) { if (g_live) dm_touch_host_live(2, 0, 0); else dm_touch_set(NULL, 0); return nil; }
             NSPoint p = [v convertPoint:e.locationInWindow fromView:nil]; NSRect gr = game_rect();
+            if (hover && getenv("DM_TEST_HOVER_LOG")) LOG("鼠标悬停坐标：窗口 %.1f,%.1f 视图 %.1f,%.1f 画面 %.1f,%.1f %.1fx%.1f", e.locationInWindow.x, e.locationInWindow.y, p.x, p.y, gr.origin.x, gr.origin.y, gr.size.width, gr.size.height);
             if (gr.size.width <= 0 || gr.size.height <= 0) return e;
             float nx = (float)((p.x - gr.origin.x) / gr.size.width), ny = (float)(1.0 - (p.y - gr.origin.y) / gr.size.height);   // AppKit 视图原点在左下，触屏原点在左上 | The AppKit view origin is at bottom left, the touchscreen origin is at top left
             if (e.type == NSEventTypeLeftMouseDown && (nx < 0 || nx > 1 || ny < 0 || ny > 1)) return nil;   // 按在黑边上：不算点 | Pressed on the black bars: not a click
@@ -245,7 +254,8 @@ void front_run(void (*guest)(void)) {
                 float vx = (float)((nx - cx) / cw), vy = (float)((ny - cy) / ch);
                 double fy = 0, fh = 1; ui_rect_frac(&fy, &fh); float uy = fh > 0 ? (float)((vy - fy) / fh) : vy;
                 if (e.type == NSEventTypeLeftMouseDown && !dm_uiscreen_ingame() && (vx < 0 || vx > 1 || uy < 0 || uy > 1)) return nil;
-                dm_touch_host_live(e.type == NSEventTypeLeftMouseDown ? 0 : 1, vx, uy); return nil; }
+                dm_touch_host_live(hover ? 3 : e.type == NSEventTypeLeftMouseDown ? 0 : 1, vx, uy); return hover ? e : nil; }
+            if (hover) { dm_touch_host_live(3, nx, ny); return e; }
             dm_touch t = {0, nx < 0 ? 0 : nx > 1 ? 1 : nx, ny < 0 ? 0 : ny > 1 ? 1 : ny};
             if (g_live) { dm_touch_host_live(e.type == NSEventTypeLeftMouseDown ? 0 : 1, t.x, t.y); return nil; }
             dm_touch_set(&t, 1); return nil;
@@ -285,13 +295,13 @@ void front_run(void (*guest)(void)) {
                           LOG("DM_TEST_PRESENT_SHOT：%s %zux%zu（内容区 %.0fx%.0f，游戏画面 %.0fx%.0f 在 (%.0f,%.0f)，界面矩形纵向 %.3f 高 %.3f，%s）", path.UTF8String, CGImageGetWidth(img), CGImageGetHeight(img),
                               vb.width, vb.height, gr.size.width, gr.size.height, gr.origin.x, gr.origin.y, fy, fh, dm_uiscreen_ingame() ? "局内" : "局外"); }); }); } }
           // DM_TEST_NSMOUSE=<文件>：合成真正的系统鼠标事件（NSEvent）投进 App 的事件队列，走与真人点击同一条分发路（事件监视器 → 换算 → 状态机），不经测试入口。
-          // 每行「秒 down|move|up x,y」，x,y 是内容区里的点（左上角为原点；窗口缺省 1280×720），时刻自窗口建好起算。
+          // 每行「秒 down|move|up|hover x,y」，x,y 是内容区里的点（左上角为原点；窗口缺省 1280×720），时刻自窗口建好起算。
           // 坐标后可带锚点「@c」「@b」：按 1280×720 写的 y 换算到实际内容区高度——@c 上下居中的界面（前端页、大面板）加 (高 − 720) / 2，@b 贴底的（局内 HUD）加 (高 − 720)；
           // 不带 = 原样（贴顶）。真全屏下窗口比例跟着屏幕（16:10 屏 1280×803），同一份脚本两种比例都能用
-          // DM_TEST_NSMOUSE=<file>: synthesizes real system mouse events (NSEvent) and posts them into the App's event queue, taking the same dispatch path as a real click (event monitor → conversion → state machine), not a test entry.
-          // Each line is "seconds down|move|up x,y", where x,y is a point in the content area (origin at top left; window defaults to 1280×720), and time counts from when the window is created.
-          // A coordinate may be followed by an anchor "@c" or "@b": converts a y written for 1280×720 to the actual content area height. @c for vertically centered UI (front-end pages, large panels) adds (height − 720) / 2, @b for bottom-anchored UI (in-game HUD) adds (height − 720);
-          // none = as is (top-anchored). In true fullscreen the window aspect follows the screen (1280×803 on a 16:10 screen), so the same script works for both aspects
+          // DM_TEST_NSMOUSE=<file>: synthesizes real system mouse events (NSEvent) and posts them into the App's event queue, taking the same dispatch path as a real click (event monitor -> conversion -> state machine), not a test entry.
+          // Each line is "seconds down|move|up|hover x,y", where x,y is a point in the content area (origin at top-left; window default 1280x720), timed from when the window is created.
+          // An anchor "@c" / "@b" may follow the coordinates: a y written for 1280x720 is converted to the actual content height - @c for vertically centered UI (front-end pages, large panels) adds (height - 720) / 2, @b for bottom-anchored UI (in-game HUD) adds (height - 720);
+          // none = as is (top-anchored). In true full screen the window aspect follows the screen (1280x803 on a 16:10 screen), so the same script works at both aspects
           if ((e = getenv("DM_TEST_NSMOUSE"))) { NSString *txt = [NSString stringWithContentsOfFile:@(e) encoding:NSUTF8StringEncoding error:nil]; NSTimeInterval t0 = NSProcessInfo.processInfo.systemUptime; int n = 0;
               dispatch_queue_t tq = dispatch_queue_create("dm.test.nsevent", DISPATCH_QUEUE_SERIAL);   // 不排在主队列上：我们自己的弹框是在主队列的一个块里跑模态循环的，那期间主队列上别的块不执行，事件就投不进弹框 | not queued on the main queue: our own dialog runs its modal loop inside a block on the main queue, during which other blocks on the main queue do not execute, so events could not be delivered into the dialog
               for (NSString *ln in [txt componentsSeparatedByString:@"\n"]) { double sec, x = 0, y = 0; char op[8];
@@ -333,11 +343,11 @@ void front_run(void (*guest)(void)) {
                           if (dbl) { for (int i = 0; i < 2; i++) { [NSApp postEvent:mk(NSEventTypeLeftMouseDown, to, i + 1) atStart:NO]; usleep(60000); [NSApp postEvent:mk(NSEventTypeLeftMouseUp, to, i + 1) atStart:NO]; usleep(150000); } }
                           else { for (int i = 1; i <= 12; i++) { [NSApp postEvent:mk(NSEventTypeLeftMouseDragged, NSMakePoint(from.x + (to.x - from.x) * i / 12, from.y + (to.y - from.y) * i / 12), 1) atStart:NO]; usleep(50000); } usleep(200000); [NSApp postEvent:mk(NSEventTypeLeftMouseUp, to, 1) atStart:NO]; } });
                       continue; }
-                  NSEventType ty = !strcmp(op, "down") ? NSEventTypeLeftMouseDown : !strcmp(op, "up") ? NSEventTypeLeftMouseUp : NSEventTypeLeftMouseDragged; int has = !strcmp(op, "up") ? 0 : 1;
+                  NSEventType ty = !strcmp(op, "hover") ? NSEventTypeMouseMoved : !strcmp(op, "down") ? NSEventTypeLeftMouseDown : !strcmp(op, "up") ? NSEventTypeLeftMouseUp : NSEventTypeLeftMouseDragged; int has = !strcmp(op, "up") ? 0 : 1;
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(sec * NSEC_PER_SEC)), tq, ^{ static NSPoint last;
                       if (has) { last = NSMakePoint(x, v.bounds.size.height - (y + anc * (v.bounds.size.height - 720))); g_test_last = last; }   // 内容区的点 → 窗口坐标（原点左下） | point in the content area -> window coordinates (origin at bottom-left)
                       NSEvent *ev = [NSEvent mouseEventWithType:ty location:[v convertPoint:last toView:nil] modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:win.windowNumber context:nil eventNumber:0 clickCount:1 pressure:ty == NSEventTypeLeftMouseUp ? 0 : 1];
-                      LOG("DM_TEST_NSMOUSE：%.2f 秒投 %s 内容区 (%.0f,%.0f)（窗口%s是主窗口，App %s在前台，背板缩放 %.1f）", NSProcessInfo.processInfo.systemUptime - t0, ty == NSEventTypeLeftMouseDown ? "按下" : ty == NSEventTypeLeftMouseUp ? "抬起" : "拖动", last.x, v.bounds.size.height - last.y, win.isKeyWindow ? "" : "不", NSApp.isActive ? "" : "不", win.backingScaleFactor);
+                      LOG("DM_TEST_NSMOUSE：%.2f 秒投 %s 内容区 (%.0f,%.0f)（窗口%s是主窗口，App %s在前台，背板缩放 %.1f）", NSProcessInfo.processInfo.systemUptime - t0, ty == NSEventTypeMouseMoved ? "悬停" : ty == NSEventTypeLeftMouseDown ? "按下" : ty == NSEventTypeLeftMouseUp ? "抬起" : "拖动", last.x, v.bounds.size.height - last.y, win.isKeyWindow ? "" : "不", NSApp.isActive ? "" : "不", win.backingScaleFactor);
                       [NSApp postEvent:ev atStart:NO]; }); }
               LOG("DM_TEST_NSMOUSE：%d 条排好", n); }
           if ((e = getenv("DM_TEST_SHARELOG"))) { NSString *to = @(e); dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ NSString *er = share_logs(to); LOG("DM_TEST_SHARELOG：第 8 秒打包到 %s → %s", to.lastPathComponent.UTF8String, er ? er.UTF8String : "OK"); }); }   // 测试：不弹存储面板，第 8 秒直接把压缩包写到这个路径 | test: no save panel, write the archive directly to this path at second 8

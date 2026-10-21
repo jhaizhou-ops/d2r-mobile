@@ -11,6 +11,10 @@ int main(void) {
     dm_tc_state s; dm_tc_init(&s,667,375);
     CHECK(s.rx==0 && s.ry==0 && s.aim_slot==DM_TC_NONE && !s.navigation_mode && !s.map_cancel_active);
     begin(&s,0,DM_TC_MAIN); CHECK(s.buttons==DM_BTN_A && s.rx==0 && s.ry==0);
+    /* 主钮长按连射时手指的小抖动（10 点死区内）不改方向，仍按住攻击（公开 issue #92） | Small finger jitter (within the 10-point dead zone) while holding the main button to attack keeps the direction and keeps attacking (public issue #92) */
+    drag(&s,0,DM_TC_MAIN,6,4); CHECK(s.buttons==DM_BTN_A && s.rx==0 && s.ry==0);
+    drag(&s,0,DM_TC_MAIN,-8,-5); CHECK(s.buttons==DM_BTN_A && s.rx==0 && s.ry==0);
+    drag(&s,0,DM_TC_MAIN,12,0); CHECK(s.rx>0 && s.ry==0);
     drag(&s,0,DM_TC_MAIN,60,0); CHECK(s.rx==32767 && s.ry==0 && s.aim_slot==0);
     drag(&s,0,DM_TC_MAIN,0,60); CHECK(s.rx==0 && s.ry==-32767);
     drag(&s,0,DM_TC_MAIN,30,-30); CHECK(s.rx==16384 && s.ry==16384);

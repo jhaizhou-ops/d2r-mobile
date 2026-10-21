@@ -4,16 +4,21 @@
 #define dm_ui_item_at_now test_ui_item_at_now
 #define dm_ui_touch test_ui_touch
 #define dm_ui_tab_go test_ui_tab_go
+#define dm_ui_mouse_hover_now test_mouse_hover
 #include "../touch_mac.c"
 #undef dm_ui_item_at_now
 #undef dm_ui_touch
 #undef dm_ui_tab_go
+#undef dm_ui_mouse_hover_now
 #include "../../ios/Sources/dm_touch_controls.c"
 
 static uint64_t test_now;
 uint64_t now_ns(void) { return test_now; }
 static int test_in, test_paused, test_hit, clicks, walks, ui_events, tabs, result = -1;
 static int test_hud;
+static int hovers;
+static float hover_x, hover_y;
+int test_mouse_hover(float x, float y) { hovers++; hover_x = x; hover_y = y; return 1; }
 static unsigned click_seq;
 static uint64_t polled_buttons;
 static float click_x, click_y, walk_x, walk_y;
@@ -148,6 +153,34 @@ static void test_live_mouse(void) {
     CHECK(clicks == 0 && walks == 0, "inventory drag never enters the immediate world-click path");
 }
 
+// 悬停与点击独立：大量移动不能挤掉点击，按住 / 拖放时不改手势目标。
+// Hover is independent of clicks: many moves cannot crowd clicks out, and held / dragged gestures keep their target.
+static void test_live_hover(void) {
+    live_reset(); hovers = 0;
+    for (int i = 0; i < 1000; i++) dm_touch_host_live(3, (float)i / 1000, .4f);
+    CHECK(atomic_load(&g_live.head) == atomic_load(&g_live.tail), "hover does not occupy the click queue");
+    live_poll();
+    CHECK(hovers == 1 && fabsf(hover_x - .999f) < .0001f && fabsf(hover_y - .4f) < .0001f, "hover coalesces to the latest position");
+    CHECK(clicks == 0 && walks == 0 && ui_events == 0 && polled_buttons == 0, "hover neither clicks nor walks nor presses a key");
+    live_poll(); CHECK(hovers == 1, "stationary mouse does not keep overriding the controller");
+    dm_touch_host_live(3, -1, -1); live_poll();
+    CHECK(hovers == 2 && hover_x == -1 && hover_y == -1, "leaving the picture requests tooltip dismissal");
+    dm_touch_host_live(3, .3f, .4f); live_event(0, .7f, .4f);
+    CHECK(clicks == 1 && hovers == 2, "mouse down cancels stale hover and still clicks");
+    dm_touch_host_live(3, .2f, .4f); live_poll();
+    CHECK(hovers == 2, "hover cannot change an active world gesture");
+    live_event(2, 0, 0);
+    g_touch.state.pointer_slot = 0;
+    dm_touch_host_live(3, .2f, .4f); live_poll();
+    CHECK(hovers == 2, "hover cannot change an active item gesture");
+    g_touch.state.pointer_slot = DM_TC_NONE; g_touch.state.pulse_button = DM_BTN_A;
+    dm_touch_host_live(3, .2f, .4f); live_poll();
+    CHECK(hovers == 2, "hover cannot change a pending item action");
+    g_touch.state.pulse_button = 0;
+    dm_touch_host_live(3, .2f, .4f); live_poll();
+    CHECK(hovers == 3, "hover resumes after gestures complete");
+}
+
 int main(void) {
     const char *path = "build/touch_host.script";
     FILE *f = fopen(path, "w"); if (!f) return 2;
@@ -178,6 +211,7 @@ int main(void) {
       dm_ui_auto_mode_leave(); CHECK(dm_ui_auto_buttons() == 0, "切换清理后在途的键脉冲作废");
       dm_ui_cache_mode_leave(); CHECK(1, "界面缓存清理在没有界面根时不崩"); }
     test_live_mouse();
+    test_live_hover();
     printf("== touch host %d 项，失败 %d ==\n", checks, fails);
     return fails != 0;
 }

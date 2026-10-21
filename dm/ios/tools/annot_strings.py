@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """物品 / 符文 / 区域 / 怪物 / 神殿的注释与旧译名（注释要、旧译名整体换回、不加英文缩写）。
-做法 = RomFS 覆盖层换字符串文件（与 touch_strings 同一套机制），只改 zhCN 一列、按键名定位、原文不符即报错。
+做法 = RomFS 覆盖层换字符串文件（与 touch_strings 同一套机制），按键名定位、原文不符即报错。
+改 zhCN、esES、esMX 三列（LANGS），每列各算一遍、各写各的列，名字取该列的现行值；旧译名、点评是中文特有内容，只做 zhCN。
 注释的数字一律从我们 3.3 包里的 excel 表算（不拷红叶的表）；旧译名表 annot/oldnames.tsv 是从红叶 mod 的名字部分抽出、
 逐条与 3.3 原文对过的。
-Annotations and old translated names for items / runes / areas / monsters / shrines (annotations wanted, old translated names restored wholesale, no English abbreviations added).
-Method = replace the string files via the RomFS overlay (same mechanism as touch_strings); only the zhCN column is changed, located by key name, and an error is raised if the source text does not match.
-Annotation numbers are always computed from the excel tables in our 3.3 package (the Hongye community mod's tables are not copied); the old-name table annot/oldnames.tsv was extracted from the name part of the Hongye mod and
-checked entry by entry against the 3.3 source text."""
+Annotations and old names for items / runes / areas / monsters / shrines (annotations wanted, old names restored wholesale, no English abbreviations added).
+Method = RomFS overlay replaces string files (same mechanism as touch_strings), located by key name, error if the original text doesn't match.
+Changes the zhCN, esES, esMX columns (LANGS), computed separately and written to its own column each, names from that column's current value; old names and commentary are Chinese-specific, done only for zhCN.
+Annotation numbers are always computed from the excel tables in our 3.3 package (Hongye's tables are not copied); the old-name table annot/oldnames.tsv was extracted from the name part of the Hongye mod
+and checked entry by entry against the 3.3 original text."""
 import csv, hashlib, io, os, re, sys
 import touch_layout
 
@@ -14,10 +16,26 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STR = '/lng/strings/'
 
 
+LANGS = ('zhCN', 'esES', 'esMX')   # 注释写进的语言列；先做 zhCN（中文列的产出与只做中文时逐字节一致） | Language columns annotations are written into; zhCN goes first (Chinese column output is byte-identical to Chinese-only)
+# 西语名字串开头的语法性别标记（[fs] 阴单、[ms] 阳单、[fp]、[mp]），游戏据它配魔法词缀的阴阳性；改写只动标记后面的部分，标记留在串首
+# Grammatical gender marker at the start of Spanish name strings ([fs] fem. sing., [ms] masc. sing., [fp], [mp]); the game uses it to match the gender of magic affixes; rewrites only touch the part after the marker, the marker stays at the start
+GENDER_TAG = re.compile(r'(?:\[[fm][sp]\])+')
+
+
 class Strings:
-    """字符串文件的按键改写：保留原文件排版，只换 zhCN 的值。 | Per-key rewrite of a strings file: keep the original file's formatting and replace only the zhCN value."""
+    """字符串文件的按键改写：保留原文件排版，只换当前语言列 col 的值（缺省 zhCN）。 | Keyed rewrite of a string file: keep the original file layout, replace only the value of the current language column col (default zhCN)."""
     def __init__(self, romfs, repl):
         self.romfs, self.repl, self.text, self.path, self.dirty = romfs, repl, {}, {}, set()
+        self.col = 'zhCN'
+
+    def _skip(self, name):
+        """chinese-overlay.json 只在中文下加载（它的其余语言列是英文占位，119 条里 118 条 esES = enUS）：非中文列当作没有这份。 | chinese-overlay.json is only loaded in Chinese (its other language columns are English placeholders, 118 of 119 entries have esES = enUS): treat non-Chinese columns as if this file didn't exist."""
+        return self.col != 'zhCN' and name == 'chinese-overlay.json'
+
+    def _split(self, v):
+        """(性别标记, 其余)；中文列不拆。 | (gender marker, rest); Chinese columns are not split."""
+        m = GENDER_TAG.match(v) if self.col != 'zhCN' else None
+        return (m.group(), v[m.end():]) if m else ('', v)
 
     def _load(self, name):
         if name in self.text: return
@@ -27,8 +45,9 @@ class Strings:
         self.text[name], self.path[name] = text, path
 
     def _iter(self, name, key):
+        if self._skip(name): return []
         self._load(name)
-        return list(re.finditer(r'"Key":\s*"%s",.*?"zhCN":\s*("(?:[^"\\]|\\.)*")' % re.escape(key.replace('"', '\\"')), self.text[name], re.S))
+        return list(re.finditer(r'"Key":\s*"%s",.*?"%s":\s*("(?:[^"\\]|\\.)*")' % (re.escape(key.replace('"', '\\"')), self.col), self.text[name], re.S))
 
     def has(self, name, key): return bool(self._iter(name, key))
 
@@ -39,7 +58,7 @@ class Strings:
     def get(self, name, key):
         import json
         m = self._iter(name, key)
-        return json.loads(m[0].group(1)) if m else None
+        return self._split(json.loads(m[0].group(1)))[1] if m else None
 
     def get_lang(self, name, key, lang):
         """同一条目里别的语言列（如 enUS）。 | Other language columns in the same entry (e.g. enUS)."""
@@ -54,7 +73,14 @@ class Strings:
         ms = self._iter(name, key)
         t = self.text[name]
         for m in reversed(ms):
-            t = t[:m.start(1)] + json.dumps(fn(json.loads(m.group(1))), ensure_ascii=False) + t[m.end(1):]
+            tag, v = self._split(json.loads(m.group(1)))
+            nv = fn(v)
+            # 西语列：注释一律用圆括号。串里还有别的方括号时，游戏解析串首性别标记（[fp] 等）失败、把标记原样画出来
+            # （西语截图：编年史里「[fp]*Garfas enormes [Exc]」）；中文列照旧
+            # Spanish columns: annotations always use parentheses. When the string contains other square brackets, the game fails to parse the leading gender marker ([fp] etc.) and draws it literally
+            # (Spanish screenshot: "[fp]*Garfas enormes [Exc]" in the chronicle); Chinese columns unchanged
+            if self.col != 'zhCN': nv = nv.replace('[', '(').replace(']', ')')
+            t = t[:m.start(1)] + json.dumps(tag + nv, ensure_ascii=False) + t[m.end(1):]
         if ms: self.text[name] = t; self.dirty.add(name)
         return len(ms)
 
@@ -108,9 +134,18 @@ def old_names(s):
 def rune_numbers(s):
     """符文名 = 中文短名 + 原版英文名 + 序号：r30 → 「贝 Ber #30」。背包说明与地上标签都用这个键；
     中文取符文之语配方里的短名 rNNL（已换旧译），英文取 rNNL 的 enUS 列。
-    Rune name = Chinese short name + the original game's English name + number: r30 → 「贝 Ber #30」(Chinese short name, Ber, #30). The inventory description and the ground label both use this key;
-    the Chinese comes from the short name rNNL in the runeword recipe (old translation already restored), the English from the enUS column of rNNL."""
+    西语列：原版名已是「Runa Ber」（含英文短名），只加序号 → 「Runa Ber #30」；配方短名同样「Ber#30 」。
+    Rune name = Chinese short name + original English name + number: r30 → "贝 Ber #30". Used as the key for both inventory descriptions and ground labels;
+        Chinese from the short name rNNL in the runeword recipes (old names already applied), English from the enUS column of rNNL.
+        Spanish columns: the original name is already "Runa Ber" (including the English short name), only add the number → "Runa Ber #30"; recipe short names likewise "Ber#30 "."""
     n = 0
+    if s.col != 'zhCN':
+        for i in range(1, 34):
+            nm, short = s.get('item-runes.json', 'r%02d' % i), s.get('item-runes.json', 'r%02dL' % i)
+            if not nm or not short or not re.fullmatch(r"\S+ %s" % re.escape(short), nm) or not re.fullmatch(r"[A-Za-z']+", short): raise SystemExit('annot_strings：%s 的 r%02d / r%02dL 不是「Runa 短名」/「短名」：%r %r' % (s.col, i, i, nm, short))
+            n += s.set('item-runes.json', 'r%02d' % i, lambda _, i=i, nm=nm: '%s #%d' % (nm, i))
+            n += s.set('item-runes.json', 'r%02dL' % i, lambda _, i=i, short=short: '%s#%d ' % (short, i))
+        return n
     for i in range(1, 34):
         zh, en = s.get('item-runes.json', 'r%02dL' % i), s.get_lang('item-runes.json', 'r%02dL' % i, 'enUS')
         if not zh or not en or not re.fullmatch(r"[A-Za-z']+", en): raise SystemExit('annot_strings：r%02dL 的中 / 英短名不对：%r %r' % (i, zh, en))
@@ -131,24 +166,32 @@ def is_shield(code, types):
     return False
 
 
+# 底材档次的措辞：(普 / 扩 / 精, 轻 / 中 / 重, 拼法)。西语档次取原版 NormalQuality / ExceptionalQuality / EliteQuality 的前三个字母
+# Wording for base grades: (normal / exceptional / elite, light / medium / heavy, format). Spanish grades take the first three letters of the original NormalQuality / ExceptionalQuality / EliteQuality
+TIER_WORDS = {'zhCN': (('普', '扩', '精'), {'0': '轻', '5': '中', '10': '重'}, '%s[%s]'),
+              'esES': (('Nor', 'Exc', 'Éli'), {'0': 'lig', '5': 'med', '10': 'pes'}, '%s [%s]'),
+              'esMX': (('Nor', 'Exc', 'Éli'), {'0': 'lig', '5': 'med', '10': 'pes'}, '%s [%s]')}
+
+
 def base_tiers(s, romfs):
     """底材名后标档次：普 / 扩 / 精 = 该行 code 等于同行 normcode / ubercode / ultracode；
-    身甲与盾类再标轻 / 中 / 重 = armor.txt 的 speed 列 0 / 5 / 10（跑步减速档）。例「神圣铠甲[精·中]」。
-    Mark the tier after the base name: 「普 / 扩 / 精」(normal / exceptional / elite) = the row's code equals the same row's normcode / ubercode / ultracode;
-    body armor and shields additionally get 「轻 / 中 / 重」(light / medium / heavy) = 0 / 5 / 10 in the speed column of armor.txt (run slowdown tier). Example: 「神圣铠甲[精·中]」(Sacred Armor [elite, medium])."""
+    身甲与盾类再标轻 / 中 / 重 = armor.txt 的 speed 列 0 / 5 / 10（跑步减速档）。例「神圣铠甲[精·中]」「Armadura sagrada [Éli·med]」。
+    Mark the grade after base names: normal / exceptional / elite = the row's code equals the same row's normcode / ubercode / ultracode;
+        body armor and shields also get light / medium / heavy = armor.txt speed column 0 / 5 / 10 (run slowdown tier). E.g. "神圣铠甲[精·中]" "Armadura sagrada [Éli·med]"."""
+    (wn, wu, wl), wsp, fmt = TIER_WORDS[s.col]
     types = {r['Code']: r for r in excel(romfs, 'itemtypes.txt') if r.get('Code')}
     n = 0
     for tab in ('weapons.txt', 'armor.txt'):
         for r in excel(romfs, tab):
             c = r.get('code')
             if not c or r.get('spawnable') != '1' or r.get('quest') not in ('', '0') or r.get('type') == 'tpot': continue
-            tier = '普' if c == r['normcode'] else '扩' if c == r['ubercode'] else '精' if c == r['ultracode'] else None
+            tier = wn if c == r['normcode'] else wu if c == r['ubercode'] else wl if c == r['ultracode'] else None
             if not tier: continue
             if tab == 'armor.txt' and (r['type'] == 'tors' or is_shield(r['type'], types)):
-                tier += '·' + {'0': '轻', '5': '中', '10': '重'}[r['speed']]
+                tier += '·' + wsp[r['speed']]
             key = r['namestr'] or c
             for f in ITEM_FILES:
-                n += s.set(f, key, lambda t, tier=tier: '%s[%s]' % (t, tier))
+                n += s.set(f, key, lambda t, tier=tier: fmt % (t, tier))
     return n
 
 
@@ -189,14 +232,23 @@ def comments(s):
 def apply_all(s, romfs):
     """全部步骤按次序做在同一个 Strings 上；返回 {步骤: 改了几处}。旧译名在前（后面的注释挂在换回后的名字上）；
     掉落名最后（杂物类按规则表缩短 / 加色 / 加说明，在旧译名与符文序号之后）。
-    All steps are applied in order to the same Strings; returns {step: number of changes}. Old translated names come first (later annotations attach to the restored names);
-    drop names come last (miscellaneous items are shortened / colored / given descriptions by the rule table, after old translated names and rune numbers)."""
+    LANGS 每列各做一遍；中文列的统计在顶层，西语列的统计放在 stat[列名] 里。旧译名、点评只做中文列。
+    Run all steps in order on the same Strings; returns {step: number of changes}. Old names first (later annotations attach to the restored names);
+        drop names last (misc items shortened / colored / annotated per the rule table, after old names and rune numbers).
+        Done once per LANGS column; Chinese column stats at top level, Spanish column stats in stat[column name]. Old names and commentary are done only for the Chinese column."""
     from annot_ranges import ann_ranges
     from annot_world import ann_levels, ann_shrines
     from annot_drop import ann_drop
-    return {'旧译名': old_names(s), '可变范围': ann_ranges(s, romfs), '点评': comments(s), '符文序号': rune_numbers(s), '底材档次': base_tiers(s, romfs),
-            '区域等级': ann_levels(s, romfs), '神殿效果': ann_shrines(s, romfs),
-            '掉落名': ann_drop(s, romfs)}
+    stat = {}
+    for col in LANGS:
+        s.col = col; zh = col == 'zhCN'
+        st = {'旧译名': old_names(s) if zh else 0, '可变范围': ann_ranges(s, romfs), '点评': comments(s) if zh else 0, '符文序号': rune_numbers(s), '底材档次': base_tiers(s, romfs),
+              '区域等级': ann_levels(s, romfs), '神殿效果': ann_shrines(s, romfs),
+              '掉落名': ann_drop(s, romfs)}
+        if zh: stat.update(st)
+        else: stat[col] = {k: v for k, v in st.items() if k not in ('旧译名', '点评')}
+    s.col = 'zhCN'
+    return stat
 
 
 # 普通文字框（TextBoxWidget）不认颜色码：游戏加载时把 ÿc 换成私用区字符 U+E07E，文字框原样画成「*5」、换行画成空格
@@ -216,8 +268,12 @@ _last_table = None
 
 def apply_textbox(s, romfs):
     from annot_world import ann_levels
-    steps = {'旧译名': lambda: old_names(s), '符文序号': lambda: rune_numbers(s), '底材档次': lambda: base_tiers(s, romfs), '区域等级': lambda: ann_levels(s, romfs)}
-    return {k: steps[k]() for k in TEXTBOX_STEPS}
+    steps = {'旧译名': lambda: old_names(s) if s.col == 'zhCN' else 0, '符文序号': lambda: rune_numbers(s), '底材档次': lambda: base_tiers(s, romfs), '区域等级': lambda: ann_levels(s, romfs)}
+    out = {}
+    for col in LANGS:
+        s.col = col; out[col] = {k: steps[k]() for k in TEXTBOX_STEPS}
+    s.col = 'zhCN'
+    return out
 
 
 def textbox_table(full, plain):
@@ -227,17 +283,21 @@ def textbox_table(full, plain):
     # When the same key exists in several tables, the later-loaded one overrides the earlier ones (same as annot_drop: the last one is what the game displays): first take each key's effective value in load order
     from annot_drop import FILES as LOAD_ORDER
     order = [n for n in LOAD_ORDER if n in full.dirty] + sorted(n for n in full.dirty if n not in LOAD_ORDER)
-    eff = {}
-    for name in order:
-        for key in full.keys(name):
-            a, b = full.get(name, key), plain.get(name, key)
-            if a is not None and b is not None: eff[(name if name not in LOAD_ORDER else '*', key)] = (a, b)
     tab, src = {}, {}
-    for k, (a, b) in eff.items():
-        if 'ÿc' not in a or a == b: continue
-        ra, rb = rt(a), rt(b)
-        if tab.get(ra, rb) != rb: raise SystemExit('annot_strings：注释版 %r 对到两种文字框版 %r（%s）/ %r（%s）' % (a, tab[ra], src[ra], rb, k))
-        tab[ra] = rb; src[ra] = k
+    for col in LANGS:   # 各语言列各取生效值，并进同一张表（宿主不分语言，按串查） | Take each language column's effective value and merge into one table (the host is language-agnostic, looks up by string)
+        full.col = plain.col = col; eff = {}
+        for name in order:
+            for key in full.keys(name):
+                a, b = full.get(name, key), plain.get(name, key)
+                if a is not None and b is not None: eff[(name if name not in LOAD_ORDER else '*', key)] = (a, b)
+        for k, (a, b) in eff.items():
+            if 'ÿc' not in a or a == b: continue
+            ra, rb = rt(a), rt(b)
+            if tab.get(ra, rb) != rb and src[ra][0] != col:   # 两种语言列写出同一个注释版、文字框版不同（如 esES / esMX 都是「Morada」，原名两列不同）：表不分语言，改用去掉颜色码的注释版 | Two language columns write the same annotated version but different text-box versions (e.g. esES / esMX both "Morada", original names differ between the two columns): the table is language-agnostic, so use the annotated version with color codes stripped instead
+                tab[ra] = re.sub('\\ue07e.', '', ra); src[ra] = (src[ra][0] + '/' + col,) + k; continue
+            if tab.get(ra, rb) != rb: raise SystemExit('annot_strings：注释版 %r 对到两种文字框版 %r（%s）/ %r（%s %s）' % (a, tab[ra], src[ra], rb, col, k))
+            tab[ra] = rb; src[ra] = (col,) + k
+    full.col = plain.col = 'zhCN'
     return tab
 
 

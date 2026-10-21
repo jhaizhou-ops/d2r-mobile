@@ -34,6 +34,38 @@ STAT_NAMES = {
     'charged': '技能', '*charged': '技能',
 }
 
+# 西语列的属性简称（esES / esMX 共用；用词照原版 item-modifiers 的西语说法缩写）
+# Stat abbreviations for the Spanish columns (shared by esES / esMX; abbreviated from the original Spanish wording in item-modifiers)
+STAT_NAMES_ES = {
+    'abs-cold': 'Abs. frío', 'abs-cold%': 'Abs. frío', 'abs-fire': 'Abs. fuego', 'abs-fire%': 'Abs. fuego',
+    'abs-ltng': 'Abs. rayo', 'abs-ltng%': 'Abs. rayo', 'abs-mag': 'Abs. magia', 'ac': 'Def', 'ac%': 'Def. mejorada',
+    'ac-miss': 'Def', 'addxp': 'Exp', 'all-stats': 'Atributos', 'allskills': 'Habilidades', 'ama': 'Amazona',
+    'att': 'Ataque', 'att%': 'Ataque', 'att-demon': 'Ataque vs. demonios', 'att-skill': 'Hab. al atacar', 'att-undead': 'Ataque vs. no muertos',
+    'aura': 'Aura', 'balance1': 'Recup. golpe', 'balance2': 'Recup. golpe', 'balance3': 'Recup. golpe', 'block': 'Bloqueo',
+    'bloody': 'Heridas abiertas', 'cast1': 'Vel. lanz.', 'cast2': 'Vel. lanz.', 'cast3': 'Vel. lanz.', 'cheap': 'Descuento',
+    'cold-len': 'Dur. frío', 'cold-max': 'Frío máx.', 'cold-min': 'Frío mín.', 'crush': 'Golpe aplastante',
+    'death-skill': 'Hab. al morir', 'demon-heal': 'Vida vs. demonios', 'dex': 'Destreza', 'dmg': 'Daño', 'dmg%': 'Daño mejorado',
+    'dmg-cold': 'Daño de frío', 'dmg-demon': 'Daño vs. demonios', 'dmg-elem': 'Daño elem.', 'dmg-fire': 'Daño de fuego', 'dmg-ltng': 'Daño de rayo',
+    'dmg-mag': 'Daño mág.', 'dmg-max': 'Daño máx.', 'dmg-min': 'Daño mín.', 'dmg-norm': 'Daño', 'dmg-undead': 'Daño vs. no muertos',
+    'dmg-pois': 'Daño de veneno', 'dru': 'Druida', 'dur': 'Durabilidad', 'enr': 'Energía', 'extra-cold': 'Hab. de frío',
+    'extra-fire': 'Hab. de fuego', 'extra-ltng': 'Hab. de rayo', 'extra-mag': 'Hab. mágicas', 'extra-pois': 'Hab. de veneno',
+    'fire-max': 'Fuego máx.', 'fire-min': 'Fuego mín.', 'freeze': 'Congela', 'gold%': 'Oro', 'gethit-skill': 'Hab. al recibir golpe',
+    'heal-kill': 'Vida al matar', 'hit-skill': 'Hab. al golpear', 'hp': 'Vida', 'hp%': 'Vida', 'kill-skill': 'Hab. al matar',
+    'levelup-skill': 'Hab. al subir de nivel', 'lifesteal': 'Robo de vida', 'light': 'Radio de luz', 'light-thorns': 'Espinas', 'ltng-max': 'Rayo máx.',
+    'mag%': 'Objetos mágicos', 'mana': 'Maná', 'mana%': 'Maná', 'mana-kill': 'Maná al matar', 'manasteal': 'Robo de maná',
+    'move1': 'Vel. carrera', 'move2': 'Vel. carrera', 'move3': 'Vel. carrera', 'nec': 'Nigromante', 'oskill': 'Habilidad',
+    'pal': 'Paladín', 'pierce-cold': 'Pen. frío', 'pierce-fire': 'Pen. fuego', 'pierce-ltng': 'Pen. rayo',
+    'pierce-mag': 'Pen. magia', 'pierce-pois': 'Pen. veneno', 'randclassskill': 'Hab. aleatoria', 'red-dmg': 'Red. daño',
+    'red-dmg%': 'Red. daño', 'red-mag': 'Red. daño mág.', 'regen': 'Regen. vida', 'regen-mana': 'Regen. maná', 'res-all': 'Res. todas',
+    'res-cold': 'Res. frío', 'res-fire': 'Res. fuego', 'res-ltng': 'Res. rayo', 'res-mag': 'Res. magia', 'res-pois': 'Res. veneno',
+    'skill': 'Habilidad', 'skill-rand': 'Hab. aleatoria', 'skilltab': 'Árbol de hab.', 'sock': 'Engarces', 'sor': 'Hechicera', 'stam': 'Aguante',
+    'str': 'Fuerza', 'swing1': 'Vel. ataque', 'swing2': 'Vel. ataque', 'swing3': 'Vel. ataque', 'thorns': 'Espinas', 'vit': 'Vitalidad',
+    'charged': 'Habilidad', '*charged': 'Habilidad',
+}
+# 按语言列：(属性简称表, 技能名最长几个字符才直接写名字, 写不下时的通称, 简称与数字之间的分隔)
+# Per language column: (stat abbreviation table, max characters of a skill name to write it directly, generic term when it doesn't fit, separator between abbreviation and number)
+RANGE_WORDS = {'zhCN': (STAT_NAMES, 4, '技能', ''), 'esES': (STAT_NAMES_ES, 16, 'Habilidad', ' '), 'esMX': (STAT_NAMES_ES, 16, 'Habilidad', ' ')}
+
 # 只有「min..max 里随机取一个值」的属性才是可变范围：看 properties.txt 的 func1。
 # 1 / 2 / 5 / 6 / 7 / 8 / 10 / 14 / 22 = 随机取值（数值、伤害下限 / 上限 / 百分比、速度、技能页、孔数、单个技能等级）；
 # 15 = min 给下限属性、max 给上限属性（如「冰伤 15-45」是固定的伤害区间）；11 / 19 = 触发 / 充能（几率或次数 + 技能等级）；17 / 18 = 按等级 / 按时间。这些都不写。
@@ -45,27 +77,27 @@ SKILL_CODES = {'skill', 'oskill', 'aura', 'skilltab', 'charged', '*charged', 'hi
                'kill-skill', 'death-skill', 'levelup-skill', 'att-skill', 'skill-rand'}
 
 
-def _skill_names(s, romfs):
+def _skill_names(s, romfs, maxlen, generic):
     names = {}
     for row in _excel(romfs, 'skills.txt'):
         skill_id = row.get('*Id', '').strip()
         skill = row.get('skill', '').strip()
         if skill_id and skill:
             value = s.get('skills.json', 'skillname' + skill_id)
-            names[skill] = value if value and len(value) <= 4 else '技能'
+            names[skill] = value if value and len(value) <= maxlen else generic
     return names
 
 
-def _label(code, param, skills):
-    label = STAT_NAMES.get(code, STAT_NAMES.get(code.lstrip('*')))
+def _label(code, param, skills, stat_names=STAT_NAMES, generic='技能'):
+    label = stat_names.get(code, stat_names.get(code.lstrip('*')))
     if code in SKILL_CODES or code.lstrip('*') in SKILL_CODES:
         if param:
-            return skills.get(param, '技能') + '+'
-        return '技能'
+            return skills.get(param, generic) + '+'
+        return generic
     return label or code
 
 
-def _range_line(rows, code_prefix, min_prefix, max_prefix, slots, skills, props):
+def _range_line(rows, code_prefix, min_prefix, max_prefix, slots, skills, props, stat_names=STAT_NAMES, generic='技能', sep=''):
     parts = []
     for i in slots:
         code = rows.get(code_prefix.format(i), '').strip()
@@ -75,13 +107,13 @@ def _range_line(rows, code_prefix, min_prefix, max_prefix, slots, skills, props)
         maximum = rows.get(max_prefix.format(i), '').strip()
         if props.get(code.lstrip('*'), {}).get('func1') not in RANDOM_FUNCS or minimum == maximum or not minimum or not maximum:
             continue
-        label = _label(code, rows.get(('par' + str(i)) if code_prefix.startswith('prop') else ('T1Param' + str(i)), '').strip(), skills)
+        label = _label(code, rows.get(('par' + str(i)) if code_prefix.startswith('prop') else ('T1Param' + str(i)), '').strip(), skills, stat_names, generic)
         suffix = '%' if '%' in code else ''
         prefix = '+' if code == 'ac' else ''
-        parts.append('%s%s%s-%s%s' % (label, prefix, minimum, maximum, suffix))
+        parts.append('%s%s%s%s-%s%s' % (label, '' if label.endswith('+') else sep, prefix, minimum, maximum, suffix))
         if len(parts) == 3:
             break
-    return '/'.join(parts)
+    return (sep + '/' + sep).join(parts)
 
 
 def _annotate(s, key, line, color, files=ITEM_FILES):
@@ -101,17 +133,18 @@ def _annotate(s, key, line, color, files=ITEM_FILES):
 
 def ann_ranges(s, romfs):
     """按表中原顺序给可变属性加范围，返回改写条数。 | Add ranges to variable properties in the table's original order; returns the number of rewritten entries."""
-    skills = _skill_names(s, romfs)
+    stat_names, maxlen, generic, sep = RANGE_WORDS[s.col]
+    skills = _skill_names(s, romfs, maxlen, generic)
     props = {r['code']: r for r in _excel(romfs, 'properties.txt') if r.get('code')}
     changed = 0
     for row in _excel(romfs, 'uniqueitems.txt'):
         if row.get('disabled') == '1' or row.get('spawnable') != '1':
             continue
-        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 13), skills, props), '\u00ffc4')
+        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 13), skills, props, stat_names, generic, sep), '\u00ffc4')
     for row in _excel(romfs, 'setitems.txt'):
-        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 9), skills, props), '\u00ffc2')
+        changed += _annotate(s, row.get('index', ''), _range_line(row, 'prop{}', 'min{}', 'max{}', range(1, 9), skills, props, stat_names, generic, sep), '\u00ffc2')
     for row in _excel(romfs, 'runes.txt'):
         if row.get('complete') != '1':
             continue
-        changed += _annotate(s, row.get('Name', ''), _range_line(row, 'T1Code{}', 'T1Min{}', 'T1Max{}', range(1, 8), skills, props), '\u00ffc4', ('item-runes.json', 'chinese-overlay.json'))
+        changed += _annotate(s, row.get('Name', ''), _range_line(row, 'T1Code{}', 'T1Min{}', 'T1Max{}', range(1, 8), skills, props, stat_names, generic, sep), '\u00ffc4', ('item-runes.json', 'chinese-overlay.json'))
     return changed

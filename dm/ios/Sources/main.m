@@ -30,6 +30,16 @@ static NSString *T(const char *k) { return @(dm_ui(k)); }   // 我们自己的�
 #import <Network/Network.h>
 #include "dm_metal_cache_guard.h"
 
+#if __IPHONE_OS_VERSION_MAX_ALLOWED < 260400
+// Xcode 26.2 的 SDK 没有这两个方法的声明，这里只补声明；运行时仍要求 iOS 26.4。
+// The Xcode 26.2 SDK lacks declarations for these two methods; only the declarations are added here, and the calls still require iOS 26.4 at runtime.
+@interface BAAssetPackManager (DmIOS26_4Compatibility)
+- (BOOL)assetPackIsAvailableLocallyWithIdentifier:(NSString *)assetPackIdentifier API_AVAILABLE(ios(26.4));
+- (void)getLocalStatusOfAssetPackWithIdentifier:(NSString *)assetPackIdentifier
+                            completionHandler:(void (^)(BAAssetPackStatus status))completionHandler API_AVAILABLE(ios(26.4));
+@end
+#endif
+
 static NSString *g_mode;
 static int g_log = -1;
 static int g_log_tee;
@@ -380,6 +390,10 @@ static BOOL ba_configured(void) {
     return v;
 }
 
+// iOS 26.0–26.3 没有同步的「本地是否可用」查询；只有系统确认（状态查询为已下载 / 下载完成回调）才置这个标记，只在主线程读写。
+// iOS 26.0–26.3 has no synchronous "available locally" query; only system confirmation (status query says downloaded / download-finished callback) sets this flag, read and written only on the main thread.
+static BOOL g_pack_legacy_available;
+
 static NSString *romfs_locate(char *why, size_t n) {
     g_doc_bad = 0; g_doc_stray = 0;
     NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0];
@@ -468,6 +482,9 @@ static NSString *romfs_locate(char *why, size_t n) {
     else if (@available(iOS 26.4, *)) {
         NSError *e = nil; pack = [BAAssetPackManager.sharedManager URLForPath:@"romfs" error:&e].path; avail = [BAAssetPackManager.sharedManager assetPackIsAvailableLocallyWithIdentifier:@"romfs"];
         if (e) plog("boot: 托管资源包取路径报错：%s", e.localizedDescription.UTF8String);
+    } else if (@available(iOS 26.0, *)) {
+        NSError *e = nil; pack = [BAAssetPackManager.sharedManager URLForPath:@"romfs" error:&e].path; avail = g_pack_legacy_available;
+        if (e) plog("boot: 托管资源包路径取不到（iOS 26.4 以前的接口）：%s", e.localizedDescription.UTF8String);
     }
     if (pack) {
         NSArray *in = [fm contentsOfDirectoryAtPath:[pack stringByAppendingPathComponent:@"data"] error:nil]; BOOL there = [fm fileExistsAtPath:pack];
@@ -804,6 +821,11 @@ static void run_boot(void);
 // on install timeout / pause / error it offers "Use direct download" (the download-site path, only offered if the package has a download address configured). packFull = the moment progress reached 100%, gone = already switched to direct download (after that, callbacks from the hosted download are only logged)
 @property (strong) UIButton *useDirect, *share; @property (strong) dispatch_source_t poll; @property (assign) CFAbsoluteTime packT, packFull, logT, testAvailAt;
 @property (assign) int64_t packBytes, packDone; @property (assign) int gone, slowShown, finished, textKind, packStop;   // packStop：系统报了暂停 / 失败，屏上留那条说明，不再换回「正在安装」 | packStop: the system reported paused / failed; the screen keeps that explanation and does not switch back to "Installing"
+@property (assign) BOOL legacyStatusPending;
+@property (assign) CFAbsoluteTime legacyStatusT;
+@property (assign) NSUInteger legacyStatus;
+@property (strong) NSError *legacyStatusError;
+@property (copy) void (^legacyStatusCompletion)(BOOL available);
 @end
 @implementation AssetVC
 - (void)netUp { if (self.netDown && self.stopped) { plog("assets: 网络通了，自动重试"); self.netDown = 0; [self start]; } else self.netDown = 0; }
@@ -862,9 +884,38 @@ static int64_t free_bytes(void) {   // 给 App 用的可用空间（系统「重
     const char *t = getenv("DM_TEST_BA_FREE"); if (t) return (int64_t)(atof(t) * 1e9);
     NSURL *u = [NSURL fileURLWithPath:NSHomeDirectory()]; NSNumber *v = nil; [u getResourceValue:&v forKey:NSURLVolumeAvailableCapacityForImportantUsageKey error:nil]; return v.longLongValue;
 }
+- (void)legacyPackReady {
+    if (self.gone || g_host_up) return;
+    g_pack_legacy_available = YES;
+    [self ready];
+}
+- (void)queryLegacyPack:(void (^)(BOOL available))completion API_AVAILABLE(ios(26.0)) {
+    // 旧的状态接口可能联网：并发的查询合并成一次，状态全放在主线程。
+    // The old status API may use the network: concurrent queries are coalesced into one, and all state stays on the main thread.
+    self.legacyStatusCompletion = completion;
+    if (self.legacyStatusPending) return;
+    self.legacyStatusPending = YES;
+    [BAAssetPackManager.sharedManager getStatusOfAssetPackWithIdentifier:@"romfs" completionHandler:^(BAAssetPackStatus st, NSError *e) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.legacyStatusPending = NO; self.legacyStatusT = CFAbsoluteTimeGetCurrent(); self.legacyStatus = st; self.legacyStatusError = e;
+            void (^done)(BOOL) = self.legacyStatusCompletion; self.legacyStatusCompletion = nil;
+            if (self.gone || g_host_up) return;
+            // 过时的查询结果不能撤销已经收到的下载完成确认。
+            // A stale query result must not undo a download completion that has already been received.
+            if (!e && (st & BAAssetPackStatusDownloaded)) g_pack_legacy_available = YES;
+            if (e) plog("assets: 托管资源包状态查询失败（iOS 26.4 以前的接口）：%s", e.localizedDescription.UTF8String);
+            if (done) done(g_pack_legacy_available);
+        });
+    }];
+}
 - (BOOL)packAvail {
     if (getenv("DM_TEST_BA")) return self.testAvailAt > 0 && CFAbsoluteTimeGetCurrent() >= self.testAvailAt;
     if (@available(iOS 26.4, *)) return [BAAssetPackManager.sharedManager assetPackIsAvailableLocallyWithIdentifier:@"romfs"];
+    if (@available(iOS 26.0, *)) {
+        if (!g_pack_legacy_available && !self.legacyStatusPending && CFAbsoluteTimeGetCurrent() - self.legacyStatusT >= 30)
+            [self queryLegacyPack:^(BOOL available) { if (available) [self ready]; }];
+        return g_pack_legacy_available;
+    }
     return NO;
 }
 - (void)logPack:(BOOL)avail free:(int64_t)fr {
@@ -874,6 +925,9 @@ static int64_t free_bytes(void) {   // 给 App 用的可用空间（系统「重
         [BAAssetPackManager.sharedManager getLocalStatusOfAssetPackWithIdentifier:@"romfs" completionHandler:^(BAAssetPackStatus st) {
             plog("assets: 托管状态：已等 %.0f 秒，进度 %.2f / %.2f GB（100%% 后 %.0f 秒，-1 = 没到），系统说本地可用 %d，可用空间 %.2f GB；系统状态位 0x%lx（1 可下载 2 有更新 4 最新 8 过期 0x10 已撤 0x20 下载中 0x40 已下完）",
                  w, d, t, f, a, g, (unsigned long)st); }];
+    } else if (@available(iOS 26.0, *)) {
+        plog("assets: 托管资源包（iOS 26.4 以前的接口）：已等 %.0f 秒，%.2f / %.2f GB，满额已 %.0f 秒，可用 %d，可用空间 %.2f GB，状态 0x%lx，查询在途 %d，错误 %s",
+             w, d, t, f, a, g, (unsigned long)self.legacyStatus, self.legacyStatusPending, self.legacyStatusError.localizedDescription.UTF8String ?: "无");
     } else plog("assets: 托管状态：已等 %.0f 秒，进度 %.2f / %.2f GB（100%% 后 %.0f 秒，-1 = 没到），系统说本地可用 %d，可用空间 %.2f GB", w, d, t, f, a, g);
 }
 - (void)packText:(int64_t)fr {   // 100% 之后屏上那段：空间不够 > 超时 > 正在安装 | the passage on screen after 100%: not enough space > timeout > installing
@@ -941,20 +995,30 @@ static int64_t free_bytes(void) {   // 给 App 用的可用空间（系统「重
         return;
     }
     if (!ba_configured()) { [self direct:stray]; return; }
-    if (@available(iOS 26.4, *)) {
-        [self say:T("dmDlConnecting")];
-        BAAssetPackManager *m = BAAssetPackManager.sharedManager; m.delegate = self;
-        [m getAssetPackWithIdentifier:@"romfs" completionHandler:^(BAAssetPack *pack, NSError *e) {
-            if (!pack) { plog("assets: 没有托管资源包（%s），改从下载站直接下", e.localizedDescription.UTF8String); dispatch_async(dispatch_get_main_queue(), ^{ [self direct:stray]; }); return; }   // 直装包走到这里必然失败 | A direct-install build always fails when it gets here
-            [self say:T("dmDlDownloading")];
-            plog("assets: 托管资源包 版本 %ld、%.2f GB，请系统确保本地可用（可用空间 %.2f GB）", (long)pack.version, pack.downloadSize / 1e9, free_bytes() / 1e9);
-            dispatch_async(dispatch_get_main_queue(), ^{ self.packBytes = pack.downloadSize; [self watchPack]; });
-            [m ensureLocalAvailabilityOfAssetPack:pack completionHandler:^(NSError *e2) {
-                if (e2) { self.packStop = 1; [self fail:@"下载游戏资源" error:e2]; [self offerDirect:3]; return; }
-                plog("assets: 系统「确保本地可用」完成回调到了");
-                dispatch_async(dispatch_get_main_queue(), ^{ [self ready]; });
+    if (@available(iOS 26.0, *)) {
+        void (^download)(void) = ^{
+            [self say:T("dmDlConnecting")];
+            BAAssetPackManager *m = BAAssetPackManager.sharedManager; m.delegate = self;
+            [m getAssetPackWithIdentifier:@"romfs" completionHandler:^(BAAssetPack *pack, NSError *e) {
+                if (!pack) { plog("assets: 没有托管资源包（%s），改从下载站直接下", e.localizedDescription.UTF8String); dispatch_async(dispatch_get_main_queue(), ^{ [self direct:stray]; }); return; }   // 直装包走到这里必然失败 | A direct-install build always fails when it gets here
+                [self say:T("dmDlDownloading")];
+                plog("assets: 托管资源包 版本 %ld、%.2f GB，请系统确保本地可用（可用空间 %.2f GB）", (long)pack.version, pack.downloadSize / 1e9, free_bytes() / 1e9);
+                dispatch_async(dispatch_get_main_queue(), ^{ self.packBytes = pack.downloadSize; [self watchPack]; });
+                [m ensureLocalAvailabilityOfAssetPack:pack completionHandler:^(NSError *e2) {
+                    if (e2) { self.packStop = 1; [self fail:@"下载游戏资源" error:e2]; [self offerDirect:3]; return; }
+                    plog("assets: 系统「确保本地可用」完成回调到了");
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (@available(iOS 26.4, *)) [self ready];
+                        else [self legacyPackReady];
+                    });
+                }];
             }];
-        }];
+        };
+        if (@available(iOS 26.4, *)) download();
+        else {
+            [self say:T("dmDlConnecting")];
+            [self queryLegacyPack:^(BOOL available) { if (available) [self ready]; else download(); }];
+        }
     } else [self direct:stray];
 }
 // 直装包：从我们自己的下载站把资源直接下到 Documents/D2R Mobile Resources（asset_dl.m）。下载站走不通时界面退回原来的指引（或 fallback 给的原因）
@@ -1016,7 +1080,11 @@ static int64_t free_bytes(void) {   // 给 App 用的可用空间（系统「重
 }
 - (void)downloadOfAssetPackBegan:(BAAssetPack *)p API_AVAILABLE(ios(26.0)) { plog("assets: 系统通知托管下载开始 / 继续"); self.packStop = 0; self.textKind = 0; }
 - (void)downloadOfAssetPackFinished:(BAAssetPack *)p API_AVAILABLE(ios(26.0)) {
-    plog("assets: 系统通知资源包下载完成%s", self.gone ? "（已改走直接下载，不接）" : ""); if (self.gone) return; self.finished = 1; dispatch_async(dispatch_get_main_queue(), ^{ [self ready]; }); }
+    plog("assets: 系统通知资源包下载完成%s", self.gone ? "（已改走直接下载，不接）" : ""); if (self.gone) return; self.finished = 1;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (@available(iOS 26.4, *)) [self ready];
+        else if (!p || [p.identifier isEqualToString:@"romfs"]) [self legacyPackReady];
+    }); }
 - (void)downloadOfAssetPackPaused:(BAAssetPack *)p API_AVAILABLE(ios(26.0)) {
     plog("assets: 系统通知托管下载暂停%s", self.gone ? "（已改走直接下载）" : ""); if (self.gone) return; self.packStop = 1; [self say:T("dmDlPaused")]; [self offerDirect:2]; }
 - (void)downloadOfAssetPack:(BAAssetPack *)p failedWithError:(NSError *)e API_AVAILABLE(ios(26.0)) {

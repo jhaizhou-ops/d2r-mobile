@@ -1,3 +1,4 @@
+#ifndef DM_MOVIE_FFMPEG
 // 过场 / 背景视频剪口（movie:: = subsdk0 任天堂 movie 库；视频内容在复刻排除范围内，不解码、不出画面）。
 // 语义：每段视频按容器里的真实时长「空播」，时序与原版一致——一次性视频到时长走游戏自己的「播完」路径（按键跳过照常生效），
 // 循环视频（选角背景 logoloop）由游戏自己 SeekTo 回开头、按原时长空转。排除的是内容，状态机不剪。
@@ -305,3 +306,265 @@ HLE_FORCE("_ZNK5movie6Buffer6OffsetEv", "过场空播：Buffer 偏移", int, mv_
 HLE_FORCE("_ZNK5movie6Buffer4SizeEv", "过场空播：Buffer 长度", int, mv_BufSize, const mvbuf *b) { return b->size; }
 HLE_FORCE("_ZN5movie6Buffer8SetRangeEii", "过场空播：Buffer 设范围", void, mv_BufSetRange, mvbuf *b, int off, int size) { b->off = off; b->size = size; }
 HLE_FORCE("_ZN5movie6Buffer18SetDataAndCapacityEPvm", "过场空播：Buffer 设数据", void, mv_BufSetData, mvbuf *b, void *p, uint64_t cap) { b->data = p; b->cap = cap; b->off = b->size = 0; }
+#else
+/* Optional macOS VP8 -> NV12 through the original movie:: reader and vtables.
+   Based on main 3.3.94012: setup 0x8996d0, decode thread 0x899270,
+   frame fetch 0x89a4b0. Audio, subtitles, clock, skip, and loops stay in the guest. */
+#include "hle.h"
+#include "dm_movie_decode.h"
+#include <errno.h>
+
+#define ST_OK 0
+#define ST_EOS 0x2000
+#define ST_TRY_AGAIN 0x1008
+#define MV_SLOTS 8
+typedef struct { void *data; uint64_t cap; int32_t off, size; } mvbuf;
+typedef struct { int width, height; int64_t duration; } mvmeta;
+typedef struct { uint8_t *data; size_t size; int64_t pts; int state, flags; uint64_t order; } mvframe;
+typedef struct {
+    void **reader;
+    void *handle;
+    dm_movie_decode *decode;
+    dm_movie_info info;
+    void *in, *out;
+    int refs, started, eos;
+    int64_t pts;
+    uint64_t sequence;
+    mvframe frames[MV_SLOTS];
+} mvreal;
+static pthread_mutex_t movie_lock = PTHREAD_MUTEX_INITIALIZER;
+static mvreal *movie_pending;
+static void (*movie_signal)(void *);
+static void (*movie_free)(void *, void *);
+static void *movie_user;
+static mvreal *movie(void *self) { return ((mvreal **)self)[1]; }
+static int64_t movie_read(void *opaque, int64_t offset, void *buf, size_t count) {
+    mvreal *m = opaque; void **vt = *(void ***)m->reader;
+    return ((int64_t (*)(void *, void *, int64_t, void *, size_t))vt[3])(m->reader, m->handle, offset, buf, count);
+}
+static int movie_free_slot(mvreal *m) {
+    for (int i = 0; i < MV_SLOTS; i++) if (!m->frames[i].state) return i;
+    return -1;
+}
+static void movie_wake_input(mvreal *m) {
+    if (m->started && !m->eos && movie_free_slot(m) >= 0) movie_signal(m->in);
+}
+static int movie_enqueue(void *opaque, const uint8_t *data, size_t count, int64_t pts) {
+    mvreal *m = opaque; int i = movie_free_slot(m);
+    if (i < 0) return -ENOBUFS;
+    mvframe *f = &m->frames[i];
+    if (f->size < count) {
+        uint8_t *p = realloc(f->data, count);
+        if (!p) return -ENOMEM;
+        f->data = p; f->size = count;
+    }
+    if (count) memcpy(f->data, data, count);
+    f->pts = pts; f->flags = count ? 0 : 4; f->order = m->sequence++; f->state = 1;
+    return 0;
+}
+static void movie_release(void *self) {
+    mvreal *m = movie(self); if (!m) return;
+    ((void **)self)[1] = NULL;
+    pthread_mutex_lock(&movie_lock);
+    if (movie_pending == m) movie_pending = NULL;
+    if (--m->refs == 0) {
+        dm_movie_decode_close(m->decode);
+        if (m->handle) {
+            void **vt = *(void ***)m->reader;
+            ((void (*)(void *, void *))vt[4])(m->reader, m->handle);
+        }
+        for (int i = 0; i < MV_SLOTS; i++) free(m->frames[i].data);
+        free(m);
+    }
+    pthread_mutex_unlock(&movie_lock);
+}
+static void movie_delete(void *self) {
+    movie_release(self);
+    if (!movie_free) die("Movie: missing guest allocator");
+    movie_free(self, movie_user);
+}
+static void movie_unsupported(void) { die("Movie: movie:: call outside the verified protocol"); }
+
+HLE_FORCE("_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", "Movie: guest allocator",
+    void, mv_SetAllocator, void *alloc, void (*fr)(void *, void *), void *realloc_, void *user) {
+    (void)alloc; (void)realloc_; movie_free = fr; movie_user = user;
+}
+static int movie_source(void *self, void **reader, const char *path) {
+    mvreal *m = calloc(1, sizeof *m);
+    if (!m) die("Movie: out of memory");
+    m->reader = reader; m->refs = 1;
+    void **vt = *(void ***)reader;
+    if (!(((uint32_t (*)(void *, const char *, void **))vt[2])(reader, path, &m->handle) & 1))
+        die("Movie: cannot open %s", path);
+    char error[160];
+    m->decode = dm_movie_decode_open(movie_read, m, &m->info, error, sizeof error);
+    if (!m->decode) die("Movie: %s: %s", path, error);
+    ((void **)self)[1] = m;
+    pthread_mutex_lock(&movie_lock); movie_pending = m; pthread_mutex_unlock(&movie_lock);
+    LOG("VP8 movie: %s, %d×%d, %.3f s", path, m->info.width, m->info.height, m->info.duration_us / 1e6);
+    return ST_OK;
+}
+static int movie_tracks(void *self, int *count) { (void)self; *count = 1; return ST_OK; }
+static void movie_metadata(void **out, mvreal *m) {
+    mvmeta *meta = *out;
+    if (!meta && !(meta = calloc(1, sizeof *meta))) die("Movie: out of memory for metadata");
+    *meta = (mvmeta){m->info.width, m->info.height, m->info.duration_us}; *out = meta;
+}
+static int movie_track(void *self, int index, void **out) {
+    if (index != 0) return ST_TRY_AGAIN;
+    movie_metadata(out, movie(self)); return ST_OK;
+}
+static int movie_select(void *self, int index) { (void)self; return index ? ST_TRY_AGAIN : ST_OK; }
+static int movie_seek(void *self, int64_t pts) {
+    mvreal *m = movie(self);
+    pthread_mutex_lock(&movie_lock);
+    int r = dm_movie_decode_seek(m->decode, pts);
+    m->eos = 0; m->pts = pts;
+    movie_wake_input(m);
+    pthread_mutex_unlock(&movie_lock);
+    if (r < 0) die("Movie: seek failed (%d)", r);
+    return ST_OK;
+}
+static int movie_read_packet(void *self, mvbuf *buf) {
+    mvreal *m = movie(self); const uint8_t *data = NULL; int size = 0;
+    pthread_mutex_lock(&movie_lock);
+    int r = dm_movie_decode_read(m->decode, &data, &size, &m->pts);
+    if (!r) m->pts = m->info.duration_us;
+    buf->data = (void *)data; buf->cap = (uint64_t)size; buf->off = 0; buf->size = size;
+    pthread_mutex_unlock(&movie_lock);
+    if (r < 0) die("Movie: WebM read failed (%d)", r);
+    return r ? ST_OK : ST_EOS;
+}
+static int movie_advance(void *self) { (void)self; return ST_OK; }
+static int movie_time(void *self, int64_t *pts) { *pts = movie(self)->pts; return ST_OK; }
+static void *const movie_extractor_vt[16] = {
+    movie_release, movie_delete, movie_unsupported, movie_unsupported, movie_tracks, movie_track,
+    movie_select, movie_select, movie_seek, movie_unsupported, movie_read_packet, movie_advance,
+    movie_time, movie_unsupported, movie_unsupported, movie_source
+};
+
+static int movie_configure(void *self, void *md) { (void)self; (void)md; return ST_OK; }
+static int movie_events(void *self, void **events) { mvreal *m = movie(self); m->in = events[0]; m->out = events[1]; return ST_OK; }
+static int movie_start(void *self) {
+    mvreal *m = movie(self);
+    if (!movie_signal) movie_signal = guest_sym("_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+    if (!movie_signal || !m->in || !m->out) die("Movie: missing guest events");
+    pthread_mutex_lock(&movie_lock); m->started = 1; movie_wake_input(m); pthread_mutex_unlock(&movie_lock);
+    return ST_OK;
+}
+static int movie_stop(void *self) {
+    pthread_mutex_lock(&movie_lock); movie(self)->started = 0; pthread_mutex_unlock(&movie_lock); return ST_OK;
+}
+static int movie_input_index(void *self, int *index, int *remaining) {
+    mvreal *m = movie(self);
+    pthread_mutex_lock(&movie_lock); *index = m->started && !m->eos && movie_free_slot(m) >= 0 ? 0 : -1;
+    *remaining = *index >= 0 ? 1 : 0; pthread_mutex_unlock(&movie_lock); return ST_OK;
+}
+static int movie_input(void *self, int index, mvbuf *buf) {
+    (void)self; (void)index; memset(buf, 0, sizeof *buf); return ST_OK;
+}
+static int movie_send(void *self, int index, int off, int size, int64_t pts, unsigned flags) {
+    (void)index; (void)off; (void)pts;
+    mvreal *m = movie(self);
+    pthread_mutex_lock(&movie_lock);
+    if (!m->started) { pthread_mutex_unlock(&movie_lock); return ST_TRY_AGAIN; }
+    /* Loop restart submits an empty EOS buffer without flag 4. */
+    int r = size || (flags & 4) ? dm_movie_decode_send(m->decode, !!(flags & 4), movie_enqueue, m) : 0;
+    if (r >= 0 && (flags & 4)) { m->eos = 1; r = movie_enqueue(m, NULL, 0, m->info.duration_us); }
+    if (r >= 0) { movie_signal(m->out); movie_wake_input(m); }
+    pthread_mutex_unlock(&movie_lock);
+    if (r < 0) die("Movie: VP8 decode failed (%d)", r);
+    return ST_OK;
+}
+static int movie_output_index(void *self, int *index, int64_t *pts, unsigned *flags, int *remaining) {
+    mvreal *m = movie(self); int first = -1, count = 0;
+    pthread_mutex_lock(&movie_lock);
+    for (int i = 0; i < MV_SLOTS; i++) if (m->frames[i].state == 1) {
+        count++; if (first < 0 || m->frames[i].order < m->frames[first].order) first = i;
+    }
+    if (first >= 0) {
+        mvframe *f = &m->frames[first]; f->state = 2;
+        *index = first; *pts = f->pts; *flags = f->flags; *remaining = count - 1;
+        if (count > 1) movie_signal(m->out);
+    }
+    pthread_mutex_unlock(&movie_lock);
+    return first < 0 ? ST_TRY_AGAIN : ST_OK;
+}
+static int movie_output(void *self, int index, mvbuf *buf) {
+    mvreal *m = movie(self); int r = ST_TRY_AGAIN;
+    pthread_mutex_lock(&movie_lock);
+    if (index >= 0 && index < MV_SLOTS && m->frames[index].state == 2) {
+        mvframe *f = &m->frames[index];
+        if (!(f->flags & 4) && buf->data && buf->off >= 0 && (uint64_t)buf->off <= buf->cap && f->size <= buf->cap - buf->off) {
+            memcpy((uint8_t *)buf->data + buf->off, f->data, f->size); buf->size = (int32_t)f->size; r = ST_OK;
+        }
+    }
+    pthread_mutex_unlock(&movie_lock);
+    return r;
+}
+static int movie_output_size(void *self, int *count, int *size) {
+    mvreal *m = movie(self); *count = MV_SLOTS; *size = m->info.width * m->info.height * 3 / 2; return ST_OK;
+}
+static int movie_release_output(void *self, int index) {
+    mvreal *m = movie(self);
+    pthread_mutex_lock(&movie_lock);
+    if (index < 0 || index >= MV_SLOTS || m->frames[index].state != 2) die("Movie: invalid output index");
+    m->frames[index].state = 0; movie_wake_input(m);
+    pthread_mutex_unlock(&movie_lock); return ST_OK;
+}
+static int movie_format(void *self, int index, void **out) {
+    mvreal *m = movie(self); int r = ST_TRY_AGAIN;
+    pthread_mutex_lock(&movie_lock);
+    if (index >= 0 && index < MV_SLOTS && m->frames[index].state == 2) {
+        r = m->frames[index].flags & 4 ? ST_EOS : ST_OK;
+        if (r == ST_OK) movie_metadata(out, m);
+    }
+    pthread_mutex_unlock(&movie_lock); return r;
+}
+static void *const movie_decoder_vt[19] = {
+    movie_release, movie_delete, movie_configure, movie_events, movie_unsupported,
+    movie_start, movie_stop, movie_unsupported, movie_unsupported, movie_input_index,
+    movie_input, movie_send, movie_output_index, movie_output, movie_output_size,
+    movie_release_output, movie_unsupported, movie_unsupported, movie_format
+};
+HLE_FORCE("_ZN5movie9ExtractorC1ENS_13ContainerTypeE", "Movie: WebM reader", void, mv_Extractor, void **self, int type) {
+    (void)type; self[0] = (void *)movie_extractor_vt; self[1] = NULL;
+}
+HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi", "Movie: VP8 to NV12",
+    void, mv_Decoder, void **self, int type, int format, int mode, int priority) {
+    (void)mode; (void)priority;
+    pthread_mutex_lock(&movie_lock); mvreal *m = movie_pending; movie_pending = NULL;
+    if (!m || type != 2 || format != 4) die("Movie: unsupported decoder configuration (%d, %d)", type, format);
+    m->refs++; self[0] = (void *)movie_decoder_vt; self[1] = m; pthread_mutex_unlock(&movie_lock);
+}
+HLE_FORCE("_ZN5movie17GetThreadPriorityEv", "Movie: guest priority", int, mv_GetThreadPriority, void) { return 16; }
+HLE_FORCE("_ZN5movie9MediaDataC1Ev", "Movie: metadata", void, mv_MediaData, void **self) { *self = NULL; }
+HLE_FORCE("_ZN5movie9MediaDataD1Ev", "Movie: release metadata", void, mv_MediaDataD, void **self) { free(*self); *self = NULL; }
+HLE_FORCE("_ZNK5movie9MediaData9FindInt32EPKcPi", "Movie: NV12 format", int, mv_FindInt32, void **self, const char *key, int *out) {
+    mvmeta *m = *self; if (!m) return 0;
+    if (!strcmp(key, "width") || !strcmp(key, "nv12-y-stride")) *out = m->width;
+    else if (!strcmp(key, "height")) *out = m->height;
+    else if (!strcmp(key, "nv12-y-offset")) *out = 0;
+    else if (!strcmp(key, "nv12-uv-offset")) *out = m->width * m->height;
+    else return 0;
+    return 1;
+}
+HLE_FORCE("_ZNK5movie9MediaData9FindInt64EPKcPl", "Movie: duration", int, mv_FindInt64, void **self, const char *key, int64_t *out) {
+    mvmeta *m = *self; if (!m || strcmp(key, "durationUs")) return 0; *out = m->duration; return 1;
+}
+HLE_FORCE("_ZNK5movie9MediaData10FindStringEPKcPS2_", "Movie: VP8 MIME", int, mv_FindString, void **self, const char *key, const char **out) {
+    if (!*self || strcmp(key, "mime")) return 0; *out = "video/x-vnd.on2.vp8"; return 1;
+}
+HLE_FORCE("_ZN5movie6BufferC1Ev", "Movie: buffer", void, mv_Buffer, mvbuf *b) { memset(b, 0, sizeof *b); }
+HLE_FORCE("_ZN5movie6BufferD1Ev", "Movie: borrowed buffer", void, mv_BufferD, mvbuf *b) { (void)b; }
+HLE_FORCE("_ZNK5movie6Buffer4DataEv", "Movie: data", void *, mv_BufData, const mvbuf *b) { return b->data; }
+HLE_FORCE("_ZNK5movie6Buffer6OffsetEv", "Movie: offset", int, mv_BufOffset, const mvbuf *b) { return b->off; }
+HLE_FORCE("_ZNK5movie6Buffer4SizeEv", "Movie: size", int, mv_BufSize, const mvbuf *b) { return b->size; }
+HLE_FORCE("_ZN5movie6Buffer8SetRangeEii", "Movie: buffer range", void, mv_BufSetRange, mvbuf *b, int off, int size) {
+    if (off < 0 || size < 0 || (uint64_t)off > b->cap || (uint64_t)size > b->cap - off) die("Movie: invalid buffer range");
+    b->off = off; b->size = size;
+}
+HLE_FORCE("_ZN5movie6Buffer18SetDataAndCapacityEPvm", "Movie: buffer storage", void, mv_BufSetData, mvbuf *b, void *data, uint64_t cap) {
+    b->data = data; b->cap = cap; b->off = b->size = 0;
+}
+#endif

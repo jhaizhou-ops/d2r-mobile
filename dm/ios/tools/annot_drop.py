@@ -8,19 +8,22 @@
     钥匙另标首领所在幕，任务物品（ua1–ua5）按 misc.txt 英文名里的 Act 号标幕。
   底材（武器 / 护甲）：档次与轻中重由前面的「底材档次」步骤写好；这里加 ★（值得留的底材，名单与理由见 VALUE_BASES）、价值数字、顶级符文之语、
     职业标枪的魔法词缀上限、合成手套的标志属性（cubemain.txt 的手套合成配方）。
-名字一律取字符串表的现行值（已做过旧译名 / 符文序号）。游戏把多行名字倒着画（最后一行在最上面），所以「说明\\n名字」画出来是名字在上、说明在下。
-Ground drop names (the filter logic and rules replicate the Hongye community mod; its wording is not copied, no piece of information is left out, everything is computed from the game tables, in our own wording).
-Hongye's "filter" is just renaming (it hides nothing): low-value consumables are shortened, valuable / needed items get color, source and use are added, bases get tier and value. Category by category:
-  Potions: healing / mana levels 1–5 are shortened to 「微 / 小 / 中 / 大 / 超」(minor / light / medium / greater / super) + 「红 / 蓝」(red / blue) (super gets color); rejuvenation becomes 「小紫 / 大紫」(small purple / large purple); antidote potion drops 「药水」(potion).
-  Scrolls: the two commonly dropped ones, town portal and identify, are shortened; arrows / bolts are shortened to 「箭」(arrows) and 「弩矢」(bolts).
-  Gems / skulls: shortened to "grade-color"; the chipped / flawed / standard grades get 「合 N」(combine N) = which rune number this one produces when upgrading runes in the Horadric Cube (rune upgrade recipes in cubemain.txt).
-  Runes: the current name "Chinese English #number" is colored; frame lines from 24 on, extra blank lines from 27 on, longer frame lines from 28 on (the more valuable, the more conspicuous).
-  Keys / boss organs / essences: the source boss is reverse-looked-up from the treasure classes (search upward level by level in treasureclassex.txt, up to the Hell drop columns of monstats / superuniques); names come from the string table;
-    keys also get the act the boss is in, and quest items (ua1–ua5) get the act from the Act number in the English name in misc.txt.
-  Bases (weapons / armor): tier and light/medium/heavy are written by the earlier "base tier" step; here we add ★ (base worth keeping; list and reasons in VALUE_BASES), the value number, top runewords,
-    the magic affix cap for class javelins, and the signature property for crafted gloves (glove crafting recipes in cubemain.txt).
-Names always use the current value in the string table (old translated names / rune numbers already applied). The game draws multi-line names in reverse (last line on top), so "description\\\\\\
-name" is drawn with the name on top and the description below."""
+名字一律取字符串表的现行值（已做过旧译名 / 符文序号）。
+措辞按语言列（WORDS：zhCN / esES / esMX），s.col 是哪列就用哪套、名字也取那一列；规则与中文相同。西语措辞只用原版拉丁字体（Formal436BT / Exocet）里有的字：
+没有 ★ 〈〉 →，所以「值得留」用 *、合成标志用 « »。游戏把多行名字倒着画（最后一行在最上面），所以「说明\\n名字」画出来是名字在上、说明在下。
+Ground drop names (filter logic and rules replicate Hongye (红叶); no text copied from Hongye, no information dropped, everything computed from game tables, in our own wording).
+Hongye's "filter" is just renaming (it hides nothing): low-value consumables shortened, valuable / useful items colored, source and use added, bases get grade and value. Per category:
+  Potions: healing / mana levels 1–5 shortened to tiny / small / medium / large / super + red / blue (super is colored); rejuvenation small purple / large purple; antidote potion drops "potion".
+  Scrolls: the two common drops, town portal and identify, are shortened; arrows / bolts shortened to "arrows" / "bolts".
+  Gems / skulls: shortened to "grade-color"; the chipped / flawed / standard grades get "cube N" = which rune number this gem produces when upgrading runes in the Horadric Cube (rune upgrade recipes in cubemain.txt).
+  Runes: current name "Chinese English #number" colored; from #24 a border line is added, from #27 extra blank lines, from #28 a longer border (the more valuable, the more visible).
+  Keys / boss organs / essences: source boss found by reverse lookup in drop tables (treasureclassex.txt walked upward level by level to the Hell drop columns of monstats / superuniques), names taken from the string table;
+    keys also note the boss's act; quest items (ua1–ua5) note the act from the Act number in the English name in misc.txt.
+  Bases (weapons / armor): grade and light / medium / heavy written by the earlier "base grade" step; here add ★ (bases worth keeping, list and reasons in VALUE_BASES), value number, top runewords,
+    magic affix caps of class javelins, signature stats of crafted gloves (glove crafting recipes in cubemain.txt).
+Names always take the current value from the string table (old names / rune numbers already applied).
+Wording per language column (WORDS: zhCN / esES / esMX): whichever column s.col is, use that set, names also from that column; rules same as Chinese. Spanish wording only uses characters present in the original Latin fonts (Formal436BT / Exocet):
+no ★ 〈〉 →, so "worth keeping" uses * and craft signature uses « ». The game draws multi-line names bottom-up (last line on top), so a "note, line break, name" string renders with the name on top and the note below."""
 import math, re
 
 FILES = ('item-names.json', 'item-runes.json', 'chinese-overlay.json')   # 加载顺序：后加载的同键覆盖前面的 | Load order: a later-loaded file overrides earlier ones for the same key
@@ -59,6 +62,34 @@ WEAPON_VALUE = {'7wa': {'value': 'range', 'eth': True}}
 FRAMED = ('ci3',)   # 头环里最高阶的权冠：可出 +2 技能 + 2 孔以上的顶级头环底 | The highest-tier circlet, the Diadem: a top circlet base that can roll +2 skills + 2 or more sockets
 CLASS_MAGIC = ('ama', 'amf')   # 职业标枪里扩展 / 精英最高阶的两把：标出魔法件能出的最高技能与攻速 | The two highest-tier exceptional / elite class javelins: mark the highest skill and attack speed a magic one can roll
 CRAFT_GLOVE_MODS = {'crush': '压碎', 'mana-kill': '杀敌回蓝'}   # 手套合成配方的标志属性里值得标的两种（鲜血 / 施法者合成） | The two signature properties of glove crafting recipes that are worth marking (Blood / Caster crafts)
+_ROMAN = ('', 'I', 'II', 'III', 'IV', 'V')
+# 按语言列的措辞。pot：药水「尺寸 + 颜色」的拼法；strip：去掉名字里的这一段（正则）后首字母大写；gem：宝石「档 / 颜色」的拼法；
+# source：来源说明（西语里的 {torch} / {token} 填原版该列的「地狱火炬」「赦免之证」名字）；act：「第 N 幕」（esES 原版写罗马数字、esMX 写阿拉伯数字）
+# Wording per language column. pot: how potion "size + color" is spelled; strip: remove this part of the name (regex) and capitalize the first letter; gem: how gem "grade / color" is spelled;
+# source: source note ({torch} / {token} in Spanish are filled with that column's original names for "Hellfire Torch" and "Token of Absolution"); act: "Act N" (original esES uses Roman numerals, esMX Arabic numerals)
+_ES = {
+    'pot': '{c} {s}', 'pot_color': {'hpot': 'Roja', 'mpot': 'Azul'},
+    'short': {'tsc': 'Portal', 'rvs': PURPLE + 'Morada', 'rvl': PURPLE + 'Morada total'},
+    'strip': {'isc': r'^Pergamino de ', 'yps': r'^Poción '},
+    'gem': '{c} {w}', 'gem_color': {'gema': 'Amat.', 'gemt': 'Topa.', 'gems': 'Zaf.', 'geme': 'Esm.', 'gemr': 'Rubí', 'gemd': 'Diam.', 'gemz': 'Crán.'},
+    'gem_rune': ' (Runa #%d)',
+    'source': dict(**{c: 'Llave para {torch}' for c in ('pk1', 'pk2', 'pk3')}, **{c: 'Material para {torch}' for c in ('dhn', 'bey', 'mbr')},
+                   **{c: 'Para crear {token}' for c in ('tes', 'ceh', 'bet', 'fed')}),
+    'or': ' o ',
+    'class_magic': 'Mágico: hab. +%d, vel. ataque +%d', 'weapon_value': 'Vel. ataque %s · Daño %d-%d', 'def_range': 'Defensa %d-%d', 'def': 'Defensa %d',
+    'can_make': 'Para ', 'star': '*', 'craft': ' «Artesanal: %s»', 'craft_mods': {'crush': 'golpe aplastante', 'mana-kill': 'maná al matar'},
+}
+WORDS = {
+    'zhCN': {'pot': '{s}{c}', 'size': SIZE, 'pot_color': {'hpot': '红', 'mpot': '蓝'}, 'short': SHORT, 'strip': {k: re.escape(v) + '$' for k, v in STRIP.items()},
+             'gem': '{w}-{c}', 'gem_color': GEM_COLOR, 'grade': tuple(w for w, _ in GEM_GRADE), 'gem_rune': ' (合%d)',
+             'source': SOURCE_NOTE, 'or': '或', 'act': lambda n: ' 第%s幕' % n,
+             'class_magic': '魔法 技能+%d 攻速+%d', 'weapon_value': '攻速 %s · 伤害 %d-%d', 'def_range': '防御 %d-%d', 'def': '防御 %d',
+             'can_make': '可做 ', 'star': '★', 'craft': ' 〈合成·%s〉', 'craft_mods': CRAFT_GLOVE_MODS},
+    'esES': dict(_ES, size=('menor', 'ligera', '', 'superior', 'súper'), grade=('frag.', 'estrop.', '', 'sin def.', 'perf.'),
+                 act=lambda n: ' Acto %s' % _ROMAN[int(n)]),
+    'esMX': dict(_ES, size=('menor', 'leve', '', 'mayor', 'especial'), grade=('mell.', 'imperf.', '', 'impec.', 'perf.'),
+                 act=lambda n: ' Acto %s' % n),
+}
 
 
 def _strings_get(s, key):
@@ -129,12 +160,12 @@ class Tables:
         return best(self.automagic, ('skilltab',), False) + best(self.prefix, ('skilltab',), True), best(self.suffix, ('swing1', 'swing2', 'swing3'), True)
 
     def craft_glove(self, code):
-        """这双手套所在的一族（普 / 扩 / 精）是哪条手套合成配方的底材：返回配方标志属性里值得标的那一个（CRAFT_GLOVE_MODS）。 | Which glove crafting recipe the family (normal / exceptional / elite) of this pair of gloves is the base for: returns the one worth marking among the recipe's signature properties (CRAFT_GLOVE_MODS)."""
+        """这双手套所在的一族（普 / 扩 / 精）是哪条手套合成配方的底材：返回配方标志属性里值得标的那一个的属性码（CRAFT_GLOVE_MODS 的键）。 | Which glove crafting recipe uses this glove's family (normal / exceptional / elite) as its base: return the stat code of the one worth marking among the recipe's signature stats (a key of CRAFT_GLOVE_MODS)."""
         r = self.armor[code]; fam = {r.get('normcode'), r.get('ubercode'), r.get('ultracode')}
         for c in self.cube:
             if (c.get('input 1', '') or '').split(',')[0] in fam:
                 for k in range(1, 6):
-                    if c.get('mod %d' % k) in CRAFT_GLOVE_MODS: return CRAFT_GLOVE_MODS[c.get('mod %d' % k)]
+                    if c.get('mod %d' % k) in CRAFT_GLOVE_MODS: return c.get('mod %d' % k)
         return None
 
 
@@ -149,47 +180,50 @@ def _rune_line(code, name):
 
 def misc_rule(T, s, code, name):
     """杂物类一个物品码的掉落名；None = 不改。 | Drop name for one miscellaneous item code; None = no change."""
-    row = T.misc[code]; t = row.get('type', '')
-    if code in SHORT: return SHORT[code]
-    if code in STRIP and name.endswith(STRIP[code]): return name[:-len(STRIP[code])]
+    row = T.misc[code]; t = row.get('type', ''); L = WORDS[s.col]
+    if code in L['short']: return L['short'][code]
+    m = re.search(L['strip'][code], name) if code in L['strip'] else None
+    if m: r = name[:m.start()] + name[m.end():]; return r[:1].upper() + r[1:]
     if t in ('hpot', 'mpot') and code[-1:].isdigit():
-        i = int(code[-1]) - 1; w = SIZE[i] + ('红' if t == 'hpot' else '蓝')
+        i = int(code[-1]) - 1; w = L['pot'].format(s=L['size'][i], c=L['pot_color'][t]).strip()
         return (RED if t == 'hpot' else BLUE) + w if i == 4 else w
     if t in GEM_COLOR:
         g = SKULL_GRADE_CH.get(code[2]) if t == 'gemz' else GEM_GRADE_CH.get(code[1])
         if g is None: return None
-        word, color = GEM_GRADE[g]
-        base = color + word + '-' + GEM_COLOR[t] if word else name
+        word, color = L['grade'][g], GEM_GRADE[g][1]
+        base = color + L['gem'].format(w=word, c=L['gem_color'][t]) if word else name
         n = T.gem_rune(code) if g <= 2 else None
-        return base + (' (合%d)' % n if n else '')
+        return base + (L['gem_rune'] % n if n else '')
     if t == 'rune' and re.fullmatch(r'r\d\d', code): return _rune_line(code, name)
     if code in SOURCE_NOTE:
         src = T.sources(code)
         if not src: raise SystemExit('annot_drop：%s 在掉落表里找不到来源首领' % code)
-        who = '或'.join(dict.fromkeys(_strings_get(s, key) or key for _, _, key in src))
+        who = L['or'].join(dict.fromkeys(_strings_get(s, key) or key for _, _, key in src))
         act = next((BOSS_ACT[x[1]] for x in src if x[1] in BOSS_ACT), None)
         color = SOURCE_COLOR.get(code, GREEN)
-        return color + '[' + who + ' · ' + SOURCE_NOTE[code] + ']\n' + color + name + (' 第%d幕' % act if act else '')
+        nm = lambda f, k: re.sub(r'\u00ffc.', '', s.get(f, k).split('\n')[-1])   # 前面的注释步骤给暗金名加了范围行：只取名字那一行 | An earlier annotation step added a range line to unique names: take only the name line
+        note = L['source'][code].format(torch=nm('item-names.json', 'Hellfire Torch'), token=nm('item-modifiers.json', 'toa')) if s.col != 'zhCN' else L['source'][code]
+        return color + '[' + who + ' · ' + note + ']\n' + color + name + (L['act'](act) if act else '')
     m = re.search(r'Act ?(\d)', row.get('name', ''))
-    if m and t == 'ques' and code.startswith('ua'): return '%s 第%s幕' % (name, m.group(1))
+    if m and t == 'ques' and code.startswith('ua'): return name + L['act'](m.group(1))
     return None
 
 
 def base_rule(T, s, code, name):
     """武器 / 护甲一个物品码的掉落名（在底材档次之后）；None = 不改。 | Drop name for one weapon / armor item code (after the base tier); None = no change."""
-    parts = []
+    parts = []; L = WORDS[s.col]
     w, a = T.weap.get(code), T.armor.get(code)
     if code in CLASS_MAGIC:
-        sk, ias = T.class_magic(code); parts.append('魔法 技能+%d 攻速+%d' % (sk, ias))
+        sk, ias = T.class_magic(code); parts.append(L['class_magic'] % (sk, ias))
     vb = VALUE_BASES.get(code) or WEAPON_VALUE.get(code)
     if vb and vb.get('value'):
         k = 1.5 if vb.get('eth') else 1.0
         if w:
             lo, hi = int(w['mindam'] or w['2handmindam']), int(w['maxdam'] or w['2handmaxdam'])
-            parts.append('攻速 %s · 伤害 %d-%d' % (w.get('speed') or '0', lo, math.floor(math.ceil(hi * k) * 1.15)))
+            parts.append(L['weapon_value'] % (w.get('speed') or '0', lo, math.floor(math.ceil(hi * k) * 1.15)))
         else:
             lo, hi = int(a['minac']), int(a['maxac']); top = math.floor(math.floor((hi + 1) * k) * 1.15)
-            parts.append(('防御 %d-%d' % (lo, top)) if vb['value'] == 'range' else '防御 %d' % top)
+            parts.append((L['def_range'] % (lo, top)) if vb['value'] == 'range' else L['def'] % top)
     if code in TOP_RUNEWORDS:
         names = []
         for rw in TOP_RUNEWORDS[code]:
@@ -197,11 +231,11 @@ def base_rule(T, s, code, name):
             if not (its & T.ancestors((w or a)['type'])): raise SystemExit('annot_drop：%s 做不了 %s' % (code, rw))
             nm = (_strings_get(s, r['Name']) or rw).split('\n')[-1]   # 前面的注释步骤给符文之语名加了范围 / 点评行：只取名字那一行 | Earlier annotation steps added range / review lines to the runeword name: take only the name line
             names.append(re.sub(r'\u00ffc.', '', nm))
-        parts.append('可做 ' + ' / '.join(names))
+        parts.append(L['can_make'] + ' / '.join(names))
     glove = T.craft_glove(code) if a and a.get('type') == 'glov' else None
     out = name
-    if code in VALUE_BASES: out = '★' + out
-    if glove: out += ' 〈合成·%s〉' % glove
+    if code in VALUE_BASES: out = L['star'] + out
+    if glove: out += L['craft'] % L['craft_mods'][glove]
     if parts: out = '[' + ' · '.join(parts) + ']\n' + out
     if code in FRAMED: out = '—' * 7 + '\n' + out + '\n' + '—' * 7   # 最顶级的几件上下加框线 | Add frame lines above and below the few top-tier pieces
     return out if out != name else None

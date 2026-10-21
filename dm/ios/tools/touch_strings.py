@@ -51,15 +51,13 @@ TABLE = {
     },
 }
 
-# 英文列（英文版）：同一批键的 enUS 改成触摸说法；口径同上（空串 = 这句不要）。不在这里的键英文照原版。
-# 人物页「%s\n命中值」那两条是中文大字号排版问题，英文不动。别的语言列不改（产品只做中英，别的语言我们自己的字按英文）
+# 英文列（英文版）：同一批键的 enUS 改成触摸说法；口径同上（空串 = 这句不要）。不在这里的键英文照原版。俄语列见下面 RU。
+# 人物页「%s\n命中值」那两条是中文大字号排版问题，英文不动。西语两列见下面 ES / MX；别的语言列不改（我们自己的字只做中英西俄，别的语言按英文）
 # 与中文表同一写法：原文只存校验（SHA-1 前 8 位），表里不存原版文字
-# English column (English version): enUS for the same set of keys is changed to touch wording; same rules as above (empty string = this sentence is
-# dropped). Keys not listed here keep the original English.
-# The two character-sheet entries of the form "%s, newline, Attack Rating" are a layout issue of the large Chinese font and are left alone in English.
-# Other language columns are not changed (the product covers only Chinese and English; in other languages our own text uses English)
-# Written the same way as the Chinese table: for the source text only a check is stored (first 8 characters of the SHA-1), and the original game's text
-# is not stored in the table
+# English column (English version): the same keys' enUS changed to touch wording; same rules as above (empty string = drop the sentence). Keys not listed keep the original English. The Russian column is RU below.
+# The two "%s
+# Attack Rating" entries on the character page are a Chinese large-font layout issue; English is untouched. The two Spanish columns are ES / MX below; other language columns are unchanged (our own text covers Chinese, English, Spanish and Russian; other languages use English)
+# Same scheme as the Chinese table: only a checksum of the original is stored (first 8 hex digits of SHA-1), never the original text
 EN = {
     'ui-controller.json': {
         'UseItemController': ('3c07d84d', 'Double-tap to Use'),
@@ -92,6 +90,106 @@ EN = {
     },
 }
 
+# 西语两列（西语版）：同一批键的 esES / esMX 各改成触摸说法，口径同英文（空串 = 这句不要）；原版两列用词不同（Acto I / Acto 1、búsqueda / gesta），各存各的原文校验
+# Two Spanish columns (Spanish version): esES / esMX of the same set of keys each changed to touch wording, same policy as English (empty string = drop this sentence); the two original columns use different wording (Acto I / Acto 1, búsqueda / gesta), each stores its own original-text check
+ES = {
+    'ui-controller.json': {
+        'UseItemController': ('b3c337b6', 'Toca dos veces para usar'),
+        'OpenHoradricCubeController': ('316e4f76', 'Toca dos veces para abrir'),
+        'ReadScrollController': ('9f9ebb2f', 'Toca dos veces para leer'),
+        'UsePotionOfLifeController': ('8261013a', 'Toca dos veces para conseguir 20 p. de vida permanentes'),
+        'UseBookOfSkillController': ('9b9ad5b4', 'Toca dos veces para aprender una habilidad'),
+        'UseScrollOfResistanceController': ('2347c7a9', 'Toca dos veces para lanzar'),
+        'UseTokenOfAbsolutionController': ('cce00a79', 'Toca dos veces para reiniciar los puntos de estadísticas/habilidades'),
+        'UseTerrorTokenAct1Controller': ('9c7bb697', 'Toca dos veces para aterrorizar el Acto I'),
+        'UseTerrorTokenAct2Controller': ('f46a3882', 'Toca dos veces para aterrorizar el Acto II'),
+        'UseTerrorTokenAct3Controller': ('773c665e', 'Toca dos veces para aterrorizar el Acto III'),
+        'UseTerrorTokenAct4Controller': ('19ba4849', 'Toca dos veces para aterrorizar el Acto IV'),
+        'UseTerrorTokenAct5Controller': ('7dffa819', 'Toca dos veces para aterrorizar el Acto V'),
+        'comparisonTooltipController': ('c84875e2', ''),
+        'hireComparisonTooltipController': ('c84875e2', ''),
+        'StrYouDiedConsole': ('c2b02f82', 'Has muerto'),
+        'ControllerInteractButton': ('54234e14', ''),
+        'ControllerTitleScreenPrompt': ('885ef015', 'Toca la pantalla para empezar'),
+        'EnterCharacterName': ('be6e6664', ''),
+        'ControllerCycleComparisonTooltips': ('1b3ed98b', 'Toca de nuevo para comparar con el otro'),
+        'SelectButtonNoteText': ('c037151e', ''),
+        'MoviePlaybackHoldToSkip_switch': ('a6b6a532', ''),
+    },
+    'ui.json': {
+        'LevelUpStatsNotificationController': ('cbd9f839', 'Has subido de nivel.'),
+        'LevelUpNotificationController': ('4b4b08fe', 'Has subido de nivel.'),
+        'QuestLogNotificationController': ('13cf1af4', 'Se ha actualizado la búsqueda.'),
+        'MoviePlaybackHoldToSkip': ('a6b6a532', ''),
+    },
+}
+
+MX = {
+    'ui-controller.json': {
+        'UseItemController': ('b3c337b6', 'Toca dos veces para usar'),
+        'OpenHoradricCubeController': ('316e4f76', 'Toca dos veces para abrir'),
+        'ReadScrollController': ('9f9ebb2f', 'Toca dos veces para leer'),
+        'UsePotionOfLifeController': ('c7d42535', 'Toca dos veces para agregar 20 a tu vida permanentemente'),
+        'UseBookOfSkillController': ('906ec564', 'Toca dos veces para aprender una habilidad a elección'),
+        'UseScrollOfResistanceController': ('76a87c82', 'Toca dos veces para activar'),
+        'UseTokenOfAbsolutionController': ('5f21cbbb', 'Toca dos veces para restablecer los puntos de atributo/habilidad'),
+        'UseTerrorTokenAct1Controller': ('37fbf40e', 'Toca dos veces para aterrorizar el Acto 1'),
+        'UseTerrorTokenAct2Controller': ('a23ab72a', 'Toca dos veces para aterrorizar el Acto 2'),
+        'UseTerrorTokenAct3Controller': ('65e32c9e', 'Toca dos veces para aterrorizar el Acto 3'),
+        'UseTerrorTokenAct4Controller': ('0217c37c', 'Toca dos veces para aterrorizar el Acto 4'),
+        'UseTerrorTokenAct5Controller': ('0478c1a6', 'Toca dos veces para aterrorizar el Acto 5'),
+        'comparisonTooltipController': ('c84875e2', ''),
+        'hireComparisonTooltipController': ('c84875e2', ''),
+        'StrYouDiedConsole': ('0cd61240', 'Has muerto'),
+        'ControllerInteractButton': ('54234e14', ''),
+        'ControllerTitleScreenPrompt': ('3db5d4d5', 'Toca la pantalla para comenzar'),
+        'EnterCharacterName': ('53243134', ''),
+        'ControllerCycleComparisonTooltips': ('43363ba3', 'Toca de nuevo para comparar con el otro'),
+        'SelectButtonNoteText': ('483ba8e7', ''),
+        'MoviePlaybackHoldToSkip_switch': ('a6b6a532', ''),
+    },
+    'ui.json': {
+        'LevelUpStatsNotificationController': ('c6faf1bb', 'Subiste de nivel.'),
+        'LevelUpNotificationController': ('582b5596', 'Subiste de nivel.'),
+        'QuestLogNotificationController': ('b9ebf5ae', 'Se actualizó la gesta.'),
+        'MoviePlaybackHoldToSkip': ('a6b6a532', ''),
+    },
+}
+# 俄语列（俄语版）：同一批键的 ruRU 改成触摸说法，口径同英文（空串 = 这句不要）；原版俄文的原文校验各自单独存
+# Russian column (Russian version): the same keys' ruRU changed to touch wording, same rules as English (empty string = drop the sentence); the original Russian checksums are stored separately
+RU = {
+    'ui-controller.json': {
+        'UseItemController': ('7474c613', 'Двойной тап — использовать'),
+        'OpenHoradricCubeController': ('b702fc29', 'Двойной тап — открыть'),
+        'ReadScrollController': ('1aca2594', 'Двойной тап — прочитать'),
+        'UsePotionOfLifeController': ('1fc240c4', 'Двойной тап — +20 к запасу здоровья'),
+        'UseBookOfSkillController': ('3230fdd2', 'Двойной тап — выучить умение'),
+        'UseScrollOfResistanceController': ('a21bc33d', 'Двойной тап — применить'),
+        'UseTokenOfAbsolutionController': ('62799712', 'Двойной тап — сбросить очки характеристик и умений'),
+        'UseTerrorTokenAct1Controller': ('767eaea7', 'Двойной тап — ввергнуть ужас в 1-й акт'),
+        'UseTerrorTokenAct2Controller': ('7e2b5ab4', 'Двойной тап — ввергнуть ужас во 2-й акт'),
+        'UseTerrorTokenAct3Controller': ('cbfd42bc', 'Двойной тап — ввергнуть ужас в 3-й акт'),
+        'UseTerrorTokenAct4Controller': ('5839a722', 'Двойной тап — ввергнуть ужас в 4-й акт'),
+        'UseTerrorTokenAct5Controller': ('f8700dbe', 'Двойной тап — ввергнуть ужас в 5-й акт'),
+        'comparisonTooltipController': ('0d40bbad', ''),
+        'hireComparisonTooltipController': ('f42afaf2', ''),
+        'StrYouDiedConsole': ('2bf9961e', 'Вы погибли'),
+        'ControllerInteractButton': ('54234e14', ''),
+        'ControllerTitleScreenPrompt': ('1b3b06b3', 'Коснитесь экрана, чтобы начать'),
+        'EnterCharacterName': ('74790c9d', ''),
+        'ControllerCycleComparisonTooltips': ('3f128d2b', 'Коснитесь снова, чтобы сравнить с другим'),
+        'SelectButtonNoteText': ('f2040580', ''),
+        'MoviePlaybackHoldToSkip_switch': ('08664e40', ''),
+    },
+    'ui.json': {
+        'LevelUpStatsNotificationController': ('96716426', 'Уровень повышен.'),
+        'LevelUpNotificationController': ('96716426', 'Уровень повышен.'),
+        'QuestLogNotificationController': ('aad0ef25', 'Задание обновлено.'),
+        'MoviePlaybackHoldToSkip': ('8f05e751', ''),
+    },
+}
+EXTRA = (('enUS', EN), ('esES', ES), ('esMX', MX), ('ruRU', RU))   # 中文以外改的列 | Columns changed besides Chinese
+
 # 手柄支持：手柄说法 ↔ 触摸说法按模式切，不再改字符串文件——build_sidecar 出旁路表，宿主触屏模式把串表里这几个键的串换成触摸说法、
 # 手柄模式换回原文（dm/host/dm_padmode.c）。只有下面这两条是排版用的（大字号，两种模式都要），照旧改文件
 # Controller support: controller wording ↔ touch wording is switched by mode and the string files are no longer modified. build_sidecar emits a sidecar table;
@@ -112,18 +210,17 @@ def build_sidecar(romfs):
             cur = json.loads(m.group(1))
             if hashlib.sha1(cur.encode('utf-8')).hexdigest()[:8] != old: raise SystemExit('touch_strings：%s 的原文变了（校验 %s，现行「%s」）——原包换了版本，核过再改表' % (key, old, cur))
             out.append((key, old, new))
-        # 英文列（英文版）：同一批键再各出一行，原文校验是 enUS 的原文。宿主按「串表里此刻的原文」认校验（dm_padmode.c str_apply），
-        # 游戏语言是英文时中文那行对不上不换、英文这行对上才换，反之亦然；不用宿主另跟语言
-        # English column (English version): the same set of keys gets one more row each, whose source-text check is against the enUS source text. The host
-        # matches the check against "the source text in the string table at this moment" (dm_padmode.c str_apply):
-        # when the game language is English the Chinese row does not match and is not applied while the English row matches and is applied, and vice versa; the
-        # host does not have to follow the language separately
-        for key, (old, new) in EN.get(name, {}).items():
-            m = re.search(r'"Key":\s*"%s",.*?"enUS":\s*("(?:[^"\\]|\\.)*")' % re.escape(key), text, re.S)
-            if not m: raise SystemExit('touch_strings：%s 里没有键 %s 的 enUS' % (name, key))
-            cur = json.loads(m.group(1))
-            if hashlib.sha1(cur.encode('utf-8')).hexdigest()[:8] != old: raise SystemExit('touch_strings：%s 的 enUS 原文变了（校验 %s，现行「%s」）——原包换了版本，核过再改表' % (key, old, cur))
-            out.append((key, old, new))
+        # 英文 / 西语列：同一批键按列再各出一行，原文校验是那一列的原文。宿主按「串表里此刻的原文」认校验（dm_padmode.c str_apply），
+        # 游戏语言是哪一种，只有那一列的行对得上、才换；不用宿主另跟语言。两列原文相同（如 esES / esMX 同一句）出重复行无妨
+        # English / Spanish columns: the same set of keys gets one more row per column, with the original-text check against that column's original. The host recognizes the check by "the original text currently in the string table" (dm_padmode.c str_apply);
+        # whichever language the game is in, only that column's rows match and get replaced; the host needn't track language separately. Duplicate rows when two columns share the same original (e.g. same sentence in esES / esMX) are harmless
+        for lang, tab in EXTRA:
+            for key, (old, new) in tab.get(name, {}).items():
+                m = re.search(r'"Key":\s*"%s",.*?"%s":\s*("(?:[^"\\]|\\.)*")' % (re.escape(key), lang), text, re.S)
+                if not m: raise SystemExit('touch_strings：%s 里没有键 %s 的 %s' % (name, key, lang))
+                cur = json.loads(m.group(1))
+                if hashlib.sha1(cur.encode('utf-8')).hexdigest()[:8] != old: raise SystemExit('touch_strings：%s 的 %s 原文变了（校验 %s，现行「%s」）——原包换了版本，核过再改表' % (key, lang, old, cur))
+                if (key, old, new) not in out: out.append((key, old, new))   # esES / esMX 原文相同、新文也相同的只留一行 | Keep only one row when esES / esMX have the same original and the same new text
     return out
 
 def build(romfs, outdir):

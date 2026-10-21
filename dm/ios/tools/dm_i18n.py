@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""我们自己加的界面文字的中英表（英文版）：唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / 用在哪）。
-做法 = 把每一行作为新条目追加进原版字符串表 ui.json（RomFS 覆盖层，与 touch_strings 同一套机制）：zhCN / zhTW 列 = 中文（繁体玩家读简体比读英文顺），其余 11 种语言列 = English。
+"""我们自己加的界面文字的多语表：唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / Español / Español MX / Русский / 用在哪）。
+做法 = 把每一行作为新条目追加进原版字符串表 ui.json（RomFS 覆盖层，与 touch_strings 同一套机制）：zhCN / zhTW 列 = 中文（繁体玩家读简体比读英文顺），
+esES 列 = Español，esMX 列 = Español MX（空 = 同 Español；只在拉美官方用词与 esES 不同时填），ruRU 列 = Русский，其余 8 种语言列 = English。
 这样布局里写「@键」、宿主用原版取串 main+0x7f5630 取，语言切换由原版自己重装字符串表完成（SetLanguage，r34 起不剪），不用我们另跟语言。
-Chinese-English string table for the UI text we added ourselves (English version): single source dm/i18n/ui_text.tsv (key / Chinese / English / where used).
-Approach = append each row as a new entry to the original string table ui.json (RomFS overlay, same mechanism as touch_strings): zhCN / zhTW columns = Chinese (Traditional Chinese players read Simplified more easily than English), the other 11 language columns = English.
-This way layouts write "@key", the host fetches through the original string lookup at main+0x7f5630, and language switching is done by the original game reloading its string tables itself (SetLanguage, no longer patched out as of r34), so we do not have to follow the language separately."""
+'''Multilingual table for UI text we added ourselves: single source dm/i18n/ui_text.tsv (key / Chinese / English / Español / Español MX / Russian / where used).
+Method = append each row as a new entry to the original string table ui.json (RomFS overlay, same mechanism as touch_strings): zhCN / zhTW columns = Chinese (Traditional Chinese players read Simplified more easily than English),
+esES column = Español, esMX column = Español MX (empty = same as Español; filled only where official Latin American wording differs from esES), ruRU column = Russian, the other 8 language columns = English.
+So layouts write "@key", the host looks up via the original main+0x7f5630, and language switching is done by the original game reloading the string table (SetLanguage, not cut since r34); we don't track language separately.'''"""
 import csv, json, os, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,19 +43,24 @@ EN_LIMITS = (
 # 英文界面下也要写汉字的键（自定义页语言那一行：切错语言的人得看得懂）。只许用在指定了全球字体 BlizzardGlobal 的文字控件上——英文界面缺省字体没有汉字
 # Keys may only contain letters and digits: the layout's "@key" parsing stops at _ (@dmCustom_auto_mana was shown as "missing string_auto_mana", measured in the iOS package on a Mac)
 # Keys that must show Chinese characters in the English UI as well (the language row of the Custom page: someone who switched to the wrong language has to be able to read it). Only allowed on text controls that specify the global font BlizzardGlobal -- the default font of the English UI has no Chinese characters
-EN_HAS_ZH = {'dmCustomLang', 'dmCustomLangZh', 'dmCustomLangHintZh'}
+EN_HAS_ZH = {'dmCustomLangZh', 'dmCustomLangHintZh'}
 def rows():
+    """[(键, 中文, English, Español, Español MX, Русский)]；Español MX 空 = 同 Español。 | [(key, Chinese, English, Español, Español MX, Russian)]; empty Español MX = same as Español."""
     out = []
     with open(TABLE, encoding='utf-8') as f:
         for r in csv.DictReader(f, delimiter='\t'):
-            k, zh, en = r['键'], r['中文'].replace('\\n', '\n'), r['English'].replace('\\n', '\n')
-            if not re.fullmatch(r'dm[A-Za-z0-9]+', k) or not zh or not en: raise SystemExit('dm_i18n：表里这一行不对：%r' % r)
-            if k not in EN_HAS_ZH and re.search(r'[　-鿿＀-￯]', re.sub(PROPER, '', en)): raise SystemExit('dm_i18n：%s 的英文里有中文字符：%r' % (k, en))
-            if FMT.findall(zh) != FMT.findall(en): raise SystemExit('dm_i18n：%s 的中英占位符不一致：%s / %s' % (k, FMT.findall(zh), FMT.findall(en)))
-            lim = next((n for pat, n in EN_LIMITS if re.fullmatch(pat, k)), None)   # 英文字数闸（见 EN_LIMITS） | English length gate (see EN_LIMITS)
-            if lim is not None and len(FMT.sub('000', en).split('\n')[0]) > lim: raise SystemExit('dm_i18n：%s 的英文「%s」%d 个字符，超过这一栏的上限 %d（会顶框 / 被截断；压短，或给这一栏做英文专用的小字号控件后再改上限）' % (k, en, len(FMT.sub('000', en)), lim))
-            out.append((k, zh, en))
-    ks = [k for k, _, _ in out]
+            k = r['键']; zh, en, es, mx, ru = (r[c].replace('\\n', '\n') for c in ('中文', 'English', 'Español', 'Español MX', 'Русский'))
+            if not re.fullmatch(r'dm[A-Za-z0-9]+', k) or not zh or not en or not es or not ru: raise SystemExit('dm_i18n：表里这一行不对：%r' % r)
+            mx = mx or es
+            for nm, t in (('英文', en), ('西语', es), ('拉美西语', mx), ('俄语', ru)):
+                if k not in EN_HAS_ZH and re.search(r'[　-鿿＀-￯]', re.sub(PROPER, '', t)): raise SystemExit('dm_i18n：%s 的%s里有中文字符：%r' % (k, nm, t))
+                if FMT.findall(zh) != FMT.findall(t): raise SystemExit('dm_i18n：%s 的中文与%s占位符不一致：%s / %s' % (k, nm, FMT.findall(zh), FMT.findall(t)))
+                if t.count('\n') != en.count('\n'): raise SystemExit('dm_i18n：%s 的%s换行数与英文不同（行高按行数排）：%r' % (k, nm, t))
+            lim = next((n for pat, n in EN_LIMITS if re.fullmatch(pat, k)), None)   # 字数闸（见 EN_LIMITS；西语 / 俄语同一栏同一上限） | Length gate (see EN_LIMITS; Spanish and Russian use the same limit for the same field)
+            for nm, t in (('英文', en), ('西语', es), ('拉美西语', mx), ('俄语', ru)):
+                if lim is not None and len(FMT.sub('000', t).split('\n')[0]) > lim: raise SystemExit('dm_i18n：%s 的%s「%s」%d 个字符，超过这一栏的上限 %d（会顶框 / 被截断；压短，或给这一栏做专用的小字号控件）' % (k, nm, t, len(FMT.sub('000', t).split('\n')[0]), lim))
+            out.append((k, zh, en, es, mx, ru))
+    ks = [r[0] for r in out]
     if len(set(ks)) != len(ks): raise SystemExit('dm_i18n：键重复：%s' % sorted({k for k in ks if ks.count(k) > 1}))
     return out
 
@@ -65,9 +72,10 @@ def build(romfs, outdir, repl):
     if prev: text = open(prev, encoding='utf-8-sig').read()
     have = set(re.findall(r'"Key":\s*"((?:[^"\\]|\\.)*)"', text))
     rs = rows()
-    clash = [k for k, _, _ in rs if k in have]
+    clash = [r[0] for r in rs if r[0] in have]
     if clash: raise SystemExit('dm_i18n：键和原版重名：%s' % clash)
-    add = [{'id': ID0 + i, 'Key': k, **{l: (zh if l in ('zhCN', 'zhTW') else en) for l in LANGS}} for i, (k, zh, en) in enumerate(rs)]
+    col = lambda l, zh, en, es, mx, ru: zh if l in ('zhCN', 'zhTW') else es if l == 'esES' else mx if l == 'esMX' else ru if l == 'ruRU' else en
+    add = [{'id': ID0 + i, 'Key': k, **{l: col(l, zh, en, es, mx, ru) for l in LANGS}} for i, (k, zh, en, es, mx, ru) in enumerate(rs)]
     end = text.rstrip().rindex(']')
     body = ',\n'.join('  ' + json.dumps(e, ensure_ascii=False) for e in add)
     text = text[:end].rstrip() + ',\n' + body + '\n' + text[end:]
@@ -79,8 +87,8 @@ def header():
     """dm/host/dm_i18n_tab.h 的内容（游戏外画的字用的编译期表）。 | Contents of dm/host/dm_i18n_tab.h (the compile-time table for text drawn outside the game)."""
     c = lambda s: json.dumps(s, ensure_ascii=False)   # JSON 串的转义在 C 里同样成立（\n \" \\） | JSON string escapes are equally valid in C (newline, double quote, backslash)
     out = ['// 生成文件，勿手改：python3 dm/ios/tools/dm_i18n.py --header > dm/host/dm_i18n_tab.h（表 dm/i18n/ui_text.tsv）', '#pragma once',
-           'static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {']
-    out += ['    { %s, %s, %s },' % (c(k), c(zh), c(en)) for k, zh, en in rows()]
+           'static const struct { const char *k, *zh, *en, *es, *mx, *ru; } k_dm_i18n[] = {']
+    out += ['    { %s, %s, %s, %s, %s, %s },' % (c(k), c(zh), c(en), c(es), c(mx), c(ru)) for k, zh, en, es, mx, ru in rows()]
     return '\n'.join(out + ['};', ''])
 
 if __name__ == '__main__':

@@ -336,17 +336,18 @@ void uimsg_subscribe(void (*fn)(const char *cat, const char *act, const char *ar
 #define UIH_MONSTERHEALTH 0xd3a07a5ecad1a9a3ull
 #define UIH_SETINFO       0x40ffba2d98a3ff97ull
 static void monres_on_setinfo(const uint64_t *regs, uint64_t payload) {
-    int dm_custom_get(const char *key); if (!dm_custom_get("item_notes") || dm_lang_index() != 8) return;   // 物品注释一系只有简中版（英文版：别的语言不显示；注释只写进 zhCN 一列） | the item-notes family exists only in Simplified Chinese (English version: not shown in other languages; notes are written only into the zhCN column)
+    int dm_custom_get(const char *key), lang = dm_lang_index(); if (!dm_custom_get("item_notes") || (lang != 8 && lang != 2 && lang != 10)) return;   // 物品注释一系做了简中与西语（zhCN、esES、esMX 三列，annot_strings.py LANGS）；别的语言不显示 | The item-annotation family (物品注释) is done in Simplified Chinese and Spanish (three columns zhCN, esES, esMX; annot_strings.py LANGS); other languages do not show it
     module_t *mm = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) mm = &g_mod[i];
     uint64_t unit = regs[19], name = 0; uint32_t type = 0; vm_size_t got = 0;
     if (!mm || !unit || vm_read_overwrite(mach_task_self(), unit, 4, (vm_address_t)&type, &got) || type != 1) return;   // 只认怪物（单位类型 1） | Monsters only (unit type 1)
     if (vm_read_overwrite(mach_task_self(), payload, 8, (vm_address_t)&name, &got) || !name) return;
     int (*get)(uint64_t, int, int) = (int (*)(uint64_t, int, int))(mm->base + 0x5b9290);
     static const int id[6] = {36, 37, 39, 41, 43, 45};
-    static const char *lb[6] = {"物", "魔", "火", "电", "冰", "毒"}, *cc[6] = {"\xee\x81\xbe" "4", "\xee\x81\xbe" "8", "\xee\x81\xbe" "1", "\xee\x81\xbe" "9", "\xee\x81\xbe" "3", "\xee\x81\xbe" "2"};   // 颜色：字符串表加载时把「ÿc<码>」换成私用区 U+E07E + <码>（UTF-8 EE 81 BE，读缓冲区实测），这里直接写换后的形式（暗金 / 橙 / 红 / 黄 / 蓝 / 绿） | Colors: when the string table loads, "ÿc<code>" is replaced by private-use U+E07E + <code> (UTF-8 EE 81 BE, measured by reading the buffer); here we write the replaced form directly (unique gold / orange / red / yellow / blue / green)
+    static const char *lb[6] = {"物", "魔", "火", "电", "冰", "毒"}, *lbes[6] = {"Fís", "Mág", "Fue", "Ray", "Frí", "Ven"}, *cc[6] = {"\xee\x81\xbe" "4", "\xee\x81\xbe" "8", "\xee\x81\xbe" "1", "\xee\x81\xbe" "9", "\xee\x81\xbe" "3", "\xee\x81\xbe" "2"};   // 颜色：字符串表加载时把「ÿc<码>」换成私用区 U+E07E + <码>（UTF-8 EE 81 BE，读缓冲区实测），这里直接写换后的形式（暗金 / 橙 / 红 / 黄 / 蓝 / 绿） | Colors: when the string table loads, "ÿc<code>" is replaced by private-use U+E07E + <code> (UTF-8 EE 81 BE, measured by reading the buffer); here we write the replaced form directly (unique gold / orange / red / yellow / blue / green)
     char add[160] = ""; size_t n = 0;
     for (int i = 0; i < 6; i++) { int v = get(unit, id[i], 0); if (!v) continue;
-        int w = v >= 100 ? snprintf(add + n, sizeof add - n, " %s%s免", cc[i], lb[i]) : snprintf(add + n, sizeof add - n, " %s%s%d", cc[i], lb[i], v);
+        int w = lang != 8 ? (v >= 100 ? snprintf(add + n, sizeof add - n, " %s%s inm", cc[i], lbes[i]) : snprintf(add + n, sizeof add - n, " %s%s %d", cc[i], lbes[i], v))   // 西语：简称与数字之间空一格，免疫写 inm（inmune） | Spanish: one space between the abbreviation and the number; immunity is written inm (inmune)
+                          : v >= 100 ? snprintf(add + n, sizeof add - n, " %s%s免", cc[i], lb[i]) : snprintf(add + n, sizeof add - n, " %s%s%d", cc[i], lb[i], v);
         if (w < 0 || (size_t)w >= sizeof add - n) return; n += (size_t)w; }
     { static int lg = -1; static uint64_t last; if (lg < 0) lg = getenv("DM_TEST_MONRES_LOG") != NULL;   // 回归判据：单位换了才记一行（拼出的串 + 六项属性原值） | Regression criterion: log a line only when the unit changes (the assembled string + the raw values of the six stats)
       if (lg && unit != last) { last = unit; int v[6]; for (int i = 0; i < 6; i++) v[i] = get(unit, id[i], 0);

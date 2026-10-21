@@ -87,7 +87,7 @@ static struct { int16_t row; int8_t d, grp; uint32_t t_die, max_item; int x, y; 
 static uint8_t *B;
 
 static uint64_t rd(uint64_t a) { return a ? *(volatile uint64_t *)(uintptr_t)a : 0; }
-static const char *str_of(const char *key) { struct { const char *k; uint64_t n; } s = { key, strlen(key) }; const char *r = ((const char *(*)(void *))(B + 0x7f5630))(&s); return r && *r ? r : key; }
+static const char *str_of(const char *key) { struct { const char *k; uint64_t n; } s = { key, strlen(key) }; const char *r = dm_untag(((const char *(*)(void *))(B + 0x7f5630))(&s)); return r && *r ? r : key; }   // 跳过西语串首的性别标记 | Skip the gender marker at the start of Spanish strings
 static void row_name(int r, char *out, size_t cap) {
     const kb_row *k = &k_rows[r];
     if (k->kind == K_GRP && k->id == 1) { snprintf(out, cap, dm_str(B, "dmKbJoin3"), str_of(k_grp_str[1][0]), str_of(k_grp_str[1][1]), str_of(k_grp_str[1][2])); return; }

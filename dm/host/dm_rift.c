@@ -1348,8 +1348,8 @@ void dm_rift_tick(uint64_t G, uint64_t player, uint8_t *main_base) {
     { static uint64_t seen; static uint32_t at; uint32_t tq = *(uint32_t *)(uintptr_t)(G + 0x170);   // 通关点数的补发：换了玩家单位（进局）后延 75 拍 | catch-up grant of clear points: delayed 75 ticks after the player unit changes (joining a game)
       if (player != seen) { seen = player; at = tq + 75; } else if (at && tq >= at) { at = 0; int p0 = R.pts; if (pts_grant(player) || R.pts != p0) rec_save(); } }
     int st = atomic_load(&K.st);
-    dm_door_label(B, G, RIFT_OBJ, "dmDoorRift", "大秘境", "Greater Rift", lv == LV_TOWN || in_rift_map(lv));
-    dm_door_label(B, G, TOWN_OBJ, "dmDoorRiftTown", "回城", "Return to Town", in_rift_map(lv));
+    dm_door_label(B, G, RIFT_OBJ, "dmDoorRift", lv == LV_TOWN || in_rift_map(lv));
+    dm_door_label(B, G, TOWN_OBJ, "dmDoorRiftTown", in_rift_map(lv));
     if (lv == LV_TOWN) { if (!GB.on) gamble_apply(G); } else gamble_restore();   // 加成只在哈洛加斯（安亚是秘境的兑换点）；别的城赌博保持原版（表是全局的，离开哈洛加斯即写回） | The bonus applies only in Harrogath (Anya is the rift's exchange point); gambling in other towns stays original (the table is global, so it is written back on leaving Harrogath)
     if (lv == LV_TOWN && GB.on) shelf_apply(G, player); else shelf_restore();   // 赌博加成生效时（地狱、通关过）才筛货架   // 秘境图里有「下一层」门（342 原版只在憎恨囚牢 102，不在秘境图表里）   // 门名牌（dm_bossrush.c） | Filter the shelf only when the gambling bonus is active (Hell, has cleared)   // Rift maps have a 「下一层」(Next Level) door (342 originally exists only in Durance of Hate 102, which is not in the rift map table)   // Door nameplate (dm_bossrush.c)
 
