@@ -16,6 +16,24 @@ DD=${DM_IOS_DD:-$R/dd}
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app
 t(){ echo "[$(date +%T)] $*"; }
 OUT=${DM_OUT:-$(bash "../tools/product.sh" path touch)}; MODS="main sdk"
+# 可选：静态链接 FFmpeg，让 movie:: 走 VP8 解码并真正显示过场。默认仍为空播。
+# Optional: statically link FFmpeg so movie:: decodes VP8 and displays cutscenes. The default no-picture backend stays unchanged.
+MOVIE_FFMPEG=${DM_MOVIE_FFMPEG:-0}
+MOVIE_PREFIX=${DM_MOVIE_FFMPEG_PREFIX:-${DM_ROOT:-$HOME/dm-work}/build/cache/dm/ffmpeg-ios/out}
+MOVIE_LDFLAGS=
+if [ "$MOVIE_FFMPEG" = 1 ]; then
+  case "$MOVIE_PREFIX" in *' '*) t "🔴 DM_MOVIE_FFMPEG_PREFIX 不能含空格：${MOVIE_PREFIX}"; exit 1;; esac
+  for library in libavformat libavcodec libswscale libavutil; do
+    [ -f "$MOVIE_PREFIX/lib/$library.a" ] || { t "🔴 缺 ${MOVIE_PREFIX}/lib/$library.a；先运行 tools/build_ffmpeg_ios.sh"; exit 1; }
+  done
+  [ -f "$MOVIE_PREFIX/include/libavcodec/avcodec.h" ] || { t "🔴 FFmpeg 头文件不在 ${MOVIE_PREFIX}/include；重跑 tools/build_ffmpeg_ios.sh"; exit 1; }
+  MOVIE_LDFLAGS="$MOVIE_PREFIX/lib/libavformat.a $MOVIE_PREFIX/lib/libavcodec.a $MOVIE_PREFIX/lib/libswscale.a $MOVIE_PREFIX/lib/libavutil.a"
+  export MOVIE_FFMPEG MOVIE_PREFIX
+  t "过场解码：静态 FFmpeg（${MOVIE_PREFIX}）"
+else
+  export MOVIE_FFMPEG=0
+  unset MOVIE_PREFIX
+fi
 if [ "$1" = build ]; then
   # 生成：宿主源文件/头路径/框架（取自 dm/host/Makefile）+ 映像三段内嵌汇编与 -segprot + 装载表头/门表进 App 资源 dm/
   # Generate: host source files/header paths/frameworks (taken from dm/host/Makefile) + embedded assembly for the three image segments and -segprot + load table header/gate table into the App resources dm/
@@ -31,7 +49,7 @@ if [ "$1" = build ]; then
   make -s -C ../host dm_vault_tab.h dm_hud_exp.h dm_bright_levels.inc ROMFS="${DM_ROMFS_SRC:-${DM_ROOT:-$HOME/dm-work}/data/switch/3.3.94012/Update/RomFS}" || { t "🔴 宿主表头生成失败（见上）"; exit 1; }
   python3 tools/gen_build.py ../host Gen > Gen/dm.xcconfig || { t "🔴 gen_build 失败"; exit 1; }
   F=$(python3 tools/gen_embed.py $OUT Gen/embed.S $MODS) || { t "🔴 gen_embed 失败"; exit 1; }
-  echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F" >> Gen/dm.xcconfig
+  echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F $MOVIE_LDFLAGS" >> Gen/dm.xcconfig
   for m in $MODS; do cp $OUT/$m.fixups.tsv $OUT/$m.gates.tsv Gen/dm/; done
   # 启动块清单（缺省开预取：宿主到产物目录 = App 内 dm/ 找 bootlist.tsv）+ main.cuts.tsv（宿主据此核清单构建号）；产物没有就不带
   # Boot block list (prefetch on by default: the host looks for bootlist.tsv in the build output directory = dm/ inside the App) + main.cuts.tsv (the host uses it to check the list's build ID); not included if the build output lacks them

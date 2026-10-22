@@ -6,13 +6,22 @@ DM_ROOT ?= $(HOME)/dm-work
 MACOS_MIN ?= 26.0
 CFLAGS=-O1 -g -Wall -Wno-unused-function -mmacosx-version-min=$(MACOS_MIN)
 MOVIE_FFMPEG ?= 0
+MOVIE_PREFIX ?=
 ifeq ($(MOVIE_FFMPEG),1)
+ifneq ($(MOVIE_PREFIX),)
+# iOS 交叉编译使用已经编好的静态库，不依赖宿主 pkg-config（脚本见 dm/ios/tools/build_ffmpeg_ios.sh）。
+# The iOS cross-build uses prepared static libraries and does not depend on host pkg-config
+# (see dm/ios/tools/build_ffmpeg_ios.sh).
+CFLAGS += -DDM_MOVIE_FFMPEG=1 -I$(MOVIE_PREFIX)/include
+MOVIE_LIBS = $(MOVIE_PREFIX)/lib/libavformat.a $(MOVIE_PREFIX)/lib/libavcodec.a $(MOVIE_PREFIX)/lib/libswscale.a $(MOVIE_PREFIX)/lib/libavutil.a
+else
 MOVIE_PACKAGES = libavformat libavcodec libavutil libswscale
 ifeq ($(shell pkg-config --exists $(MOVIE_PACKAGES) && echo yes),)
-$(error MOVIE_FFMPEG=1 requires pkg-config and FFmpeg development libraries)
+$(error MOVIE_FFMPEG=1 requires pkg-config and FFmpeg development libraries, or MOVIE_PREFIX pointing to a static FFmpeg build)
 endif
 CFLAGS += -DDM_MOVIE_FFMPEG=1 $(shell pkg-config --cflags $(MOVIE_PACKAGES))
 MOVIE_LIBS = $(shell pkg-config --libs $(MOVIE_PACKAGES))
+endif
 endif
 # 服务层接管 hle_*.c 按通配纳入：新增文件不改这一行（免合并冲突）
 # 一行一个、按字母序（先本目录的，再 ../ 开头的，最后是通配那一项）：加源文件时插到自己的位置，别的分支加的在别的行，变基不再整行冲突

@@ -258,7 +258,9 @@ _UPDATE_PAD = (_upd_text('TouchBuild', 3341, 60, 420, 30, (150, 140, 115), 'righ
                + _upd_text('TouchUpdTitle', 1220, 1524, 1400, 46, (214, 74, 58), 'center')
                + _upd_text('TouchUpdDesc', 1220, 1610, 1400, 36, (232, 228, 214), 'center')
                + _upd_btn('TouchUpdBig', None, ''))
-def pad_ribbon(s):   # 手柄版主菜单左侧按钮栏 = 原版布局，只拿掉「电影动画」：包里不播过场（列表里只有一行有字、选了什么都不播），是个没用的入口，同触屏版没有它。 | Controller layout main menu left button ribbon = the original layout, only removing 「电影动画」(Cinematics): the package does not play cutscenes (only one row in the list has text, and nothing plays whichever is chosen), so it is a useless entry; same as the touch version, which does not have it.
+def pad_ribbon(s, movies=False):   # 手柄版主菜单左侧按钮栏。不编过场解码时拿掉「电影动画」；启用后保留原版入口。 | Controller layout main menu left button ribbon. Without movie decoding 「电影动画」(Cinematics) is removed; with movie decoding enabled the original entry is retained.
+    if movies:
+        return s
     # 「制作人员」上移到它的位置，上下焦点改成「选项 ↔ 制作人员」直连
     # 「制作人员」(Credits) moves up into its place, and up / down focus becomes a direct link 「选项 ↔ 制作人员」(Options ↔ Credits)
     s = _sub1(s, '"rect": { "x": 164, "y": 1175 },', '"rect": { "x": 99999, "y": 99999 },')
@@ -305,6 +307,10 @@ def _pc_charselect(s):
         s = s[:m.start()] + '"pointSize": %d' % size + s[m.end():]; n += 1
     return s, n + 1
 def _pc_ribbon(s):
+    # 启用过场时保留原版左侧栏，触屏玩家也能从这里进入「电影动画」。
+    # Keep the original left sidebar when movies are enabled so touch players can open Cinematics there.
+    if os.environ.get('MOVIE_FFMPEG') == '1':
+        return s, 0
     # 左侧栏整块不要（「选项」「退出」两个按钮、按钮区和背景图全删，标志也一起删，首页不留设置入口）；公告栏本来就是空的，一并挪走
     # The whole left sidebar block is dropped (the two buttons 「选项」(Options) and 「退出」(Quit), the button area and the background image are all deleted, the logo is deleted too, and the home page keeps no settings entry); the announcement bar was empty anyway and is moved away as well
     s, n = offscreen(s, types=(), names=('Ribbon', 'MotDSection'))
@@ -1177,7 +1183,7 @@ def _drop_rows(*rows):
 # (console version VideoOptionsPanelHD.json; the touch version has already removed the video tab): the fourth item of the tab strip (originally 「控制」(Controls) = KeyBindingMenu, which does not appear on this platform) is renamed 「自定义」(Custom) and opens VideoOptionsPanel;
 # the video page's table is replaced entirely with our rows: section header + one original-game checkbox per switch (following the fields of the 「自动拾取金币」(Auto Gold Pickup) row on the 「游戏」(Game) page). Widget names are TouchCustom_<key>,
 # and the host dm_custom.c reads whether each is checked and handles apply / discard / default. The checkbox message sends a harmless ClosePanel (same as 「极乐世界」(Elysium)), which the game does not recognize
-_CUSTOM_KEYS = ('auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes', 'icloud', 'pot_pick', 'drop_haptic', 'gem_pick', 'store_btn', 'eco_fps', 'q3d', 'loot_filter', 'auto_buff', 'touch_swap_above')
+_CUSTOM_KEYS = ('voice', 'auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes', 'icloud', 'pot_pick', 'drop_haptic', 'gem_pick', 'store_btn', 'eco_fps', 'q3d', 'loot_filter', 'auto_buff', 'touch_swap_above')
 # 字在中英表（dm/i18n/ui_text.tsv 的 dmCustom<键名驼峰>），布局写 @键、跟原版语言走（英文版）；行高按中文行数分，英文必须同样行数（不然换语言排版变）
 # The text lives in the Chinese-English string table (dmCustom<key name in camel case> in dm/i18n/ui_text.tsv); layouts write @key and follow the
 # original game's language (English version); row height is assigned by the number of Chinese lines, and English must have the same number of lines
@@ -1204,7 +1210,7 @@ _CUSTOM_TEST_ROWS = int(os.environ.get('DM_CUSTOM_TEST_ROWS', '0'))   # 测试�
 # 「3D 画质」（q3d）是单选的两项、每项下面一行说明小字，占两行高（_CUSTOM_Q3D_H）；其余各行一行高
 # "3D Quality" (q3d) is a radio with two options, each with a line of small description text below, taking two rows of height (_CUSTOM_Q3D_H); every other row is one row high
 _CUSTOM_Q3D_H = 2 * _CUSTOM_LINE_H
-_CUSTOM_ROW_H = [(_CUSTOM_Q3D_H if k in ('q3d', 'touch_swap_above') else _CUSTOM_LINE_H) for k, _ in _CUSTOM_ALL] + [_CUSTOM_LINE_H] * _CUSTOM_TEST_ROWS
+_CUSTOM_ROW_H = [(_CUSTOM_Q3D_H if k in ('voice', 'q3d', 'touch_swap_above') else _CUSTOM_LINE_H) for k, _ in _CUSTOM_ALL] + [_CUSTOM_LINE_H] * _CUSTOM_TEST_ROWS
 _CUSTOM_Y = [_CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H[:i]) for i in range(len(_CUSTOM_ROW_H))]
 _CUSTOM_H = _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H)
 def _custom_toggle_row(i, key, label):
@@ -1264,7 +1270,9 @@ def _custom_q3d_row(i, setting="q3d"):
             '            "toggledFrame": 4, "toggledPressedFrame": 5, "toggledHoveredFrame": 6,\n'
             '            "onClickMessage": "PanelManager:ClosePanel:%s" } },\n') % (name, yy, name)
     out = '        { "type": "TextBoxWidget", "name": "%s_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "" } },\n' % (prefix, y, _CUSTOM_Q3D_H)
-    choices = (('dmCustomQ3dSmooth', prefix + '_smooth'), ('dmCustomQ3dQuality', prefix)) if setting == 'q3d' else (('dmCustomTouchSwapNear', prefix + '_near'), ('dmCustomTouchSwapFar', prefix))
+    choices = ((('dmCustomVoiceZh', prefix + '_zh'), ('dmCustomVoiceEn', prefix)) if setting == 'voice' else
+               (('dmCustomQ3dSmooth', prefix + '_smooth'), ('dmCustomQ3dQuality', prefix)) if setting == 'q3d' else
+               (('dmCustomTouchSwapNear', prefix + '_near'), ('dmCustomTouchSwapFar', prefix)))
     for k, (key, nm) in enumerate(choices):
         yy = y + k * h
         out += text(nm + '_Label', yy + 10, 100, key, False) + text(nm + '_Hint', yy + 100, 70, key + 'Hint', True) + box(nm, yy + 15)
@@ -1282,7 +1290,7 @@ def _custom_page(text):
            '            { "type": "TableWidget", "name": "OptionsTable", "fields": { "columns": [ "$OptionsTableColumn1", "$OptionsTableColumn2" ], "rowHeight": %d }, "children": [\n' % _CUSTOM_TITLE_H
            + title + '            ] },\n'
            + '            { "type": "Widget", "name": "TouchCustomRows", "fields": { "rect": { "x": 0, "y": 0, "width": 1500, "height": %d } }, "children": [\n' % _CUSTOM_H
-           + _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('q3d', 'touch_swap_above') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i) + _CUSTOM_LANG_HINT
+           + _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('voice', 'q3d', 'touch_swap_above') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i) + _CUSTOM_LANG_HINT
            + ''.join('        { "type": "TextBoxWidget", "name": "TouchCustomTest%d_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "@KeyBindingTypeCustom", "style": "$StyleSettingsText" } },\n'
                      % (n, _CUSTOM_Y[len(_CUSTOM_ALL) + n], _CUSTOM_LINE_H) for n in range(_CUSTOM_TEST_ROWS)) +
            # 手柄模式的选中框（同符文之语清单 TouchRwSel）：框住十字键选中的那一行，宿主摆（dm_custom.c）；触屏模式一直在屏外（只把 x 挪出去、y 留在内容范围内：滚动区按子控件的范围算内容高度，y 放到 99999 会把可滚范围撑到十万）。和各行在同一个容器里，跟着滚

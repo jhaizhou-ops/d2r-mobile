@@ -2,7 +2,7 @@
 
 中文: [MOVIE.zh-CN.md](MOVIE.zh-CN.md)
 
-`MOVIE_FFMPEG=1` replaces the Mac host's duration-only `movie::` backend with VP8 decoding through FFmpeg. The default build and iOS continue to use the existing backend. No game content or FFmpeg binaries are included.
+`MOVIE_FFMPEG=1` replaces the host's duration-only `movie::` backend with VP8 decoding through FFmpeg. The default build continues to use the existing backend. No game content or FFmpeg binaries are included. On Mac, install FFmpeg development libraries. On iOS, build the static libraries with the script below and link them into the app.
 
 The adapter implements the existing extractor/decoder vtables: the guest supplies a random-access reader, owns its input/output events, schedules frames using their PTS, and handles skip and looping. Frames are packed NV12. Audio and subtitles remain on their existing guest paths; FFmpeg does not play audio. The adapter shares the reader between extractor and decoder and keeps acquired frames until release, with eight output slots and input backpressure.
 
@@ -17,6 +17,21 @@ make -C dm/host -B dmhost MOVIE_FFMPEG=1
 ```
 
 Omit the flag, or use `MOVIE_FFMPEG=0`, for the existing backend. The same option applies to `dmhost_m3`, but installed FFmpeg libraries may require a newer macOS than that target. Check dependency deployment versions separately. This change does not bundle libraries into an app or change the iOS project.
+
+## iOS
+
+Build minimal arm64 iOS static libraries containing only the Matroska/WebM, VP8 decoder, and NV12 conversion modules:
+
+```sh
+dm/ios/tools/build_ffmpeg_ios.sh
+DM_MOVIE_FFMPEG=1 dm/ios/run.sh build
+```
+
+The script writes to `$DM_ROOT/build/cache/dm/ffmpeg-ios/out` by default. `DM_MOVIE_FFMPEG_PREFIX` may point to another compatible prebuilt directory. `run.sh` sets both `MOVIE_FFMPEG=1` and `MOVIE_PREFIX`, links the four static libraries into the app, and keeps the original Cinematics entry available. Without `DM_MOVIE_FFMPEG`, the build keeps the duration-only backend.
+
+The standard 18 resource chunks contain the global story videos. Japanese and Traditional Chinese localized openings live in the corresponding language chunks and must be added separately to the ordinary RomFS outside the app installer.
+
+Cinematics use the game's original `VoiceLanguage` selection. The Custom page adds an independent voice-over radio: Chinese text can use English voice, or switch back to Chinese voice. Tap Apply, then close and reopen the app for the change to take effect. This changes voice-over only, not the UI language.
 
 ## Synthetic tests, no game files
 

@@ -22,17 +22,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *const k_keys[] = { "lang", "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
+static const char *const k_keys[] = { "lang", "voice", "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
 #define NK (int)(sizeof k_keys / sizeof *k_keys)
-static const int k_def[NK] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0 };   // 缺省值：省电模式（30 帧）缺省关、3D 画质缺省流畅优先（q3d=0），换组默认在传送门左侧，其余缺省开 | Defaults: power-saving mode (30 fps) off, 3D quality smoothness first (q3d=0), switch left of portal by default, everything else on
+static const int k_def[NK] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0 };   // 缺省值：省电模式（30 帧）缺省关、3D 画质缺省流畅优先（q3d=0），换组默认在传送门左侧，其余缺省开 | Defaults: power-saving mode (30 fps) off, 3D quality smoothness first (q3d=0), switch left of portal by default, everything else on
 // q3d（3D 画质）：0 = 流畅优先（掉帧就自动降 3D 比例）、1 = 画质优先（不自动降）。生效 = 调 hle_oe.c 的 dm_3d_quality_mode_set，读盘与点「应用」时当场调，下一帧控制器就按新档走。
 // 页上是上下两项单选（同语言行）：TouchCustom_q3d 是「画质优先」那格（勾上 = 1），TouchCustom_q3d_smooth 是它的反面
 // q3d (3D quality): 0 = smoothness first (automatically lowers the 3D scale on frame drops), 1 = quality first (no automatic lowering). Applied by calling hle_oe.c's dm_3d_quality_mode_set, immediately on load and on tapping "Apply", so the controller follows the new setting from the next frame.
 // On the page it is a stacked two-option radio (like the language row): TouchCustom_q3d is the "Quality first" cell (checked = 1), TouchCustom_q3d_smooth is its inverse
-#define K_Q3D 12
-#define K_TOUCH_SWAP 15
+#define K_VOICE 1
+#define K_MERC 3
+#define K_Q3D 13
+#define K_TOUCH_SWAP 16
 void dm_3d_quality_mode_set(int mode);
-static const char *rev_box(int i) { return i == K_Q3D ? "TouchCustom_q3d_smooth" : i == K_TOUCH_SWAP ? "TouchCustom_touch_swap_above_near" : NULL; }   // 单选行「反面那一项」的勾选框 | Checkbox of the radio row's "inverse option"
+static const char *rev_box(int i) { return i == K_VOICE ? "TouchCustom_voice_zh" : i == K_Q3D ? "TouchCustom_q3d_smooth" : i == K_TOUCH_SWAP ? "TouchCustom_touch_swap_above_near" : NULL; }   // 单选行「反面那一项」的勾选框 | Checkbox of the radio row's "inverse option"
 static _Atomic int g_val[NK];        // 已生效：1 开 / 0 关 | In effect: 1 on / 0 off
 static _Atomic int g_pend[NK];       // 选项页上改了还没应用：-1 = 没改 | Changed on the options page but not applied yet: -1 = not changed
 static _Atomic int g_loaded;         // 0 没读盘 / 1 已读 | 0 not read from disk / 1 read
@@ -51,6 +53,9 @@ static const char *const k_lang_name[LANG_N] = { "zh", "en", "es", "ru" };   // 
 static _Atomic int g_lang_explicit = -1;   // 文件里写着的 lang：-1 没写 / 0 中文 / 1 English / 2 Español / 3 Русский | lang as written in the file: -1 not written / 0 Chinese / 1 English / 2 Español / 3 Russian
 static int g_lang_test;   // 测试开关 DM_TEST_LANG=<0|1|2>：当作玩家选了这一项并应用（走 hle_fs.c 挂存档时的真实改写），但不写回 sw_custom.txt（容器各局共用） | Test switch DM_TEST_LANG=<0|1|2>: treated as if the player selected this option and applied it (goes through the real rewrite in hle_fs.c when mounting the save), but not written back to sw_custom.txt (the container is shared by all runs)
 static int lang_running(void) { int g = dm_lang_group(); return g == DM_LG_ZH ? 0 : g == DM_LG_ES || g == DM_LG_MX ? 2 : g == DM_LG_RU ? 3 : 1; }   // 此刻实际在跑的语言落在哪一项 | Which option the currently running language falls into
+static _Atomic int g_voice_explicit = -1;   // 文件里写着的 voice：-1 没写 / 0 中文配音 / 1 英文配音 | voice as written in the file: -1 not written / 0 Chinese / 1 English
+static int g_voice_test;   // 测试开关 DM_TEST_VOICE=0|1；只用于真机回归，不写回文件 | Test switch DM_TEST_VOICE=0|1; real-device regression only, not written back
+static int voice_running(void) { return lang_running() == 0 ? 0 : 1; }   // 没单独选过时，按原来的「中文配中文、其余英文」显示 | Without an explicit choice, mirror the old rule: Chinese for Chinese text, English otherwise
 // merc_pot（佣兵自动喂药）原先缺省关、现在缺省开。旧文件每次存盘都把全部键写一遍，里面的 merc_pot=0 分不出「没动过」还是「自己关的」，
 // 所以另记一行 merc_pot_v2：只有在缺省改成开之后玩家自己在页上改过这一项才写。读盘时有 merc_pot_v2 以它为准；没有 = 没在新缺省下动过 → 开
 // （旧文件里的 merc_pot=1 也是开，结果一样）。merc_pot 那一行照旧写当前值，旧版本的包读它不出错
@@ -58,7 +63,6 @@ static int lang_running(void) { int g = dm_lang_group(); return g == DM_LG_ZH ? 
 // so a separate line merc_pot_v2 is recorded: it is written only when the player has changed this item on the page after the default was changed to on. On load, if merc_pot_v2 exists it is authoritative; absent = never touched under the new default → on
 // (merc_pot=1 in an old file is also on, the same result). The merc_pot line is still written with the current value, so packages of older versions read it without error
 static _Atomic int g_merc_explicit = -1;   // 文件里写着的 merc_pot_v2：-1 没写 / 0 / 1 | merc_pot_v2 as written in the file: -1 not written / 0 / 1
-#define K_MERC 2
 static _Atomic int g_repaint;        // 默认 / 放弃之后：页上的勾选框按待定值 / 生效值重摆一遍 | After default / discard: lay out the checkboxes on the page again according to pending values / effective values
 
 const char *dm_save_commitdir(void);
@@ -74,28 +78,34 @@ static void load_once(void) {
     char p[1100]; if (!file_path(p, sizeof p)) return;   // 存档还没挂上：先按缺省开答，挂上后再读 | The save is not mounted yet: answer with the default (on) for now, and read again after it is mounted
     int v[NK]; for (int i = 0; i < NK; i++) v[i] = k_def[i];
     FILE *f = fopen(p, "r"); char ln[128];
-    int lang = -1, merc = -1;
+    int lang = -1, voice = -1, merc = -1;
     while (f && fgets(ln, sizeof ln, f)) { char *eq = strchr(ln, '='); if (!eq) continue; *eq = 0; int i = key_index(ln); if (i > 0) v[i] = eq[1] != '0';
-        if (i == 0) { int l = atoi(eq + 1); if (l >= 0 && l < LANG_N) lang = v[0] = l; } if (!strcmp(ln, "merc_pot_v2")) merc = eq[1] != '0'; }
+        if (i == 0) { int l = atoi(eq + 1); if (l >= 0 && l < LANG_N) lang = v[0] = l; }
+        if (i == K_VOICE) { int x = atoi(eq + 1); if (x == 0 || x == 1) voice = v[K_VOICE] = x; }
+        if (!strcmp(ln, "merc_pot_v2")) merc = eq[1] != '0'; }
     if (f) fclose(f);
     { const char *tl = getenv("DM_TEST_LANG"); if (tl && *tl >= '0' && *tl < '0' + LANG_N) { lang = v[0] = *tl - '0'; g_lang_test = 1; LOG("自定义设置：测试开关 DM_TEST_LANG=%d（当作语言行选了 %s 并应用，不写回文件）", lang, k_lang_name[lang]); } }
+    { const char *tv = getenv("DM_TEST_VOICE"); if (tv && *tv >= '0' && *tv <= '1') { voice = v[K_VOICE] = *tv - '0'; g_voice_test = 1; LOG("自定义设置：测试开关 DM_TEST_VOICE=%d（当作配音行选了 %s 并应用，不写回文件）", voice, voice ? "English" : "中文"); } }
     if (lang < 0) v[0] = lang_running();   // 没写过：按当前实际语言显示 | Never written: display according to the current actual language
+    if (voice < 0) v[K_VOICE] = voice_running();
     atomic_store(&g_lang_explicit, lang);
+    atomic_store(&g_voice_explicit, voice);
     v[K_MERC] = merc < 0 ? k_def[K_MERC] : merc; atomic_store(&g_merc_explicit, merc);
     for (int i = 0; i < NK; i++) { atomic_store(&g_val[i], v[i]); atomic_store(&g_pend[i], -1); }
     dm_3d_quality_mode_set(v[K_Q3D]); LOG("自定义设置：3D 画质读盘为%s（q3d=%d，已交给 3D 比例控制）", v[K_Q3D] ? "画质优先" : "流畅优先", v[K_Q3D]);
-    if (!atomic_exchange(&g_loaded, 1)) LOG("自定义设置：读盘 %s%s lang=%d%s auto_mana=%d merc_pot=%d drop_light=%d map_mark=%d item_notes=%d icloud=%d pot_pick=%d drop_haptic=%d gem_pick=%d store_btn=%d eco_fps=%d", p, f ? "" : "（没有文件，全按缺省）", v[0], lang < 0 ? "（没写，按当前语言）" : "", v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11]);
+    if (!atomic_exchange(&g_loaded, 1)) LOG("自定义设置：读盘 %s%s lang=%d%s voice=%d%s auto_mana=%d merc_pot=%d drop_light=%d map_mark=%d item_notes=%d icloud=%d pot_pick=%d drop_haptic=%d gem_pick=%d store_btn=%d eco_fps=%d", p, f ? "" : "（没有文件，全按缺省）", v[0], lang < 0 ? "（没写，按当前语言）" : "", v[K_VOICE], voice < 0 ? "（没写，跟随语言）" : "", v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12]);
 }
 int dm_custom_get(const char *key) {
     load_once(); int i = key_index(key); if (i < 0) return 1;
     return atomic_load(&g_loaded) ? atomic_load(&g_val[i]) : k_def[i];
 }
 int dm_custom_lang_explicit(void) { load_once(); return atomic_load(&g_loaded) ? atomic_load(&g_lang_explicit) : -1; }
+int dm_custom_voice_explicit(void) { load_once(); return atomic_load(&g_loaded) ? atomic_load(&g_voice_explicit) : -1; }
 int dm_fps_setting(void) { return dm_custom_get("eco_fps") ? 30 : 60; }   // 图形层 nvn_mtl.m mtl_fps_target 每帧读（弱符号的强定义） | Read every frame by mtl_fps_target in the graphics layer nvn_mtl.m (strong definition of a weak symbol)
 static void save(void) {
     char p[1100], t[1120]; if (!file_path(p, sizeof p)) { LOG("【红】自定义设置：存档目录没挂上，没存盘"); return; }
     snprintf(t, sizeof t, "%s.tmp", p); FILE *f = fopen(t, "w"); int ok = f != NULL;
-    for (int i = 0; ok && i < NK; i++) { if (i == 0 && (atomic_load(&g_lang_explicit) < 0 || g_lang_test)) continue; ok = fprintf(f, "%s=%d\n", k_keys[i], atomic_load(&g_val[i])) > 0; }   // lang 只在玩家真改过之后才写进文件 | lang is written to the file only after the player actually changed it
+    for (int i = 0; ok && i < NK; i++) { if (i == 0 && (atomic_load(&g_lang_explicit) < 0 || g_lang_test)) continue; if (i == K_VOICE && (atomic_load(&g_voice_explicit) < 0 || g_voice_test)) continue; ok = fprintf(f, "%s=%d\n", k_keys[i], atomic_load(&g_val[i])) > 0; }   // lang / voice 只在玩家真改过之后才写进文件 | lang / voice are written only after the player actually changes them
     if (ok && atomic_load(&g_merc_explicit) >= 0) ok = fprintf(f, "merc_pot_v2=%d\n", atomic_load(&g_merc_explicit)) > 0;
     if (f) ok = fclose(f) == 0 && ok;
     if (ok) ok = rename(t, p) == 0;   // 先写临时文件再换名：写到一半被杀也不会留下半个文件 | Write a temporary file first and then rename: being killed halfway through the write does not leave half a file behind
@@ -105,10 +115,10 @@ void dm_custom_on_uimsg(const char *cat, const char *act, const char *arg) {
     (void)arg; if (!cat || !act || strcmp(cat, "OptionsPanelMessage")) return;
     load_once();
     if (!strcmp(act, "AcceptChanges")) { int ch = 0;
-        for (int i = 0; i < NK; i++) { int pd = atomic_exchange(&g_pend[i], -1); if (pd >= 0 && pd != atomic_load(&g_val[i])) { atomic_store(&g_val[i], pd); ch = 1; if (i == K_Q3D) { int dm_3d_quality_mode_get(void); float dm_3d_scale_cur(void); dm_3d_quality_mode_set(pd); LOG("自定义设置：3D 画质 → %s（已交给 3D 比例控制，读回模式 %d，此刻 3D 比例 %.2f）", pd ? "画质优先" : "流畅优先", dm_3d_quality_mode_get(), dm_3d_scale_cur()); } if (i == 0) atomic_store(&g_lang_explicit, pd); if (i == K_MERC) atomic_store(&g_merc_explicit, pd); if (i == 0) LOG("自定义设置：语言 → %s（应用；下次启动生效）", k_lang_name[pd]); else LOG("自定义设置：%s → %s（应用）", k_keys[i], pd ? "开" : "关"); } }
+        for (int i = 0; i < NK; i++) { int pd = atomic_exchange(&g_pend[i], -1); if (pd >= 0 && pd != atomic_load(&g_val[i])) { atomic_store(&g_val[i], pd); ch = 1; if (i == K_Q3D) { int dm_3d_quality_mode_get(void); float dm_3d_scale_cur(void); dm_3d_quality_mode_set(pd); LOG("自定义设置：3D 画质 → %s（已交给 3D 比例控制，读回模式 %d，此刻 3D 比例 %.2f）", pd ? "画质优先" : "流畅优先", dm_3d_quality_mode_get(), dm_3d_scale_cur()); } if (i == 0) atomic_store(&g_lang_explicit, pd); if (i == K_VOICE) atomic_store(&g_voice_explicit, pd); if (i == K_MERC) atomic_store(&g_merc_explicit, pd); if (i == 0) LOG("自定义设置：语言 → %s（应用；下次启动生效）", k_lang_name[pd]); else if (i == K_VOICE) LOG("自定义设置：配音 → %s（应用；下次启动生效）", pd ? "English" : "中文"); else LOG("自定义设置：%s → %s（应用）", k_keys[i], pd ? "开" : "关"); } }
         if (ch) save(); }
     else if (!strcmp(act, "CancelChanges")) { for (int i = 0; i < NK; i++) atomic_store(&g_pend[i], -1); atomic_store(&g_repaint, 1); }
-    else if (!strcmp(act, "ResetToDefaults")) { for (int i = 1; i < NK; i++) atomic_store(&g_pend[i], k_def[i]); atomic_store(&g_repaint, 1); }   // 从 1 起：语言那一格不归「默认」管 | Starts from 1: the language cell is not governed by 「默认」(Default)
+    else if (!strcmp(act, "ResetToDefaults")) { for (int i = 2; i < NK; i++) atomic_store(&g_pend[i], k_def[i]); atomic_store(&g_repaint, 1); }   // 从 2 起：语言与单独配音不归「默认」管 | Starts from 2: language and separate voice are not governed by 「默认」(Default)
 }
 
 // ---- 选项页上的勾选框
@@ -142,6 +152,7 @@ void dm_custom_ui_pump(unsigned long long root) {
         memset(seen, 0, sizeof seen); return; }
     load_once(); if (atomic_exchange(&g_repaint, 0)) memset(seen, 0, sizeof seen);
     if (atomic_load(&g_lang_explicit) < 0) atomic_store(&g_val[0], lang_running());   // 语言那一格没点过应用：生效值 = 此刻实际在跑的语言（读盘时游戏还没设语言，那时取到的不准） | Apply never tapped for the language cell: effective value = the language actually running right now (when read from disk the game has not set the language yet, so the value fetched then is not accurate)
+    if (atomic_load(&g_voice_explicit) < 0) atomic_store(&g_val[K_VOICE], voice_running());
     // 手柄模式：原版选项页的焦点只认表格里它自己的行，够不着我们的勾选框——十字键上下选行（原版手柄选中框 TouchCustomSel 框住这一行）、A 翻勾选（下面照「玩家点了」处理），其余键照旧归原版
     // Controller mode: the original options page's focus only recognizes its own rows in the table and cannot reach our checkboxes. D-pad up/down selects a row
     // (the original controller selection frame TouchCustomSel frames that row), A toggles the checkbox (handled below as "the player tapped it"), and all other
@@ -154,7 +165,7 @@ void dm_custom_ui_pump(unsigned long long root) {
           if (ev & DM_BTN_DOWN) sel = sel + 1 < NK ? sel + 1 : sel; else if (ev & DM_BTN_UP) sel = sel > 0 ? sel - 1 : 0;
           snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[sel]); cw = find_w(sp, sel == 0 ? k_lang_box[LANG_N - 1] : nm, 0); snprintf(nm, sizeof nm, "TouchCustom_%s_Text", k_keys[sel]); tw = find_w(sp, nm, 0);   // 语言行：框住标签到最右那一格 | Language row: box from the label to the rightmost cell
           if ((ev & DM_BTN_A) && cw && dm_wref_get(&seen[sel]) == cw) {
-              if (sel == K_Q3D || sel == K_TOUCH_SWAP) { int p0 = atomic_load(&g_pend[sel]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[sel]); atomic_store(&g_pend[sel], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, rev_box(sel), 0); if (z) set_toggle(z, sh); }
+              if (sel == K_VOICE || sel == K_Q3D || sel == K_TOUCH_SWAP) { int p0 = atomic_load(&g_pend[sel]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[sel]); atomic_store(&g_pend[sel], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, rev_box(sel), 0); if (z) set_toggle(z, sh); }
                   LOG("自定义设置：%s → %d（手柄 A 在两项间切换；点「应用」生效）",k_keys[sel],!sh); }
               else if (sel == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]), to = (sh + 1) % LANG_N; atomic_store(&g_pend[0], to);   // 语言行是单选的四项：A 依次轮换，四个框当场摆好 | The language row is a four-option radio: A cycles through them, and all four boxes are laid out on the spot
                   for (int k = 0; k < LANG_N; k++) { uint64_t z = find_w(sp, k_lang_box[k], 0); if (z) set_toggle(z, k == to); }

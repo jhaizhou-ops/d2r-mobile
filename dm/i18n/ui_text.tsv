@@ -91,6 +91,10 @@ dmCustomLangHintZh	点「应用」，然后把 App 关掉重开	点「应用」�
 dmCustomLangHintEn	Tap Apply, then close and reopen the app	Tap Apply, then close and reopen the app	Tap Apply, then close and reopen the app		Tap Apply, then close and reopen the app	语言行选了 English 而当前不是英文界面时显示
 dmCustomLangHintEs	Toca Aplicar y luego cierra y vuelve a abrir la app	Toca Aplicar y luego cierra y vuelve a abrir la app	Toca Aplicar y luego cierra y vuelve a abrir la app		Toca Aplicar y luego cierra y vuelve a abrir la app	语言行选了 Español 而当前不是西语界面时显示在这一行下半（提示用选中的那种语言写）
 dmCustomLangHintRu	Нажми «Применить» и перезапусти игру	Нажми «Применить» и перезапусти игру	Нажми «Применить» и перезапусти игру		Нажми «Применить» и перезапусти игру	语言行选了 Русский 而当前不是俄语界面时显示在这一行下半（提示用选中的那种语言写）
+dmCustomVoiceZh	中文配音	Chinese voice	Voz en chino		Китайская озвучка	自定义页「配音」单选第一项（voice=0）
+dmCustomVoiceZhHint	对话与过场使用中文语音；下次启动生效	Chinese dialogue and cutscenes; applies after restart	Diálogos y escenas en chino; se aplica al reiniciar		Китайские диалоги и ролики; после перезапуска	中文配音下面的说明小字
+dmCustomVoiceEn	English voice	English voice	Voz en inglés		Английская озвучка	自定义页「配音」单选第二项（voice=1）
+dmCustomVoiceEnHint	对话与过场使用英文语音；下次启动生效	English dialogue and cutscenes; applies after restart	Diálogos y escenas en inglés; se aplica al reiniciar		Английские диалоги и ролики; после перезапуска	英文配音下面的说明小字
 dmTabGameSettings	游戏设定	Settings	Ajustes	Config.	Опции	触屏设置页第三个子页签（原版英文 Game Settings 放不进页签；中文取原版串原文）
 dmTabCustom	自定义	Custom	Extras		Своё	选项页第四个页签「自定义」（touch_layout.py 页签条）：原版 KeyBindingTypeCustom 的西语 Personalizar 放不进页签，换我们的短词；中英与原版同字
 dmChronRunewords	符文之语	Runewords	P. rúnicas		Руны	编年史第三个页签（touch_layout.py _chronicle_killboard）：原版 Runewords 的西语 Palabras rúnicas 在 320 宽页签里被截断，换我们的短写；中英与原版同字

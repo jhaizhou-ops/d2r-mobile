@@ -36,7 +36,9 @@ def index():
     global _IDX
     if _IDX is None:
         _IDX = {}
-        with open(os.path.join(ROOT, "build_manifest.psv"), encoding="utf-8") as f:
+        # The 3.3.94012 manifest has binary data after its textual index. Replace the
+        # undecodable tail so the valid pipe-delimited rows before it remain usable.
+        with open(os.path.join(ROOT, "build_manifest.psv"), encoding="utf-8", errors="replace") as f:
             next(f)
             for line in f:
                 if line.startswith("#"):

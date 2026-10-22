@@ -204,6 +204,7 @@ def build_sidecar(romfs):
     for name, items in TABLE.items():
         path, text = touch_layout.read_layout(romfs, None, suffix='/lng/strings/' + name)
         for key, (old, new) in items.items():
+            if key.startswith('MoviePlaybackHoldToSkip') and os.environ.get('MOVIE_FFMPEG') == '1': continue
             if key in FILE_ONLY: continue
             m = re.search(r'"Key":\s*"%s",.*?"zhCN":\s*("(?:[^"\\]|\\.)*")' % re.escape(key), text, re.S)
             if not m: raise SystemExit('touch_strings：%s 里没有键 %s' % (name, key))
@@ -216,6 +217,7 @@ def build_sidecar(romfs):
         # whichever language the game is in, only that column's rows match and get replaced; the host needn't track language separately. Duplicate rows when two columns share the same original (e.g. same sentence in esES / esMX) are harmless
         for lang, tab in EXTRA:
             for key, (old, new) in tab.get(name, {}).items():
+                if key.startswith('MoviePlaybackHoldToSkip') and os.environ.get('MOVIE_FFMPEG') == '1': continue
                 m = re.search(r'"Key":\s*"%s",.*?"%s":\s*("(?:[^"\\]|\\.)*")' % (re.escape(key), lang), text, re.S)
                 if not m: raise SystemExit('touch_strings：%s 里没有键 %s 的 %s' % (name, key, lang))
                 cur = json.loads(m.group(1))
@@ -230,6 +232,7 @@ def build(romfs, outdir):
         path, text = touch_layout.read_layout(romfs, None, suffix='/lng/strings/' + name)
         if not any(k in FILE_ONLY for k in items): continue
         for key, (old, new) in items.items():
+            if key.startswith('MoviePlaybackHoldToSkip') and os.environ.get('MOVIE_FFMPEG') == '1': continue
             if key not in FILE_ONLY: continue
             m = re.search(r'"Key":\s*"%s",.*?"zhCN":\s*("(?:[^"\\]|\\.)*")' % re.escape(key), text, re.S)
             if not m: raise SystemExit('touch_strings：%s 里没有键 %s' % (name, key))
