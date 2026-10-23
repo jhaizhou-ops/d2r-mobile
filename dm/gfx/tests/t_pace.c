@@ -16,6 +16,8 @@ int main(void) {
         {1000 * MS + 9 * P, 0, 0, "周期 0（DM_PRESENT_HZ=0）：不等"},
         {1000 * MS + 9 * P + 1 * MS, 2 * P, 2 * P - 1 * MS, "切回间隔 2：节拍点 = 上帧时刻 9P + 2P"},
         {1000 * MS + 11 * P + 3 * MS, 2 * P, 2 * P - 3 * MS, "间隔 2 下一帧：节拍点 13P"},
+        {1000 * MS + 13 * P + 2 * MS, P, P - 2 * MS, "30 to 60 fps: resume one-period cadence"},
+        {1000 * MS + 14 * P + 1 * MS, 2 * P, 2 * P - 1 * MS, "60 to 30 fps: wait two periods"},
     };
     nvn_pacer p = {0}; int fail = 0, n = sizeof c / sizeof *c;
     for (int i = 0; i < n; i++) {
