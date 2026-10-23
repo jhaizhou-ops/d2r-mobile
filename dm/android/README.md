@@ -192,6 +192,12 @@ python dm/android/tools/stage_touch_assets.py --native-art <external-native-art>
 
 Import the complete finalized candidate overlay. Skill PNGs and HUD images stay in the external resource payload; do not add them to Git or APK assets. The renderer reads them from the validated imported `files/dm/overlay` directory. `DM_NATIVE_ART_DIR=<external-native-art>` lets the native-art capture test verify the external index and pixels. The five navigation buttons remain enabled until the complete replacement inventory flow passes device validation.
 
+## Android Auto parked games
+
+The existing game activity declares `MAIN` / `CAR_LAUNCHER` and accepts window resizing for Android Auto parked games on Android 15 or newer. Rendering, saves and touch input stay on the phone; this does not add a separate vehicle renderer or controller implementation. Complete resource setup and file-access authorization on the phone first. Android Auto automatically exits parked apps when vehicle motion is detected.
+
+For a locally installed APK, enable Android Auto's own developer mode and **Unknown sources**, then reconnect to a compatible head unit while parked and look for **D2R Mobile**. See [parked app support](https://developer.android.com/training/cars/parked/auto) and [local vehicle testing](https://developer.android.com/training/cars/testing#allow-unknown-sources). Actual DHU/vehicle validation is pending: check launch, display aspect and touch alignment, pause/resume, audio and disconnect/reconnect. Physical-controller support is a separate change.
+
 ## Debug performance controls
 
 Only CMake's Debug configuration reads `<files>/dm/android-debug.env`; Release contains no reader or call. This file is separate from the game's general `env`. It accepts only `DM_3D_SCALE`, `DM_3D_SCALE_DYN` and `DM_3D_SCALE_FLOOR`, one `KEY=VALUE` per line. Blank lines, `#` comments and CRLF are accepted. Unknown or repeated keys, files over 4096 bytes, lines over 127 characters, non-finite or malformed numbers, invalid switches and a floor above the starting scale reject the whole file. Scale and floor range from 0.50 through 1.00; DYN is exactly 0 or 1. The log reports acceptance/rejection without values.
