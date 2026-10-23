@@ -113,6 +113,12 @@ python dm/android/tools/stage_touch_assets.py --native-art <仓外native-art>/To
 
 导入完整且已生成最终manifest的候选overlay。技能PNG和HUD图像留在外部资源载荷，不加Git或APK assets；绘制层从已校验导入的`files/dm/overlay`读取。设置`DM_NATIVE_ART_DIR=<仓外native-art>`可让素材采图测试核验仓外索引和像素。五个导航键保留，等完整替代背包流程通过真机验证后再调整。
 
+## Android Auto停车游戏
+
+现有游戏Activity声明`MAIN` / `CAR_LAUNCHER`并允许窗口调整尺寸，用于Android 15或更新版本的Android Auto停车游戏。渲染、存档及触屏输入仍在手机上，不增加独立车机渲染器或手柄实现。先在手机完成资源配置及文件访问授权；车辆移动时由Android Auto自动退出停车应用。
+
+本地安装APK需要开启Android Auto自身的开发者模式和“未知来源”，停车后重新连接兼容车机，在应用列表查找D2R Mobile。参见[停车应用接入](https://developer.android.com/training/cars/parked/auto)及[本地车机测试](https://developer.android.com/training/cars/testing#allow-unknown-sources)。尚待DHU／真实车机验证启动、画面比例与触控坐标、暂停恢复、声音及断开重连；实体手柄支持是独立改动。
+
 ## Debug性能参数
 
 仅CMake的Debug配置读取`<files>/dm/android-debug.env`，Release不包含读取函数或调用。它与游戏通用`env`不同，只接受`DM_3D_SCALE`、`DM_3D_SCALE_DYN`、`DM_3D_SCALE_FLOOR`，每行一个`KEY=VALUE`。支持空行、`#`注释及CRLF；未知/重复键、文件超过4096字节、行超过127字符、非有限值/错误数字、非法开关、下限高于起点均整份拒绝。起点和下限范围为0.50至1.00，DYN只允许0或1。日志仅记录接受/拒绝，不输出数值。
