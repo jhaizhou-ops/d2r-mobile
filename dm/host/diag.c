@@ -1,6 +1,7 @@
 // 诊断：探针 DM_PROBE、UI 消息总线 DM_UIMSG、主线程采样 DM_SAMPLE。从 crash.c 拆出（crash.c 只管信号处理）。
 // Diagnostics: probes DM_PROBE, UI message bus DM_UIMSG, main-thread sampling DM_SAMPLE. Split out of crash.c (crash.c only handles signals).
 #include "dm_prof.h"
+#include "dm_entry_diag.h"
 #include "dm.h"
 #include "dm_uctx.h"
 #include "dm_hud.h"
@@ -376,6 +377,26 @@ static void monres_on_setinfo(const uint64_t *regs, uint64_t payload) {
     memcpy(buf + keep, add, n); memcpy(buf + keep + n, "\xee\x81\xbe" "0", 4); memset(buf + keep + n + 4, ' ', len - keep); buf[keep + n + 4 + (len - keep)] = 0;
 }
 
+// 只在装载边界与首个错误取样；重复错误合并。帧链逐帧安全读取，不能让诊断自己解引用坏指针。
+// Sample only load boundaries and the first error; coalesce repeats. Read each frame safely so diagnostics never dereference a bad pointer.
+uint64_t dm_guest_frame(void);
+static void entry_diag_message(const char *cat, const char *act, const char *arg) {
+    static dm_entry_diag state; static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&lock); int event=dm_entry_diag_event(&state,cat,act,arg); dm_entry_diag snap=state; pthread_mutex_unlock(&lock);
+    if (!event) return;
+    LOG("进局诊断：事件 %d 尝试 %u 错误快照 %u 重复 %u 帧 %llu 拍 %u 墙钟 %llu 客体时钟 %llu", event,snap.attempts,snap.snapshots,snap.repeats,(unsigned long long)dm_guest_frame(),cur_tick(),(unsigned long long)now_ns(),(unsigned long long)guest_ns());
+    if (event != DM_ENTRY_FATAL) return;
+    LOG("进局诊断：错误观测回调帧链（不等于原生错误码；最多 24 帧）");
+    uint64_t fp=(uint64_t)(uintptr_t)__builtin_frame_address(0);
+    for(int i=0;i<24 && fp && !(fp&7);i++) { uint64_t frame[2]; vm_size_t got=0;
+        if(vm_read_overwrite(mach_task_self(),fp,sizeof frame,(vm_address_t)frame,&got) || got!=sizeof frame) break;
+        off("entry-return",frame[1]); fputc('\n',stderr); if(frame[0]<=fp) break; fp=frame[0]; }
+}
+static void entry_diag_warm(int begin, int elapsed_ms) {
+    static uint64_t warm_wall_ns,warm_guest_ns; uint64_t current_wall_ns=now_ns(),current_guest_ns=guest_ns();
+    if(begin) { warm_wall_ns=current_wall_ns; warm_guest_ns=current_guest_ns; LOG("进局诊断：预热等待开始 帧 %llu 拍 %u",(unsigned long long)dm_guest_frame(),cur_tick()); }
+    else LOG("进局诊断：预热等待结束 报告 %d ms 墙钟差 %llu ms 客体时钟差 %llu ms 帧 %llu 拍 %u",elapsed_ms,(unsigned long long)((current_wall_ns-warm_wall_ns)/1000000),(unsigned long long)((current_guest_ns-warm_guest_ns)/1000000),(unsigned long long)dm_guest_frame(),cur_tick());
+}
 static void uimsg_print(const uint64_t *regs) {   // 观测门回调：只读寄存器 | Observation gate callback: registers are read-only
     if ((g_ui_print || atomic_load(&g_nui_sub)) && !g_uih) uih_build();
     uint64_t msg = regs[1], f[3] = {0}; vm_size_t got = 0;
@@ -401,6 +422,7 @@ static void uimsg_print(const uint64_t *regs) {   // 观测门回调：只读寄
     { static int played, back; if (!strcmp(n0, "FrontEndNavigation") && !strcmp(n1, "ToGame")) { played = 1; back = 0; crash_watch_pregame_done(); }
       else if (!strcmp(n0, "FrontEndNavigation") && !strcmp(n1, "ToFrontEnd") && played) { back = 1; void crash_watch_pregame_again(void); crash_watch_pregame_again(); }
       else if (have_arg && !strcmp(nm, "MainMenuButtonRibbon") && !back) crash_watch_pregame_done(); }
+    entry_diag_message(n0,n1,have_arg ? nm : "");
     for (int k = 0, n = atomic_load(&g_nui_sub); k < n; k++) { char s0[24], s1[24]; g_ui_sub[k](uih_name(f[0], s0), uih_name(f[1], s1), have_arg ? nm : ""); }
     if (!g_ui_print) return;
     const char *cat = uih_name(f[0], b0), *act = uih_name(f[1], b1);
@@ -1913,7 +1935,7 @@ static void shotui_install(void) {
     const char *delay = getenv("DM_TEST_LOADSCREEN_DELAY_MS"); g_loadscreen_delay_ms = delay ? atoi(delay) : 0;
     uimsg_subscribe(loadscreen_on_uimsg);
     { extern uint32_t (*dm_thread_tick_fn)(void); dm_thread_tick_fn = dm_cur_tick; }   // 线程建 / 退记拍号（hle_thread.c 现场导出用） | Thread creation / exit records the tick number (used by the hle_thread.c state dump)
-    { extern int (*g_nvn_loadscreen_up)(void); g_nvn_loadscreen_up = dm_loadscreen_up; }   // 出图处「进局读取画面等管线预热」用 | Used at present for "the run-entry loading screen waits for pipeline warm-up"
+    { extern int (*g_nvn_loadscreen_up)(void); g_nvn_loadscreen_up = dm_loadscreen_up; extern void (*g_nvn_warm_wait_diag)(int,int); g_nvn_warm_wait_diag = entry_diag_warm; }   // 出图处「进局读取画面等管线预热」用 | Used at present for "the run-entry loading screen waits for pipeline warm-up"
     const char *e = getenv("DM_NVN_SHOT_UI"); if (!e) return;
     char buf[4096]; strlcpy(buf, e, sizeof buf);
     for (char *sv, *tok = strtok_r(buf, ",", &sv); tok; tok = strtok_r(NULL, ",", &sv)) {

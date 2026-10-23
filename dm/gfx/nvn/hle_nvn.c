@@ -1468,13 +1468,15 @@ static uint64_t present_period(const win_t *o) {
     return hz > 0 ? (uint64_t)(itv * 1e9 / hz) : 0;
 }
 int (*g_nvn_loadscreen_up)(void);   // 宿主登记：读取画面此刻是否开着（diag.c 订阅界面消息时填；图形单测里为空 = 不设闸） | host registration: whether the loading screen is up right now (filled in when diag.c subscribes to UI messages; null in graphics unit tests = no gate)
+// 宿主可登记只读等待诊断；图形单测不登记时为空。 | The host may register read-only wait diagnostics; null in standalone graphics tests.
+void (*g_nvn_warm_wait_diag)(int, int);
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     (void)q; win_t *o = (win_t *)w; o->presents++;
     static uint64_t prev_in, prev_out, prev_pass, prev_draw;
     // 第一次进局的读取画面：后台管线预热没跑完就在这里等它（读取画面多停一会儿），进局后不在提交线程现编管线。预热早已完成时一次判断即过
     // Loading screen on first entering a run: if the background pipeline warm-up has not finished, wait for it here (the loading screen stays a bit longer), so that after entering the run no pipelines are compiled on the fly on the submit thread. When warm-up finished long ago this passes with a single check
     { static int gate;
-      if (!gate && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { gate = 1; int ms = mtl_warm_wait(15000); if (ms) LOG("[nvn] 进局读取画面等管线预热 %d ms", ms); } }
+      if (!gate && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { gate = 1; if (g_nvn_warm_wait_diag) g_nvn_warm_wait_diag(1,0); int ms = mtl_warm_wait(15000); if (g_nvn_warm_wait_diag) g_nvn_warm_wait_diag(0,ms); if (ms) LOG("[nvn] 进局读取画面等管线预热 %d ms", ms); } }
     present_cfg(o);
     gfx_enter();
     uint64_t t0 = now_ns();
