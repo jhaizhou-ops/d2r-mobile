@@ -10,15 +10,22 @@
 //   (Previously buttonA was taken as the bottom button per the diamond convention in GCExtendedGamepad.h and Nintendo controllers were swapped again to right A / bottom B, i.e. swapped twice. The header's diamond does not hold for Nintendo controllers.)
 #pragma once
 #include <stdint.h>
+#include <string.h>
 #include "dm_input.h"
 static inline uint64_t dm_padmap_face(int a, int b, int x, int y) {   // 四个参数 = 系统 buttonA / B / X / Y 按着没有 | The four parameters = whether the system's buttonA / B / X / Y are pressed
     return (a ? DM_BTN_A : 0) | (b ? DM_BTN_B : 0) | (x ? DM_BTN_X : 0) | (y ? DM_BTN_Y : 0);
 }
+// GameController's product category does not guarantee Nintendo's letter-based face-button order.
+// GameSir X5 Lite reports "Switch Pro Controller" but its buttonA/B follow physical Xbox positions.
+static inline int dm_padmap_nintendo_labels(const char *vendor, const char *category) {
+    if (vendor && strstr(vendor, "GameSir-X5 Lite")) return 0;
+    return category && (strstr(category, "Switch") || strstr(category, "Joy-Con"));
+}
 // Xbox 键位（dm_gamepad.m 认出 Xbox 手柄时自动用）：按物理位置排，与 PC / Xbox 版同位置同功能——下 = A 确认、右 = B 返回、上 = X（放进堆叠仓库）、左 = Y。
-//   任天堂手柄（及切到 Switch 模式、被系统认成 Switch Pro 的第三方手柄）系统按 Switch 字母给：右 = buttonA、下 = buttonB、上 = buttonX、左 = buttonY → 只换 A/B。
+//   按键按 Nintendo 字母上报的手柄：右 = buttonA、下 = buttonB、上 = buttonX、左 = buttonY → 只换 A/B。不能仅凭 Switch Pro 类别判断（GameSir X5 Lite 就是例外，见 dm_padmap_nintendo_labels）。
 //   其余手柄系统按菱形位置给：下 = buttonA、右 = buttonB、左 = buttonX、上 = buttonY → 只换 X/Y。
 // Xbox layout (used automatically when dm_gamepad.m recognizes an Xbox controller): by physical position, same position = same function as the PC / Xbox version -- bottom = A confirm, right = B back, top = X (into the stack stash), left = Y.
-//   Nintendo controllers (and third-party ones in Switch mode, recognized as Switch Pro) are reported by Switch letters: right = buttonA, bottom = buttonB, top = buttonX, left = buttonY -> only A/B swap.
+//   Controllers that report Nintendo keycap letters: right = buttonA, bottom = buttonB, top = buttonX, left = buttonY -> only A/B swap. A Switch Pro category alone is insufficient (GameSir X5 Lite is an exception; see dm_padmap_nintendo_labels).
 //   Every other controller is reported by diamond position: bottom = buttonA, right = buttonB, left = buttonX, top = buttonY -> only X/Y swap.
 static inline uint64_t dm_padmap_face_xbox(int a, int b, int x, int y, int nintendo) {
     return nintendo ? dm_padmap_face(b, a, x, y) : dm_padmap_face(a, b, y, x);

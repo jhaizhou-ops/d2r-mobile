@@ -35,6 +35,14 @@ int main(void) {
         { "Xbox One", "上", GY, 0, DM_BTN_X }, { "Xbox One", "左", GX, 0, DM_BTN_Y } };
     for (unsigned i = 0; i < sizeof x / sizeof *x; i++)
         CHECK(dm_padmap_face_xbox(x[i].sys == GA, x[i].sys == GB, x[i].sys == GX, x[i].sys == GY, x[i].nin) == x[i].want, "Xbox 键位 %s：按%s键（系统给 button%s）→ 游戏 %s", x[i].cat, x[i].pos, nm[x[i].sys], nm[__builtin_ctzll(x[i].want)]);
+    CHECK(!dm_padmap_nintendo_labels("GameSir-X5 Lite_S", "Switch Pro Controller"), "GameSir X5 Lite 虽被识别为 Switch Pro，仍按实际 Xbox 物理顺序处理");
+    CHECK(dm_padmap_nintendo_labels("Pro Controller", "Switch Pro Controller"), "Nintendo Pro Controller 使用印字母顺序");
+    CHECK(dm_padmap_face_for_layout(1, 0, 0, 0,
+          dm_padmap_nintendo_labels("GameSir-X5 Lite_S", "Switch Pro Controller"), 1) == DM_BTN_A,
+          "GameSir Xbox 布局：buttonA（物理下键）仍映射为游戏 A 确认");
+    CHECK(dm_padmap_face_for_layout(0, 1, 0, 0,
+          dm_padmap_nintendo_labels("GameSir-X5 Lite_S", "Switch Pro Controller"), 1) == DM_BTN_B,
+          "GameSir Xbox 布局：buttonB（物理右键）仍映射为游戏 B 取消");
     CHECK(dm_padmap_face_for_layout(1, 0, 0, 0, 1, 0) == DM_BTN_A, "Switch 默认布局保留印着 A 的右侧键为确认");
     CHECK(dm_padmap_face_for_layout(1, 0, 0, 0, 1, 1) == DM_BTN_B, "Switch Xbox 布局将右侧印着 A 的键映射为 B");
     CHECK(dm_padmap_face_for_layout(0, 1, 0, 0, 1, 1) == DM_BTN_A, "Switch Xbox 布局将底部印着 B 的键映射为 A 确认");
