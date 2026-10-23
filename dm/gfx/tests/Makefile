@@ -28,6 +28,8 @@ t_pace: t_pace.c ../nvn/nvn_pace.h
 	clang -O1 -Wall -o $@ t_pace.c
 t_adaptive_pace: t_adaptive_pace.c ../nvn/nvn_adaptive_pace.h ../nvn/nvn_pace.h
 	clang -O1 -Wall -o $@ t_adaptive_pace.c
+t_bc8: t_bc8.c ../vulkan/engine/xbg_texture.c ../vulkan/engine/xbg_texture.h ../nvn/nvn_tex.c ../tex/nvn_deswizzle.h
+	clang -O1 -Wall -Wno-unused-function -fsigned-char -I../vulkan/engine -o $@ t_bc8.c ../vulkan/engine/xbg_texture.c ../nvn/nvn_tex.c -lpthread
 t_completion_wait: t_completion_wait.cpp ../vulkan/engine/xbg_completion_wait.h
 	clang++ -std=c++17 -O1 -Wall -pthread -DDM_COMPLETION_WAIT_SELFTEST -DDM_COMPLETION_WAIT_MAIN -o $@ t_completion_wait.cpp
 t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -64,6 +66,7 @@ t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 # Dependencies one per line in alphabetical order (so that adding one test does not conflict on the whole line); the order of the commands below is unchanged
 run: \
 	t_adaptive_pace \
+	t_bc8 \
 	t_completion_wait \
 	t_copy_pitch \
 	t_builtin \
@@ -98,6 +101,7 @@ run: \
 	./t_deswz_gpu
 	./t_pace
 	./t_adaptive_pace
+	./t_bc8
 	./t_completion_wait
 	./t_refl
 	./t_hmap

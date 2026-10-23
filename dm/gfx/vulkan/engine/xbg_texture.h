@@ -10,7 +10,13 @@ extern "C" {
  * BC4/5 keep native R/RG channels, never replicate red or reconstruct blue. */
 enum xbg_pixels { XBG_RGBA8_UNORM=1, XBG_RGBA8_SRGB=2,
                   XBG_R16_UNORM=3, XBG_RG16_UNORM=4,
-                  XBG_R16_SNORM=5, XBG_RG16_SNORM=6, XBG_RGBA16_SFLOAT=7 };
+                  XBG_R16_SNORM=5, XBG_RG16_SNORM=6, XBG_RGBA16_SFLOAT=7,
+                  XBG_R8_UNORM=8, XBG_R8_SNORM=9, XBG_RG8_UNORM=10, XBG_RG8_SNORM=11 };
+/* 设备不支持 16 位单/双通道格式的线性过滤时置 1（Mali 的 R16G16_UNORM 就是这种）：
+ * BC4/BC5 改为解码成 8 位 R8/RG8，牺牲通道精度换取可线性过滤。
+ * Set when the device cannot linearly filter 16-bit single/dual channel formats (Mali's R16G16_UNORM):
+ * BC4/BC5 then decode to 8-bit R8/RG8, trading channel precision for filterability. */
+extern int xbg_bc_8bit_channels;
 typedef struct xbg_bc_format {
     uint32_t pixels, bytes_per_pixel, bytes_per_block;
 } xbg_bc_format;

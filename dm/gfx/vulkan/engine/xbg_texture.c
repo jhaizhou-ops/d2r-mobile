@@ -16,6 +16,7 @@
  * interpreting negative endpoints as positive on the phone. */
 _Static_assert((char)-1 < 0,"bcdec signed formats require -fsigned-char");
 
+int xbg_bc_8bit_channels=0;
 int xbg_bc_format_info(uint32_t fmt,xbg_bc_format *out) {
     if(!out || fmt<0x41 || fmt>0x50)return -1;
     out->pixels=XBG_RGBA8_UNORM;out->bytes_per_pixel=4;out->bytes_per_block=16;
@@ -26,6 +27,12 @@ int xbg_bc_format_info(uint32_t fmt,xbg_bc_format *out) {
     if(fmt==0x4b)out->pixels=XBG_RG16_UNORM;
     if(fmt==0x4c)out->pixels=XBG_RG16_SNORM;
     if(fmt==0x4f || fmt==0x50){out->pixels=XBG_RGBA16_SFLOAT;out->bytes_per_pixel=8;}
+    /* 8 位通道回退：设备不能线性过滤 16 位 R/RG（Mali）。SNORM 仍保留 16 位。
+     * 8-bit channel fallback: the device cannot filter 16-bit R/RG (Mali). Signed formats keep 16 bits. */
+    if(xbg_bc_8bit_channels){
+        if(fmt==0x49){out->pixels=XBG_R8_UNORM;out->bytes_per_pixel=1;}
+        if(fmt==0x4b){out->pixels=XBG_RG8_UNORM;out->bytes_per_pixel=2;}
+    }
     return 0;
 }
 static uint32_t bc_linear_format(uint32_t f) {
@@ -50,7 +57,7 @@ static int map(uint32_t code, uint32_t *nvn, uint32_t *pixels, uint32_t *bpp) {
     case 0x3d: *nvn=0x44; break;
     case 0x3e: *nvn=0x48; *pixels=XBG_RGBA8_SRGB; break;
     case 0x3f: *nvn=0x49; *pixels=XBG_R16_UNORM; *bpp=2; break;
-    case 0x41: *nvn=0x4b; *pixels=XBG_RG16_UNORM; break;
+    case 0x41: *nvn=0x4b; if(xbg_bc_8bit_channels){*pixels=XBG_RG8_UNORM;*bpp=2;}else *pixels=XBG_RG16_UNORM; break;
     default: return -1;
     }
     return 0;
@@ -177,8 +184,10 @@ int xbg_decode_block(uint32_t fmt,const void *block,size_t bn,void *out,size_t o
     }
     if(fmt==0x49 || fmt==0x4b) {
         unsigned channels=fmt==0x49?1:2;
-        if(bn<channels*8 || on<channels*32) return -1;
+        const int eight=xbg_bc_8bit_channels && (fmt==0x49 || fmt==0x4b);
+        if(bn<channels*8 || on<channels*16*(eight?1:2)) return -1;
         channel(b,r); if(channels==2) channel(b+8,g);
+        if(eight){ for(unsigned i=0;i<16;i++) {dst[i*channels]=(uint8_t)(r[i]>>8);if(channels==2) dst[i*2+1]=(uint8_t)(g[i]>>8);} return 0; }
         for(unsigned i=0;i<16;i++) {
             dst[i*channels*2]=(uint8_t)r[i]; dst[i*channels*2+1]=(uint8_t)(r[i]>>8);
             if(channels==2) {dst[i*4+2]=(uint8_t)g[i];dst[i*4+3]=(uint8_t)(g[i]>>8);}
