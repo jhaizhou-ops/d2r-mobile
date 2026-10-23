@@ -1177,7 +1177,7 @@ def _drop_rows(*rows):
 # (console version VideoOptionsPanelHD.json; the touch version has already removed the video tab): the fourth item of the tab strip (originally 「控制」(Controls) = KeyBindingMenu, which does not appear on this platform) is renamed 「自定义」(Custom) and opens VideoOptionsPanel;
 # the video page's table is replaced entirely with our rows: section header + one original-game checkbox per switch (following the fields of the 「自动拾取金币」(Auto Gold Pickup) row on the 「游戏」(Game) page). Widget names are TouchCustom_<key>,
 # and the host dm_custom.c reads whether each is checked and handles apply / discard / default. The checkbox message sends a harmless ClosePanel (same as 「极乐世界」(Elysium)), which the game does not recognize
-_CUSTOM_KEYS = ('auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes', 'icloud', 'pot_pick', 'drop_haptic', 'gem_pick', 'store_btn', 'eco_fps', 'q3d', 'loot_filter', 'auto_buff', 'touch_swap_above')
+_CUSTOM_KEYS = ('auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes', 'icloud', 'pot_pick', 'drop_haptic', 'gem_pick', 'store_btn', 'eco_fps', 'q3d', 'loot_filter', 'auto_buff', 'touch_swap_above', 'pad_xbox')
 # 字在中英表（dm/i18n/ui_text.tsv 的 dmCustom<键名驼峰>），布局写 @键、跟原版语言走（英文版）；行高按中文行数分，英文必须同样行数（不然换语言排版变）
 # The text lives in the Chinese-English string table (dmCustom<key name in camel case> in dm/i18n/ui_text.tsv); layouts write @key and follow the
 # original game's language (English version); row height is assigned by the number of Chinese lines, and English must have the same number of lines

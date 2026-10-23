@@ -2,7 +2,7 @@
 // iOS GameController（MFi / Xbox / PS / Switch Pro）的扩展手柄 → 原版手柄输入（宿主 dm_pad_set，与触屏输入在游戏取手柄时合并）。
 // 四个面键按键帽上印的字母对应：提示条写哪个字母，就按手柄上印着那个字母的键（提示条画的是 Switch 键帽）。
 // Xbox 手柄（GCXboxGamepad / 产品类别含 Xbox）自动换成 PC / Xbox 版的键位：按物理位置，下确认、右返回、上 = 放进堆叠仓库、左 = Y 功能，
-//   提示条换成原版的 Xbox 键帽（dm_padmap.h dm_padmap_face_xbox、dm_padmode.c 键帽样式）。哪只手柄有明确输入就按哪只的类型换键帽，设置里不用开关。
+//   提示条换成原版的 Xbox 键帽（dm_padmap.h dm_padmode.c 键帽样式）。其他手柄可在「选项 → 自定义」打开「手柄按键：Xbox 布局」，Switch Pro 等任天堂手柄会按物理位置换键并显示 Xbox 键帽。
 //   其余手柄：系统给的 buttonA/B/X/Y 直接发游戏的 A/B/X/Y，不再按型号细分：系统对任天堂手柄按键帽字母给（印 A 的右键 = buttonA），Xbox 字母与位置一致，
 //   没字母的（PS 等）按菱形位置给（下方键 = buttonA = 确认）。规则在 host/dm_padmap.h（纯函数，宿主单测 t_padmap 核）；连接时记一行厂商名与产品类别。
 //   （先前一律按 Switch 的位置排——右键确认——Xbox 手柄玩家照提示条「A 选择」按印着 A 的下方键，实际发的是 B，选角页选不了人。）
@@ -23,7 +23,7 @@
 // iOS GameController extended gamepads (MFi / Xbox / PS / Switch Pro) → original controller input (host dm_pad_set, merged with touch input when the game reads the controller).
 // The four face buttons follow the letters printed on the keycaps: whatever letter the prompt shows, press the button printed with that letter (the prompt draws Switch keycaps).
 // An Xbox controller (GCXboxGamepad / product category containing Xbox) switches automatically to the PC / Xbox layout: by physical position, bottom confirms, right goes back, top = into the stack stash, left = the Y function,
-//   and the prompt strip shows the original Xbox glyphs (dm_padmap.h dm_padmap_face_xbox, the glyph styles in dm_padmode.c). Whichever controller gives clear input decides the glyphs; there is no setting to turn on.
+//   and the prompt strip shows the original Xbox glyphs (dm_padmap.h, glyph styles in dm_padmode.c). Other controllers can use the same mapping by enabling "Controller buttons: Xbox layout" under Options → Custom; Nintendo controllers such as Switch Pro are translated by physical position and show Xbox glyphs too.
 //   For other controllers, the system's buttonA/B/X/Y are sent directly as the game's A/B/X/Y, with no further distinction by model: the system reports Nintendo controllers by keycap letter (the right button printed A = buttonA), Xbox letters match positions,
 //   and controllers without letters (PS etc.) by diamond position (bottom button = buttonA = confirm). The rule lives in host/dm_padmap.h (pure function, checked by the host unit test t_padmap); the vendor name and product category are logged on connect.
 //   (Previously everything followed the Switch layout — right button confirms — so Xbox players pressing the bottom button printed A per the prompt "A Select" actually sent B and could not pick a character.)
@@ -42,6 +42,7 @@
 #import <GameController/GameController.h>
 #include "dm_input.h"
 #include "dm_padmap.h"
+#include "dm_custom.h"
 #include "hle.h"
 
 static void (*g_on_mode)(int pad);
@@ -109,19 +110,20 @@ void dm_gamepad_inject_n(int n, uint64_t b, int32_t lx, int32_t ly, int32_t rx, 
 void dm_gamepad_drop_n(int n) { LOG("手柄：断开（虚拟手柄 %d）", n == 2 ? 2 : 1); drop((const void *)(intptr_t)(n == 2 ? 2 : 1)); }
 void dm_gamepad_inject(uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) { dm_gamepad_inject_n(1, b, lx, ly, rx, ry); }
 static int is_xbox(GCController *c) { return [c.extendedGamepad isKindOfClass:[GCXboxGamepad class]] || [c.productCategory ?: @"" containsString:@"Xbox"]; }
+static int is_nintendo(GCController *c) { NSString *k = c.productCategory ?: @""; return [k containsString:@"Switch"] || [k containsString:@"Joy-Con"]; }
 static void publish(GCController *c, GCExtendedGamepad *g) {
-    uint64_t b = 0; int xb = is_xbox(c);
-    if (xb) b |= dm_padmap_face_xbox(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed, 0);   // Xbox 手柄：按物理位置（dm_padmap.h） | Xbox controller: by physical position (dm_padmap.h)
-    else b |= dm_padmap_face(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed);   // 其余：系统给哪个字母发哪个字母（dm_padmap.h） | Others: send whichever letter the system reports (dm_padmap.h)
+    int xbox_layout = is_xbox(c) || dm_custom_get("pad_xbox");
+    int nintendo = is_nintendo(c);
+    uint64_t b = dm_padmap_face_for_layout(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed, nintendo, xbox_layout);
     if (g.leftShoulder.pressed) b |= DM_BTN_L; if (g.rightShoulder.pressed) b |= DM_BTN_R; if (g.leftTrigger.pressed) b |= DM_BTN_ZL; if (g.rightTrigger.pressed) b |= DM_BTN_ZR;
     if (g.leftThumbstickButton.pressed) b |= DM_BTN_LS; if (g.rightThumbstickButton.pressed) b |= DM_BTN_RS;
     if (g.buttonMenu.pressed) b |= DM_BTN_PLUS; if (g.buttonOptions.pressed) b |= DM_BTN_MINUS;
     if (g.dpad.left.pressed) b |= DM_BTN_LEFT; if (g.dpad.up.pressed) b |= DM_BTN_UP; if (g.dpad.right.pressed) b |= DM_BTN_RIGHT; if (g.dpad.down.pressed) b |= DM_BTN_DOWN;
-    put((__bridge const void *)c, b, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value), xb);
+    put((__bridge const void *)c, b, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value), xbox_layout);
 }
 static void attach(GCController *c) {
     GCExtendedGamepad *g = c.extendedGamepad; if (!g) { LOG("手柄：%s 不是扩展手柄，不接", c.vendorName.UTF8String ?: "?"); return; }
-    LOG("手柄：连上 %s，类别 %s → %s", c.vendorName.UTF8String ?: "?", c.productCategory.UTF8String ?: "?", is_xbox(c) ? "Xbox 手柄：面键按位置排（下 A 右 B 上 X 左 Y）、Xbox 键帽" : "面键 buttonA/B/X/Y 直接发 A/B/X/Y");
+    LOG("手柄：连上 %s，类别 %s → %s", c.vendorName.UTF8String ?: "?", c.productCategory.UTF8String ?: "?", (is_xbox(c) || dm_custom_get("pad_xbox")) ? "Xbox 布局：面键按物理位置、Xbox 键帽" : "面键 buttonA/B/X/Y 直接发 A/B/X/Y");
     __weak GCController *wc = c;
     g.valueChangedHandler = ^(GCExtendedGamepad *gp, GCControllerElement *el) { (void)el; GCController *sc = wc; if (sc) publish(sc, gp); };
 }

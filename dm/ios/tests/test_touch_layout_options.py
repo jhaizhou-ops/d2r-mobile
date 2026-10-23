@@ -34,4 +34,6 @@ assert keys == [key for key, _ in layout._CUSTOM_ALL]
 defaults = [int(x) for x in re.search(r'k_def\[NK\].*?=\s*\{(.*?)\}', host, re.S)[1].split(',')]
 assert len(defaults) == len(keys) and defaults[keys.index('touch_swap_above')] == 0
 assert 'TouchCustom_touch_swap_above_near' in host
+assert keys[-1] == 'pad_xbox' and defaults[keys.index('pad_xbox')] == 0
+assert nodes['TouchCustom_pad_xbox']['fields']['onClickMessage'].endswith('TouchCustom_pad_xbox')
 print('PASS touch layout options: generated radio pair, labels, defaults, host order and scrolling row extent')

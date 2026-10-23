@@ -23,3 +23,7 @@ static inline uint64_t dm_padmap_face(int a, int b, int x, int y) {   // 四个�
 static inline uint64_t dm_padmap_face_xbox(int a, int b, int x, int y, int nintendo) {
     return nintendo ? dm_padmap_face(b, a, x, y) : dm_padmap_face(a, b, y, x);
 }
+// Apply the per-user layout choice while accounting for Nintendo's letter-based reporting.
+static inline uint64_t dm_padmap_face_for_layout(int a, int b, int x, int y, int nintendo, int xbox_layout) {
+    return xbox_layout ? dm_padmap_face_xbox(a, b, x, y, nintendo) : dm_padmap_face(a, b, x, y);
+}

@@ -93,7 +93,7 @@ This is not a gamepad pasted onto the screen. Every panel and every action was r
 
 ### Controller
 
-Connect a controller and press any button: the interface switches to the original controller layout, with button prompts at the bottom of every panel. Touch the screen and you are back in the touch interface instantly. Inventory, stash, skill tree, Chronicle and settings are fully controller-navigable, with the same button mapping as on Switch. With an Xbox controller the layout switches automatically to the PC / Xbox one (bottom confirms, right goes back) and the prompts show Xbox button icons; there is nothing to turn on.
+Connect a controller and press any button: the interface switches to the original controller layout, with button prompts at the bottom of every panel. Touch the screen and you are back in the touch interface instantly. Inventory, stash, skill tree, Chronicle and settings are fully controller-navigable; the default button mapping matches Switch. Xbox controllers automatically use the PC / Xbox mapping (bottom confirms, right goes back) and Xbox button icons. Other controllers can use that mapping by enabling "Controller buttons: Xbox layout" under Options → Custom.
 
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/en_pad_combat.jpg" width="49%" alt="Combat with a controller connected">
