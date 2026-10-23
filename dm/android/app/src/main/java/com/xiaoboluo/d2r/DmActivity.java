@@ -20,6 +20,8 @@ import android.text.SpanWatcher;
 import android.text.Spannable;
 import android.text.Spanned;
 import android.text.TextWatcher;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -39,7 +41,9 @@ import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 
 public class DmActivity extends Activity implements SurfaceHolder.Callback, DisplayManager.DisplayListener {
     static native int nativeStart(String filesDir, String extDir, String romfsSrc, String lang);
@@ -48,6 +52,9 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     static native void nativeTouch(int n, int[] ids, float[] xs, float[] ys);
     static native void nativeFocus(int ev);
     static native void nativeTextResult(long id, boolean accepted, String text);
+    static native void nativePad(long buttons, int lx, int ly, int rx, int ry);
+    static native void nativePadMode(int pad);
+    static native void nativePadGlyph(int glyph);
 
     private static WeakReference<DmActivity> current = new WeakReference<>(null);
     private static volatile int bootFailure;
@@ -86,6 +93,54 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     private void immersive() {
         WindowInsetsController c = getWindow().getInsetsController();
         if (c != null) { c.hide(WindowInsets.Type.systemBars()); c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE); }
+    }
+
+    // 实体手柄：按键与摇杆在 PadInput 里合成宿主的手柄状态（nativePad → dm_pad_set），与触屏的虚拟手柄在游戏取手柄时合并。
+    // 手柄事件在这里吃掉，不再往下传给视图（否则会触发触摸控件、系统返回等）。
+    // Physical controller: keys and sticks are merged in PadInput into the host controller state (nativePad -> dm_pad_set), combined with
+    // the touch stick when the game reads the controller. Controller events are consumed here and not passed on to the views.
+    @Override public boolean dispatchKeyEvent(KeyEvent e) {
+        if (PadInput.onKey(e)) return true;
+        return super.dispatchKeyEvent(e);
+    }
+
+    @Override public boolean onGenericMotionEvent(MotionEvent e) {
+        if (PadInput.onMotion(e)) return true;
+        return super.onGenericMotionEvent(e);
+    }
+
+    // 手柄布局下碰屏 = 切回触屏布局，这一根手指整根不执行（此刻触控控件还没露出来，落点可能正好压在看不见的按钮上；
+    // iOS 的 front_ios.m 同样把这根手指吞掉）。之后的手指正常。
+    // Touching the screen in the controller layout = back to the touch layout, and that finger is swallowed for its whole life (the touch
+    // widgets are not shown yet and the landing point may sit on an invisible button; iOS front_ios.m swallows it the same way).
+    private final Set<Integer> swallowed = new HashSet<>();
+
+    @Override public boolean dispatchTouchEvent(MotionEvent e) {
+        int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            boolean wasPad = PadInput.isPadMode();
+            PadInput.onTouch();
+            if (wasPad) swallowed.add(e.getPointerId(0));
+        }
+        boolean swallowThis = false;
+        for (int i = 0; i < e.getPointerCount(); i++) if (swallowed.contains(e.getPointerId(i))) swallowThis = true;
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) swallowed.clear();
+        else if (action == MotionEvent.ACTION_POINTER_UP) swallowed.remove(e.getPointerId(e.getActionIndex()));
+        if (swallowThis) return true;
+        return super.dispatchTouchEvent(e);
+    }
+
+    // 手柄布局隐藏触控控件（iOS 由覆盖层的 _padMode 控制） | The controller layout hides the touch widgets (iOS does it through _padMode)
+    static void onPadMode(boolean pad) {
+        DmActivity a = current.get();
+        if (a == null) return;
+        a.applyPadMode(pad);
+    }
+
+    private void applyPadMode(boolean pad) {
+        if (touchOverlay == null) return;
+        touchOverlay.setInputEnabled(!pad);
+        touchOverlay.setVisibility(pad ? View.GONE : View.VISIBLE);
     }
 
     // 资源在玩家放的位置读（缺省 Download/S2X/D2R Mobile/data），要「所有文件访问」权限；没有就引导去系统设置页，回来再启动
@@ -267,7 +322,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
             showStartError(resource == 0 ? getString(R.string.dmAndroidStartFailed, result) : getString(resource)); return;
         }
         started = true;
-        touchOverlay.setInputEnabled(true);
+        applyPadMode(PadInput.isPadMode());
         nativeFocus(3);
     }
 
@@ -389,8 +444,8 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     @Override public void onDisplayAdded(int id) { updateRefresh(); }
     @Override public void onDisplayRemoved(int id) { updateRefresh(); }
     @Override public void onDisplayChanged(int id) { updateRefresh(); }
-    @Override protected void onResume() { super.onResume(); resumed = true; immersive(); startHost(); updateRefresh(); if (started) { nativeFocus(3); if (touchOverlay != null && bootFailure == 0) touchOverlay.setInputEnabled(true); } }
-    @Override protected void onPause() { resumed = false; if (inputDialog != null) inputDialog.dismiss(); releaseTouches(); if (touchOverlay != null) touchOverlay.setInputEnabled(false); if (started) nativeFocus(0); super.onPause(); }
+    @Override protected void onResume() { super.onResume(); resumed = true; immersive(); startHost(); updateRefresh(); if (started) { nativeFocus(3); if (touchOverlay != null && bootFailure == 0) applyPadMode(PadInput.isPadMode()); } }
+    @Override protected void onPause() { resumed = false; if (inputDialog != null) inputDialog.dismiss(); releaseTouches(); PadInput.reset(); if (touchOverlay != null) touchOverlay.setInputEnabled(false); if (started) nativeFocus(0); super.onPause(); }
     @Override protected void onStart() { super.onStart(); if (started) nativeFocus(2); }
     @Override protected void onStop() { if (started) nativeFocus(1); com.xiaoboluo.d2r.widget.HeroWidgetProvider.requestUpdate(this); super.onStop(); }
     @Override protected void onDestroy() { if (displays != null) displays.unregisterDisplayListener(this); if (inputDialog != null) inputDialog.dismiss(); if (current.get() == this) current.clear(); super.onDestroy(); }

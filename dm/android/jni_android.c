@@ -13,6 +13,7 @@
 //   resource dir (default /sdcard/Download/S2X/D2R Mobile/data)  the player's 18 .data archives + .build.config; the App creates romfs/data/ in the internal dir linking to each of them
 //   <internal dir>/save, temp        saves and temporary files
 #include "../host/dm.h"
+#include "../host/dm_input.h"
 #include "../host/front.h"
 #include "../host/hle.h"
 #include <android/log.h>
@@ -27,6 +28,11 @@
 #include "dm_overlay_contract.h"
 #include <sys/stat.h>
 #include <unistd.h>
+
+// 手柄 / 触屏布局与键帽切换（dm_padmode.c 里定义、没有头文件；iOS 由 front_ios.m 直接调）
+// Controller / touch layout and key-cap switching (defined in dm_padmode.c without a header; iOS calls it from front_ios.m)
+void dm_padmode_request(int pad);
+void dm_padmode_request_glyph(int glyph);
 
 void front_android_set_window(void *win, int w, int h);
 void front_android_set_refresh(float hz);
@@ -335,6 +341,36 @@ JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeTouch(JNIEnv *env
     if (n) { (*env)->GetIntArrayRegion(env, ids, 0, n, id); (*env)->GetFloatArrayRegion(env, xs, 0, n, x); (*env)->GetFloatArrayRegion(env, ys, 0, n, y); }
     for (int i = 0; i < n; i++) t[i] = (dm_touch){(uint32_t)id[i], x[i], y[i]};
     dm_touch_set(t, n);
+}
+
+// 实体手柄（Java PadInput.java）→ 宿主手柄状态。与触屏的虚拟手柄分开存，游戏取手柄时按键取或、摇杆触屏优先（hle_hid.c 的 fill）。
+// Physical controller (Java PadInput.java) -> host controller state. Kept apart from the touch on-screen stick; when the game reads the
+// controller the buttons are ORed and the touch stick wins (fill in hle_hid.c).
+JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativePad(JNIEnv *env, jclass cls, jlong buttons, jint lx, jint ly, jint rx, jint ry) {
+    (void)env; (void)cls;
+    // 按下沿记一条（最多 30 条），用来确认手柄通着、键位对 | Log each press edge (at most 30) to show the controller works and the bits are right
+    static uint64_t prev;
+    static int logged;
+    if (buttons && !prev && logged < 30) {
+        LOG("手柄：按下 buttons=%#llx lx=%d ly=%d rx=%d ry=%d", (unsigned long long)buttons, lx, ly, rx, ry);
+        ++logged;
+    }
+    prev = (uint64_t)buttons;
+    dm_pad_set((uint64_t)buttons, lx, ly, rx, ry);
+}
+
+// 手柄 / 触屏布局切换（对应 iOS 的 dm_padmode_request）：导入包的覆盖层不带那套布局时是 no-op。
+// Controller / touch layout switch (iOS dm_padmode_request): a no-op when the overlay does not carry those layouts.
+JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativePadMode(JNIEnv *env, jclass cls, jint pad) {
+    (void)env; (void)cls;
+    dm_padmode_request(pad ? 1 : 0);
+}
+
+// 键帽样式（0 Switch 手柄 / 1 键盘 / 2 Xbox / 3 PlayStation），按手柄厂商报
+// Key-cap style (0 Switch pad / 1 keyboard / 2 Xbox / 3 PlayStation), reported from the controller vendor
+JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativePadGlyph(JNIEnv *env, jclass cls, jint glyph) {
+    (void)env; (void)cls;
+    dm_padmode_request_glyph(glyph);
 }
 
 // UI只入队：0失焦，1后台，2前台，3激活；激活也声明前台，合并2/3时不会漏恢复。
