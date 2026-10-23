@@ -156,6 +156,7 @@ void mtl_bw(uint64_t *load, uint64_t *store, uint64_t *full_rw_passes);   // 附
 uint64_t mtl_udc_saved_bytes(void);                                      // DM_NVN_UNWRITTEN_DC 实际省下的写回字节 | Write-back bytes actually saved by DM_NVN_UNWRITTEN_DC
 int mtl_has_window(void);
 int mtl_warm_wait(int timeout_ms);
+int mtl_fps_target(void);
 int mtl_link_active(void);
 int mtl_link_wait_tick(uint64_t timeout_ns);
 double mtl_presented_time(uint64_t n);
