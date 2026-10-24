@@ -1,0 +1,27 @@
+; Authored synthetic compute shader: write 1.0 to storage buffer cp_s0.
+; Exercises descriptor-set argument buffers and replay sbuf mapping.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %buffer "cp_s0"
+OpMemberDecorate %block 0 Offset 0
+OpDecorate %block BufferBlock
+OpDecorate %buffer DescriptorSet 0
+OpDecorate %buffer Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%zero = OpConstant %uint 0
+%one = OpConstant %float 1
+%block = OpTypeStruct %float
+%blockptr = OpTypePointer Uniform %block
+%floatptr = OpTypePointer Uniform %float
+%buffer = OpVariable %blockptr Uniform
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%ptr = OpAccessChain %floatptr %buffer %zero
+OpStore %ptr %one
+OpReturn
+OpFunctionEnd

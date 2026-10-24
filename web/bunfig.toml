@@ -1,0 +1,9 @@
+[install]
+# Bun 可执行文件由 packageManager/CI 固定，不作为 npm 对等依赖安装。
+# 所需 React 对等依赖在 package.json 中明确列出。
+# The Bun executable is pinned by packageManager/CI, not installed as an npm peer.
+# Required React peers are explicit dependencies in package.json.
+peer = false
+# 运行时导入必须使用冻结安装，不得下载缺少的包。
+# Runtime imports must use the frozen installation, never fetch missing packages.
+auto = "disable"

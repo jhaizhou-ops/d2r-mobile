@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "license": "DOTNET_SOURCE_LICENSE.txt",
+  "sidecar": {
+    "version": "10.0.13",
+    "sources": {
+      "loader/globals.ts": "2525a1e33a5b1fb4496020b9c1ba3bb7fb0feeb929de1edc1c0c2c893d7f3e47",
+      "loader/assets.ts": "ccb86500d04da71e05a97e36bdbb57c8840b66f0b9b251263e435027d088aba9"
+    },
+    "classification": "// if we are the first script loaded in the web worker, we are expected to become the sidecar\nif (typeof importScripts === \"function\" && !globalThis.onmessage) {\n    (globalThis as any).dotnetSidecar = true;\n}\n\n// keep in sync with src\\mono\\browser\\runtime\\globals.ts and src\\mono\\browser\\test-main.js\nexport const ENVIRONMENT_IS_NODE = typeof process == \"object\" && typeof process.versions == \"object\" && typeof process.versions.node == \"string\";\nexport const ENVIRONMENT_IS_WEB_WORKER = typeof importScripts == \"function\";\nexport const ENVIRONMENT_IS_SIDECAR = ENVIRONMENT_IS_WEB_WORKER && typeof dotnetSidecar !== \"undefined\"; // sidecar is emscripten main running in a web worker\nexport const ENVIRONMENT_IS_WORKER = ENVIRONMENT_IS_WEB_WORKER && !ENVIRONMENT_IS_SIDECAR; // we redefine what ENVIRONMENT_IS_WORKER, we replace it in emscripten internals, so that sidecar works\n",
+    "coreReadiness": "if (!ENVIRONMENT_IS_WORKER) {\n                runtimeHelpers.coreAssetsInMemory.promise_control.resolve();\n            }"
+  },
+  "nativeUrl": {
+    "version": "10.0.13",
+    "build": "ea3da757241508db614cefea6bd7bcf40d5742b3",
+    "source": "dotnet.native.0khjfvip6w.js",
+    "sha256": "a08ad1c2ebf711ec583976a276ed9c2a40e160423173dea776760849e5dbfc70",
+    "locateFile": "function locateFile(path) {\n  if (Module['locateFile']) {\n    return Module['locateFile'](path, scriptDirectory);\n  }\n  return scriptDirectory + path;\n}",
+    "wasmBinaryFile": "var wasmBinaryFile;\nif (Module['locateFile']) {\n  wasmBinaryFile = 'dotnet.native.wasm';\n  if (!isDataURI(wasmBinaryFile)) {\n    wasmBinaryFile = locateFile(wasmBinaryFile);\n  }\n} else {\n  if (ENVIRONMENT_IS_SHELL)\n    wasmBinaryFile = 'dotnet.native.wasm';\n  else\n  // Use bundler-friendly `new URL(..., import.meta.url)` pattern; works in browsers too.\n  wasmBinaryFile = new URL('dotnet.native.wasm', import.meta.url).href;\n}"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/SciresM/hactool.git",
+  "commit": "1d64a83450e025622f3468c28fc4164dad2c5ef6",
+  "mbedtlsVersion": "2.6.1",
+  "files": {
+    "mbedtls/library/sha256.c": {
+      "bytes": 13397,
+      "sha256": "3966a53aa1aa6882004cd0ba673d1e4e9767f6a0170df5e467eaf2a67af198f1"
+    },
+    "mbedtls/include/mbedtls/sha256.h": {
+      "bytes": 3650,
+      "sha256": "6b062b5f7dae2112162a3ec4c0c8b43e8a76fc19b6205c8843d9b8e6cc40f9c9"
+    },
+    "mbedtls/LICENSE": {
+      "bytes": 135,
+      "sha256": "d4412d97a34e5dd3263394d02f14be1c4a99794ef66669a3a8b4b87dce31aa9f"
+    },
+    "mbedtls/apache-2.0.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  },
+  "configSha256": "337232b2b8d43390160a9fe9ccb3b4ff9bb63200d8796d8819a2df1e0c53a1f0"
+}

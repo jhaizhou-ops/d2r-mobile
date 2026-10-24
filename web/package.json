@@ -1,0 +1,47 @@
+{
+  "name": "d2r-mobile-browser-preflight",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0",
+    "bun": "1.4.3"
+  },
+  "scripts": {
+    "dev": "bun scripts/serve.mjs --watch",
+    "build": "bun run i18n:check && bun run lint && bun run format:check && tsc --noEmit && bun run build:bundle",
+    "preview": "bun scripts/serve.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:e2e:bun": "bun scripts/bun-e2e.mjs",
+    "lint": "oxlint . --max-warnings 0",
+    "lint:fix": "oxlint . --fix --max-warnings 0",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "format:docs": "cd .. && web/node_modules/.bin/oxfmt --config web/.oxfmtrc.json --write docs/WEB_IPA_PACKAGER.md docs/WEB_IPA_PACKAGER.zh-CN.md",
+    "format:docs:check": "cd .. && web/node_modules/.bin/oxfmt --config web/.oxfmtrc.json --check docs/WEB_IPA_PACKAGER.md docs/WEB_IPA_PACKAGER.zh-CN.md",
+    "format:workflows:check": "cd .. && web/node_modules/.bin/oxfmt --config web/.oxfmtrc.json --check .github/workflows",
+    "build:bundle": "bun scripts/build.mjs",
+    "i18n:check": "python3 scripts/generate-i18n.py --check && python3 ../dm/ios/tools/dm_i18n.py --check && python3 ../dm/i18n/scan_literals.py"
+  },
+  "dependencies": {
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "radix-ui": "1.4.3",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "tailwind-merge": "3.3.1",
+    "lucide-react": "1.61.0",
+    "hash-wasm": "4.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.5.2",
+    "@types/react": "19.1.16",
+    "@types/react-dom": "19.1.9",
+    "tailwindcss": "4.1.13",
+    "typescript": "5.9.2",
+    "oxlint": "1.89.0",
+    "oxfmt": "0.74.0",
+    "bun-plugin-tailwind": "0.1.2"
+  },
+  "packageManager": "bun@1.4.3"
+}

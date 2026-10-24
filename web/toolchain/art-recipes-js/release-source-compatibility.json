@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "scope": "Read-only source comparison only; no rendered parity or shell activation",
+  "releaseRevision": "b811b90172f4eb40ec1bc89d903308e0c5ab88d0",
+  "upstreamRevision": "e3756f8942b40eba6c851e881828a5b1bda17fd6",
+  "sharedSourceSha256": {
+    "dm/gfx/nvn/nvn_tex.c": "05a0fe55d48408a9b2fd924665c66a9a7eb2db62e2b206967acbf33ef7c4b890",
+    "dm/gfx/tex/nvn_deswizzle.c": "989859a8c0112ca430d4788dbe428efac6687e195a8675589a171dc8421d3b4d",
+    "dm/ios/Sources/TouchArt/native_art_manifest.json": "334ed8adfa6d21feea33946692a1d5088b5ed39edb36545241ee543414382a5e",
+    "dm/ios/docs/native_art_v1_geometry.json": "7332bf327af662259cde973d5ed6ba80af472e4f0c232ea4dfe3fcf0a17a4799",
+    "dm/ios/docs/touch_layout_spec_native_binding_v5.json": "e0e649d9c0a6cb6861f166db0e705be196f69a20c40993116f591b13cdcfec1f",
+    "dm/ios/tools/dm_i18n.py": "ab379e0656d13b9830ed88f528bd1dc407225c996650453f37bc0cfc258b796b",
+    "dm/ios/tools/gen_hud_exp.py": "5217484a7cb8d4ae47d5cadf28fb85264a4cc11398890a60ad5cff493b073e02",
+    "dm/ios/tools/gen_hud_v4.py": "c37dc64dfd6a3fc09cb438e7e15990affc8eab2e880041dc80d9df3f54e4be8c",
+    "dm/ios/tools/gen_map_goal_art.py": "d68f9bd866034b4606b71d74af690c567187f3b9089dba682450c13038171d4b",
+    "dm/ios/tools/gen_pouch_art.py": "5870fea04d7cb8a7bab64a2975ab9c0ab451d2e174c15c5c29eb4df0bb17d40b",
+    "dm/ios/tools/gen_trove_art.py": "d7c57fa5854fd845776b4a294d1198be3b902dc262c9dd35167589e42127f6c2",
+    "dm/ios/tools/gen_vault_cover.py": "5a22420e14479c4c6625e79404a5fd8839c7610ed562e7dc038ac29a5d6be4a9",
+    "dm/ios/tools/gen_vault_table.py": "a9ed6567e4b7a0f76c2b31eb2932f085f8c3120df791526f973e39d47c810555",
+    "dm/ios/tools/gen_widestash_art.py": "f58435e650cc12e1472eb229a7eb5d4e08f7477f37f5d91376df5ad5af952c79",
+    "dm/ios/tools/hud_v4_design.py": "6f9852ac3fc17e54bb6e6f4d490966faf5bbfbaaa86e5153bb4734561186c772",
+    "dm/ios/tools/layout_patch.py": "a4ca908c93c1ff563cacd506d242a94833731e5629c7e543ecb6c123bdddee9b",
+    "dm/ios/tools/native_art/generate.py": "d70f88aecd049e9286ea88ff9cdce6b353b282a9b98f2eaeadc229dcbfb80f19",
+    "dm/ios/tools/native_art/implementation.c.inc": "3bf1a58f9189d7857c4fc666e7044a958eff27cf1b594fd9d1b6c47d381db4b1",
+    "dm/ios/tools/romfs_art.py": "d9e96c6638d13d087064c8c0ba44154efd73c0922db2f9b5a06458572b32a998",
+    "dm/ios/tools/shell_stubs.py": "adc25af7fb8c26a32d31f266c7a270e1338a18c573af594aa6e174318804fd16",
+    "dm/ios/tools/touchrectv1_patch.json": "631bdf2195978f24f44804176a21345dd16fd9a924e6a8c8d0bfe84eae83fa2e"
+  },
+  "i18n": {
+    "path": "dm/i18n/ui_text.tsv",
+    "releaseSha256": "086b2b11eea23cd67b0ce30a265f51dd1c5dec36160e56a86a74e949bca75e46",
+    "upstreamSha256": "4e099481929406e10597a14cf9704de0e49d840c4c63bb1ab67f4eb524d4f4b4",
+    "onlyAddedRows": [
+      "dmCustomVoiceEn",
+      "dmCustomVoiceEnHint",
+      "dmCustomVoiceZh",
+      "dmCustomVoiceZhHint"
+    ],
+    "unchangedHudVitalRows": {
+      "dmHudLife": [
+        "生命: %d / %d",
+        "Life: %d / %d",
+        "Vida: %d / %d",
+        "",
+        "Жизнь: %d / %d",
+        "생명: %d / %d"
+      ],
+      "dmHudMana": [
+        "法力: %d / %d",
+        "Mana: %d / %d",
+        "Maná: %d / %d",
+        "",
+        "Мана: %d / %d",
+        "마나: %d / %d"
+      ]
+    },
+    "mergedSha256": "4e099481929406e10597a14cf9704de0e49d840c4c63bb1ab67f4eb524d4f4b4",
+    "mergedDifference": "Native table restored exactly to upstream 195ae11; browser-only rows live in web/i18n/ui_text.tsv."
+  },
+  "mergedSourceOverrides": {
+    "dm/ios/tools/dm_i18n.py": {
+      "sha256": "ab379e0656d13b9830ed88f528bd1dc407225c996650453f37bc0cfc258b796b",
+      "reason": "Restored exact upstream 195ae11 native source; browser translations are owned by web/i18n/ui_text.tsv."
+    }
+  }
+}

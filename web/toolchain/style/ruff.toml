@@ -1,0 +1,15 @@
+# 仅检查 toolchain-style-checks.yml 中显式列出的自编路径。
+# 排除原生源码、下载的依赖和生成的运行时副本。
+# Only explicit authored paths in toolchain-style-checks.yml are checked.
+# Native sources, downloaded dependencies and generated runtime copies are excluded.
+required-version = "==0.14.0"
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

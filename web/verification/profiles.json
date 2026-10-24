@@ -1,0 +1,116 @@
+{
+  "signed-nca": {
+    "node": "22",
+    "dotnet": false,
+    "timeout": 35,
+    "artifact": null
+  },
+  "offline-dotnet": {
+    "node": "22",
+    "dotnet": true,
+    "timeout": 25,
+    "artifact": null
+  },
+  "offline-wasm": {
+    "node": "22",
+    "dotnet": false,
+    "timeout": 30,
+    "artifact": null
+  },
+  "staged-output": {
+    "node": "22",
+    "dotnet": false,
+    "timeout": 10,
+    "artifact": null
+  },
+  "shader-pipeline": {
+    "node": "22",
+    "dotnet": true,
+    "timeout": 35,
+    "artifact": {
+      "name": "linked-shader-pipeline-synthetic-evidence",
+      "path": "$RUNNER_TEMP/linked-shader/native/\n$RUNNER_TEMP/linked-shader/browser/\n",
+      "retention": 7,
+      "missing": "warn",
+      "always": true
+    }
+  },
+  "zip64": {
+    "node": "24",
+    "dotnet": false,
+    "timeout": 10,
+    "artifact": null
+  },
+  "texture": {
+    "node": "22",
+    "dotnet": false,
+    "timeout": 30,
+    "artifact": {
+      "name": "texture-wasm-synthetic-verified",
+      "path": "web/toolchain/texture-spike/dist/",
+      "retention": 7,
+      "missing": "error",
+      "always": false
+    }
+  },
+  "program": {
+    "node": "22",
+    "dotnet": false,
+    "timeout": 25,
+    "artifact": {
+      "name": "synthetic-program-rewrite-proof",
+      "path": "web/toolchain/program-rewrite-spike/browser-results/\nweb/toolchain/program-rewrite-spike/dist/\nweb/toolchain/program-rewrite-spike/oracle/\nweb/toolchain/program-rewrite-spike/oracle-guest/\n",
+      "retention": 7,
+      "missing": "warn",
+      "always": false
+    }
+  },
+  "spirv-cross": {
+    "node": "22",
+    "dotnet": false,
+    "timeout": 30,
+    "artifact": {
+      "name": "synthetic-spirv-cross-browser-parity",
+      "path": "web/toolchain/spirv-cross-spike/results/\nweb/toolchain/spirv-cross-spike/wwwroot/\nweb/toolchain/spirv-cross-spike/toolchain-lock.json\n",
+      "retention": 7,
+      "missing": "warn",
+      "always": true
+    }
+  },
+  "extraction": {
+    "node": "22",
+    "dotnet": false,
+    "timeout": 30,
+    "artifact": {
+      "name": "nsp-metadata-wasm-boundary",
+      "path": "web/toolchain/nsp-extract-spike/dist/",
+      "retention": 7,
+      "missing": "error",
+      "always": true
+    }
+  },
+  "shader": {
+    "node": "22",
+    "dotnet": true,
+    "timeout": 25,
+    "artifact": null
+  },
+  "desktop-build": {
+    "node": "24",
+    "dotnet": false,
+    "timeout": 20,
+    "artifact": {
+      "name": "desktop-public-texture-runtime",
+      "path": "web/toolchain/offline-runtime-spike/dist/",
+      "retention": 1,
+      "missing": "error",
+      "always": false
+    }
+  },
+  "desktop": {
+    "node": "24",
+    "dotnet": false,
+    "timeout": 12,
+    "artifact": null
+  }
+}

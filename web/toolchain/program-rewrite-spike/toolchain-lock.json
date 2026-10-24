@@ -1,0 +1,30 @@
+{
+  "capstone": {
+    "repository": "https://github.com/capstone-engine/capstone.git",
+    "tag": "5.0.3",
+    "commit": "5cca00533dadfe53181f1de3525f859769f69b65",
+    "license": "BSD-3-Clause"
+  },
+  "lz4": {
+    "repository": "https://github.com/lz4/lz4.git",
+    "tag": "v1.10.0",
+    "commit": "ebb370ca83af193212df4dcbadcc5d87bc0de2f0",
+    "license": "BSD-2-Clause (lib)"
+  },
+  "emsdk": {
+    "repository": "https://github.com/emscripten-core/emsdk.git",
+    "tag": "4.0.20",
+    "commit": "e4fe26ef59168ff44f4c23c466e497bf60b3411e"
+  },
+  "pyodide": {
+    "version": "0.27.7",
+    "source": "https://www.npmjs.com/package/pyodide",
+    "license": "MPL-2.0",
+    "licenseSource": "https://raw.githubusercontent.com/pyodide/pyodide/0.27.7/LICENSE",
+    "licenseSha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+  },
+  "oracle": {
+    "capstone": "5.0.3",
+    "lz4": "4.4.4"
+  }
+}

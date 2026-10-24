@@ -1,0 +1,11 @@
+{
+  "dm/ios/tools/gen_merc_art.py": "0d65f6f3bf3a9328ea947ca91d7c625bc364c75e09a74192155b16d7c7b7b179",
+  "dm/ios/tools/gen_widestash_art.py": "f58435e650cc12e1472eb229a7eb5d4e08f7477f37f5d91376df5ad5af952c79",
+  "dm/ios/tools/gen_trove_art.py": "d7c57fa5854fd845776b4a294d1198be3b902dc262c9dd35167589e42127f6c2",
+  "dm/ios/tools/gen_vault_cover.py": "5a22420e14479c4c6625e79404a5fd8839c7610ed562e7dc038ac29a5d6be4a9",
+  "dm/ios/tools/gen_pouch_art.py": "5870fea04d7cb8a7bab64a2975ab9c0ab451d2e174c15c5c29eb4df0bb17d40b",
+  "dm/ios/tools/gen_fe_rightpanel.py": "c68ea1e6d5c720eca576b298708cd637d8d2d898d192e34a92c41121a52db424",
+  "web/toolchain/asset-generation-spike/src/remaining_art.py": "ba1c5a11fa6c868b4909a808d0387e83e60d8b79cb2c2b2328f9980d75403042",
+  "web/toolchain/asset-generation-spike/src/mercenary.py": "9af174fb83f85feffc43be208cc5fa96c8e05a3d3eb99226ee91d4021bc367ca",
+  "web/toolchain/art-kernels/kernels.mjs": "87ec9ca1f11fb7ff6e4ae61fdec92e17dd7367b98eba80ad8264fc4c8d2b7b9c"
+}

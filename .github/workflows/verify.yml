@@ -1,0 +1,354 @@
+name: Verify
+on:
+  push:
+    branches: [pr/web-ipa-packager]
+    paths:
+      [
+        "web/**",
+        ".github/workflows/verify.yml",
+        "LICENSE",
+        "dm/android/tools/stage_touch_assets.py",
+        "dm/data/casc_overlay/borrowed_paths.tsv",
+        "dm/gfx/nvn/bf_want.tsv",
+        "dm/gfx/nvn/dmsh_chain.h",
+        "dm/gfx/nvn/nvn_tex.c",
+        "dm/gfx/nvn/nvn_tex.h",
+        "dm/gfx/nvn/shader_facts.tsv",
+        "dm/gfx/nvn/shader_map.tsv",
+        "dm/gfx/nvn/shader_map.tsv.conflicts.tsv",
+        "dm/gfx/tex/nvn_bcdec.c",
+        "dm/gfx/tex/nvn_bcdec.h",
+        "dm/gfx/tex/nvn_deswizzle.c",
+        "dm/gfx/tex/nvn_deswizzle.h",
+        "dm/gfx/tools/dmsh_build.py",
+        "dm/gfx/tools/dmsh_chain.lock",
+        "dm/gfx/tools/dmsh_chain.py",
+        "dm/gfx/tools/dmsh_facts.py",
+        "dm/gfx/tools/dmsh_fetch.py",
+        "dm/gfx/tools/dmsh_xlate/Program.cs",
+        "dm/gfx/tools/dmsh_xlate/dmsh_xlate.csproj",
+        "dm/gfx/tools/nometal_run.py",
+        "dm/host/dm_i18n_tab.h",
+        "dm/host/dm_kills.c",
+        "dm/i18n/literal_whitelist.tsv",
+        "dm/i18n/scan_literals.py",
+        "dm/i18n/ui_text.tsv",
+        "dm/ios/NativeHUD/touch/close.png",
+        "dm/ios/Sources/TouchArt/native_art_manifest.json",
+        "dm/ios/docs/native_art_v1_geometry.json",
+        "dm/ios/docs/touch_layout_spec_native_binding_v5.json",
+        "dm/ios/tools/annot_drop.py",
+        "dm/ios/tools/annot_ranges.py",
+        "dm/ios/tools/annot_strings.py",
+        "dm/ios/tools/annot_world.py",
+        "dm/ios/tools/dm_i18n.py",
+        "dm/ios/tools/drop_light.py",
+        "dm/ios/tools/gen_assets.py",
+        "dm/ios/tools/gen_close_btn.py",
+        "dm/ios/tools/gen_fe_rightpanel.py",
+        "dm/ios/tools/gen_hud_exp.py",
+        "dm/ios/tools/gen_hud_v4.py",
+        "dm/ios/tools/gen_map_goal_art.py",
+        "dm/ios/tools/gen_merc_art.py",
+        "dm/ios/tools/gen_paths.py",
+        "dm/ios/tools/gen_pouch_art.py",
+        "dm/ios/tools/gen_romfs_overlay.py",
+        "dm/ios/tools/gen_trove_art.py",
+        "dm/ios/tools/gen_vault_cover.py",
+        "dm/ios/tools/gen_vault_table.py",
+        "dm/ios/tools/gen_widestash_art.py",
+        "dm/ios/tools/hud_v4_design.py",
+        "dm/ios/tools/ios_metal.py",
+        "dm/ios/tools/kbd_glyphs.py",
+        "dm/ios/tools/layout_patch.py",
+        "dm/ios/tools/merc_slots.py",
+        "dm/ios/tools/native_art/generate.py",
+        "dm/ios/tools/native_art/implementation.c.inc",
+        "dm/ios/tools/overlay_contract.py",
+        "dm/ios/tools/pouch_layout.py",
+        "dm/ios/tools/romfs_art.py",
+        "dm/ios/tools/shell_stubs.py",
+        "dm/ios/tools/touch_layout.py",
+        "dm/ios/tools/touch_strings.py",
+        "dm/ios/tools/touchrectv1_patch.json",
+        "dm/ios/tools/wide_stash.py",
+        "dm/third_party/bcdec/LICENSE",
+        "dm/third_party/bcdec/bcdec.h",
+        "dm/third_party/ryujinx/LICENSE.txt",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Memory/IArray.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Memory/StructArrayHelpers.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Pools/ObjectPool.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Utilities/BitUtils.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Utilities/BitfieldExtensions.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/**",
+        "dm/third_party/ryujinx/src/Spv.Generator/**",
+        "dm/tools/astc_pack.py",
+        "dm/tools/casc_overlay.py",
+        "dm/tools/d2rm_pack.py",
+        "dm/tools/dmx.py",
+        "dm/tools/extract_game.sh",
+        "dm/tools/guest_dylib.py",
+        "dm/tools/patch_nso.py",
+        "dm/tools/winlf/run.py",
+        "dm/tools/winlf/sitecustomize.py",
+        "!**/*.md",
+        "!**/*.MD",
+      ]
+  pull_request:
+    paths:
+      [
+        "web/**",
+        ".github/workflows/verify.yml",
+        "LICENSE",
+        "dm/android/tools/stage_touch_assets.py",
+        "dm/data/casc_overlay/borrowed_paths.tsv",
+        "dm/gfx/nvn/bf_want.tsv",
+        "dm/gfx/nvn/dmsh_chain.h",
+        "dm/gfx/nvn/nvn_tex.c",
+        "dm/gfx/nvn/nvn_tex.h",
+        "dm/gfx/nvn/shader_facts.tsv",
+        "dm/gfx/nvn/shader_map.tsv",
+        "dm/gfx/nvn/shader_map.tsv.conflicts.tsv",
+        "dm/gfx/tex/nvn_bcdec.c",
+        "dm/gfx/tex/nvn_bcdec.h",
+        "dm/gfx/tex/nvn_deswizzle.c",
+        "dm/gfx/tex/nvn_deswizzle.h",
+        "dm/gfx/tools/dmsh_build.py",
+        "dm/gfx/tools/dmsh_chain.lock",
+        "dm/gfx/tools/dmsh_chain.py",
+        "dm/gfx/tools/dmsh_facts.py",
+        "dm/gfx/tools/dmsh_fetch.py",
+        "dm/gfx/tools/dmsh_xlate/Program.cs",
+        "dm/gfx/tools/dmsh_xlate/dmsh_xlate.csproj",
+        "dm/gfx/tools/nometal_run.py",
+        "dm/host/dm_i18n_tab.h",
+        "dm/host/dm_kills.c",
+        "dm/i18n/literal_whitelist.tsv",
+        "dm/i18n/scan_literals.py",
+        "dm/i18n/ui_text.tsv",
+        "dm/ios/NativeHUD/touch/close.png",
+        "dm/ios/Sources/TouchArt/native_art_manifest.json",
+        "dm/ios/docs/native_art_v1_geometry.json",
+        "dm/ios/docs/touch_layout_spec_native_binding_v5.json",
+        "dm/ios/tools/annot_drop.py",
+        "dm/ios/tools/annot_ranges.py",
+        "dm/ios/tools/annot_strings.py",
+        "dm/ios/tools/annot_world.py",
+        "dm/ios/tools/dm_i18n.py",
+        "dm/ios/tools/drop_light.py",
+        "dm/ios/tools/gen_assets.py",
+        "dm/ios/tools/gen_close_btn.py",
+        "dm/ios/tools/gen_fe_rightpanel.py",
+        "dm/ios/tools/gen_hud_exp.py",
+        "dm/ios/tools/gen_hud_v4.py",
+        "dm/ios/tools/gen_map_goal_art.py",
+        "dm/ios/tools/gen_merc_art.py",
+        "dm/ios/tools/gen_paths.py",
+        "dm/ios/tools/gen_pouch_art.py",
+        "dm/ios/tools/gen_romfs_overlay.py",
+        "dm/ios/tools/gen_trove_art.py",
+        "dm/ios/tools/gen_vault_cover.py",
+        "dm/ios/tools/gen_vault_table.py",
+        "dm/ios/tools/gen_widestash_art.py",
+        "dm/ios/tools/hud_v4_design.py",
+        "dm/ios/tools/ios_metal.py",
+        "dm/ios/tools/kbd_glyphs.py",
+        "dm/ios/tools/layout_patch.py",
+        "dm/ios/tools/merc_slots.py",
+        "dm/ios/tools/native_art/generate.py",
+        "dm/ios/tools/native_art/implementation.c.inc",
+        "dm/ios/tools/overlay_contract.py",
+        "dm/ios/tools/pouch_layout.py",
+        "dm/ios/tools/romfs_art.py",
+        "dm/ios/tools/shell_stubs.py",
+        "dm/ios/tools/touch_layout.py",
+        "dm/ios/tools/touch_strings.py",
+        "dm/ios/tools/touchrectv1_patch.json",
+        "dm/ios/tools/wide_stash.py",
+        "dm/third_party/bcdec/LICENSE",
+        "dm/third_party/bcdec/bcdec.h",
+        "dm/third_party/ryujinx/LICENSE.txt",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Memory/IArray.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Memory/StructArrayHelpers.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Pools/ObjectPool.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Utilities/BitUtils.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Common/Utilities/BitfieldExtensions.cs",
+        "dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/**",
+        "dm/third_party/ryujinx/src/Spv.Generator/**",
+        "dm/tools/astc_pack.py",
+        "dm/tools/casc_overlay.py",
+        "dm/tools/d2rm_pack.py",
+        "dm/tools/dmx.py",
+        "dm/tools/extract_game.sh",
+        "dm/tools/guest_dylib.py",
+        "dm/tools/patch_nso.py",
+        "dm/tools/winlf/run.py",
+        "dm/tools/winlf/sitecustomize.py",
+        "!**/*.md",
+        "!**/*.MD",
+      ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  quick:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.3"
+      - name: Build frontend and enforce requested code-quality gates
+        run: node web/verification/verify.mjs quick
+      - name: Authenticate pinned AIR release identity
+        id: air_source
+        run: node web/runtime-build/build-air-compiler.mjs --fingerprint
+      - name: Cache only release-bound public AIR compiler outputs
+        id: air_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            web/toolchain/metal-air-compiler/dist
+            web/runtime-build/.build/air-compiler-receipt.sha256
+          key: public-air-release-v1-${{ steps.air_source.outputs.release_manifest_sha256 }}
+      - name: Cache pinned public compiler source archive separately
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: web/runtime-build/.build/air-compiler-release
+          key: public-air-release-assets-v1-${{ steps.air_source.outputs.release_manifest_sha256 }}
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: "10.0.402"
+      - name: Prepare pinned SDK for non-AIR browser runtimes
+        run: |
+          git clone --depth 1 --branch 4.0.20 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/browser-emsdk"
+          test "$(git -C "$RUNNER_TEMP/browser-emsdk" rev-parse HEAD)" = e4fe26ef59168ff44f4c23c466e497bf60b3411e
+      - name: Cache only public Emscripten SDK downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/browser-emsdk/downloads
+          key: public-emsdk-downloads-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-4.0.20-e4fe26ef59168ff44f4c23c466e497bf60b3411e
+      - name: Build pinned public browser runtimes
+        id: runtime
+        env:
+          EMSDK_KEEP_DOWNLOADS: "1"
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          DOTNET_NOLOGO: "1"
+          DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: "true"
+          D2R_AIR_COMPILER_SOURCE_FINGERPRINT: ${{ steps.air_source.outputs.source_fingerprint }}
+          D2R_AIR_COMPILER_RELEASE_MANIFEST_SHA256: ${{ steps.air_source.outputs.release_manifest_sha256 }}
+        run: |
+          df -h .
+          "$RUNNER_TEMP/browser-emsdk/emsdk" install 4.0.20
+          "$RUNNER_TEMP/browser-emsdk/emsdk" activate 4.0.20
+          source "$RUNNER_TEMP/browser-emsdk/emsdk_env.sh"
+          emcc --version | grep -E '^emcc .* 4[.]0[.]20([[:space:]]|$)'
+          node web/runtime-build/build-air-compiler.mjs
+          # 仅在来源与回执认证及编译 canary 均通过后写入。
+          # Written only after source/receipt authentication and the compile canary pass.
+          printf 'air_compiler_verified=true\n' >> "$GITHUB_OUTPUT"
+          rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown --component rustfmt --component clippy
+          printf '{"sdk":{"version":"10.0.402","rollForward":"disable","allowPrerelease":false,"workloadVersion":"10.0.402"}}\n' > web/toolchain/shader-spike/global.json
+          (cd web/toolchain/shader-spike && dotnet workload install wasm-tools)
+          node web/runtime-build/build.mjs
+          df -h .
+      - name: Authenticate compiler evidence after runtime failure
+        id: air_failure_verify
+        if: ${{ failure() && steps.runtime.outcome == 'failure' }}
+        run: node web/runtime-build/air-compiler-assets.mjs verify --source-fingerprint "${{ steps.air_source.outputs.source_fingerprint }}"
+      - name: Preserve authenticated compiler cache despite later failure
+        if: ${{ !cancelled() && steps.air_failure_verify.outcome == 'success' && steps.air_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            web/toolchain/metal-air-compiler/dist
+            web/runtime-build/.build/air-compiler-receipt.sha256
+          key: public-air-release-v1-${{ steps.air_source.outputs.release_manifest_sha256 }}
+      - name: Prepare matching diagnostic compiler source after runtime failure
+        id: air_failure_source
+        if: ${{ !cancelled() && steps.air_failure_verify.outcome == 'success' }}
+        run: node web/runtime-build/prepare-air-compiler-source.mjs --output "$RUNNER_TEMP/air-compiler-diagnostic-source"
+      - name: Upload complete corresponding diagnostic compiler source
+        id: air_failure_source_upload
+        if: ${{ !cancelled() && steps.air_failure_source.outcome == 'success' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: air-compiler-diagnostic-source
+          path: ${{ runner.temp }}/air-compiler-diagnostic-source/
+          include-hidden-files: true
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Assemble explicitly unvalidated public compiler diagnostic
+        id: air_failure_bundle
+        if: ${{ !cancelled() && steps.air_failure_source_upload.outcome == 'success' }}
+        env:
+          D2R_AIR_COMPILER_SOURCE_FINGERPRINT: ${{ steps.air_source.outputs.source_fingerprint }}
+          D2R_AIR_COMPILER_RELEASE_MANIFEST_SHA256: ${{ steps.air_source.outputs.release_manifest_sha256 }}
+          D2R_AIR_COMPILER_SOURCE_REPORT_SHA256: ${{ steps.air_failure_source.outputs.source_report_sha256 }}
+          D2R_AIR_COMPILER_SOURCE_ARTIFACT_ID: ${{ steps.air_failure_source_upload.outputs.artifact-id }}
+        run: node web/runtime-build/prepare-air-compiler-diagnostic.mjs "$RUNNER_TEMP/air-compiler-diagnostic" "$RUNNER_TEMP/air-compiler-diagnostic-source/source-report.json"
+      - name: Upload unvalidated compiler diagnostic, never a successful preview
+        if: ${{ !cancelled() && steps.air_failure_bundle.outcome == 'success' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: air-compiler-diagnostic-unvalidated
+          path: ${{ runner.temp }}/air-compiler-diagnostic/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stage only manifest-verified public runtime files
+        run: node web/runtime-build/stage-preview.mjs
+        env:
+          EXPECTED_RUNTIME_MANIFEST_SHA256: ${{ steps.runtime.outputs.manifest_sha256 }}
+      - name: Prepare complete matching compiler source (no LLVM compilation)
+        run: node web/runtime-build/prepare-air-compiler-source.mjs --output "$RUNNER_TEMP/air-compiler-source-artifact"
+      - name: Upload complete corresponding compiler source separately
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: air-compiler-source
+          path: ${{ runner.temp }}/air-compiler-source-artifact/
+          include-hidden-files: true
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload browser webpage and public runtimes (no game files or keys)
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: web-preview
+          path: web/dist/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Package the same verified webpage for GitHub Pages
+        if: ${{ github.repository == 'n3crosis/d2r-mobile' && github.ref == 'refs/heads/pr/web-ipa-packager' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: web/dist/
+          retention-days: 1
+  deploy-pages:
+    needs: quick
+    if: ${{ needs.quick.result == 'success' && github.repository == 'n3crosis/d2r-mobile' && github.ref == 'refs/heads/pr/web-ipa-packager' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Read existing GitHub Pages configuration
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Deploy verified webpage
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

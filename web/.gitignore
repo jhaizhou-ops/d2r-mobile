@@ -1,0 +1,119 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# runtime-build
+/runtime-build/.build/
+/runtime-build/out/
+
+# toolchain/art-kernels
+/toolchain/art-kernels/**/__pycache__/
+
+# toolchain/asset-generation-spike
+/toolchain/asset-generation-spike/**/node_modules/
+/toolchain/asset-generation-spike/public/vendor/
+/toolchain/asset-generation-spike/public/generated/
+/toolchain/asset-generation-spike/**/test-results/
+/toolchain/asset-generation-spike/**/__pycache__/
+
+# toolchain/asset-runtime-js
+/toolchain/asset-runtime-js/**/.build/
+
+# toolchain/astc-encoder-wasm
+/toolchain/astc-encoder-wasm/**/.build/
+/toolchain/astc-encoder-wasm/**/dist/
+
+# toolchain/font-rasterizer-exact
+/toolchain/font-rasterizer-exact/dist/
+/toolchain/font-rasterizer-exact/vendor/
+/toolchain/font-rasterizer-exact/reference/*.c
+/toolchain/font-rasterizer-exact/reference/*.py
+/toolchain/font-rasterizer-exact/reference/ImagingUtils.h
+/toolchain/font-rasterizer-exact/test/fixtures.json
+/toolchain/font-rasterizer-exact/test/fixtures-meta.json
+/toolchain/font-rasterizer-exact/test/*.so
+
+# toolchain/hud-recipes-js
+/toolchain/hud-recipes-js/test-results/
+
+# toolchain/image-kernels-rust
+/toolchain/image-kernels-rust/target/
+/toolchain/image-kernels-rust/dist/
+/toolchain/image-kernels-rust/reference/*.c
+/toolchain/image-kernels-rust/reference/*.h
+/toolchain/image-kernels-rust/reference/Image.py
+/toolchain/image-kernels-rust/test/fixtures.json
+/toolchain/image-kernels-rust/test/fixtures-meta.json
+/toolchain/image-kernels-rust/reference/PngImagePlugin.py
+
+# toolchain/metal-air-compiler
+/toolchain/metal-air-compiler/**/work/
+/toolchain/metal-air-compiler/**/fixture-results/
+/toolchain/metal-air-compiler/**/msl-fixture-results/
+/toolchain/metal-air-compiler/**/dist/
+/toolchain/metal-air-compiler/**/.dist-*/
+/toolchain/metal-air-compiler/**/.release-*/
+
+# toolchain/nsp-extract-spike
+/toolchain/nsp-extract-spike/**/.build/
+/toolchain/nsp-extract-spike/**/dist/
+/toolchain/nsp-extract-spike/**/node_modules/
+
+# toolchain/offline-runtime-spike
+/toolchain/offline-runtime-spike/dist/
+/toolchain/offline-runtime-spike/pyodide-dist/
+/toolchain/offline-runtime-spike/dotnet-dist/
+
+# toolchain/overlay-recipe-js
+/toolchain/overlay-recipe-js/test-results/
+
+# toolchain/png-codec-exact
+/toolchain/png-codec-exact/dist/
+/toolchain/png-codec-exact/vendor/
+/toolchain/png-codec-exact/reference/*.c
+/toolchain/png-codec-exact/reference/*.py
+/toolchain/png-codec-exact/test/fixtures.json
+/toolchain/png-codec-exact/test/fixtures-meta.json
+
+# toolchain/program-rewrite-spike
+/toolchain/program-rewrite-spike/deps/
+/toolchain/program-rewrite-spike/dist/
+/toolchain/program-rewrite-spike/fixtures/
+/toolchain/program-rewrite-spike/node_modules/
+/toolchain/program-rewrite-spike/oracle/
+/toolchain/program-rewrite-spike/browser-results/
+/toolchain/program-rewrite-spike/__pycache__/
+/toolchain/program-rewrite-spike/.venv/
+/toolchain/program-rewrite-spike/oracle-guest/
+
+# toolchain/remaining-art-js
+/toolchain/remaining-art-js/test-results/
+
+# toolchain/sha256-stream-wasm
+/toolchain/sha256-stream-wasm/dist/
+
+# toolchain/shader-spike
+/toolchain/shader-spike/**/bin/
+/toolchain/shader-spike/**/obj/
+/toolchain/shader-spike/**/artifacts/
+/toolchain/shader-spike/global.json
+
+# toolchain/spirv-cross-spike
+/toolchain/spirv-cross-spike/wwwroot/spirv-cross.mjs
+/toolchain/spirv-cross-spike/wwwroot/spirv-cross.wasm
+/toolchain/spirv-cross-spike/wwwroot/*.spv
+/toolchain/spirv-cross-spike/**/build/
+/toolchain/spirv-cross-spike/**/results/
+
+# toolchain/texture-spike
+/toolchain/texture-spike/**/dist/
+/toolchain/texture-spike/**/.build/
+/toolchain/texture-spike/**/__pycache__/
+
+# toolchain/texture-spike/rust-bc3
+/toolchain/texture-spike/rust-bc3/target/
+
+# toolchain/zsign-wasm
+/toolchain/zsign-wasm/**/.build/
+/toolchain/zsign-wasm/**/dist/
+/toolchain/zsign-wasm/**/__pycache__/
