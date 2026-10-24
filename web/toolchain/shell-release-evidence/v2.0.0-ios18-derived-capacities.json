@@ -1,0 +1,918 @@
+{
+  "schemaVersion": 1,
+  "shellSha256": "b2d1e3b48c0b15f773b4ea94290fde08039fd123c21be98c55b00da8df55ada5",
+  "counts": {
+    "EXP": 100,
+    "VTPART": 11,
+    "VTROW": 562,
+    "VTSET": 35,
+    "TAROW": 429
+  },
+  "evidence": {
+    "method": "LC_SYMTAB and LC_FUNCTION_STARTS; fixed-width ARM64 compare/conditional-branch decoding, raw instruction windows retained. No array-spacing, generated-input or fixture-count assumptions.",
+    "executablePath": "Payload/DmIOS.app/DmIOS",
+    "executableSha256": "1ab0bcacc8cde2a691ec17d70f7ca6da7e45bee563c10cf0c7ee50c67fac32c4",
+    "architecture": "arm64",
+    "decoder": "Read-only fixed-width ARM64 CMP-immediate and B.cond bit decoding; undecoded context retained as raw bytes",
+    "sourceCommit": "b811b90172f4eb40ec1bc89d903308e0c5ab88d0",
+    "sourcePath": "dm/ios/tools/shell_stubs.py",
+    "sourceSha256": "adc25af7fb8c26a32d31f266c7a270e1338a18c573af594aa6e174318804fd16",
+    "scope": "Derived capacity and exact-count comparisons only; no game execution, content correctness, GPU or device verification.",
+    "reviewStatus": "independently-reviewed-static-control-flow",
+    "bindings": [
+      {
+        "name": "_ta_load",
+        "virtualAddress": "0x10001c004",
+        "fileOffset": 114692,
+        "functionBytes": 680,
+        "functionSha256": "31e7c80a950d553051410f2d789aaf2217f8b51365265a13eec8c0572ecb10eb",
+        "instructions": [
+          {
+            "compareImmediate": 429,
+            "window": [
+              {
+                "fileOffset": 114848,
+                "virtualAddress": "0x10001c0a0",
+                "bytes": "3fb50671",
+                "decodedSubset": "cmp w9, #429"
+              },
+              {
+                "fileOffset": 114852,
+                "virtualAddress": "0x10001c0a4",
+                "bytes": "29050091"
+              },
+              {
+                "fileOffset": 114856,
+                "virtualAddress": "0x10001c0a8",
+                "bytes": "61ffff54",
+                "decodedSubset": "b.ne 0x10001c094"
+              },
+              {
+                "fileOffset": 114860,
+                "virtualAddress": "0x10001c0ac",
+                "bytes": "a00240f9"
+              },
+              {
+                "fileOffset": 114864,
+                "virtualAddress": "0x10001c0b0",
+                "bytes": "a8358052"
+              },
+              {
+                "fileOffset": 114868,
+                "virtualAddress": "0x10001c0b4",
+                "bytes": "f72300a9"
+              },
+              {
+                "fileOffset": 114872,
+                "virtualAddress": "0x10001c0b8",
+                "bytes": "810800b0"
+              },
+              {
+                "fileOffset": 114876,
+                "virtualAddress": "0x10001c0bc",
+                "bytes": "21581f91"
+              },
+              {
+                "fileOffset": 114880,
+                "virtualAddress": "0x10001c0c0",
+                "bytes": "a4e80394"
+              },
+              {
+                "fileOffset": 114884,
+                "virtualAddress": "0x10001c0c4",
+                "bytes": "00008012"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 428,
+            "window": [
+              {
+                "fileOffset": 115220,
+                "virtualAddress": "0x10001c214",
+                "bytes": "ffb20671",
+                "decodedSubset": "cmp w23, #428"
+              },
+              {
+                "fileOffset": 115224,
+                "virtualAddress": "0x10001c218",
+                "bytes": "ec010054",
+                "decodedSubset": "b.gt 0x10001c254"
+              },
+              {
+                "fileOffset": 115228,
+                "virtualAddress": "0x10001c21c",
+                "bytes": "e01340f9"
+              },
+              {
+                "fileOffset": 115232,
+                "virtualAddress": "0x10001c220",
+                "bytes": "010080d2"
+              },
+              {
+                "fileOffset": 115236,
+                "virtualAddress": "0x10001c224",
+                "bytes": "42018052"
+              },
+              {
+                "fileOffset": 115240,
+                "virtualAddress": "0x10001c228",
+                "bytes": "c9ea0394"
+              },
+              {
+                "fileOffset": 115244,
+                "virtualAddress": "0x10001c22c",
+                "bytes": "88018052"
+              },
+              {
+                "fileOffset": 115248,
+                "virtualAddress": "0x10001c230",
+                "bytes": "fb5a289b"
+              },
+              {
+                "fileOffset": 115252,
+                "virtualAddress": "0x10001c234",
+                "bytes": "600300b9"
+              },
+              {
+                "fileOffset": 115256,
+                "virtualAddress": "0x10001c238",
+                "bytes": "e01740f9"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 429,
+            "window": [
+              {
+                "fileOffset": 115312,
+                "virtualAddress": "0x10001c270",
+                "bytes": "ffb60671",
+                "decodedSubset": "cmp w23, #429"
+              },
+              {
+                "fileOffset": 115316,
+                "virtualAddress": "0x10001c274",
+                "bytes": "0bf0ff54",
+                "decodedSubset": "b.lt 0x10001c074"
+              },
+              {
+                "fileOffset": 115320,
+                "virtualAddress": "0x10001c278",
+                "bytes": "a1f1ff54",
+                "decodedSubset": "b.ne 0x10001c0ac"
+              },
+              {
+                "fileOffset": 115324,
+                "virtualAddress": "0x10001c27c",
+                "bytes": "00008052"
+              },
+              {
+                "fileOffset": 115328,
+                "virtualAddress": "0x10001c280",
+                "bytes": "92ffff17"
+              },
+              {
+                "fileOffset": 115332,
+                "virtualAddress": "0x10001c284",
+                "bytes": "a00240f9"
+              },
+              {
+                "fileOffset": 115336,
+                "virtualAddress": "0x10001c288",
+                "bytes": "f40300f9"
+              },
+              {
+                "fileOffset": 115340,
+                "virtualAddress": "0x10001c28c",
+                "bytes": "810800b0"
+              },
+              {
+                "fileOffset": 115344,
+                "virtualAddress": "0x10001c290",
+                "bytes": "21742091"
+              },
+              {
+                "fileOffset": 115348,
+                "virtualAddress": "0x10001c294",
+                "bytes": "2fe80394"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "_k_exp_load",
+        "virtualAddress": "0x10006ed70",
+        "fileOffset": 454000,
+        "functionBytes": 592,
+        "functionSha256": "0acf141a4a6716cb9dffc86d3f323d1ea59279f92f8d5f3dbb74fb3cbc3d172d",
+        "instructions": [
+          {
+            "compareImmediate": 100,
+            "window": [
+              {
+                "fileOffset": 454432,
+                "virtualAddress": "0x10006ef20",
+                "bytes": "ff9201f1",
+                "decodedSubset": "cmp x23, #100"
+              },
+              {
+                "fileOffset": 454436,
+                "virtualAddress": "0x10006ef24",
+                "bytes": "880c8052"
+              },
+              {
+                "fileOffset": 454440,
+                "virtualAddress": "0x10006ef28",
+                "bytes": "fbc2889a"
+              },
+              {
+                "fileOffset": 454444,
+                "virtualAddress": "0x10006ef2c",
+                "bytes": "39f37dd3"
+              },
+              {
+                "fileOffset": 454448,
+                "virtualAddress": "0x10006ef30",
+                "bytes": "7f0317eb"
+              },
+              {
+                "fileOffset": 454452,
+                "virtualAddress": "0x10006ef34",
+                "bytes": "80010054",
+                "decodedSubset": "b.eq 0x10006ef64"
+              },
+              {
+                "fileOffset": 454456,
+                "virtualAddress": "0x10006ef38",
+                "bytes": "006b7cf8"
+              },
+              {
+                "fileOffset": 454460,
+                "virtualAddress": "0x10006ef3c",
+                "bytes": "010080d2"
+              },
+              {
+                "fileOffset": 454464,
+                "virtualAddress": "0x10006ef40",
+                "bytes": "42018052"
+              },
+              {
+                "fileOffset": 454468,
+                "virtualAddress": "0x10006ef44",
+                "bytes": "829f0294"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 100,
+            "window": [
+              {
+                "fileOffset": 454528,
+                "virtualAddress": "0x10006ef80",
+                "bytes": "7f930171",
+                "decodedSubset": "cmp w27, #100"
+              },
+              {
+                "fileOffset": 454532,
+                "virtualAddress": "0x10006ef84",
+                "bytes": "f4039f5a"
+              },
+              {
+                "fileOffset": 454536,
+                "virtualAddress": "0x10006ef88",
+                "bytes": "0a000014"
+              },
+              {
+                "fileOffset": 454540,
+                "virtualAddress": "0x10006ef8c",
+                "bytes": "48090090"
+              },
+              {
+                "fileOffset": 454544,
+                "virtualAddress": "0x10006ef90",
+                "bytes": "08f146f9"
+              },
+              {
+                "fileOffset": 454548,
+                "virtualAddress": "0x10006ef94",
+                "bytes": "000140f9"
+              },
+              {
+                "fileOffset": 454552,
+                "virtualAddress": "0x10006ef98",
+                "bytes": "f40300f9"
+              },
+              {
+                "fileOffset": 454556,
+                "virtualAddress": "0x10006ef9c",
+                "bytes": "e10500f0"
+              },
+              {
+                "fileOffset": 454560,
+                "virtualAddress": "0x10006efa0",
+                "bytes": "21742091"
+              },
+              {
+                "fileOffset": 454564,
+                "virtualAddress": "0x10006efa4",
+                "bytes": "eb9c0294"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "_vt_load",
+        "virtualAddress": "0x1000d7cf0",
+        "fileOffset": 883952,
+        "functionBytes": 376,
+        "functionSha256": "401f0e9988f9b8e74b564144f60d5f14551cc4d62c3a65ca614c89d32246cb17",
+        "instructions": [
+          {
+            "compareImmediate": 10,
+            "window": [
+              {
+                "fileOffset": 884052,
+                "virtualAddress": "0x1000d7d54",
+                "bytes": "7f2a0071",
+                "decodedSubset": "cmp w19, #10"
+              },
+              {
+                "fileOffset": 884056,
+                "virtualAddress": "0x1000d7d58",
+                "bytes": "6c010054",
+                "decodedSubset": "b.gt 0x1000d7d84"
+              },
+              {
+                "fileOffset": 884060,
+                "virtualAddress": "0x1000d7d5c",
+                "bytes": "c8570090"
+              },
+              {
+                "fileOffset": 884064,
+                "virtualAddress": "0x1000d7d60",
+                "bytes": "08413191"
+              },
+              {
+                "fileOffset": 884068,
+                "virtualAddress": "0x1000d7d64",
+                "bytes": "000d138b"
+              },
+              {
+                "fileOffset": 884072,
+                "virtualAddress": "0x1000d7d68",
+                "bytes": "48018052"
+              },
+              {
+                "fileOffset": 884076,
+                "virtualAddress": "0x1000d7d6c",
+                "bytes": "0801134b"
+              },
+              {
+                "fileOffset": 884080,
+                "virtualAddress": "0x1000d7d70",
+                "bytes": "087d7dd3"
+              },
+              {
+                "fileOffset": 884084,
+                "virtualAddress": "0x1000d7d74",
+                "bytes": "c10500d0"
+              },
+              {
+                "fileOffset": 884088,
+                "virtualAddress": "0x1000d7d78",
+                "bytes": "21000c91"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 34,
+            "window": [
+              {
+                "fileOffset": 884104,
+                "virtualAddress": "0x1000d7d88",
+                "bytes": "9f8a0071",
+                "decodedSubset": "cmp w20, #34"
+              },
+              {
+                "fileOffset": 884108,
+                "virtualAddress": "0x1000d7d8c",
+                "bytes": "6c010054",
+                "decodedSubset": "b.gt 0x1000d7db8"
+              },
+              {
+                "fileOffset": 884112,
+                "virtualAddress": "0x1000d7d90",
+                "bytes": "e85700b0"
+              },
+              {
+                "fileOffset": 884116,
+                "virtualAddress": "0x1000d7d94",
+                "bytes": "08410f91"
+              },
+              {
+                "fileOffset": 884120,
+                "virtualAddress": "0x1000d7d98",
+                "bytes": "000d148b"
+              },
+              {
+                "fileOffset": 884124,
+                "virtualAddress": "0x1000d7d9c",
+                "bytes": "48048052"
+              },
+              {
+                "fileOffset": 884128,
+                "virtualAddress": "0x1000d7da0",
+                "bytes": "0801144b"
+              },
+              {
+                "fileOffset": 884132,
+                "virtualAddress": "0x1000d7da4",
+                "bytes": "087d7dd3"
+              },
+              {
+                "fileOffset": 884136,
+                "virtualAddress": "0x1000d7da8",
+                "bytes": "c10500d0"
+              },
+              {
+                "fileOffset": 884140,
+                "virtualAddress": "0x1000d7dac",
+                "bytes": "21000c91"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 561,
+            "window": [
+              {
+                "fileOffset": 884156,
+                "virtualAddress": "0x1000d7dbc",
+                "bytes": "1fc50871",
+                "decodedSubset": "cmp w8, #561"
+              },
+              {
+                "fileOffset": 884160,
+                "virtualAddress": "0x1000d7dc0",
+                "bytes": "ec030054",
+                "decodedSubset": "b.gt 0x1000d7e3c"
+              },
+              {
+                "fileOffset": 884164,
+                "virtualAddress": "0x1000d7dc4",
+                "bytes": "c9570090"
+              },
+              {
+                "fileOffset": 884168,
+                "virtualAddress": "0x1000d7dc8",
+                "bytes": "29c13291"
+              },
+              {
+                "fileOffset": 884172,
+                "virtualAddress": "0x1000d7dcc",
+                "bytes": "2915088b"
+              },
+              {
+                "fileOffset": 884176,
+                "virtualAddress": "0x1000d7dd0",
+                "bytes": "29410091"
+              },
+              {
+                "fileOffset": 884180,
+                "virtualAddress": "0x1000d7dd4",
+                "bytes": "0a050091"
+              },
+              {
+                "fileOffset": 884184,
+                "virtualAddress": "0x1000d7dd8",
+                "bytes": "ebff9f52"
+              },
+              {
+                "fileOffset": 884188,
+                "virtualAddress": "0x1000d7ddc",
+                "bytes": "8c0200f0"
+              },
+              {
+                "fileOffset": 884192,
+                "virtualAddress": "0x1000d7de0",
+                "bytes": "8c713a91"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 562,
+            "window": [
+              {
+                "fileOffset": 884216,
+                "virtualAddress": "0x1000d7df8",
+                "bytes": "5fc90871",
+                "decodedSubset": "cmp w10, #562"
+              },
+              {
+                "fileOffset": 884220,
+                "virtualAddress": "0x1000d7dfc",
+                "bytes": "4a050091"
+              },
+              {
+                "fileOffset": 884224,
+                "virtualAddress": "0x1000d7e00",
+                "bytes": "21ffff54",
+                "decodedSubset": "b.ne 0x1000d7de4"
+              },
+              {
+                "fileOffset": 884228,
+                "virtualAddress": "0x1000d7e04",
+                "bytes": "e90500f0"
+              },
+              {
+                "fileOffset": 884232,
+                "virtualAddress": "0x1000d7e08",
+                "bytes": "29f146f9"
+              },
+              {
+                "fileOffset": 884236,
+                "virtualAddress": "0x1000d7e0c",
+                "bytes": "200140f9"
+              },
+              {
+                "fileOffset": 884240,
+                "virtualAddress": "0x1000d7e10",
+                "bytes": "69048052"
+              },
+              {
+                "fileOffset": 884244,
+                "virtualAddress": "0x1000d7e14",
+                "bytes": "f42702a9"
+              },
+              {
+                "fileOffset": 884248,
+                "virtualAddress": "0x1000d7e18",
+                "bytes": "49468052"
+              },
+              {
+                "fileOffset": 884252,
+                "virtualAddress": "0x1000d7e1c",
+                "bytes": "e82701a9"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 11,
+            "window": [
+              {
+                "fileOffset": 884284,
+                "virtualAddress": "0x1000d7e3c",
+                "bytes": "7f2e0071",
+                "decodedSubset": "cmp w19, #11"
+              },
+              {
+                "fileOffset": 884288,
+                "virtualAddress": "0x1000d7e40",
+                "bytes": "21feff54",
+                "decodedSubset": "b.ne 0x1000d7e04"
+              },
+              {
+                "fileOffset": 884292,
+                "virtualAddress": "0x1000d7e44",
+                "bytes": "1fc90871"
+              },
+              {
+                "fileOffset": 884296,
+                "virtualAddress": "0x1000d7e48",
+                "bytes": "e1fdff54",
+                "decodedSubset": "b.ne 0x1000d7e04"
+              },
+              {
+                "fileOffset": 884300,
+                "virtualAddress": "0x1000d7e4c",
+                "bytes": "9f8e0071"
+              },
+              {
+                "fileOffset": 884304,
+                "virtualAddress": "0x1000d7e50",
+                "bytes": "a1fdff54",
+                "decodedSubset": "b.ne 0x1000d7e04"
+              },
+              {
+                "fileOffset": 884308,
+                "virtualAddress": "0x1000d7e54",
+                "bytes": "00008052"
+              },
+              {
+                "fileOffset": 884312,
+                "virtualAddress": "0x1000d7e58",
+                "bytes": "fd7b45a9"
+              },
+              {
+                "fileOffset": 884316,
+                "virtualAddress": "0x1000d7e5c",
+                "bytes": "f44f44a9"
+              },
+              {
+                "fileOffset": 884320,
+                "virtualAddress": "0x1000d7e60",
+                "bytes": "ff830191"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 562,
+            "window": [
+              {
+                "fileOffset": 884292,
+                "virtualAddress": "0x1000d7e44",
+                "bytes": "1fc90871",
+                "decodedSubset": "cmp w8, #562"
+              },
+              {
+                "fileOffset": 884296,
+                "virtualAddress": "0x1000d7e48",
+                "bytes": "e1fdff54",
+                "decodedSubset": "b.ne 0x1000d7e04"
+              },
+              {
+                "fileOffset": 884300,
+                "virtualAddress": "0x1000d7e4c",
+                "bytes": "9f8e0071"
+              },
+              {
+                "fileOffset": 884304,
+                "virtualAddress": "0x1000d7e50",
+                "bytes": "a1fdff54",
+                "decodedSubset": "b.ne 0x1000d7e04"
+              },
+              {
+                "fileOffset": 884308,
+                "virtualAddress": "0x1000d7e54",
+                "bytes": "00008052"
+              },
+              {
+                "fileOffset": 884312,
+                "virtualAddress": "0x1000d7e58",
+                "bytes": "fd7b45a9"
+              },
+              {
+                "fileOffset": 884316,
+                "virtualAddress": "0x1000d7e5c",
+                "bytes": "f44f44a9"
+              },
+              {
+                "fileOffset": 884320,
+                "virtualAddress": "0x1000d7e60",
+                "bytes": "ff830191"
+              },
+              {
+                "fileOffset": 884324,
+                "virtualAddress": "0x1000d7e64",
+                "bytes": "c0035fd6"
+              }
+            ]
+          },
+          {
+            "compareImmediate": 35,
+            "window": [
+              {
+                "fileOffset": 884300,
+                "virtualAddress": "0x1000d7e4c",
+                "bytes": "9f8e0071",
+                "decodedSubset": "cmp w20, #35"
+              },
+              {
+                "fileOffset": 884304,
+                "virtualAddress": "0x1000d7e50",
+                "bytes": "a1fdff54",
+                "decodedSubset": "b.ne 0x1000d7e04"
+              },
+              {
+                "fileOffset": 884308,
+                "virtualAddress": "0x1000d7e54",
+                "bytes": "00008052"
+              },
+              {
+                "fileOffset": 884312,
+                "virtualAddress": "0x1000d7e58",
+                "bytes": "fd7b45a9"
+              },
+              {
+                "fileOffset": 884316,
+                "virtualAddress": "0x1000d7e5c",
+                "bytes": "f44f44a9"
+              },
+              {
+                "fileOffset": 884320,
+                "virtualAddress": "0x1000d7e60",
+                "bytes": "ff830191"
+              },
+              {
+                "fileOffset": 884324,
+                "virtualAddress": "0x1000d7e64",
+                "bytes": "c0035fd6"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "_vt_part_cb",
+        "virtualAddress": "0x1000dba34",
+        "fileOffset": 899636,
+        "functionBytes": 76,
+        "functionSha256": "9e67d1c8233ef5e6ab356e5568a9d06a1173e2968b96a879ee3fb7a3b7d0a53e",
+        "instructions": [
+          {
+            "compareImmediate": 10,
+            "window": [
+              {
+                "fileOffset": 899664,
+                "virtualAddress": "0x1000dba50",
+                "bytes": "9f2a0071",
+                "decodedSubset": "cmp w20, #10"
+              },
+              {
+                "fileOffset": 899668,
+                "virtualAddress": "0x1000dba54",
+                "bytes": "0c010054",
+                "decodedSubset": "b.gt 0x1000dba74"
+              },
+              {
+                "fileOffset": 899672,
+                "virtualAddress": "0x1000dba58",
+                "bytes": "000040f9"
+              },
+              {
+                "fileOffset": 899676,
+                "virtualAddress": "0x1000dba5c",
+                "bytes": "8cec0094"
+              },
+              {
+                "fileOffset": 899680,
+                "virtualAddress": "0x1000dba60",
+                "bytes": "88060011"
+              },
+              {
+                "fileOffset": 899684,
+                "virtualAddress": "0x1000dba64",
+                "bytes": "680200b9"
+              },
+              {
+                "fileOffset": 899688,
+                "virtualAddress": "0x1000dba68",
+                "bytes": "a8570090"
+              },
+              {
+                "fileOffset": 899692,
+                "virtualAddress": "0x1000dba6c",
+                "bytes": "08413191"
+              },
+              {
+                "fileOffset": 899696,
+                "virtualAddress": "0x1000dba70",
+                "bytes": "007934f8"
+              },
+              {
+                "fileOffset": 899700,
+                "virtualAddress": "0x1000dba74",
+                "bytes": "fd7b41a9"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "_vt_row_cb",
+        "virtualAddress": "0x1000dba80",
+        "fileOffset": 899712,
+        "functionBytes": 232,
+        "functionSha256": "d7a644ea289d0631f368054e04275297127b47aab66086c0269544a8dc21cf5b",
+        "instructions": [
+          {
+            "compareImmediate": 561,
+            "window": [
+              {
+                "fileOffset": 899724,
+                "virtualAddress": "0x1000dba8c",
+                "bytes": "1fc50871",
+                "decodedSubset": "cmp w8, #561"
+              },
+              {
+                "fileOffset": 899728,
+                "virtualAddress": "0x1000dba90",
+                "bytes": "ac060054",
+                "decodedSubset": "b.gt 0x1000dbb64"
+              },
+              {
+                "fileOffset": 899732,
+                "virtualAddress": "0x1000dba94",
+                "bytes": "fc6fbaa9"
+              },
+              {
+                "fileOffset": 899736,
+                "virtualAddress": "0x1000dba98",
+                "bytes": "fa6701a9"
+              },
+              {
+                "fileOffset": 899740,
+                "virtualAddress": "0x1000dba9c",
+                "bytes": "f85f02a9"
+              },
+              {
+                "fileOffset": 899744,
+                "virtualAddress": "0x1000dbaa0",
+                "bytes": "f65703a9"
+              },
+              {
+                "fileOffset": 899748,
+                "virtualAddress": "0x1000dbaa4",
+                "bytes": "f44f04a9"
+              },
+              {
+                "fileOffset": 899752,
+                "virtualAddress": "0x1000dbaa8",
+                "bytes": "fd7b05a9"
+              },
+              {
+                "fileOffset": 899756,
+                "virtualAddress": "0x1000dbaac",
+                "bytes": "fd430191"
+              },
+              {
+                "fileOffset": 899760,
+                "virtualAddress": "0x1000dbab0",
+                "bytes": "f30300aa"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "_vt_set_cb",
+        "virtualAddress": "0x1000dbb68",
+        "fileOffset": 899944,
+        "functionBytes": 76,
+        "functionSha256": "ccc3d39325c06dbb29b0ddc0b4ef3a09dffd8456f4a08708de0dc2abfcfbeffd",
+        "instructions": [
+          {
+            "compareImmediate": 34,
+            "window": [
+              {
+                "fileOffset": 899972,
+                "virtualAddress": "0x1000dbb84",
+                "bytes": "9f8a0071",
+                "decodedSubset": "cmp w20, #34"
+              },
+              {
+                "fileOffset": 899976,
+                "virtualAddress": "0x1000dbb88",
+                "bytes": "0c010054",
+                "decodedSubset": "b.gt 0x1000dbba8"
+              },
+              {
+                "fileOffset": 899980,
+                "virtualAddress": "0x1000dbb8c",
+                "bytes": "000040f9"
+              },
+              {
+                "fileOffset": 899984,
+                "virtualAddress": "0x1000dbb90",
+                "bytes": "3fec0094"
+              },
+              {
+                "fileOffset": 899988,
+                "virtualAddress": "0x1000dbb94",
+                "bytes": "88060011"
+              },
+              {
+                "fileOffset": 899992,
+                "virtualAddress": "0x1000dbb98",
+                "bytes": "680200b9"
+              },
+              {
+                "fileOffset": 899996,
+                "virtualAddress": "0x1000dbb9c",
+                "bytes": "c85700b0"
+              },
+              {
+                "fileOffset": 900000,
+                "virtualAddress": "0x1000dbba0",
+                "bytes": "08410f91"
+              },
+              {
+                "fileOffset": 900004,
+                "virtualAddress": "0x1000dbba4",
+                "bytes": "007934f8"
+              },
+              {
+                "fileOffset": 900008,
+                "virtualAddress": "0x1000dbba8",
+                "bytes": "fd7b41a9"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "independentReviewFile": "v2.0.0-independent-native-review.json"
+  }
+}

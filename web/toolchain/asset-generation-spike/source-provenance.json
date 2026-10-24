@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "method": "AST-packaged original pure functions plus validated byte I/O adapter; no subprocess/ctypes/compiler shipped",
+  "sources": {
+    "dm/ios/tools/romfs_art.py": "d9e96c6638d13d087064c8c0ba44154efd73c0922db2f9b5a06458572b32a998",
+    "dm/ios/tools/gen_hud_v4.py": "c37dc64dfd6a3fc09cb438e7e15990affc8eab2e880041dc80d9df3f54e4be8c",
+    "dm/ios/tools/gen_hud_exp.py": "5217484a7cb8d4ae47d5cadf28fb85264a4cc11398890a60ad5cff493b073e02",
+    "dm/ios/tools/gen_romfs_overlay.py": "9b65ac59edfa0f85f159f70c0f6c01707803406a8f9bdbdade8fb081b970296b",
+    "dm/ios/tools/shell_stubs.py": "adc25af7fb8c26a32d31f266c7a270e1338a18c573af594aa6e174318804fd16"
+  }
+}

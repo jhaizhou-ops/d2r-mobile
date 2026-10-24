@@ -1,0 +1,23 @@
+{
+  "dm/ios/tools/gen_romfs_overlay.py": "9b65ac59edfa0f85f159f70c0f6c01707803406a8f9bdbdade8fb081b970296b",
+  "dm/ios/tools/touch_layout.py": "600e17649f2e3163add19b8d7b15b52b23e658f5e668e9bbb6c480cbde1fca86",
+  "dm/ios/tools/merc_slots.py": "79f5d786bdf36e30c0b115a4e2caab4ac460c817afdd27ca2fab4c7d34553e6b",
+  "dm/ios/tools/touch_strings.py": "6d27e4408de51373a9d26b4fb36d422ae478f89eb3c5a82e7cd93fbdd8aba85e",
+  "dm/ios/tools/dm_i18n.py": "ab379e0656d13b9830ed88f528bd1dc407225c996650453f37bc0cfc258b796b",
+  "dm/ios/tools/drop_light.py": "98b6d465c5b3835c99e0a10da46a5421f176f2cefdaff23a636e12b2923a782d",
+  "dm/ios/tools/pouch_layout.py": "56429f4f578954a693a080c10887408339a1d73f2f59a3f76078c9bb5c4f32cf",
+  "dm/ios/tools/wide_stash.py": "80e9250950926d36ea3928ed64ca3f1f616cc9109051f1c6af4a9f737796bdf3",
+  "dm/ios/tools/annot_strings.py": "c11d6752962af3a9476f6aa23172da2c6161a6ef46ee327668118e34ae74c090",
+  "dm/ios/tools/annot_ranges.py": "a37f9a89fd25befe6e844d0911d38ad562d55e3565157a5d7b330c25419db228",
+  "dm/ios/tools/annot_world.py": "2517bc142a45d80df400ef51c755f11f7b4203b4ed34b63d691e4daa67b14c81",
+  "dm/ios/tools/annot_drop.py": "c30b12df91cd9b7186481366c2012ece9098b344e8aad524d67ae7a8d0715368",
+  "dm/ios/tools/gen_paths.py": "37bd6bdca36cbd9015ccc370e0492da26885c69c73dbfe21969f02efc59f1430",
+  "dm/ios/tools/gen_trove_art.py": "d7c57fa5854fd845776b4a294d1198be3b902dc262c9dd35167589e42127f6c2",
+  "dm/i18n/ui_text.tsv": "4e099481929406e10597a14cf9704de0e49d840c4c63bb1ab67f4eb524d4f4b4",
+  "dm/host/dm_kills.c": "8a0de7a29ce473621dc94eee60fc397f14058309eb1e96ba394a54835d1bb436",
+  "dm/ios/NativeHUD/touch/close.png": "52f0af458afde67fa4d1e46069e24f38a96aaa83cbbb880501cc778ff909545f",
+  "web/toolchain/asset-generation-spike/src/overlay_recipe.py": "6e7a232f71732bd2425777917fdf6aa63b9367e42499b2007e9cd81a76200e41",
+  "dm/ios/tools/gen_merc_art.py": "0d65f6f3bf3a9328ea947ca91d7c625bc364c75e09a74192155b16d7c7b7b179",
+  "dm/ios/tools/overlay_contract.py": "6a2c5ebdfec67df3afde5a03e8b7cbb75f4db094bd4ce0310b570e91f3ce74ce",
+  "dm/tools/winlf/sitecustomize.py": "8bd102b4e0eff1cf22f6e20c224b1e2b9be12f89b13d0b6c42070be2fca09071"
+}

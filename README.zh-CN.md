@@ -399,6 +399,7 @@ DM_MAC_M3=1 dm/tools/mac_app.sh      # macOS 15 – 25：产出 D2R Mobile M3.ap
 | [dm/android/README.zh-CN.md](dm/android/README.zh-CN.md) | 安卓版：源码结构、构建、要放进手机的文件、验收清单 |
 | [dm/gfx/vulkan/INTEGRATION.md](dm/gfx/vulkan/INTEGRATION.md) | Vulkan 图形层怎么接到共用的图形接口上 |
 | [docs/ANDROID_COLLABORATION.zh-CN.md](docs/ANDROID_COLLABORATION.zh-CN.md) | 安卓 / 鸿蒙协作：仓库分工、怎么参与、实测状态与待办；每一轮的开发笔记在 [docs/android-notes/](docs/android-notes/) |
+| [docs/WEB_IPA_PACKAGER.zh-CN.md](docs/WEB_IPA_PACKAGER.zh-CN.md) | 浏览器 IPA 打包与安装 |
 
 ## 声明
 

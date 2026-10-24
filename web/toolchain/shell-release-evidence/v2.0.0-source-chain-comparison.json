@@ -1,0 +1,116 @@
+[
+  {
+    "commit": "120fe55c02a5633476998a44f8c3c3c809fa48b0",
+    "options": "debug=True reduced=True",
+    "computedChain": "c675d3fa7c90",
+    "headerChain": "15cf7ca29eaf",
+    "headerMatchesCommittedInputs": false,
+    "chainInputSha256": {
+      "dm/gfx/tools/dmsh_chain.py": "1af7bca12c4edab58103988fb5c89326da1b63ce5dded4c4d7548aa5f50cd795",
+      "dm/gfx/tools/dmsh_build.py": "946721c1123af1ed40baffee12d7f7f0d214b8047ff69583da014edf5dd09a74",
+      "dm/gfx/tools/dmsh_fetch.py": "ff53f64e8f35957336b7a6e6306ed70070ab4dbd401e14be3dbb797fecb20ae9",
+      "dm/gfx/tools/dmsh_facts.py": "f663837ff559d62922edde9ba6e233ca7c19b721d660893274140b22f9e0c2a9",
+      "dm/gfx/nvn/shader_facts.tsv": "5f50b1d9934b2f4e85ebddbd62114c6f5acb94ae42b8509fcfc3486e7953f490",
+      "dm/gfx/tools/dmsh_xlate/Program.cs": "1ba5bc41d670a2ea1647d2c2f77de805d72c3add673f7ce809e2e02449d8e196",
+      "dm/gfx/tools/dmsh_xlate/dmsh_xlate.csproj": "cb98c2eea844b3a3e52aaefebcefc2d801dac2fdca557b6383c19b613756736a",
+      "dm/gfx/nvn/shader_map.tsv": "419dae7adddbaba455045b1d121a01671fcb3bc82fc5d7d193593255df23c628",
+      "dm/gfx/nvn/shader_map.tsv.conflicts.tsv": "5e554c11cf2732d90539eb334e84a744ef88f527bc280b9256f3d72185f25501",
+      "dm/ios/tools/ios_metal.py": "ddaab68dee6a08860fb3cd8b4d7e4a5c9096409734a3e8dad8c60ba8773e5f29",
+      "dm/gfx/tools/dmsh_chain.lock": "fa5ca033ce97e82b73a9293995883cbb26994c245cd017d69439288166739c23"
+    },
+    "spirvCrossFlags": [
+      "--msl",
+      "--msl-version",
+      "20300",
+      "--msl-argument-buffers",
+      "--msl-texture-buffer-native",
+      "--msl-pad-fragment-output"
+    ],
+    "product": "3.3.94012-r44",
+    "committedToolLock": {
+      "dmsh_xlate.dll": "aff3b70cff6bf29e",
+      "Ryujinx.Graphics.Shader.dll": "72886c0b30bc0016",
+      "Ryujinx.Common.dll": "614dced78b44547d",
+      "xlate_source": "1cc46907ca1ee8d0",
+      "spirv-cross": "c95d3fc88f6ae5f5",
+      "metal_macosx": "Apple metal version 32023.883 (metalfe-32023.883)",
+      "metal_iphoneos": "Apple metal version 32023.883 (metalfe-32023.883)"
+    }
+  },
+  {
+    "commit": "b811b90172f4eb40ec1bc89d903308e0c5ab88d0",
+    "options": "debug=True reduced=True",
+    "computedChain": "c675d3fa7c90",
+    "headerChain": "15cf7ca29eaf",
+    "headerMatchesCommittedInputs": false,
+    "chainInputSha256": {
+      "dm/gfx/tools/dmsh_chain.py": "1af7bca12c4edab58103988fb5c89326da1b63ce5dded4c4d7548aa5f50cd795",
+      "dm/gfx/tools/dmsh_build.py": "946721c1123af1ed40baffee12d7f7f0d214b8047ff69583da014edf5dd09a74",
+      "dm/gfx/tools/dmsh_fetch.py": "ff53f64e8f35957336b7a6e6306ed70070ab4dbd401e14be3dbb797fecb20ae9",
+      "dm/gfx/tools/dmsh_facts.py": "f663837ff559d62922edde9ba6e233ca7c19b721d660893274140b22f9e0c2a9",
+      "dm/gfx/nvn/shader_facts.tsv": "5f50b1d9934b2f4e85ebddbd62114c6f5acb94ae42b8509fcfc3486e7953f490",
+      "dm/gfx/tools/dmsh_xlate/Program.cs": "1ba5bc41d670a2ea1647d2c2f77de805d72c3add673f7ce809e2e02449d8e196",
+      "dm/gfx/tools/dmsh_xlate/dmsh_xlate.csproj": "cb98c2eea844b3a3e52aaefebcefc2d801dac2fdca557b6383c19b613756736a",
+      "dm/gfx/nvn/shader_map.tsv": "419dae7adddbaba455045b1d121a01671fcb3bc82fc5d7d193593255df23c628",
+      "dm/gfx/nvn/shader_map.tsv.conflicts.tsv": "5e554c11cf2732d90539eb334e84a744ef88f527bc280b9256f3d72185f25501",
+      "dm/ios/tools/ios_metal.py": "ddaab68dee6a08860fb3cd8b4d7e4a5c9096409734a3e8dad8c60ba8773e5f29",
+      "dm/gfx/tools/dmsh_chain.lock": "fa5ca033ce97e82b73a9293995883cbb26994c245cd017d69439288166739c23"
+    },
+    "spirvCrossFlags": [
+      "--msl",
+      "--msl-version",
+      "20300",
+      "--msl-argument-buffers",
+      "--msl-texture-buffer-native",
+      "--msl-pad-fragment-output"
+    ],
+    "product": "3.3.94012-r44",
+    "committedToolLock": {
+      "dmsh_xlate.dll": "aff3b70cff6bf29e",
+      "Ryujinx.Graphics.Shader.dll": "72886c0b30bc0016",
+      "Ryujinx.Common.dll": "614dced78b44547d",
+      "xlate_source": "1cc46907ca1ee8d0",
+      "spirv-cross": "c95d3fc88f6ae5f5",
+      "metal_macosx": "Apple metal version 32023.883 (metalfe-32023.883)",
+      "metal_iphoneos": "Apple metal version 32023.883 (metalfe-32023.883)"
+    }
+  },
+  {
+    "commit": "e3756f8942b40eba6c851e881828a5b1bda17fd6",
+    "options": "debug=True reduced=True",
+    "computedChain": "c675d3fa7c90",
+    "headerChain": "15cf7ca29eaf",
+    "headerMatchesCommittedInputs": false,
+    "chainInputSha256": {
+      "dm/gfx/tools/dmsh_chain.py": "1af7bca12c4edab58103988fb5c89326da1b63ce5dded4c4d7548aa5f50cd795",
+      "dm/gfx/tools/dmsh_build.py": "946721c1123af1ed40baffee12d7f7f0d214b8047ff69583da014edf5dd09a74",
+      "dm/gfx/tools/dmsh_fetch.py": "ff53f64e8f35957336b7a6e6306ed70070ab4dbd401e14be3dbb797fecb20ae9",
+      "dm/gfx/tools/dmsh_facts.py": "f663837ff559d62922edde9ba6e233ca7c19b721d660893274140b22f9e0c2a9",
+      "dm/gfx/nvn/shader_facts.tsv": "5f50b1d9934b2f4e85ebddbd62114c6f5acb94ae42b8509fcfc3486e7953f490",
+      "dm/gfx/tools/dmsh_xlate/Program.cs": "1ba5bc41d670a2ea1647d2c2f77de805d72c3add673f7ce809e2e02449d8e196",
+      "dm/gfx/tools/dmsh_xlate/dmsh_xlate.csproj": "cb98c2eea844b3a3e52aaefebcefc2d801dac2fdca557b6383c19b613756736a",
+      "dm/gfx/nvn/shader_map.tsv": "419dae7adddbaba455045b1d121a01671fcb3bc82fc5d7d193593255df23c628",
+      "dm/gfx/nvn/shader_map.tsv.conflicts.tsv": "5e554c11cf2732d90539eb334e84a744ef88f527bc280b9256f3d72185f25501",
+      "dm/ios/tools/ios_metal.py": "ddaab68dee6a08860fb3cd8b4d7e4a5c9096409734a3e8dad8c60ba8773e5f29",
+      "dm/gfx/tools/dmsh_chain.lock": "fa5ca033ce97e82b73a9293995883cbb26994c245cd017d69439288166739c23"
+    },
+    "spirvCrossFlags": [
+      "--msl",
+      "--msl-version",
+      "20300",
+      "--msl-argument-buffers",
+      "--msl-texture-buffer-native",
+      "--msl-pad-fragment-output"
+    ],
+    "product": "3.3.94012-r44",
+    "committedToolLock": {
+      "dmsh_xlate.dll": "aff3b70cff6bf29e",
+      "Ryujinx.Graphics.Shader.dll": "72886c0b30bc0016",
+      "Ryujinx.Common.dll": "614dced78b44547d",
+      "xlate_source": "1cc46907ca1ee8d0",
+      "spirv-cross": "c95d3fc88f6ae5f5",
+      "metal_macosx": "Apple metal version 32023.883 (metalfe-32023.883)",
+      "metal_iphoneos": "Apple metal version 32023.883 (metalfe-32023.883)"
+    }
+  }
+]
