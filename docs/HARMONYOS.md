@@ -8,6 +8,8 @@ On 2026-10-22, the shell passed re-signing, replacement installation, system fol
 
 Use the **unsigned HAP** and matching source/tools from the release. If the release has no shell asset yet, wait for the maintainer to publish it or follow the [developer build guide](../dm/harmony/README.md). Do not use private test packages containing game content or someone else's signing profile.
 
+A separate [MatePad mini experimental bring-up report](devices/MATEPAD_MINI.md) records startup blockers and personal-build results. It does not establish compatibility of the published shell.
+
 ## Requirements
 
 - A phone meeting the HAP's minimum API, with developer mode and USB debugging enabled. Only the API 26 device above was checked in this run; marketing OS versions do not directly identify SDK APIs.
