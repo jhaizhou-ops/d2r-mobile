@@ -1822,14 +1822,21 @@ static void mv_offset(int own, uint64_t w, int f, int32_t delta, int relayout) {
         if (!mv_count(own)) { static int lg[MV_N]; if (lg[own]++ < 40) LOG("位置守卫：%s 开始挪（%s）", mv_name[own], (const char *)*(uint64_t *)(w + 8)); }   // 每次「开挪」留一条证据（绑定框只挪 0.2 秒，自检碰不上） | Leave one line of evidence at every "start moving" (the binding box is only moved for 0.2 s, which the self-check never catches)
         i = g_nmv;   // prune 后新条目的下标可能已变；后续必须更新实际插入的条目 | Pruning can move the insertion slot; update the entry actually inserted | Pruning can move the insertion slot; update the entry actually inserted
         g_mv[g_nmv] = (mvent){ { 0, 0 }, own, f, relayout, *v, *v }; dm_wref_set(&g_mv[g_nmv++].r, w); }
-    mvent *e = &g_mv[i]; if (g_mv_base_on) e->orig = g_mv_base; else if (*v != e->val) e->orig = *v;   // 游戏重建 / 重排过：现值当原值（调用方给了原位就用给的） | The game has rebuilt / re-laid out the UI: take the current value as the original value (if the caller supplied an original position, use that)
+    mvent *e = &g_mv[i];
+    // 写回时控件 x 不是我们上次写的值 = 原版暂时把它挪走了（＋ 关储藏箱：原版同一帧单开物品栏，把我们挪过的 x 记成自己的原位，单开的关掉时写回它）。
+    // 条目留着、原值不动，等它回到我们的值再写回原位；丢掉的话我们的位移被原版当原位，下次再叠一次（tests/t_widestash_restore.c）
+    // On restore the widget value is not the one we last wrote = the original game has moved it away for now (+ closing the stash: in the same frame the original game opens the inventory alone, records our shifted x as its own original position and writes it back when that inventory closes).
+    // Keep the entry and its original value, and restore once the widget holds our value again; dropping it would let the original game adopt our shift as its original position and stack another one next time (tests/t_widestash_restore.c)
+    if (!delta && !g_mv_base_on && *v != e->val) return;
+    if (g_mv_base_on) e->orig = g_mv_base; else if (*v != e->val) e->orig = *v;   // 游戏重建 / 重排过：现值当原值（调用方给了原位就用给的） | The game has rebuilt / re-laid out the UI: take the current value as the original value (if the caller supplied an original position, use that)
     if (!delta) { if (*v == e->val && *v != e->orig) { *v = e->orig; if (e->relayout) ((void (*)(uint64_t))*(uint64_t *)(*(uint64_t *)w + 0x10))(w); } g_mv[i] = g_mv[--g_nmv]; return; }
     int32_t want = e->orig + delta; if (*v != want) { *v = want; if (relayout) ((void (*)(uint64_t))*(uint64_t *)(*(uint64_t *)w + 0x10))(w); } e->val = want;
 }
 static void mv_restore(uint64_t root, int own) {   // 这一位的条目全部写回原值（只写还挂在界面树上的，不在了就忘掉） | Write all entries of this bit back to their original values (only those still attached to the UI tree; forget the ones that are gone)
     int n0 = mv_count(own); if (!n0) return;
     for (int i = g_nmv - 1; i >= 0; i--) if (g_mv[i].own == own) { if (root && ui_has(root, g_mv[i].r.w, 0)) mv_offset(own, g_mv[i].r.w, g_mv[i].f, 0, g_mv[i].relayout); else g_mv[i] = g_mv[--g_nmv]; }
-    static int lg[MV_N]; if (lg[own]++ < 40) LOG("位置守卫：%s 条件没了，%d 处全部写回（剩 %d）", mv_name[own], n0, mv_count(own));
+    int n1 = mv_count(own); if (n1 == n0) return;   // 只剩等原版写回的条目、这一帧没变：不记（每帧都会进来） | Only entries waiting for the original game to write back, nothing changed this frame: do not log (this runs every frame)
+    static int lg[MV_N]; if (lg[own]++ < 40) LOG("位置守卫：%s 条件没了，%d 处全部写回（剩 %d）", mv_name[own], n0, n1);
 }
 static int mv_count(int own) { int n = 0; for (int i = 0; i < g_nmv; i++) n += g_mv[i].own == own; return n; }
 static uint64_t g_mv_audit_at; static const char *g_mv_audit_path = "";
@@ -1839,7 +1846,8 @@ static void mv_audit_arm(const char *path) {   // 前一条还没到点就合并
 void dm_ui_lifecycle(int background) { mv_audit_arm(background ? "切后台" : "回前台"); }   // iOS 前端进 / 出后台时调（front_ios.m） | Called by the iOS front end on entering / leaving the background (front_ios.m)
 static void mv_audit_pump(uint64_t root, uint64_t fr) {
     if (!g_mv_audit_at || fr < g_mv_audit_at) return; g_mv_audit_at = 0; int bad = 0; char line[256]; int k = 0;
-    for (int o = 0; o < MV_N; o++) { int live = 0; for (int i = 0; i < g_nmv; i++) live += g_mv[i].own == o && ui_has(root, g_mv[i].r.w, 0);
+    // 只数控件此刻还是我们写的值的条目：等原版写回的条目（原版暂时挪走了）不算没写回 | Only count entries whose widget still holds our value: entries waiting for the original game to write back (it has moved the widget away for now) are not unrestored
+    for (int o = 0; o < MV_N; o++) { int live = 0; for (int i = 0; i < g_nmv; i++) live += g_mv[i].own == o && ui_has(root, g_mv[i].r.w, 0) && *(int32_t *)(g_mv[i].r.w + 0x70 + 4 * g_mv[i].f) == g_mv[i].val;
         if (!g_mv_want[o] && live) { bad++; k += snprintf(line + k, sizeof line - k, "%s 还剩 %d 处没写回；", mv_name[o], live); }
         else if (k < 200) k += snprintf(line + k, sizeof line - k, "%s %s；", mv_name[o], g_mv_want[o] ? "条件成立、挪着" : "已全部写回"); }
     static const char *lp; static uint64_t lfr; if (!bad && lp == g_mv_audit_path && fr - lfr < 600) return;   // 都对：同一条路 10 秒内只记一次（关面板消息很密）；红的一律记 | All correct: the same path is logged only once per 10 s (close-panel messages are dense); failure lines are always logged
