@@ -194,16 +194,16 @@ JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeStart(JNIEnv *env
     // on the Redmi K50 Ultra camp GPU -0.5 ms and live image memory 827 -> 320 MB.
     setenv("DM_GFX_NATIVE_BC", "1", 0);
     // 片元着色器的四元组邻居交换改用精细导数（引擎的 gfx-quad-derivatives；标记文件仍优先）：Adreno 上辅助调用在子组洗牌里取到垃圾，
-    // 罪恶洞穴打斗时单位周围出现黑方块。
+    // 罪恶洞穴打斗时单位周围出现黑方块。Adreno 740/750 上引擎缺省关掉它（那两个驱动会丢掉设备，见 xbg_adreno_policy.h）。
     // Fragment-shader quad-neighbour shuffles go through fine derivatives (the engine's gfx-quad-derivatives; a marker file
     // still wins): on Adreno helper invocations read garbage in subgroup shuffles, and black squares appeared around units in
-    // the Den of Evil fight.
+    // the Den of Evil fight. On Adreno 740/750 the engine defaults it off (those drivers drop the device; see xbg_adreno_policy.h).
     setenv("DM_GFX_QUAD_DERIVATIVES", "1", 0);
     // 按 32 道线程束翻译的计算着色器，在 64 道的子组里每 32 道各当一个线程束（引擎的 gfx-warp32；标记文件仍优先）：Adreno 上
-    // 杂物、草地、流体与 PPR 着色器的线程束聚合追加丢了 32–63 号车道、条目互相覆盖。
+    // 杂物、草地、流体与 PPR 着色器的线程束聚合追加丢了 32–63 号车道、条目互相覆盖。Adreno 740/750 上引擎缺省关掉它。
     // Compute shaders translated for 32-lane warps run every 32 lanes of a 64-lane subgroup as their own warp (the engine's
     // gfx-warp32; a marker file still wins): on Adreno the clutter, grass, fluid and PPR shaders' warp-aggregated appends lost
-    // lanes 32-63 and overwrote entries.
+    // lanes 32-63 and overwrote entries. On Adreno 740/750 the engine defaults it off.
     setenv("DM_GFX_WARP32", "1", 0);
     // 翻译器输出的两项等价整理（引擎的 gfx-ldc-fold 与 gfx-forward-temps；标记文件仍优先）：常量缓冲区按字寻址时可推出的分量下标
     // 换成常量，只写一次的临时变量直接转发。Redmi K50 Ultra 营地（比例 0.75）GPU 每帧 15.70 → 14.34 ms，结果不变。
