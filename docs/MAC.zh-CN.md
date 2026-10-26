@@ -65,6 +65,8 @@ App 带本项目自己的图标（`dm/ios/Assets.xcassets/AppIcon.appiconset/App
 
 接上手柄直接可用，与键盘并存。菜单栏有「显示 → 全屏（⌃⌘F）」和「退出（⌘Q）」。窗口可以随意拉大小。进游戏后画面按窗口 / 屏幕的比例铺满（16:10 的 MacBook 上窗口态和全屏态都铺满，界面贴底，开着大面板时界面居中）；主菜单、选角等前端页仍是 16:9、上下留边。
 
+想让 App 每次一开就全屏：`defaults write org.d2rmobile.mac StartFullScreen -bool YES`（旧接口版用 `org.d2rmobile.mac.m3`）；`-bool NO` 或 `defaults delete org.d2rmobile.mac StartFullScreen` 改回窗口。⌃⌘F 仍可在这一次里退出全屏。
+
 鼠标指针停在游戏窗口里 3 秒不动会自动隐藏（用键盘或手柄玩时不挡画面），鼠标一动立刻回来；在菜单栏、别的窗口或对话框上不会隐藏。改时长：`defaults write org.d2rmobile.mac CursorHideSeconds -float 5`（单位秒；`0` = 关；旧接口版用 `org.d2rmobile.mac.m3`），然后重开 App。
 
 ## 鼠标
