@@ -11,6 +11,8 @@
 #   ④ 只在 DM_VK_INLINE_CS=1 时（缺省不做）：计算着色器里「非入口函数含子组指令」的，把辅助函数全部内联进入口（S24 Ultra / Adreno 750
 #     的高通驱动在这种结构上启动即崩）。只动计算着色器：像素着色器的 quad 改写器认 Ryujinx 的 SHFL 辅助函数调用形式，内联后 176 个就改不了了；
 #     计算着色器内联后 warp32 仍能改写（5 个里 5 个）。
+#   ⑤ DM_VK_INLINE_SUBGROUP=1 显式制作 Adreno 740/750 用的包：所有阶段都内联非入口子组辅助函数（优先于④），
+#     再验证和导出。Y700/Adreno750 仅做④仍在像素阶段崩溃；两项运行时改写必须关闭。缺省不做，避免破坏其它 GPU 的 quad 匹配。
 # 绑定来源（贴图 / 采样器 / 存储缓冲槽、c0 / c2 驱动段、c1）与 dmsh_build.py 的 reflect() / decode_tex() 同一套解码。
 # 用法：dmsh_vk.py <Switch 包目录> <输出目录> [键…]     环境：XLATE（翻译器）、MAIN（main NSO）、J（并发）、SPIRV_OPT / SPIRV_VAL
 #       dmsh_vk.py --compare <参考 .xgs 目录> <本次输出目录>    逐个比字节：一致 / 不一致（不一致的再分 SPIR-V / 绑定表 / 其他）
@@ -26,6 +28,8 @@
 #   ④ Only with DM_VK_INLINE_CS=1 (off by default): compute shaders where a non-entry function contains subgroup instructions get every helper inlined into the entry point (the Qualcomm driver on the S24 Ultra / Adreno 750
 #     crashes at startup on that shape). Compute shaders only: the pixel shaders' quad rewriter matches Ryujinx's SHFL helper-call form, and 176 of them could no longer be rewritten after inlining;
 #     after inlining, warp32 still rewrites the compute shaders (5 of 5).
+#   ⑤ DM_VK_INLINE_SUBGROUP=1 explicitly builds an Adreno 740/750 pack: inline non-entry subgroup helpers in every stage (takes precedence over ④),
+#     then validate and export. On Y700/Adreno750, ④ alone still crashes in the pixel stage; both runtime rewrites must be off. Default unchanged to preserve quad matching on other GPUs.
 # Binding sources (texture / sampler / storage buffer slots, the c0 / c2 driver banks, c1) use the same decoding as reflect() / decode_tex() in dmsh_build.py.
 # Usage: dmsh_vk.py <Switch package directory> <output directory> [keys...]     environment: XLATE (translator), MAIN (main NSO), J (parallelism), SPIRV_OPT / SPIRV_VAL
 #        dmsh_vk.py --compare <reference .xgs directory> <output directory>    compare byte by byte: identical / different (the different ones split into SPIR-V / binding table / other)
@@ -36,6 +40,7 @@ DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')
 OPT, VAL = (os.environ.get(k, d) for k, d in (('SPIRV_OPT', 'spirv-opt'), ('SPIRV_VAL', 'spirv-val')))
 STAGE_NO = {'vs': 0, 'hs': 1, 'ds': 2, 'gs': 3, 'ps': 4, 'cs': 5}
 INLINE_CS = os.environ.get('DM_VK_INLINE_CS') == '1'
+INLINE_SUBGROUP = os.environ.get('DM_VK_INLINE_SUBGROUP') == '1'
 
 
 def helper_has_subgroup(spv):
@@ -50,6 +55,19 @@ def helper_has_subgroup(spv):
         elif 333 <= op <= 366 and cur is not None and cur not in entry: return True
         i += wc
     return False
+
+
+def inline_subgroup_helpers(spv, source, destination):
+    """跨阶段内联含子组指令的辅助函数，供显式选择的 Adreno 导入包使用。 | Inline subgroup helpers in any stage for explicitly selected Adreno import packs."""
+    if not helper_has_subgroup(spv): return spv
+    with open(source, 'wb') as f: f.write(spv)
+    r = subprocess.run([OPT, '--target-env=vulkan1.1', '--merge-return', '--inline-entry-points-exhaustive',
+                        '--eliminate-dead-functions', source, '-o', destination], capture_output=True, text=True)
+    if r.returncode: raise ValueError(r.stderr.strip()[:160] or 'spirv-opt failed')
+    with open(destination, 'rb') as f: result = f.read()
+    if helper_has_subgroup(result): raise ValueError('subgroup instructions remain in a helper function')
+    return result
+
 TEX_BASE, SAMP_BASE, IMG_BASE = 0x168, 0x568, 0x120   # 同 dmsh_build.py：c[2] 贴图句柄表、采样器句柄表、图像句柄表 | as dmsh_build.py: the texture handle, sampler handle and image handle tables in c[2]
 
 
@@ -276,12 +294,16 @@ def one(key):
     open(f1, 'wb').write(spv)
     r = subprocess.run([OPT, '--trim-capabilities', f1, '-o', f2], capture_output=True, text=True)
     if r.returncode: return key, 'spirv-opt 失败', r.stderr.strip()[:160]
-    if INLINE_CS and stage == 'cs' and helper_has_subgroup(open(f2, 'rb').read()):
+    if INLINE_CS and not INLINE_SUBGROUP and stage == 'cs' and helper_has_subgroup(open(f2, 'rb').read()):
         f3 = os.path.join(work, key + '.i.spv')
         r = subprocess.run([OPT, '--merge-return', '--inline-entry-points-exhaustive', '--eliminate-dead-functions', f2, '-o', f3], capture_output=True, text=True)
         if r.returncode: return key, 'spirv-opt 内联失败', r.stderr.strip()[:160]
         os.replace(f3, f2)
-    spv = add_format_caps(open(f2, 'rb').read()); open(f2, 'wb').write(spv)
+    spv = add_format_caps(open(f2, 'rb').read())
+    if INLINE_SUBGROUP:
+        try: spv = inline_subgroup_helpers(spv, f2, os.path.join(work, key + '.i.spv'))
+        except ValueError as e: return key, 'spirv-opt 内联失败', str(e)
+    open(f2, 'wb').write(spv)
     r = subprocess.run([VAL, '--target-env', 'vulkan1.1', f2], capture_output=True, text=True)
     if r.returncode: return key, 'spirv-val 失败', r.stderr.strip().splitlines()[0][:160] if r.stderr.strip() else '?'
     spv = open(f2, 'rb').read()

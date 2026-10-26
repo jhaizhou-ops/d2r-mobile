@@ -9,6 +9,7 @@
 # 需要：Python 3.9+ 与 pillow numpy lz4 capstone unicorn；.NET SDK（编着色器翻译工具）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
 #   （Mac：brew install spirv-tools shaderc；Windows / Linux：LunarG Vulkan SDK；glslc 也可以用安卓 NDK 里的）。缺什么本工具开头会逐项报。
 # 它做的事与 d2rm_pack.py（iOS 壳）同一套：改写游戏程序换成安卓目标，着色器翻成 Vulkan 用的包（dm/gfx/tools/dmsh_vk.py）而不是 Metal 库。
+# Adreno 740/750 可显式设 DM_VK_INLINE_SUBGROUP=1；仅用于两项运行时改写关闭的设备，见 docs/android-notes/2026-10-26-adreno-subgroup-import.zh-CN.md。
 # 鸿蒙：d2rm_android.py --target ohos <游戏文件目录> <输出目录>，写出 <输出目录>/harmony/dm/：改写目标换成鸿蒙（out/ 与安卓不能共用），着色器包与安卓同一份，
 #   另加 ui-art/（技能键标签 lbl_* 与技能剪影 sil_*，各 9 张，取自底栏素材生成器的输出）；把 dm 文件夹拷进手机上和游戏资源 data 并排的「D2R Mobile」文件夹，应用导入时选它。
 # The Android import pack: from your own game files, make on a computer everything the Android App on the release page (which contains no game content) lacks, put it in one folder, copy it to the phone, and the App imports it when opened.
@@ -21,6 +22,7 @@
 # Needs: Python 3.9+ with pillow numpy lz4 capstone unicorn; the .NET SDK (to build the shader translation tool); spirv-opt, spirv-val and glslc from the Vulkan SDK
 #   (Mac: brew install spirv-tools shaderc; Windows / Linux: the LunarG Vulkan SDK; glslc can also come from the Android NDK). The tool lists anything missing at the start.
 # It does the same as d2rm_pack.py (the iOS shell): the game program is rewritten for the Android target, and the shaders become the bundles Vulkan uses (dm/gfx/tools/dmsh_vk.py) instead of a Metal library.
+# For Adreno 740/750, explicitly set DM_VK_INLINE_SUBGROUP=1 only with both runtime rewrites off; see docs/android-notes/2026-10-26-adreno-subgroup-import.md.
 # HarmonyOS: d2rm_android.py --target ohos <game files directory> <output directory> writes <output directory>/harmony/dm/: the game program is rewritten for HarmonyOS (out/ cannot be shared with Android), the shader bundles are the same as Android's,
 #   plus ui-art/ (9 skill-button labels lbl_* and 9 skill silhouettes sil_*, taken from the bottom-bar art generator's output); copy the dm folder into a "D2R Mobile" folder on the phone next to the data folder with the game resources, and pick that folder when the app asks to import.
 import hashlib, os, shutil, subprocess, sys, time
@@ -132,7 +134,9 @@ def main():
 
     # 五、放到输出目录：先写在旁边，齐了再换上（中途失败不留半份）
     # 5. Put it in the output directory: write it alongside first and swap it in once complete (a failure halfway leaves no half copy)
-    with open(os.path.join(stage, 'pack_info.txt'), 'w', encoding='utf-8', newline='\n') as f: f.write('PRODUCT=%s\nTARGET=%s\nMADE=%s\n' % (P, T, time.strftime('%Y-%m-%dT%H:%M:%S')))
+    with open(os.path.join(stage, 'pack_info.txt'), 'w', encoding='utf-8', newline='\n') as f:
+        f.write('PRODUCT=%s\nTARGET=%s\nMADE=%s\n' % (P, T, time.strftime('%Y-%m-%dT%H:%M:%S')))
+        if os.environ.get('DM_VK_INLINE_SUBGROUP') == '1': f.write('SHADER_SUBGROUP_INLINE=1\n')
     part = final + '.part'
     shutil.rmtree(part, ignore_errors=True); os.makedirs(part)
     for x in ('out', 'shaders', 'overlay') + (('ui-art',) if T == 'ohos' else ()): shutil.copytree(os.path.join(stage, x), os.path.join(part, x))
