@@ -10,9 +10,7 @@
 #if TARGET_OS_IPHONE
 #include <os/proc.h>
 #endif
-#if TARGET_OS_OSX
-#import <MetalFX/MetalFX.h>   // 出图的 MetalFX 空间放大（只在 Mac，见 mfx_ready） | MetalFX spatial upscaling at present (Mac only, see mfx_ready)
-#endif
+#import <MetalFX/MetalFX.h>   // MetalFX 空间放大：Mac 出图那一步，及各平台游戏的 3D 放大趟（见 mfx_ready、mfx3d_draw） | MetalFX spatial upscaling: the Mac present step, and the game's 3D upscale pass on every platform (see mfx_ready, mfx3d_draw)
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -4635,6 +4633,7 @@ static void ghost_flush(void) {   // 渲染通道结束前：把认到的图标�
     memcpy(&S, &save, sizeof S); args_dirty_all(); R.sc = sc; R.has_sc = has_sc; g_pso_dirty = g_dss_dirty = 1; g_gh.busy = 0;
     for (int i = 0; i < g_gh.n; i++) free(g_gh.c[i].S_); g_gh.n = 0;
 }
+static int mfx3d_draw(NvShader *f);   // 见定义处（MetalFX 换掉游戏的 3D 放大趟） | see the definition (MetalFX replaces the game's 3D upscale pass)
 static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (!S.prog) { RED_ONCE(18, "绘制前没有绑定程序"); return; }
     __unsafe_unretained NvProg *pr = prog_get(S.prog);
@@ -4712,6 +4711,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         } else if (g_bloomq.state) { RED_ONCE(61, "泛光 1/4 起点：链中途出现别的绘制，本帧泛光不完整"); bloomq_reset(); }
       }
     }
+    if (pr->sh[1] && !strncmp(pr->sh[1]->key, "52aac1f2306b8fc5", 16) && mfx3d_draw(pr->sh[1])) return;   // 游戏的 3D 放大趟（ps_upsample_p）改用 MetalFX | the game's 3D upscale pass (ps_upsample_p) through MetalFX
     if (S.poly.cull == NVN_FACE_FRONT_AND_BACK) return;
     // 续用的通道可能是少挂深度 / 模板开的（开法 2 / 3 / 4）：这次绘制要的平面没挂，就在它之前切开（重开时按新前瞻挂）
     // The continued render pass may have been opened with fewer depth / stencil attachments (open modes 2 / 3 / 4): if the plane this draw needs is not attached, split before it (on reopen, attach per the new lookahead)
@@ -5990,7 +5990,6 @@ static id<MTLTexture> present_src(id<MTLTexture> src) {
     pthread_mutex_unlock(&mu);
     return v;
 }
-#if TARGET_OS_OSX
 // MetalFX 空间放大（只在 Mac）：开着时，出图要放大（视口比游戏画面大 5% 以上）的帧用 MetalFX 的边缘自适应放大代替双线性；不放大的帧照旧。
 // 开关是选项页「图形 → 放大方式」（dm_video.c，见 mfx_on），DM_MFX=0/1 可定死。同一个命令缓冲里三步：
 // ① 拷贝趟（出图着色器，带队列屏障）把有效区 1:1 画进输入贴图，顺带处理裁切与 sRGB 视图；② MetalFX 放大到视口尺寸；③ 出图趟把结果 1:1 画上 drawable。
@@ -6008,13 +6007,29 @@ static id<MTLTexture> present_src(id<MTLTexture> src) {
 #else
 #define MFX_M4 1
 #endif
-typedef struct { id scaler; id<MTLTexture> in, out; id<MTLFence> fence; NSUInteger iw, ih, ow, oh; int m4, bad; } mfx_t;
-static mfx_t g_mfx_pres, g_mfx_grab;   // 出图用（随构建是 Metal 4 或旧接口）/ 整窗截图用（旧接口） | for present (Metal 4 or older API, per build) / for the whole-window screenshot (older API)
-static id<MTLRenderPipelineState> g_mfx_copy_pso;   // 拷贝趟：出图着色器，输出 RGBA8 | copy pass: the present shader with RGBA8 output
-static id<MTLBuffer> g_mfx_uv[3];
-#if !DM_NVN_M3
-static id<MTL4ArgumentTable> g_mfx_args;
-#endif
+// 每份放大器各带自己的格式、参数表与 UV 缓冲：出图线程（出图 / 截图）与回放线程（3D 放大趟）各用各的，不共用会被并发改写的东西。
+// main_cb = 编在每帧的主命令缓冲里（3D 放大趟）：换下的贴图走回放的延迟释放（defer_obj_release）；否则走出图计数的退役表（mfx_retire）
+// Each scaler carries its own formats, argument table and UV buffers: the present thread (present / screenshot) and the replay thread (3D upscale pass) each use their own, sharing nothing that is rewritten concurrently.
+// main_cb = encoded into each frame's main command buffer (3D upscale pass): replaced textures go through the replay's deferred release (defer_obj_release); otherwise through the present-counted retire list (mfx_retire)
+typedef struct { id scaler; id<MTLTexture> in, out; id<MTLFence> fence; NSUInteger iw, ih, ow, oh; MTLPixelFormat fmt; int m4, bad, main_cb, uvi; id args; id<MTLBuffer> uv[3]; const char *who; } mfx_t;
+static mfx_t g_mfx_pres = { .who = "出图" }, g_mfx_grab = { .who = "出图截图" }, g_mfx_3d = { .who = "3D 放大", .main_cb = 1 };   // 出图用 / 整窗截图用（旧接口）/ 游戏 3D 放大趟用 | present / whole-window screenshot (older API) / the game's 3D upscale pass
+static id<MTLRenderPipelineState> mfx_copy_pso(MTLPixelFormat fmt) {   // 拷贝趟：出图着色器，按输出格式各编一份 | copy pass: the present shader, one pipeline per output format
+    static MTLPixelFormat f[4]; static id<MTLRenderPipelineState> p[4]; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu); id<MTLRenderPipelineState> r = nil; int k = 0;
+    for (; k < 4 && p[k]; k++) if (f[k] == fmt) { r = p[k]; break; }
+    if (!r && k < 4) { NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(g_present_msl) options:nil error:&e];
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = [lib newFunctionWithName:@"vs"]; pd.fragmentFunction = [lib newFunctionWithName:@"fs"]; pd.colorAttachments[0].pixelFormat = fmt;
+        r = lib ? [g_dev newRenderPipelineStateWithDescriptor:pd error:&e] : nil; if (r) { f[k] = fmt; p[k] = r; }
+        else MLOG("【红】MetalFX 拷贝趟管线建不出（格式 %lu）：%s", (unsigned long)fmt, e.localizedDescription.UTF8String); }
+    pthread_mutex_unlock(&mu); return r;
+}
+static id<MTLSamplerState> mfx_samp(int linear) {   // 自带的采样器：3D 放大趟可能早于第一次出图（出图的 g_blit_samp 还没建） | own samplers: the 3D upscale pass can come before the first present (the present's g_blit_samp does not exist yet)
+    static id<MTLSamplerState> sm[2]; static dispatch_once_t once;
+    dispatch_once(&once, ^{ for (int i = 0; i < 2; i++) { MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new]; sd.minFilter = sd.magFilter = i ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+        sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge; sd.supportArgumentBuffers = YES; sm[i] = [g_dev newSamplerStateWithDescriptor:sd]; } });
+    return sm[linear != 0];
+}
 static struct { id<MTLTexture> t; uint64_t at; } g_mfx_old[8]; static int g_mfx_nold; static uint64_t g_mfx_calls;
 __attribute__((weak)) int dm_video_upscale(void) { return 0; }   // 宿主 dm_video.c 提供强定义（选项页「放大方式」）；图形单测不链宿主时恒关 | the host's dm_video.c provides the strong definition (options page "Upscaling"); always off when the graphics unit tests do not link the host
 static int mfx_on(void) {   // DM_MFX=0/1 定死（测试、A/B）；没给就每帧按选项页的设置，点「应用」下一帧就换 | DM_MFX=0/1 fixes it (tests, A/B); otherwise follow the options page setting every frame, so "Apply" takes effect on the next frame
@@ -6034,19 +6049,13 @@ static void mfx_retire_tick(void) {
     for (int i = k; i < g_mfx_nold; i++) g_mfx_old[i].t = nil;
     if (k != g_mfx_nold) { g_mfx_nold = k; res_commit(); }
 }
-static int mfx_ready(mfx_t *m, int m4, NSUInteger iw, NSUInteger ih, NSUInteger ow, NSUInteger oh) {
+static int mfx_ready(mfx_t *m, int m4, MTLPixelFormat fmt, NSUInteger iw, NSUInteger ih, NSUInteger ow, NSUInteger oh) {
     if (m->bad) return 0;
-    if (m->scaler && m->iw == iw && m->ih == ih && m->ow == ow && m->oh == oh) return 1;
+    if (m->scaler && m->fmt == fmt && m->iw == iw && m->ih == ih && m->ow == ow && m->oh == oh) return 1;
     NSError *e = nil;
-    if (!g_mfx_copy_pso) {
-        id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(g_present_msl) options:nil error:&e];
-        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-        pd.vertexFunction = [lib newFunctionWithName:@"vs"]; pd.fragmentFunction = [lib newFunctionWithName:@"fs"]; pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
-        g_mfx_copy_pso = lib ? [g_dev newRenderPipelineStateWithDescriptor:pd error:&e] : nil;
-        if (!g_mfx_copy_pso) { MLOG("【红】出图：MetalFX 拷贝趟管线建不出（%s），退回双线性", e.localizedDescription.UTF8String); m->bad = 1; return 0; }
-    }
+    if (!mfx_copy_pso(fmt)) { m->bad = 1; return 0; }
     MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
-    d.colorTextureFormat = d.outputTextureFormat = MTLPixelFormatRGBA8Unorm;
+    d.colorTextureFormat = d.outputTextureFormat = fmt;
     d.inputWidth = iw; d.inputHeight = ih; d.outputWidth = ow; d.outputHeight = oh;
     d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;   // 交换链存的是 sRGB 编码值（显示参照） | the swapchain holds sRGB-encoded (display-referred) values
     id<MTLFXSpatialScalerBase> s = nil;
@@ -6056,44 +6065,48 @@ static int mfx_ready(mfx_t *m, int m4, NSUInteger iw, NSUInteger ih, NSUInteger 
     if (m4) s = comp && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev] ? [d newSpatialScalerWithDevice:g_dev compiler:comp] : nil;
 #endif
     if (!m4) s = [MTLFXSpatialScalerDescriptor supportsDevice:g_dev] ? [d newSpatialScalerWithDevice:g_dev] : nil;
-    if (!s) { MLOG("【红】出图：MetalFX 空间放大器建不出（%lux%lu → %lux%lu，%s），退回双线性", (unsigned long)iw, (unsigned long)ih, (unsigned long)ow, (unsigned long)oh, m4 ? "Metal 4" : "旧接口"); m->bad = 1; return 0; }
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:iw height:ih mipmapped:NO];
+    if (!s) { MLOG("【红】%s：MetalFX 空间放大器建不出（%lux%lu → %lux%lu，%s），退回原样", m->who, (unsigned long)iw, (unsigned long)ih, (unsigned long)ow, (unsigned long)oh, m4 ? "Metal 4" : "旧接口"); m->bad = 1; return 0; }
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt width:iw height:ih mipmapped:NO];
     td.storageMode = MTLStorageModePrivate; td.usage = s.colorTextureUsage | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     id<MTLTexture> in = [g_dev newTextureWithDescriptor:td];
     td.width = ow; td.height = oh; td.usage = s.outputTextureUsage | MTLTextureUsageShaderRead;
     id<MTLTexture> out = [g_dev newTextureWithDescriptor:td];
-    if (!in || !out) { MLOG("【红】出图：MetalFX 贴图建不出（%lux%lu → %lux%lu），退回双线性", (unsigned long)iw, (unsigned long)ih, (unsigned long)ow, (unsigned long)oh); m->bad = 1; return 0; }
+    if (!in || !out) { MLOG("【红】%s：MetalFX 贴图建不出（%lux%lu → %lux%lu），退回原样", m->who, (unsigned long)iw, (unsigned long)ih, (unsigned long)ow, (unsigned long)oh); m->bad = 1; return 0; }
     if (m4) {
 #if !DM_NVN_M3
-        if (!g_mfx_args) { MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 1; ad.maxSamplerStateBindCount = 1; ad.maxBufferBindCount = 1;
-            g_mfx_args = [g_dev newArgumentTableWithDescriptor:ad error:&e]; }
-        if (!g_mfx_uv[0]) for (int i = 0; i < 3; i++) { g_mfx_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared]; res_add(g_mfx_uv[i]); }
+        if (!m->args) { MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 1; ad.maxSamplerStateBindCount = 1; ad.maxBufferBindCount = 1;
+            m->args = [g_dev newArgumentTableWithDescriptor:ad error:&e]; }
+        if (!m->uv[0]) for (int i = 0; i < 3; i++) { m->uv[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared]; res_add(m->uv[i]); }
 #endif
-        mfx_retire(m->in); mfx_retire(m->out); res_add(in); res_add(out); res_commit();
+        if (m->main_cb) { defer_obj_release(m->in); defer_obj_release(m->out); } else { mfx_retire(m->in); mfx_retire(m->out); }
+        res_add(in); res_add(out); res_commit();
         if (!m->fence) m->fence = [g_dev newFence];
         s.fence = m->fence;
     }
     s.colorTexture = in; s.outputTexture = out; s.inputContentWidth = iw; s.inputContentHeight = ih;
-    m->scaler = s; m->in = in; m->out = out; m->iw = iw; m->ih = ih; m->ow = ow; m->oh = oh; m->m4 = m4;
-    MLOG("出图：MetalFX 空间放大 %lux%lu → %lux%lu（%s） | present: MetalFX spatial upscale", (unsigned long)iw, (unsigned long)ih, (unsigned long)ow, (unsigned long)oh, m4 ? "Metal 4" : "旧接口");
+    m->scaler = s; m->in = in; m->out = out; m->iw = iw; m->ih = ih; m->ow = ow; m->oh = oh; m->m4 = m4; m->fmt = fmt;
+    MLOG("%s：MetalFX 空间放大 %lux%lu → %lux%lu（%s，格式 %lu） | MetalFX spatial upscale", m->who, (unsigned long)iw, (unsigned long)ih, (unsigned long)ow, (unsigned long)oh, m4 ? "Metal 4" : "旧接口", (unsigned long)fmt);
     return 1;
 }
 // 步骤 ① ②：拷贝趟 + MetalFX 编码；之后调用方把 m->out 当源、按 1:1 画上 drawable | Steps (1) and (2): copy pass + MetalFX encode; the caller then draws m->out 1:1 onto the drawable
-static int mfx_scale(mfx_t *m, id cb, id<MTLTexture> src, NSUInteger cx, NSUInteger cy, NSUInteger cw, NSUInteger ch, int uv_i) {
+static int mfx_scale(mfx_t *m, id cb, id<MTLTexture> src, NSUInteger cx, NSUInteger cy, NSUInteger cw, NSUInteger ch) {
     float uv[8] = {(float)cx / src.width, (float)cy / src.height, (float)cw / src.width, (float)ch / src.height,
                    (cx + 0.5f) / src.width, (cy + 0.5f) / src.height, (cx + cw - 0.5f) / src.width, (cy + ch - 0.5f) / src.height};
     MTLViewport vp = {0, 0, cw, ch, 0, 1};
+    id<MTLRenderPipelineState> pso = mfx_copy_pso(m->fmt); if (!pso) return 0;
 #if !DM_NVN_M3
     if (m->m4) {
-        memcpy(g_mfx_uv[uv_i].contents, uv, sizeof uv);
+        int uv_i = m->uvi = (m->uvi + 1) % 3;   // 本份放大器自己的环：在途最多 3 份 | this scaler's own ring: at most 3 in flight
+        memcpy(m->uv[uv_i].contents, uv, sizeof uv);
         MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
         rp.colorAttachments[0].texture = m->in; rp.colorAttachments[0].loadAction = MTLLoadActionDontCare; rp.colorAttachments[0].storeAction = MTLStoreActionStore;
         id<MTL4RenderCommandEncoder> en = [(id<MTL4CommandBuffer>)cb renderCommandEncoderWithDescriptor:rp];
-        if (!en) { MLOG("【红】出图：MetalFX 拷贝趟编码器建不出"); return 0; }
+        if (!en) { MLOG("【红】%s：MetalFX 拷贝趟编码器建不出", m->who); return 0; }
+        id<MTL4ArgumentTable> at = m->args;
         [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
-        [en setArgumentTable:g_mfx_args atStages:MTLRenderStageFragment];
-        [g_mfx_args setTexture:src.gpuResourceID atIndex:0]; [g_mfx_args setSamplerState:g_blit_samp.gpuResourceID atIndex:0]; [g_mfx_args setAddress:g_mfx_uv[uv_i].gpuAddress atIndex:0];
-        [en setViewport:vp]; [en setRenderPipelineState:g_mfx_copy_pso];
+        [en setArgumentTable:at atStages:MTLRenderStageFragment];
+        [at setTexture:src.gpuResourceID atIndex:0]; [at setSamplerState:mfx_samp(1).gpuResourceID atIndex:0]; [at setAddress:m->uv[uv_i].gpuAddress atIndex:0];
+        [en setViewport:vp]; [en setRenderPipelineState:pso];
         [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         [en updateFence:m->fence afterEncoderStages:MTLStageFragment];
         m4_end(en);
@@ -6101,13 +6114,12 @@ static int mfx_scale(mfx_t *m, id cb, id<MTLTexture> src, NSUInteger cx, NSUInte
         return 1;
     }
 #endif
-    (void)uv_i;
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = m->in; rp.colorAttachments[0].loadAction = MTLLoadActionDontCare; rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLRenderCommandEncoder> en = [(id<MTLCommandBuffer>)cb renderCommandEncoderWithDescriptor:rp];
-    if (!en) { MLOG("【红】出图：MetalFX 拷贝趟编码器建不出"); return 0; }
-    [en setFragmentTexture:src atIndex:0]; [en setFragmentSamplerState:g_blit_samp atIndex:0]; [en setFragmentBytes:uv length:sizeof uv atIndex:0];
-    [en setViewport:vp]; [en setRenderPipelineState:g_mfx_copy_pso];
+    if (!en) { MLOG("【红】%s：MetalFX 拷贝趟编码器建不出", m->who); return 0; }
+    [en setFragmentTexture:src atIndex:0]; [en setFragmentSamplerState:mfx_samp(1) atIndex:0]; [en setFragmentBytes:uv length:sizeof uv atIndex:0];
+    [en setViewport:vp]; [en setRenderPipelineState:pso];
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [en endEncoding];
     [(id<MTLFXSpatialScaler>)m->scaler encodeToCommandBuffer:(id<MTLCommandBuffer>)cb];
@@ -6126,9 +6138,89 @@ static void mfx_gpu_note(double sec) {
 }
 // 要不要走 MetalFX：开关开、视口两边都比有效区大 5% 以上、放大器备好 | Whether to use MetalFX: switch on, viewport more than 5% larger than the valid area on both sides, scaler ready
 static int mfx_want(mfx_t *m, int m4, NSUInteger cw, NSUInteger ch, MTLViewport vp) {
-    return mfx_on() && vp.width > cw * 1.05 && vp.height > ch * 1.05 && mfx_ready(m, m4, cw, ch, (NSUInteger)vp.width, (NSUInteger)vp.height);
+    return mfx_on() && vp.width > cw * 1.05 && vp.height > ch * 1.05 && mfx_ready(m, m4, MTLPixelFormatRGBA8Unorm, cw, ch, (NSUInteger)vp.width, (NSUInteger)vp.height);
 }
+// ---- MetalFX 换掉游戏的 3D 放大趟（各平台）----
+// 游戏 3D 按比例出（iOS 缺省 0.75、掉帧降到 0.70；Mac 缺省 1.0），末端由 ps_upsample_p（片元键 52aac1f2306b8fc5）放回输出尺寸。反汇编它：
+//   uv' = clamp(uv × c7[0].xy, c7[2].xy, c7[2].zw)；在 t10（3D 画面，RG11B10F）上双线性取中心与上下左右 4 点（步长 c7[1].xy）做非锐化掩模锐化（强度 c7[1].z），
+//   再乘 t11（R8 遮罩，在原 uv 上取）；alpha = 1；只写颜色 0（另一个附件挂着、不写）。
+// 开着时（DM_MFX3D=0/1 定死；没给就跟选项页「放大方式」）且真在放大（视口两边都比有效区大 5% 以上）：拷贝趟把有效区（uv 0..c7[0].xy）搬进 RGBA16F，
+// MetalFX 放大到视口尺寸（它自带锐化，取代原来的 5 点锐化），再一趟写回游戏的目标：rgb = MetalFX(uv) × 遮罩(uv)、alpha = 1。原版那次绘制跳过。
+// 条件不齐（目标是多级 / 切片、读不到参数、贴图不全、不在放大）就照原版画
+// ---- MetalFX replaces the game's 3D upscale pass (every platform) ----
+// The game renders 3D at a scale (iOS 0.75 by default, down to 0.70 on frame drops; Mac 1.0 by default) and at the end ps_upsample_p (fragment key 52aac1f2306b8fc5) scales it back to the output size. Disassembled:
+//   uv' = clamp(uv × c7[0].xy, c7[2].xy, c7[2].zw); bilinear samples of t10 (the 3D picture, RG11B10F) at the centre and 4 neighbours (step c7[1].xy) make an unsharp-mask sharpen (strength c7[1].z),
+//   multiplied by t11 (an R8 mask, sampled at the original uv); alpha = 1; only colour 0 is written (the other attachment is bound but not written).
+// When on (DM_MFX3D=0/1 fixes it; otherwise it follows the options page "Upscaling") and really enlarging (viewport more than 5% larger than the valid area both ways): a copy pass moves the valid area (uv 0..c7[0].xy) into RGBA16F,
+// MetalFX scales it to the viewport size (with its own sharpening, replacing the 5-tap one), and one more pass writes the game's target: rgb = MetalFX(uv) × mask(uv), alpha = 1. The original draw is skipped.
+// When anything does not fit (a mip / slice target, parameters unreadable, a texture missing, not enlarging) the original draws as usual
+static int mfx3d_on(void) {
+    static int env = -2, last = -1; if (env == -2) { const char *e = getenv("DM_MFX3D"); env = e ? atoi(e) > 0 : -1; }
+    int on = env >= 0 ? env : dm_video_upscale() != 0;
+    if (on != last) { last = on; MLOG("3D 放大：MetalFX %s（%s） | 3D upscale: MetalFX %s", on ? "开" : "关", env >= 0 ? "DM_MFX3D" : "选项页设置", on ? "on" : "off"); }
+    return on;
+}
+static const char *g_mfx3d_msl =
+    "#include <metal_stdlib>\nusing namespace metal;\n"
+    "struct V { float4 p [[position]]; float2 uv; };\n"
+    "vertex V vs(uint id [[vertex_id]]) { float2 uv = float2((id << 1) & 2, id & 2); V o; o.p = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); o.uv = uv; return o; }\n"
+    "fragment float4 fs(V in [[stage_in]], texture2d<float> c [[texture(0)]], texture2d<float> m [[texture(1)]], sampler sl [[sampler(0)]], sampler sn [[sampler(1)]]) { return float4(c.sample(sl, in.uv).rgb * m.sample(sn, in.uv).r, 1.0); }\n";
+static id<MTLRenderPipelineState> mfx3d_pso(MTLPixelFormat fmt) {   // 写回趟：按目标格式各编一份 | write-back pass: one pipeline per target format
+    static MTLPixelFormat f[4]; static id<MTLRenderPipelineState> p[4]; int k = 0;
+    for (; k < 4 && p[k]; k++) if (f[k] == fmt) return p[k];
+    if (k == 4) return nil;
+    NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(g_mfx3d_msl) options:nil error:&e];
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = [lib newFunctionWithName:@"vs"]; pd.fragmentFunction = [lib newFunctionWithName:@"fs"]; pd.colorAttachments[0].pixelFormat = fmt;
+    id<MTLRenderPipelineState> r = lib ? [g_dev newRenderPipelineStateWithDescriptor:pd error:&e] : nil;
+    if (!r) { MLOG("【红】3D 放大：写回趟管线建不出（格式 %lu）：%s", (unsigned long)fmt, e.localizedDescription.UTF8String); return nil; }
+    f[k] = fmt; p[k] = r; return r;
+}
+#if !DM_NVN_M3
+static id<MTL4ArgumentTable> g_mfx3d_args;
 #endif
+static int mfx3d_draw(NvShader *f) {   // 回放线程，游戏那次 ps_upsample_p 绘制处调；1 = 已用 MetalFX 画好、跳过原版 | replay thread, at the game's ps_upsample_p draw; 1 = drawn with MetalFX, skip the original
+    if (!mfx3d_on() || g_defer_replaying || !R.has_rt || R.rt.n < 1 || !R.rt.color[0]) return 0;
+    uint64_t h10 = 0, h11 = 0; int cb = -1;
+    for (int i = 0; i < f->rf.nb; i++) { nvn_rbind *b = &f->rf.b[i];
+        if (b->kind == NVN_RB_TEX && b->reg == 10) h10 = S.tex[1][10];
+        if (b->kind == NVN_RB_TEX && b->reg == 11) h11 = S.tex[1][11];
+        if (b->kind == NVN_RB_CBUF && cb < 0) cb = b->reg; }
+    float c[12]; if (!h10 || !h11 || cb < 0) return 0;
+    for (int k = 0; k < 12; k++) if (!ubo_float(1, (uint16_t)(cb << 8 | k), &c[k])) return 0;   // c7[0..2]：引用 = 槽 << 8 | 向量 << 2 | 分量 | c7[0..2]: reference = slot << 8 | vector << 2 | component
+    int i10 = (int)(h10 & 0xfffff), i11 = (int)(h11 & 0xfffff); tex_t t10, t11;
+    pthread_mutex_lock(&g_rmu);   // 登记表可能正被游戏线程扩容或改写：锁内拷出两项 | the registration table may be being grown or rewritten by the game thread: copy both entries out under the lock
+    int ok = i10 > 0 && i10 < g_ntreg && g_treg[i10].ok && i11 > 0 && i11 < g_ntreg && g_treg[i11].ok;
+    if (ok) { t10 = g_treg[i10].t; t11 = g_treg[i11].t; }
+    pthread_mutex_unlock(&g_rmu); if (!ok) return 0;
+    uint64_t ser; int lv, sl; rt_sub(&R.rt, 0, &ser, &lv, &sl); if (lv || sl) return 0;
+    id<MTLTexture> src = tex_mtl(&t10), mask = tex_mtl(&t11), dst = tex_mtl(R.rt.color[0]); if (!src || !mask || !dst) return 0;
+    double vx = S.vp[0][0], vy = S.vp[0][1], vw = S.vp[0][2], vh = S.vp[0][3];
+    NSUInteger cw = (NSUInteger)llround(c[0] * src.width), ch = (NSUInteger)llround(c[1] * src.height);
+    if (!cw || !ch || cw > src.width || ch > src.height || vw < cw * 1.05 || vh < ch * 1.05 || vx + vw > dst.width + 0.5 || vy + vh > dst.height + 0.5) return 0;
+    if (!mfx_ready(&g_mfx_3d, MFX_M4, MTLPixelFormatRGBA16Float, cw, ch, (NSUInteger)llround(vw), (NSUInteger)llround(vh))) return 0;
+    id<MTLRenderPipelineState> pso = mfx3d_pso(dst.pixelFormat); if (!pso) return 0;
+    rp_end();
+    if (!mfx_scale(&g_mfx_3d, g_cb, src, 0, 0, cw, ch)) return 0;
+    int full = vx == 0 && vy == 0 && llround(vw) == (long)dst.width && llround(vh) == (long)dst.height;
+    RPD *rp = [RPD new]; rp.colorAttachments[0].texture = dst; rp.colorAttachments[0].loadAction = full ? MTLLoadActionDontCare : MTLLoadActionLoad; rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    RENC en = [g_cb renderCommandEncoderWithDescriptor:rp]; if (!en) { MLOG("【红】3D 放大：写回趟编码器建不出"); return 0; }
+#if DM_NVN_M3
+    [en setFragmentTexture:g_mfx_3d.out atIndex:0]; [en setFragmentTexture:mask atIndex:1]; [en setFragmentSamplerState:mfx_samp(1) atIndex:0]; [en setFragmentSamplerState:mfx_samp(0) atIndex:1];
+#else
+    if (!g_mfx3d_args) { MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 2; ad.maxSamplerStateBindCount = 2; NSError *e = nil; g_mfx3d_args = [g_dev newArgumentTableWithDescriptor:ad error:&e]; }
+    [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
+    [en waitForFence:g_mfx_3d.fence beforeEncoderStages:MTLStageFragment];   // 等 MetalFX 写完 | wait for MetalFX to finish writing
+    [en setArgumentTable:g_mfx3d_args atStages:MTLRenderStageFragment];
+    [g_mfx3d_args setTexture:g_mfx_3d.out.gpuResourceID atIndex:0]; [g_mfx3d_args setTexture:mask.gpuResourceID atIndex:1];
+    [g_mfx3d_args setSamplerState:mfx_samp(1).gpuResourceID atIndex:0]; [g_mfx3d_args setSamplerState:mfx_samp(0).gpuResourceID atIndex:1];
+#endif
+    [en setViewport:(MTLViewport){vx, vy, vw, vh, 0, 1}]; [en setRenderPipelineState:pso]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; m4_end(en);
+    R.clear_c[0] = 0; args_dirty_all(); g_pso_dirty = g_dss_dirty = 1;
+    { static int once; if (!once++) MLOG("3D 放大：MetalFX 取代 ps_upsample_p：有效区 %lux%lu（%.0f%% 宽）→ 视口 %.0fx%.0f，锐化强度原为 %.3f", (unsigned long)cw, (unsigned long)ch, 100.0 * cw / vw, vw, vh, c[6]); }
+    PD("U %llu 3D 放大改用 MetalFX %lux%lu → %.0fx%.0f", g_stat_pass, (unsigned long)cw, (unsigned long)ch, vw, vh);
+    return 1;
+}
 // 出图仅采NVN声明的有效源矩形；与原始交换链读回截图分开。边缘钳到有效区纹素中心，双线性不读外侧黑纹素。
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
 static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTexture> dst, const int crop[4]) {
@@ -6157,7 +6249,7 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTe
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
 #if TARGET_OS_OSX
     if (mfx_want(&g_mfx_grab, 0, cw, ch, vp)) {   // 整窗截图：与上屏一样走 MetalFX | whole-window screenshot: MetalFX like the present
-        if (!mfx_scale(&g_mfx_grab, cb, src, cx, cy, cw, ch, 0)) return 0;
+        if (!mfx_scale(&g_mfx_grab, cb, src, cx, cy, cw, ch)) return 0;
         src = g_mfx_grab.out; cx = cy = 0; cw = src.width; ch = src.height;
     }
 #endif
@@ -6196,7 +6288,7 @@ static int present_encode_m4(CBUF cb, id<MTLTexture> src0, id<MTLTexture> dst, c
     int mfx = 0;
     if (MFX_M4) mfx_retire_tick();
     if (mfx_want(&g_mfx_pres, MFX_M4, cw, ch, vp)) {
-        if (!mfx_scale(&g_mfx_pres, cb, src, cx, cy, cw, ch, uv_i)) return 0;
+        if (!mfx_scale(&g_mfx_pres, cb, src, cx, cy, cw, ch)) return 0;
         src = g_mfx_pres.out; cx = cy = 0; cw = src.width; ch = src.height; mfx = 1;
     }
     (void)mfx;
