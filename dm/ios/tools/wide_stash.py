@@ -110,9 +110,11 @@ def _vt_check(name, x, y, label):
              'toggledFrame': 4, 'toggledPressedFrame': 5, 'toggledHoveredFrame': 6, 'onClickMessage': 'PanelManager:ClosePanel:' + name}},
             {'type': 'TextBoxWidget', 'name': name + '_Text', 'fields': {'text': label, 'rect': {'x': x + 75, 'y': y - 5, 'height': 50}, 'style': '$StyleSettingsTitle', 'fitToText': True}}]
 def _vt_sub(name, x, label):
-    return {'type': 'ToggleButtonWidget', 'name': name, 'fields': {'rect': {'x': x, 'y': 0, 'width': 358, 'height': 94, 'scale': 0.7}, 'sound': 'cursor_menu_select_hd',
-            'filename': 'PANEL\\Chronicle\\Slot_list_small_golddeco', 'untoggledFrame': 0, 'toggledFrame': 1, 'onClickMessage': 'PanelManager:ClosePanel:' + name},
-            'children': [_vt_text('Text', 25, 0, 330, 94, '$FontColorWhite', '$LargeFontSize', 'center', label)]}
+    return {'type': 'Widget', 'name': name, 'fields': {'rect': {'x': x, 'y': 0, 'width': 358, 'height': 94, 'scale': 0.7}},
+            'children': [
+                {'type': 'ImageWidget', 'name': 'Img', 'fields': {'rect': {'x': 0, 'y': 0}, 'filename': 'PANEL\\Chronicle\\Slot_list_small_golddeco', 'frame': 0}},
+                _vt_box('Hit', 0, 0, 358, 94, [0, 0, 0, 0]),
+                _vt_text('Text', 25, 0, 330, 94, '$FontColorWhite', '$LargeFontSize', 'center', label)]}
 def vault_widgets():
     CW, CH, GAP = (VW - 2 * 8) // VAULT_COLS, 130, 8
     cells = []

@@ -239,7 +239,7 @@ static int vu_cell_at(uint64_t vt, int x, int y, int *cell) {   // 视口像素�
 int dm_vault_ui_blocks(int x, int y) {
     if (!dm_vault_ui_over(x, y)) return 0;
     uint8_t *b = vu_base(); uint64_t root = b ? *(uint64_t *)(b + 0x2f05458) : 0, bk = root ? dm_ui_top(root, "BankExpansionLayout") : 0, vt = bk ? vu_find(bk, "TouchVault", 1) : 0; if (!vt) return 0;
-    static const char *const ours[] = { "TouchV_SubU", "TouchV_SubS", "TouchV_T0", "TouchV_T1", "TouchV_T2", "TouchV_SearchBg" };
+    static const char *const ours[] = { "TouchV_T0", "TouchV_T1", "TouchV_T2", "TouchV_SearchBg" };
     for (unsigned i = 0; i < sizeof ours / sizeof ours[0]; i++) if (vu_hit(vu_find(vt, ours[i], 1), x, y)) return 0;
     return 1;
 }
@@ -250,6 +250,13 @@ int dm_vault_ui_tap(int x, int y) {
     // Tap areas of the page bar (two hit boxes larger than the arrow graphics): handled by the host itself. Must come before the cell check -- the cell logic further down has a 0.4-second double-tap check, and repeated page-turn taps must not fall into it; if a tooltip is open, close it first
     { int dm_vault_ui_pager_hit(int, int); void dm_vault_ui_flip(int); int d = dm_vault_ui_pager_hit(x, y);
       if (d) { if (g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; } dm_vault_ui_flip(d); return 1; } }
+    for (int s = 0; s < 2; s++) {
+        uint64_t tab = vu_find(vt, s ? "TouchV_SubS" : "TouchV_SubU", 1);
+        if (vu_hit(vu_find(tab, "Hit", 0), x, y)) {
+            if (g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; }
+            atomic_store(&g_sub_req, s); atomic_store(&g_dirty, 1); return 1;
+        }
+    }
     if (g_sub == 0) for (int p = 0; p < VT_NPART; p++) { char nm[16]; snprintf(nm, sizeof nm, "TouchV_PT%d", p); uint64_t t = vu_find(vt, nm, 1);   // 部位页签：宿主自己收，不发鼠标 | Slot tabs: handled by the host itself, no mouse event sent
         if (t && vu_hit(vu_find(t, "Hit", 0), x, y)) { if (g_tip_on) { vu_tip(b, vt, NULL); g_tip_on = 0; } if (p != g_part) { g_part = p; atomic_store(&g_dirty, 1); LOG("编年史仓库：点部位页签 %s", vt_part_name[p]); } return 1; } }
     int cell = -1, row = vu_cell_at(vt, x, y, &cell);
@@ -448,7 +455,8 @@ void dm_vault_ui_pump(void) {
     static int gen = -1; int g = dm_vault_gen(); if (g != gen) { gen = g; atomic_store(&g_dirty, 1); }
     if (g_tip_on) { vu_tip_exact(b, vt); vu_tip_place(vu_find(vt, "TouchV_Tip", 0), vu_find(vt, "TouchV_TipBg", 0)); }
     static int fr; int dirty = atomic_exchange(&g_dirty, 0); if (!dirty && ++fr % 30) return;   // 编年史收录在服务端拍里变：开着时每半秒重写一次（字没变不写） | Chronicle records change in the server tick: while open, rewrite once every half second (no write if the text did not change)
-    vu_toggle(vu_find(vt, "TouchV_SubU", 1), g_sub == 0); vu_toggle(vu_find(vt, "TouchV_SubS", 1), g_sub == 1);
+    vu_frame(vu_find(vu_find(vt, "TouchV_SubU", 1), "Img", 0), g_sub == 0);
+    vu_frame(vu_find(vu_find(vt, "TouchV_SubS", 1), "Img", 0), g_sub == 1);
     vu_show(vu_find(vt, "TouchV_Parts", 0), g_sub == 0); vu_show(vu_find(vt, "TouchV_Tiers", 0), g_sub == 0 && !g_query[0]);
     {   // 档次勾选的排法跟语言走（英文版）：中文照布局（wide_stash.py：块右对齐宽 590、三格间距 200）；英文三个标签宽窄不一、统计行也长， | the layout of the quality tier checkboxes follows the language (English version): Chinese follows the layout (wide_stash.py: block right-aligned and 590 wide, three cells spaced 200 apart); in English the three labels differ in width and the stats row is longer too,
         // 块改宽 650、各格按标签宽排（Norm 140 / Exc 100 / Elite 136 单位，Mac 上的 iOS 包截图量，标签后各留 15），让出的地方给统计行（左对齐，宽到 780）。勾选框在 x、标签在 x + 75、y − 5（同 _vt_check）
