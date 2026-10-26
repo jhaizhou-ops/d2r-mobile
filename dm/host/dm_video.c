@@ -19,9 +19,13 @@
 // 手机（DM_PHONE，iOS 覆盖层 DM_OVERLAY_IOS）：页上只有「图形」一节——res 是 3D 清晰度（0.75 / 0.85 / 1.0，交给 hle_oe.c 的 3D 比例，点应用当场换），
 // up 是游戏 3D 放大趟用不用 MetalFX（nvn_mtl.m mfx3d_draw），没有显示模式那一行；预设：推荐 = 首次启动按机型定，性能 = 75% 标准（最省电），品质 = 100% + MetalFX。
 // 页上有哪几行就管哪几行（dm_video_rows 按实际找到的切换框排）
+// 两个平台的「图形」节末尾还有「帧率」（60 / 30 省电）与「掉帧时」（降低 / 保持 3D 清晰度）：值存在自定义设置里（eco_fps / q3d，dm_custom.c 读写、存 sw_custom.txt），
+// 这里只管页上的切换框——待定值、应用、放弃都走自定义设置那一套；图形预设不管它们，「默认」把它们回到缺省（60 帧、降低）
 // Phones (DM_PHONE, iOS overlay DM_OVERLAY_IOS): the page only has the "Graphics" section -- res is the 3D resolution (0.75 / 0.85 / 1.0, handed to the 3D scale in hle_oe.c, switching as soon as Apply is pressed),
 // up is whether the game's 3D upscale pass uses MetalFX (nvn_mtl.m mfx3d_draw), and there is no display mode row; presets: Recommended = chosen per device on first boot, Performance = 75% Standard (lightest on the battery), Quality = 100% + MetalFX.
 // Only the rows the page actually has are handled (dm_video_rows lists the selectors it finds)
+// On both platforms the Graphics section ends with Frame Rate (60 / 30 power saver) and Frame Drops (lower / keep the 3D resolution): their values live in the custom settings (eco_fps / q3d, read and written by
+// dm_custom.c, saved in sw_custom.txt), and this file only drives the selectors -- pending values, Apply and Discard go through the custom settings; the graphic presets leave them alone, and "Default" puts them back to their defaults (60 fps, lower)
 #include "hle.h"
 #include "dm.h"
 #include "dm_cursor.h"
@@ -34,13 +38,18 @@
 #include <string.h>
 
 uint64_t dm_custom_find_w(uint64_t w, const char *name);
+int dm_custom_shown(void);
 int dm_custom_path(const char *name, char *p, size_t n);
 enum { K_MODE, K_RES, K_UP, NV };
 static const char *const k_keys[NV] = { "mode", "res", "up" };
 static const int k_n[NV] = { 2, 3, 2 };
-static const char *const k_rows[4] = { "mode", "res", "preset", "upscale" };   // 页上的行序 | row order on the page
-static const int k_row_n[4] = { 2, 3, 4, 2 };
-static const int k_row_key[4] = { K_MODE, K_RES, -1, K_UP };   // -1 = 图形预设（推导） | -1 = graphic presets (derived)
+#define NR 6
+static const char *const k_rows[NR] = { "mode", "res", "preset", "upscale", "fps", "drops" };   // 页上的行序 | row order on the page
+static const int k_row_n[NR] = { 2, 3, 4, 2, 2, 2 };
+static const int k_row_key[NR] = { K_MODE, K_RES, -1, K_UP, -2, -2 };   // -1 = 图形预设（推导）；-2 = 自定义设置里的键（k_row_ckey） | -1 = graphic presets (derived); -2 = a custom settings key (k_row_ckey)
+static const char *const k_row_ckey[NR] = { 0, 0, 0, 0, "eco_fps", "q3d" };   // 切换框第 0 / 1 项 = 键值 0 / 1（60 帧 / 30 帧；降低 / 保持） | selector options 0 / 1 = key values 0 / 1 (60 / 30 fps; lower / keep)
+int dm_custom_shown_value(const char *key); void dm_custom_set_pending(const char *key, int v); int dm_custom_default(const char *key);
+static _Atomic int g_crows;   // 页上有的自定义键行（按行号的位）：「默认」只回这几行 | the custom-key rows the page has (one bit per row): "Default" resets only those
 enum { P_REC, P_PERF, P_QUAL, P_CUSTOM };
 static _Atomic int g_val[NV], g_pend[NV] = { -1, -1, -1 }, g_rec[NV], g_loaded, g_repaint;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;   // 读盘 / 存盘：前端主线程（启动、全屏切换）与游戏线程（应用）都会写 | load / save: written by both the front end's main thread (launch, full-screen changes) and the game thread (Apply)
@@ -124,7 +133,10 @@ void dm_video_on_uimsg(const char *cat, const char *act, const char *arg) {
         if (mode >= 0) front_video_fullscreen(mode);   // 显示模式当场切 | display mode switches at once
         atomic_store(&g_repaint, 1); }
     else if (!strcmp(act, "CancelChanges")) { for (int i = 0; i < NV; i++) atomic_store(&g_pend[i], -1); atomic_store(&g_repaint, 1); }
-    else if (!strcmp(act, "ResetToDefaults")) { for (int i = 0; i < NV; i++) atomic_store(&g_pend[i], atomic_load(&g_rec[i])); atomic_store(&g_repaint, 1); LOG("画面设置：默认 → 推荐值（点「应用」生效）"); }
+    // 「默认」只管当前页签那一节（「附加」页签上不动画面设置，同原版各页签各管各的） | Default covers only the current tab's section (on the "Extras" tab it leaves the picture settings alone, as each original tab covers its own)
+    else if (!strcmp(act, "ResetToDefaults") && (dm_custom_shown() & 1)) { for (int i = 0; i < NV; i++) atomic_store(&g_pend[i], atomic_load(&g_rec[i]));
+        for (int i = 0; i < NR; i++) if (k_row_ckey[i] && (atomic_load(&g_crows) >> i & 1)) dm_custom_set_pending(k_row_ckey[i], dm_custom_default(k_row_ckey[i]));
+        atomic_store(&g_repaint, 1); LOG("画面设置：默认 → 推荐值、帧率与掉帧时回缺省（点「应用」生效）"); }
 }
 
 // ---- 页上的切换框
@@ -140,16 +152,16 @@ static int car_ok(uint64_t w, int n) {
 static int car_get(uint64_t w) { return *(int32_t *)(w + 0x7ec); }
 static void car_set(uint64_t w, int i) { if (car_get(w) != i) ((void (*)(uint64_t, int))(main_base() + 0xab0c84))(w, i); }
 static void preset_enable(uint64_t w, int custom) { *(uint8_t *)(w + 0x7d8 + P_CUSTOM) = custom != 0; }   // 「自定义」只在不对应任何一档时可选（箭头跳过它） | "Custom" can only be chosen when no preset matches (the arrows skip it)
-static int present_rows(uint64_t sp, int idx[4]) {   // 页上实际有的行（按页上的顺序）：Mac 四行，手机没有显示模式 | the rows the page really has (in page order): four on the Mac, no display mode on phones
-    int n = 0; for (int i = 0; i < 4 && sp; i++) { uint64_t w = row_w(sp, i); if (w && *(uint8_t *)(w + 0x50)) idx[n++] = i; } return n;
+static int present_rows(uint64_t sp, int idx[NR]) {   // 页上实际有的行（按页上的顺序）：Mac 六行，手机没有显示模式 | the rows the page really has (in page order): six on the Mac, no display mode on phones
+    int n = 0; for (int i = 0; i < NR && sp; i++) { uint64_t w = row_w(sp, i); if (w && *(uint8_t *)(w + 0x50)) idx[n++] = i; } return n;
 }
-int dm_video_rows(uint64_t sp) { int idx[4]; return present_rows(sp, idx); }
+int dm_video_rows(uint64_t sp) { int idx[NR]; return present_rows(sp, idx); }
 void dm_video_row(uint64_t sp, int i, uint64_t *tw, uint64_t *cw) {   // 手柄选中框：第 i 个画面设置行的标签与切换框 | controller selection frame: label and selector of the i-th picture row
-    int idx[4], n = present_rows(sp, idx); *tw = *cw = 0; if (i < 0 || i >= n) return;
+    int idx[NR], n = present_rows(sp, idx); *tw = *cw = 0; if (i < 0 || i >= n) return;
     char nm[48]; snprintf(nm, sizeof nm, "TouchVideo_%s_Text", k_rows[idx[i]]); *tw = dm_custom_find_w(sp, nm); *cw = row_w(sp, idx[i]);
 }
 void dm_video_pad(uint64_t sp, int r, int dir) {   // 手柄：左右 = 上一项 / 下一项，A = 下一项（到头回第一项）；之后 dm_video_pump 当玩家改了处理 | controller: left / right = previous / next option, A = next (wrapping to the first); dm_video_pump then handles it as a player change
-    int idx[4], nr = present_rows(sp, idx); if (r < 0 || r >= nr) return; int i = idx[r];
+    int idx[NR], nr = present_rows(sp, idx); if (r < 0 || r >= nr) return; int i = idx[r];
     uint64_t w = row_w(sp, i); if (!car_ok(w, k_row_n[i])) return;
     int n = k_row_n[i], cur = car_get(w), to = cur;
     for (int k = 0; k < n; k++) { to = dir == 2 ? (to + 1) % n : to + dir; if (to < 0 || to >= n) { to = cur; break; } if (*(uint8_t *)(w + 0x7d8 + to)) break; }
@@ -160,29 +172,32 @@ static void hint(uint64_t sp) {   // 分辨率改了还没重启：「重启游�
     int run = front_video_running_res(), x = run >= 0 && shown(K_RES) != run ? ((int32_t *)(lw + 0x70))[0] : 99999; int32_t *r = (int32_t *)(hw + 0x70);
     if (r[0] != x) { r[0] = x; ((void (*)(uint64_t))*(uint64_t *)(*(uint64_t *)hw + 0x10))(hw); }
 }
+static int row_want(int i) { return k_row_ckey[i] ? dm_custom_shown_value(k_row_ckey[i]) : k_row_key[i] < 0 ? preset_of() : shown(k_row_key[i]); }   // 这一行该显示哪一项 | the option this row should show
 void dm_video_pump(uint64_t sp) {   // 自定义页在屏上时每帧调（dm_custom.c）；sp = 0：页不在屏上 | called every frame while the custom page is on screen (dm_custom.c); sp = 0: the page is not on screen
-    static dm_wref seen[4];
-    uint64_t w[4] = { 0, 0, 0, 0 }; int ok = sp != 0 && dm_video_rows(sp) > 0;
-    for (int i = 0; ok && i < 4; i++) { w[i] = row_w(sp, i); if (w[i] && !*(uint8_t *)(w[i] + 0x50)) w[i] = 0; }   // 页上没有的行 = 0，下面跳过 | rows the page lacks = 0, skipped below
-    if (!ok) { int was = 0; for (int i = 0; i < 4; i++) was |= seen[i].w != 0;   // 页没了：没点「应用」的改动作废（同自定义页） | the page is gone: changes without "Apply" are dropped (as the custom page)
-        if (was) for (int i = 0; i < NV; i++) atomic_store(&g_pend[i], -1);
-        memset(seen, 0, sizeof seen); return; }
-    for (int i = 0; i < 4; i++) if (w[i] && !car_ok(w[i], k_row_n[i])) return;
+    static dm_wref seen[NR];
+    uint64_t w[NR] = { 0 }; int ok = sp != 0 && dm_video_rows(sp) > 0;
+    for (int i = 0; ok && i < NR; i++) { w[i] = row_w(sp, i); if (w[i] && !*(uint8_t *)(w[i] + 0x50)) w[i] = 0; }   // 页上没有的行 = 0，下面跳过 | rows the page lacks = 0, skipped below
+    if (!ok) { int was = 0; for (int i = 0; i < NR; i++) was |= seen[i].w != 0;   // 页没了：没点「应用」的改动作废（同自定义页） | the page is gone: changes without "Apply" are dropped (as the custom page)
+        if (was) { for (int i = 0; i < NV; i++) atomic_store(&g_pend[i], -1); for (int i = 0; i < NR; i++) if (k_row_ckey[i]) dm_custom_set_pending(k_row_ckey[i], -1); }
+        memset(seen, 0, sizeof seen); atomic_store(&g_crows, 0); return; }
+    for (int i = 0; i < NR; i++) if (w[i] && !car_ok(w[i], k_row_n[i])) return;
+    { int cr = 0; for (int i = 0; i < NR; i++) if (w[i] && k_row_ckey[i]) cr |= 1 << i; atomic_store(&g_crows, cr); }
     load_once(); if (!atomic_load(&g_loaded)) return;
     if (atomic_exchange(&g_repaint, 0)) memset(seen, 0, sizeof seen);
-    int want[4], ch = -1;   // 先按改之前的值算各行该显示什么，再找玩家动了哪一行（一帧只认一行）：原先边改边比，预设刚改的待定值被后面几行当成玩家又改回去了
+    int want[NR], ch = -1;   // 先按改之前的值算各行该显示什么，再找玩家动了哪一行（一帧只认一行）：原先边改边比，预设刚改的待定值被后面几行当成玩家又改回去了
                             // first work out what each row should show from the values before any change, then find the row the player moved (one per frame): comparing while changing used to let the later rows read a preset's fresh pending values as the player changing them back
-    for (int i = 0; i < 4; i++) want[i] = k_row_key[i] < 0 ? preset_of() : shown(k_row_key[i]);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NR; i++) want[i] = row_want(i);
+    for (int i = 0; i < NR; i++) {
         if (!w[i]) continue;
-        if (dm_wref_get(&seen[i]) != w[i]) { dm_wref_set(&seen[i], w[i]); if (k_row_key[i] < 0) preset_enable(w[i], want[i] == P_CUSTOM); car_set(w[i], want[i]); continue; }   // 页刚出现：摆成该显示的值，这一帧不当玩家改了 | the page just appeared: show the value it should, and do not treat this frame as a player change
+        if (dm_wref_get(&seen[i]) != w[i]) { dm_wref_set(&seen[i], w[i]); if (k_row_key[i] == -1) preset_enable(w[i], want[i] == P_CUSTOM); car_set(w[i], want[i]); continue; }   // 页刚出现：摆成该显示的值，这一帧不当玩家改了 | the page just appeared: show the value it should, and do not treat this frame as a player change
         if (ch < 0 && car_get(w[i]) != want[i]) ch = i;
     }
     if (ch >= 0) {
         int k = k_row_key[ch], cur = car_get(w[ch]);
-        if (k < 0) { if (cur != P_CUSTOM) apply_preset(cur); LOG("画面设置：图形预设 → %d（点「应用」生效）", cur); }
+        if (k_row_ckey[ch]) { dm_custom_set_pending(k_row_ckey[ch], cur); LOG("画面设置：%s → %d（自定义设置里的键；点「应用」生效）", k_row_ckey[ch], cur); }
+        else if (k < 0) { if (cur != P_CUSTOM) apply_preset(cur); LOG("画面设置：图形预设 → %d（点「应用」生效）", cur); }
         else { atomic_store(&g_pend[k], cur); LOG("画面设置：%s → %d（点「应用」生效）", k_keys[k], cur); }
-        for (int i = 0; i < 4; i++) { if (!w[i]) continue; int kk = k_row_key[i], v = kk < 0 ? preset_of() : shown(kk); if (kk < 0) preset_enable(w[i], v == P_CUSTOM); car_set(w[i], v); }   // 预设带动其余几项、其余几项带动预设 | presets move the other rows, and the other rows move the preset
+        for (int i = 0; i < NR; i++) { if (!w[i]) continue; int v = row_want(i); if (k_row_key[i] == -1) preset_enable(w[i], v == P_CUSTOM); car_set(w[i], v); }   // 预设带动其余几项、其余几项带动预设 | presets move the other rows, and the other rows move the preset
     }
     hint(sp);
 }

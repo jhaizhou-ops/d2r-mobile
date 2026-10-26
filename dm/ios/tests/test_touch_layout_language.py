@@ -41,7 +41,7 @@ for key, cap, _ in opts:
     assert b['x'] >= right and t['x'] == b['x'] + 80, (key, b, t)
     right = t['x'] + t['width']
 assert right <= 1385, right
-# 标签控件还在（宿主拿它定提示与手柄选中框），不写字、横跨整行
+# 标签控件还在（宿主拿它定提示的位置、手柄选到这一行时把整行滚进来），不写字、横跨整行
 lab = nodes['TouchCustom_lang_Text']['fields']
 assert lab['text'] == '' and lab['rect']['x'] == 0 and lab['rect']['width'] >= right, lab
 host = (root / 'host/dm_custom.c').read_text()

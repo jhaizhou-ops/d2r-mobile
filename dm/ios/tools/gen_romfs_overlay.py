@@ -121,6 +121,10 @@ with tempfile.TemporaryDirectory() as t:
         PR.update(touch_layout.build_ingame(romfs,tpad,touch_layout.PAD_SETTINGS_MAC,present=False,pre={'controller/console/settingspanelhd.json':touch_layout.pad_settings})[0])
         lp,lt=touch_layout.read_layout(romfs,'controller/settingspanelhd.json'); o=os.path.join(tpad,'pad_settings_legend.json'); open(o,'w',encoding='utf-8').write(touch_layout.pad_settings_legend(lt)); PR[lp.lower()]=o
     PR.update(pouch_layout.build(romfs,tpad,PR)[0]); PR.update(wide_stash.build(romfs,tpad,PR)[0])   # 储藏箱 10 → 14 列（编年史仓库第 1 步）：表、底图、宽外框、布局；要在触摸布局之后（储藏箱 / 外框布局叠在那份上） | Stash 10 → 14 columns (chronicle vault step 1): table, base image, wide outer frame, layout; must come after the touch layout (the stash / outer frame layout stacks on that copy)
+    # 选项页第五个页签「附加」的那一页（Mac、iOS，touch_layout._EXTRAS_PANEL）：布局根下的新目录 2extras_lay/，手柄与触屏两种模式都落到这一份
+    # The page of the Options page's fifth tab, "Extras" (Mac, iOS, touch_layout._EXTRAS_PANEL): a new folder 2extras_lay/ under the layout root, which both controller and touch modes fall back to
+    EXTRAS={}
+    if touch_layout._VIDEO: o=os.path.join(t,'extras_page.json'); open(o,'w',encoding='utf-8').write(touch_layout.extras_page(romfs)); EXTRAS[touch_layout.EXTRAS_PATH]=o
     cb=Image.open(os.path.join(HERE,'..','NativeHUD','touch','close.png')).convert('RGBA')
     open(os.path.join(t,'close.sprite'),'wb').write(b'SpA1'+struct.pack('<HHIIIIII',31,cb.width,cb.width,cb.height,0,1,0,0)+struct.pack('<II',cb.width*cb.height*4,4)+cb.tobytes())
     # 选角页右侧面板底图：去掉「转换角色」的槽与十字花、只留居中一个槽（原图解出后改的，同尺寸）
@@ -197,7 +201,7 @@ with tempfile.TemporaryDirectory() as t:
                'controller/controlleroverlayhd.json','controller/hirelinginventorypanelhd.json','controller/hudmonsterhealthhd.json','controller/messagelogpanelhd.json','controller/notificationpanelhd.json','controller/pauselayoutgardenhd.json','controller/pauselayouthd.json','controller/vendorpanellayouthd.json')+(('controller/settingspanelhd.json',) if os.environ.get('DM_OVERLAY_MAC') else ())
     if sorted(k[len(LAY):] for k in PADLAY)!=sorted(PAD_PAGES): raise SystemExit('gen_romfs_overlay：手柄专用布局与清单 PAD_PAGES 不一致：多 %s，少 %s' % (sorted(set(k[len(LAY):] for k in PADLAY)-set(PAD_PAGES)), sorted(set(PAD_PAGES)-set(k[len(LAY):] for k in PADLAY))))
     def emit(repl, dst, tag, prebuilt=None):   # repl → 覆盖层（新 .build.config + 一个新数据档）写到 dst/data | repl → overlay (a new .build.config + one new data archive) written to dst/data
-        repl=to_touch(repl); repl.update(PADLAY)
+        repl=to_touch(repl); repl.update(PADLAY); repl.update(EXTRAS)   # 「附加」页（新目录，两种模式同一份） | the "Extras" page (a new folder, the same file for both modes)
         # 只该给触屏的根目录布局（不在 Controller/ 前缀下、原先两种模式共用一份改过的）：改过的那份挪到触屏这边，原路径不再替换——手柄模式加载到原版字节。
         # 触屏目录里有页继承它的（basedOn 它的名字）：放 1touchbase_lay/ 并把那些页的 basedOn 改指过去；没有页继承的（游戏直接按名字加载）：放进触屏目录 xtouch_lay/，触屏模式先在那里找到
         # Root-directory layouts meant only for touch (not under the Controller/ prefix, previously one modified copy shared by both modes): the modified copy moves to the touch side and the original path is no longer replaced -- controller mode loads original bytes.

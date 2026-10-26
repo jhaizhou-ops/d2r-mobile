@@ -42,9 +42,38 @@ for voice in (False, True):
     keys = re.findall(r'"([a-z_0-9]+)"', re.search(r'k_keys\[\].*?=\s*\{(.*?)\}', host, re.S)[1])
     assert keys == [key for key, _ in layout._CUSTOM_ALL], (voice, keys)
     assert ('voice' in keys) == voice
-    defaults = [int(x) for x in re.search(r'k_def\[NK\].*?=\s*\{(.*?)\}', host, re.S)[1].split(',')]
+    defaults = [x.strip() for x in re.search(r'k_def\[NK\].*?=\s*\{(.*?)\}', host, re.S)[1].split(',')]   # 缺省值可以是平台式子（q3d：!DM_PHONE = Mac 画质优先、手机流畅优先） | a default may be a platform expression (q3d: !DM_PHONE = quality first on the Mac, smoothness first on phones)
+    assert all(re.fullmatch(r'-?\d+|!?DM_PHONE', x) for x in defaults), defaults
+    defaults = [int(x) if re.fullmatch(r'-?\d+', x) else x for x in defaults]
     assert len(defaults) == len(keys) and defaults[keys.index('touch_swap_above')] == 0
 os.environ.pop('MOVIE_FFMPEG'); layout = importlib.reload(layout)
 host = host_src
 assert 'TouchCustom_touch_swap_above_near' in host
-print('PASS touch layout options: generated radio pair, labels, defaults, host order (default and MOVIE_FFMPEG=1) and scrolling row extent')
+# Mac / iOS：「帧率」「掉帧时」是「视频」页签上的切换框（宿主 dm_video.c 读写同一对键 eco_fps / q3d），「附加」页上没有这两行；安卓的自定义页（不设覆盖层开关）照旧是勾选行
+# Mac / iOS: Frame Rate and Frame Drops are selectors on the Video tab (the host's dm_video.c reads and writes the same keys eco_fps / q3d) and not rows on the Extras page; Android's custom page (no overlay flag) keeps the checkbox rows
+FAKE = '"name": "VideoOptionsPanel", "name": "OptionsTable"'
+def page_nodes(text):
+    found = {}
+    def visit(node):
+        if isinstance(node, dict):
+            if 'name' in node: found[node['name']] = node
+            for child in node.values(): visit(child)
+        elif isinstance(node, list):
+            for child in node: visit(child)
+    visit(json.loads(re.sub(r',\s*([}\]])', r'\1', text)))
+    return found
+all_keys = [k for k, _ in layout._CUSTOM_ROWS]
+assert 'TouchCustom_eco_fps' in nodes and 'TouchCustom_q3d' in nodes and [k for k, _ in layout._CUSTOM_ALL][1:] == all_keys
+for flag in ('DM_OVERLAY_MAC', 'DM_OVERLAY_IOS'):
+    os.environ[flag] = '1'; layout = importlib.reload(layout)
+    video = page_nodes(layout._custom_page(FAKE, 'video')[0]); extras = page_nodes(layout._custom_page(FAKE, 'extras')[0])
+    for row, states in (('fps', ['dmVideoFps60', 'dmVideoFps30']), ('drops', ['dmVideoDropsLower', 'dmVideoDropsKeep'])):
+        w = video['TouchVideo_' + row]
+        assert w['type'] == 'CarouselWidget' and w['fields']['states'] == states, (flag, row, w)
+    assert not {'TouchCustom_eco_fps', 'TouchCustom_q3d', 'TouchCustom_q3d_smooth'} & set(extras), flag
+    assert [k for k, _ in layout._CUSTOM_ALL][1:] == [k for k in all_keys if k not in ('eco_fps', 'q3d')], flag
+    os.environ.pop(flag); layout = importlib.reload(layout)
+video_src = (root / 'host/dm_video.c').read_text()
+assert re.search(r'k_rows\[NR\] = \{ "mode", "res", "preset", "upscale", "fps", "drops" \}', video_src)
+assert re.search(r'k_row_ckey\[NR\] = \{ 0, 0, 0, 0, "eco_fps", "q3d" \}', video_src)
+print('PASS touch layout options: generated radio pair, labels, defaults, host order (default and MOVIE_FFMPEG=1), scrolling row extent, and Frame Rate / Frame Drops on the Mac and iOS Video tab')

@@ -150,7 +150,7 @@ Se entra por el portal rojo de Harrogath tras completar Infierno. Hay 100 nivele
 | Tareas tediosas eliminadas | Identificación gratuita, Town Portal gratuito sin necesidad de pergaminos, aparición justo al lado del Waypoint, Quick Restart, mercancía de los vendedores renovable |
 | Partidas guardadas | Se guardan de inmediato al cambiar de app, al cerrarla deslizando o al salir; sincronización por iCloud entre dispositivos (requiere firmar con una cuenta de desarrollador de pago) |
 
-La mayoría de las funciones se pueden activar o desactivar una por una en el juego, en Options → Custom.
+La mayoría de las funciones se pueden activar o desactivar una por una en el juego, en Opciones → Extras (Options → Custom en Android).
 
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/es_runeword.jpg" width="32%" alt="El asistente de palabras rúnicas">

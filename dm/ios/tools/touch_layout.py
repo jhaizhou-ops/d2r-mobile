@@ -1139,7 +1139,8 @@ def build_present(romfs, outdir):
 # ---------- 选项页：视频页签整页去掉（iPhone 自己能调亮度），其余页签里与触摸产品无关的项藏掉 ----------
 # ---------- Options pages: the whole video tab page is removed (the iPhone can adjust brightness itself), and items in the other tabs unrelated to the touch product are hidden ----------
 def _settings_tabs(text):
-    """页签条去掉第一个（视频）：个数与四个并列数组各去首项；第四项「控制」换成「自定义」。 | Remove the first item (video) from the tab strip: drop the first entry from the count and from each of the four parallel arrays; the fourth item 「控制」(Controls) is replaced with 「自定义」(Custom)."""
+    """页签条去掉第一个（视频）：个数与四个并列数组各去首项；第四项「控制」换成「自定义」。Mac 与 iOS（_VIDEO）改用五个页签（_tabs5）。 | Remove the first item (video) from the tab strip: drop the first entry from the count and from each of the four parallel arrays; the fourth item 「控制」(Controls) is replaced with 「自定义」(Custom). The Mac and iOS (_VIDEO) use the five tabs instead (_tabs5)."""
+    if _VIDEO: return _settings_legend(_tabs5(text), 1)
     n = 0
     def drop_first(m):
         nonlocal n; items = [x for x in re.split(r',\s*', m.group(2).strip().rstrip(',')) if x.strip()]; n += 1
@@ -1161,9 +1162,11 @@ def _settings_tabs(text):
     # 字（「默认」「返回」）露在「应用 / 默认 / 放弃」三个按钮下面——在这份里也挪走
     # Bottom legend: this console layout declares its own Legend too (its basedOn is the hard-coded original path Controller/SettingsPanelHD.json, so touch mode also inherits the original and not the touch copy moved away below),
     # and its text (Default / Return) showed under the Apply / Default / Discard buttons -- moved away in this file as well
+    return _settings_legend(new, n + k + 1)
+def _settings_legend(new, n):
     new, k2 = offscreen(new, types=('ButtonLegendWidget',))
     if k2 != 1: raise SystemExit('touch_layout：主机版选项页提示条应为 1 个，找到 %d 个' % k2)
-    return new, n + k + k2 + 1
+    return new, n + k2
 def _drop_rows(*rows):
     """把选项表里的整行（TableRowWidget "Row <名>"）删掉：表格按剩下的行重排，不留空行。每个名字必须恰好删到一行。 | Delete whole rows (TableRowWidget "Row <name>") from the options table: the table re-lays out the remaining rows and leaves no empty row. Each name must delete exactly one row."""
     def fn(text):
@@ -1207,7 +1210,14 @@ _CUSTOM_ROWS = tuple((k, '@' + _custom_key(k)) for k in _CUSTOM_KEYS)
 # Dimensions are taken from the values the table lays out in the same widget tree: row height 180; text 1000×180; checkbox at x 1315 within the row, 70×70, vertically centered. Header row 180 (the gold divider line below it is placed for a 180 row height).
 # The first row is the language switch (also first in the host's key table), followed by the rows of _CUSTOM_KEYS; adding a row = adding a key to _CUSTOM_KEYS (and to k_keys in the host's dm_custom.c in the same order)
 _CUSTOM_TITLE_H, _CUSTOM_LINE_H = 180, 180
-_CUSTOM_ALL = (('lang', '@dmCustomLang'),) + _CUSTOM_ROWS
+_VIDEO_MAC = bool(os.environ.get('DM_OVERLAY_MAC'))
+_VIDEO_IOS = bool(os.environ.get('DM_OVERLAY_IOS')) and not _VIDEO_MAC
+# 「省电模式」（eco_fps）与「3D 画质」（q3d）是画面设置：Mac、iOS 上它们是「视频」页签「图形」一节的两个切换框（_VIDEO 的 fps / drops，宿主 dm_video.c 读写同一对键、存档不变），
+# 不在「附加」页上；安卓只有一张自定义页，照旧是勾选行。宿主按页上实际有的行上下选（dm_custom.c），键表 k_keys 仍是全部的键
+# Power saver (eco_fps) and 3D quality (q3d) are picture settings: on the Mac and iOS they are two selectors in the Video tab's Graphics section (fps / drops in _VIDEO; the host's dm_video.c reads and writes the same
+# two keys, so saved values carry over), not rows on the Extras page; Android has a single custom page and keeps them as checkbox rows there. The host moves through the rows a page really has (dm_custom.c); its key table k_keys still lists every key
+_VIDEO_TAB_KEYS = ('eco_fps', 'q3d') if _VIDEO_MAC or _VIDEO_IOS else ()
+_CUSTOM_ALL = (('lang', '@dmCustomLang'),) + tuple(r for r in _CUSTOM_ROWS if r[0] not in _VIDEO_TAB_KEYS)
 _CUSTOM_TEST_ROWS = int(os.environ.get('DM_CUSTOM_TEST_ROWS', '0'))   # 测试（造现场）：末尾多摆这么多行假行，验更多行时的滚动；产品不设 | test (test setup): append this many dummy rows at the end, to verify scrolling with more rows; not set in the product
 # 「3D 画质」（q3d）是单选的两项、每项下面一行说明小字，占两行高（_CUSTOM_Q3D_H）；其余各行一行高
 # "3D Quality" (q3d) is a radio with two options, each with a line of small description text below, taking two rows of height (_CUSTOM_Q3D_H); every other row is one row high
@@ -1226,24 +1236,26 @@ _CUSTOM_ROW_H = [(_CUSTOM_Q3D_H if k in ('voice', 'q3d', 'touch_swap_above') els
 # A selector sends TouchVideoMessage:<key>, a category nothing in the game handles: a selector replaces the message's third part with its own value, so the checkboxes' harmless PanelManager:ClosePanel:<name> became ClosePanel with no name, which crashed (lookup of a NULL child name at main+0xb1ee2c). The host reads each selector's current choice and handles apply / discard / default. The Resolution row keeps a line below it,
 # where the host puts "Takes effect after restarting the game" while a change is waiting for a restart (like the language row's hint). There is mouse hover, so each row has an original-style hover description
 # iOS（DM_OVERLAY_IOS，dm/ios/run.sh 生成覆盖层时设；安卓共用生成器但不设）：只有「图形」一节，标题行就是它——3D 清晰度（75% / 85% / 100%）、图形预设、放大方式
-# （游戏的 3D 放大趟用不用 MetalFX）；没有显示模式与分辨率（手机按屏幕原生出图）。触屏没有悬停，不带悬停说明
+# （游戏的 3D 放大趟用不用 MetalFX）、帧率（60 / 30 省电）、掉帧时（降 / 保持 3D 清晰度）；没有显示模式与分辨率（手机按屏幕原生出图）。触屏没有悬停，不带悬停说明
 # iOS (DM_OVERLAY_IOS, set by dm/ios/run.sh when it generates the overlay; Android shares the generator but does not set it): only the "Graphics" section, which is the header row itself -- 3D Resolution (75% / 85% / 100%), Graphic Presets, Upscaling
-# (whether the game's 3D upscale pass uses MetalFX); no display mode or resolution (phones render at the screen's native size). Touch has no hover, so no hover descriptions
-_VIDEO_MAC = bool(os.environ.get('DM_OVERLAY_MAC'))
-_VIDEO_IOS = bool(os.environ.get('DM_OVERLAY_IOS')) and not _VIDEO_MAC
+# (whether the game's 3D upscale pass uses MetalFX), Frame Rate (60 / 30 power saver), Frame Drops (lower / keep the 3D resolution); no display mode or resolution (phones render at the screen's native size). Touch has no hover, so no hover descriptions
+# Mac 与 iOS 上这几行独占「视频」页签（页首标题 = 第一节的名字，在表格的标题行里）；自定义各行在第五个页签「附加」那一页（_EXTRAS_PANEL）
+# On the Mac and iOS these rows have the "Video" tab to themselves (the page title = the first section's name, in the table's title row); the custom rows are on the page of the fifth tab, "Extras" (_EXTRAS_PANEL)
 _VIDEO = ((('mode', '@OptionsMenuDisplayMode', ('Windowed', 'Fullscreen'), 'dmVideoModeTip'),
            ('res', '@ScreenResolution', ('dmVideoRes1600', 'dmVideoRes1920', 'dmVideoRes2560'), 'dmVideoResTip'),
            ('hdr', '@Graphics'),
            ('preset', '@GraphicPresetsText', ('dmVideoPresetRec', 'Performance', 'Quality', 'Custom'), 'dmVideoPresetTip'),
            ('upscale', '@dmVideoUpscale', ('dmVideoUpStandard', 'dmVideoUpMetalFX'), 'dmVideoUpscaleTip'),
-           ('hdr', '@KeyBindingTypeCustom')) if _VIDEO_MAC else
+           ('fps', '@dmVideoFps', ('dmVideoFps60', 'dmVideoFps30'), 'dmVideoFpsTip'),
+           ('drops', '@dmVideoDrops', ('dmVideoDropsLower', 'dmVideoDropsKeep'), 'dmVideoDropsTip')) if _VIDEO_MAC else
           (('res', '@dmVideo3DRes', ('dmVideoScale75', 'dmVideoScale85', 'dmVideoScale100'), None),
            ('preset', '@GraphicPresetsText', ('dmVideoPresetRec', 'Performance', 'Quality', 'Custom'), None),
            ('upscale', '@dmVideoUpscale', ('dmVideoUpStandard', 'dmVideoUpMetalFX'), None),
-           ('hdr', '@KeyBindingTypeCustom')) if _VIDEO_IOS else ())
+           ('fps', '@dmVideoFps', ('dmVideoFps60', 'dmVideoFps30'), None),
+           ('drops', '@dmVideoDrops', ('dmVideoDropsLower', 'dmVideoDropsKeep'), None)) if _VIDEO_IOS else ())
 _VIDEO_H = _CUSTOM_LINE_H * len(_VIDEO)
-_CUSTOM_Y = [_VIDEO_H + _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H[:i]) for i in range(len(_CUSTOM_ROW_H))]
-_CUSTOM_H = _VIDEO_H + _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H)
+_CUSTOM_Y = [_CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H[:i]) for i in range(len(_CUSTOM_ROW_H))]
+_CUSTOM_H = _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H)
 def _video_rows():
     out = ''
     for i, row in enumerate(_VIDEO):
@@ -1286,7 +1298,7 @@ _CUSTOM_LANG_HINT = ''.join('        { "type": "TextBoxWidget", "name": "TouchCu
 # （原版标题页、队伍名等同样按控件指定它）。五项放不下左边的「语言」标签字（俄语界面真包截图量：English / Español / Русский 实宽约 166 / 178 / 188，
 # 文字框要比实宽多约 30 才不折行），所以这一行不写标签字，五个选项自己说明是选语言。每项勾选框在前、字在后：文字框比字宽出来的那一截落在两项之间当间隔，
 # 勾选框紧挨着自己的字（字在前时那一截落在字与自己的勾选框之间，勾选框看着像下一项的，真包截图）。
-# 标签控件 TouchCustom_lang_Text 仍在、不写字、横跨整行：宿主拿它定提示那句的横坐标、手柄选中框按它与最后一个勾选框取并框住整行
+# 标签控件 TouchCustom_lang_Text 仍在、不写字、横跨整行：宿主拿它定提示那句的横坐标，手柄选到这一行时按它与最后一个勾选框取并、把整行滚进列表框
 _LANG_OPTS = (('Zh', 'zh', 'dmCustomLangZh', 38, 131), ('En', 'en', 'dmCustomLangEnOpt', 249, 196), ('Es', 'es', 'dmCustomLangEsOpt', 525, 213),
               ('Ru', 'ru', 'dmCustomLangRuOpt', 818, 221), ('Ko', 'ko', 'dmCustomLangKoOpt', 1119, 166))   # （控件名后缀，勾选框后缀，文字键，勾选框 x，文字框宽）；字在勾选框右边 10，宽 = 实宽 + 30
 _LANG_ROW_W = 1385   # 到各行勾选框那一列的右沿（x 1315 + 70）
@@ -1304,10 +1316,10 @@ def _custom_lang_row():
     return label + ''.join(box('TouchCustom_lang_' + b, bx) + text('TouchCustomLang%s_Text' % n, bx + 80, w, k) for n, b, k, bx, w in _LANG_OPTS)   # 空字标签（见上）
 # 「3D 画质」（流畅优先（缺省，掉帧自动降 3D 比例）/ 画质优先（不自动降））：上下两项单选，每项标题下一行说明小字。
 # 存的是一个键 q3d（1 = 画质优先）：「画质优先」的勾选框叫 TouchCustom_q3d、「流畅优先」的叫 TouchCustom_q3d_smooth（它的反面），宿主 dm_custom.c 让两框互斥（同语言行）。
-# TouchCustom_q3d_Text 是空字、高度盖住两项的框：手柄选中框按「文字框与勾选框的上下沿取并」框住整行（dm_custom.c），所以用它把两项一起框进去
+# TouchCustom_q3d_Text 是空字、高度盖住两项的框：手柄选到这一行时宿主按「文字框与勾选框的上下沿取并」把整行滚进列表框（dm_custom.c），所以用它让两项一起露出来
 # "3D Quality" (Smoothness first (default, automatically lowers the 3D scale on frame drops) / Quality first (no automatic lowering)): a stacked two-option radio, each option with a line of small description text below its title.
 # It stores a single key q3d (1 = quality first): the "Quality first" checkbox is TouchCustom_q3d and the "Smoothness first" one is TouchCustom_q3d_smooth (its inverse); the host's dm_custom.c makes the two boxes mutually exclusive (like the language row).
-# TouchCustom_q3d_Text is an empty-text box tall enough to cover both options: the controller selection frame wraps the whole row by "the union of the top/bottom edges of the text box and the checkbox" (dm_custom.c), so it is used to frame both options together
+# TouchCustom_q3d_Text is an empty-text box tall enough to cover both options: when the controller selects the row, the host scrolls "the union of the top/bottom edges of the text box and the checkbox" into the list box (dm_custom.c), so both options come into view together
 def _custom_q3d_row(i, setting="q3d"):
     prefix = "TouchCustom_" + setting
     y = _CUSTOM_Y[i]; h = _CUSTOM_LINE_H
@@ -1328,44 +1340,66 @@ def _custom_q3d_row(i, setting="q3d"):
         yy = y + k * h
         out += text(nm + '_Label', yy + 10, 100, key, False) + text(nm + '_Hint', yy + 100, 70, key + 'Hint', True) + box(nm, yy + 15)
     return out
-def _custom_page(text):
+# 第五个页签「附加」那一页（Mac、iOS）：页的名字带一级新目录，游戏按「前缀 + 名字 + HD.json」找布局，各前缀下都没有就落到布局根目录——
+# 覆盖层只能在已有目录下新开一个子目录放文件（casc_overlay.py），所以这一页放在布局根下的新目录 2extras_lay/（首字符 2 与根下各项都不同），手柄与触屏两种模式找到的是同一份。
+# 名字与页签发的完全一致，开 / 关都按它（只换大小写的同名会开出第二个视频页、关不掉）。类仍是借来的视频页
+# The page of the fifth tab, "Extras" (Mac, iOS): its name carries one new folder level. The game looks for a layout at "prefix + name + HD.json" and falls back to the layout root when no prefix has it;
+# the overlay can only open a new subdirectory under an existing one (casc_overlay.py), so the page lives in a new folder 2extras_lay/ under the layout root (first character 2, unlike every item there), and both controller and touch modes find the same file.
+# The name is exactly what the tab sends, and opening / closing go by it (a same name differing only in case opened a second video page that would not close). The class is still the borrowed video page
+_EXTRAS_PANEL = '2extras_lay/ExtrasOptionsPanel'
+EXTRAS_PATH = 'data/global/ui/layouts/2extras_lay/extrasoptionspanelhd.json'
+def _custom_page(text, kind=None):   # kind：'video'（Mac、iOS 的视频页）、'extras'（附加页）；不给 = 按平台：有画面设置的给视频页，否则（安卓）整页自定义 | kind: 'video' (the Mac / iOS video page), 'extras' (the Extras page); none = by platform: the video page where there are picture settings, otherwise (Android) the whole Custom page
+    kind = kind or ('video' if _VIDEO else 'all')
     if '"name": "VideoOptionsPanel"' not in text or '"name": "OptionsTable"' not in text: raise SystemExit('touch_layout：主机版视频页不是原样（原版布局变了？），自定义页没换')
     title = ('{ "type": "TableRowWidget", "name": "Row TouchCustomTitle", "children": [\n'
              '    { "type": "TextBoxWidget", "name": "TouchCustomTitle", "fields": { "text": "%s", "style": "$StyleSettingsTitle" }, "children": [\n'
              '        { "type": "ImageWidget", "name": "Divider", "fields": { "rect": "$OptionsDividerRect", "filename": "PauseMenu\\\\Divider" } },\n'
              '    ] },\n'
-             '] },\n') % ('@OptionsMenuDisplay' if _VIDEO_MAC else '@Graphics' if _VIDEO_IOS else '@KeyBindingTypeCustom')   # Mac 页首是「显示」一节，「自定义」挪成后面一节 | on the Mac the page opens with the "Display" section and "Custom" becomes a later section
-    out = ('{\n    "basedOn": "VideoOptionsPanelHD.json",\n    "type": "VideoOptionsPanel", "name": "VideoOptionsPanel",\n    "children": [\n'
+             '] },\n') % ('@OptionsMenuDisplay' if kind == 'video' and _VIDEO_MAC else '@Graphics' if kind == 'video' else '@dmExtras' if kind == 'extras' else '@KeyBindingTypeCustom')
+    rows = _video_rows() if kind == 'video' else _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('voice', 'q3d', 'touch_swap_above') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i) + _CUSTOM_LANG_HINT + \
+        ''.join('        { "type": "TextBoxWidget", "name": "TouchCustomTest%d_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "@KeyBindingTypeCustom", "style": "$StyleSettingsText" } },\n'
+                % (n, _CUSTOM_Y[len(_CUSTOM_ALL) + n], _CUSTOM_LINE_H) for n in range(_CUSTOM_TEST_ROWS))
+    out = ('{\n    "basedOn": "VideoOptionsPanelHD.json",\n    "type": "VideoOptionsPanel", "name": "' + (_EXTRAS_PANEL if kind == 'extras' else 'VideoOptionsPanel') + '",\n    "children": [\n'
            '        { "type": "ImageWidget", "name": "ScrollBarBackground", "children": [ { "type": "ScrollControllerWidget", "name": "ScrollController" }, ] },\n'
            '        { "type": "ScrollViewWidget", "name": "ScrollView", "children": [\n'
            '            { "type": "TableWidget", "name": "OptionsTable", "fields": { "columns": [ "$OptionsTableColumn1", "$OptionsTableColumn2" ], "rowHeight": %d }, "children": [\n' % _CUSTOM_TITLE_H
            + title + '            ] },\n'
-           + '            { "type": "Widget", "name": "TouchCustomRows", "fields": { "rect": { "x": 0, "y": 0, "width": %d, "height": %d } }, "children": [\n' % (1700 if _VIDEO_MAC else 1500, _CUSTOM_H)
-           + _video_rows() + _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('voice', 'q3d', 'touch_swap_above') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i) + _CUSTOM_LANG_HINT
-           + ''.join('        { "type": "TextBoxWidget", "name": "TouchCustomTest%d_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "@KeyBindingTypeCustom", "style": "$StyleSettingsText" } },\n'
-                     % (n, _CUSTOM_Y[len(_CUSTOM_ALL) + n], _CUSTOM_LINE_H) for n in range(_CUSTOM_TEST_ROWS)) +
-           # 手柄模式的选中框（同符文之语清单 TouchRwSel）：框住十字键选中的那一行，宿主摆（dm_custom.c）；触屏模式一直在屏外（只把 x 挪出去、y 留在内容范围内：滚动区按子控件的范围算内容高度，y 放到 99999 会把可滚范围撑到十万）。和各行在同一个容器里，跟着滚
-           # Selection frame in controller mode (same as TouchRwSel of the runeword list): frames the row selected with the D-pad, positioned by the host (dm_custom.c); always off-screen in touch mode (only x is moved out while y stays within the content range: the scroll area computes the content height from the extent of its child widgets, and a y of 99999 would stretch the scrollable range to a hundred thousand). It is in the same container as the rows and scrolls with them
-           '        { "type": "NineTileImageWidget", "name": "TouchCustomSel", "fields": { "rect": { "x": 99999, "y": 0, "width": 1000, "height": 100 }, "backgroundColor": [ 0, 0, 0, 0 ], '
-           '"filename": "Controller/PANEL/ControllerSelector/ControllerSelectorBorder", "tileScale": 0.5 } },\n'
+           + '            { "type": "Widget", "name": "TouchCustomRows", "fields": { "rect": { "x": 0, "y": 0, "width": %d, "height": %d } }, "children": [\n' % (1700 if _VIDEO_MAC else 1500, _CUSTOM_TITLE_H + _VIDEO_H if kind == 'video' else _CUSTOM_H)
+           + rows +
+           # 手柄模式的高亮：同原版其余页签的手柄焦点，只亮选中的那个控件——切换框是原版 Carousel_Hover、勾选框是 CheckBox_Hover（_profileHD.json 的 Options*FocusIndicatorFilename），宿主摆（dm_custom.c）。
+           # 原先用整行金框（ControllerSelectorBorder 九宫格）：框比字往左出去 30，滚动区把它左边那条裁掉、只剩两个角，与其余页签的样子也不一样。
+           # 触屏模式一直在屏外（只把 x 挪出去、y 留在内容范围内：滚动区按子控件的范围算内容高度，y 放到 99999 会把可滚范围撑到十万）。和各行在同一个容器里、放在最后（画在控件上面，同原版），跟着滚
+           # Controller-mode highlight: like the game's own controller focus on the other tabs, only the selected control lights up -- the game's Carousel_Hover on a selector, CheckBox_Hover on a checkbox (Options*FocusIndicatorFilename in _profileHD.json), positioned by the host (dm_custom.c).
+           # It used to be a gold frame around the whole row (the ControllerSelectorBorder nine-tile): reaching 30 units left of the text, its left edge was clipped by the scroll area, leaving only two corners, and it did not look like the other tabs.
+           # Always off-screen in touch mode (only x is moved out while y stays within the content range: the scroll area computes the content height from the extent of its child widgets, and a y of 99999 would stretch the scrollable range to a hundred thousand). In the same container as the rows and last (drawn over the control, as in the game), so it scrolls with them
+           '        { "type": "ImageWidget", "name": "TouchCustomHiCar", "fields": { "rect": { "x": 99999, "y": 0 }, "filename": "Controller/HoverImages/Carousel_Hover" } },\n'
+           '        { "type": "ImageWidget", "name": "TouchCustomHiBox", "fields": { "rect": { "x": 99999, "y": 0 }, "filename": "Controller/HoverImages/CheckBox_Hover" } },\n'
            '            ] },\n        ] },\n'
            '    ]\n}\n')
     return out, len(_CUSTOM_ALL) + 2
+def extras_page(romfs):   # 「附加」页的布局文本（以主机版视频页为底，同上） | layout text of the "Extras" page (from the console video page, as above)
+    return _custom_page(read_layout(romfs, 'controller/console/videooptionspanelhd.json')[1], 'extras')[0]
 PRESENT['controller/console/videooptionspanelhd.json'] = _custom_page
 # 手柄版选项页：原版页签条不动，只把第一项「视频」换成「自定义」——它打开的视频页就是上面那份自定义页（两种模式同一份内容）
 # Controller options page: the original tab bar is untouched, only the first item "Video" is replaced by "Custom"; the video page it opens is the Custom
 # page above (same content in both modes)
 # Mac App（DM_OVERLAY_MAC）：第一项留原版「视频」（这页顶上是「显示」「图形」两节，同电脑版的视频页），第三项换成触屏那份短词（原版 Game Settings 在 266 宽的页签里截成「Game S…」）
 # Mac App (DM_OVERLAY_MAC): the first item keeps the original "Video" (this page opens with the "Display" and "Graphics" sections, like the PC version's video page), and the third item takes the touch tab bar's short word (the original Game Settings is cut to "Game S..." in the 266-wide tab)
+# Mac 与 iOS 的五个页签（手柄版与触屏版同一条）：视频 | 音频 | 游戏 | 设定 | 附加。第一项留原版「视频」（这页是「显示」「图形」，同电脑版的视频页）；第四项换成短词（原版 Game Settings 在 266 宽的页签里截成「Game S…」）；
+# 第五项原是「控制」（KeyBindingMenu，本平台没有这一页，页签不显示）：改成「附加」，打开我们自己的「附加」页（_EXTRAS_PANEL，类同视频页）。
+# 页签字：原版字距 0.95 在 1600 宽出图下「Gameplay」差一点放不下 266 宽的页签、折成「GAMEPLA / Y」——字距收到 0.88（其余同原版 textStyle，派生布局按键整个替换）
+# The five tabs on the Mac and iOS (same tab bar in the controller and touch layouts): Video | Audio | Gameplay | Settings | Extras. The first item keeps the original "Video" (this page holds "Display" and "Graphics", like the PC version's video page); the fourth takes a short word (the original Game Settings is cut to "Game S..." in the 266-wide tab);
+# the fifth was "Controls" (KeyBindingMenu, which this platform lacks, so the tab was hidden): it becomes "Extras" and opens our own "Extras" page (_EXTRAS_PANEL, the video page's class).
+# Tab text: at the original kerning 0.95 "Gameplay" just misses fitting the 266-wide tab at a 1600-wide render and wraps to "GAMEPLA / Y" -- kerning tightened to 0.88 (the rest as the original textStyle; a derived layout replaces the key whole)
+def _tabs5(s):
+    s = _sub1(s, '"tabCount": 5,', '"tabCount": 5,\n                "textStyle": { "options": { "lineWrap": true }, "pointSize": "$MediumFontSize", "alignment": { "h": "center", "v": "center" }, '
+              '"fontColor": "$FontColorWhite", "spacing": { "leading": 0.9, "kerning": 0.88 } },')
+    s = _sub1(s, '"@GameSettingsTab"', '"@dmTabGameSettings"')
+    return _sub1(_sub1(s, '"@Controls"', '"@dmTabExtras"'), 'SettingsPanelMessage:CheckChanges:KeyBindingMenu', 'SettingsPanelMessage:CheckChanges:' + _EXTRAS_PANEL)
 def pad_settings(s):
-    if _VIDEO_MAC:
-        # 页签字：原版字距 0.95 在 1600 宽出图下「Gameplay」差一点放不下 266 宽的页签、折成「GAMEPLA / Y」——字距收到 0.88（其余同原版 textStyle，派生布局按键整个替换）
-        # Tab text: at the original kerning 0.95 "Gameplay" just misses fitting the 266-wide tab at a 1600-wide render and wraps to "GAMEPLA / Y" -- kerning tightened to 0.88 (the rest as the original textStyle; a derived layout replaces the key whole)
-        s = _sub1(s, '"tabCount": 5,', '"tabCount": 5,\n                "textStyle": { "options": { "lineWrap": true }, "pointSize": "$MediumFontSize", "alignment": { "h": "center", "v": "center" }, '
-                  '"fontColor": "$FontColorWhite", "spacing": { "leading": 0.9, "kerning": 0.88 } },')
-        return _sub1(s, '"@GameSettingsTab"', '"@dmTabGameSettings"')
+    if _VIDEO: return _tabs5(s)
     return _sub1(s, '"@OptionsMenuVideo"', '"@KeyBindingTypeCustom"')   # 原版串：自定义 / Custom（跟游戏语言走） | original string: "Custom" in Chinese / English (follows the game language)
-def pad_custom_page(s): return _custom_page(s)[0]
+def pad_custom_page(s): return _custom_page(s)[0]   # 两种模式同一份内容：Mac / iOS 是视频页，安卓是整页自定义 | the same content in both modes: the video page on the Mac / iOS, the whole Custom page on Android
 # 挂进 PRESENT：build_ingame 对同一份文件（往选项页插「应用 / 默认 / 放弃」）会先套这里的变换再插按钮，不会出两份覆盖互相盖掉
 # Hooked into PRESENT: for the same file (inserting 「应用 / 默认 / 放弃」(Apply / Default / Discard) into the options page) build_ingame applies the transform here first and then inserts the buttons, so two overlays that overwrite each other are not produced
 PRESENT['controller/console/settingspanelhd.json'] = _settings_tabs

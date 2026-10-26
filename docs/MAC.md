@@ -41,7 +41,7 @@ Double-click the App. The first launch asks you to choose the **game resource fo
 
 A key reference is then shown once; afterwards it is under Help in the menu bar.
 
-Language: the first launch follows the system language (Chinese systems start in Chinese, Spanish in Spanish, Russian in Russian, everything else in English). To change it: Options → Custom, the language switch in the first row → Accept All → close and reopen the App.
+Language: the first launch follows the system language (Chinese systems start in Chinese, Spanish in Spanish, Russian in Russian, everything else in English). To change it: Options → Extras, the language switch in the first row → Accept All → close and reopen the App.
 
 ## Keyboard ↔ gamepad
 
@@ -65,13 +65,15 @@ With a keyboard, the button prompts on screen (the hint bar at the bottom, skill
 
 A gamepad works as soon as it is connected, alongside the keyboard. The menu bar has View → Full Screen (⌃⌘F) and Quit (⌘Q). The window can be resized freely. In game the picture fills the window or screen at its own aspect ratio (on a 16:10 MacBook both windowed and full screen are filled, with the interface along the bottom, centred while a large panel is open); the front-end pages such as the main menu and character select stay 16:9 with bars above and below.
 
-**Picture settings** are on the **Video** tab, the first one under Options, in the **Display** and **Graphics** sections (the **Custom** section follows them). The Options pages have the same roomy rows as on iPhone, with **Apply**, **Default** and **Discard** buttons to click at the bottom; the keyboard and gamepad keys work as before.
+Options has five tabs: **Video**, **Audio**, **Gameplay**, **Settings** and **Extras**. **Picture settings** are on the **Video** tab, in the **Display** and **Graphics** sections; the features this port adds (language, auto-drink, light beams and the rest) are on **Extras**. **Default** resets only the tab you are on. The Options pages have the same roomy rows as on iPhone, with **Apply**, **Default** and **Discard** buttons to click at the bottom; the keyboard and gamepad keys work as before.
 - **Display Mode** (Windowed / Fullscreen) switches as soon as you press Apply, and the App opens that way next time. Switching with View → Full Screen (⌃⌘F) updates the setting too.
 - **Resolution** (1600 × 900 / 1920 × 1080 / 2560 × 1440) is the size the game renders at; on a screen narrower than 16:9 the height follows the screen. It takes effect the next time the App starts, and the page says so until then.
 - **Upscaling** (Standard / MetalFX) is how the picture is enlarged to the window or screen: Standard is a plain stretch, MetalFX is Apple's sharper upscaler (about 1.5 ms of GPU time per frame on an M-series Mac). It changes as soon as you press Apply.
+- **Frame Rate** (60 fps / 30 fps): 30 fps is the power saver mode. It changes as soon as you press Apply.
+- **Frame Drops** (Lower 3D Res / Keep 3D Res): with *Lower*, the game lowers its 3D resolution on its own when frames drop and brings it back up afterwards; *Keep* always renders at the full resolution. The Mac defaults to *Keep*: its GPU has headroom, and its rare drops are short stutters a lower 3D resolution doesn't fix (phones default to *Lower*).
 - **Graphic Presets**: *Recommended* is what the App picked for this Mac the first time it started: full screen, the highest resolution up to three quarters of the screen's width (2560 × 1440 only on Pro, Max and Ultra chips), and MetalFX when the picture is enlarged. *Performance* is 1600 × 900 and *Quality* 2560 × 1440, both with MetalFX. Choosing a preset fills in the rows; changing a row shows which preset matches, or *Custom*.
-- **Default** at the bottom of the panel puts every row back to Recommended (and the Custom rows to their defaults); press Apply to keep it.
-- The settings live in `sw_video.txt` next to the App's saves. Delete it to have the App work out Recommended again.
+- **Default** at the bottom of the panel puts the Display rows, Graphic Presets and Upscaling back to Recommended, Frame Rate to 60 fps and Frame Drops to Keep 3D Res; press Apply to keep it.
+- The settings live in `sw_video.txt` next to the App's saves (Frame Rate and Frame Drops with the Extras options in `sw_custom.txt`). Delete `sw_video.txt` to have the App work out Recommended again.
 
 The mouse pointer hides itself after it has rested over the game window for 3 seconds (handy when playing with the keyboard or a gamepad) and comes back the moment the mouse moves. It never hides over the menu bar, other windows or a dialog. To change the delay: `defaults write org.d2rmobile.mac CursorHideSeconds -float 5` (seconds; `0` turns it off; the older-API build uses `org.d2rmobile.mac.m3`), then restart the App.
 
