@@ -1157,7 +1157,13 @@ def _settings_tabs(text):
     # 第四项「自定义」同理：原版串 KeyBindingTypeCustom 的西语「Personalizar」在页签里被截成「Persona…」（西语截图），页签用我们表里的短词（页面大标题仍用原版串）
     # The fourth item "Custom" likewise: the original string KeyBindingTypeCustom in Spanish "Personalizar" is truncated to "Persona…" in the tab (Spanish screenshot), so the tab uses the short word from our table (the page heading still uses the original string)
     new = new.replace('"@Controls"', '"@dmTabCustom"').replace('SettingsPanelMessage:CheckChanges:KeyBindingMenu', 'SettingsPanelMessage:CheckChanges:VideoOptionsPanel')
-    return new, n + k + 1
+    # 底部提示条：这份主机版布局自己也声明了 Legend（basedOn 写死的是原版路径 Controller/SettingsPanelHD.json，触屏模式也继承原版那份、不走下面挪走过的触屏副本），
+    # 字（「默认」「返回」）露在「应用 / 默认 / 放弃」三个按钮下面——在这份里也挪走
+    # Bottom legend: this console layout declares its own Legend too (its basedOn is the hard-coded original path Controller/SettingsPanelHD.json, so touch mode also inherits the original and not the touch copy moved away below),
+    # and its text (Default / Return) showed under the Apply / Default / Discard buttons -- moved away in this file as well
+    new, k2 = offscreen(new, types=('ButtonLegendWidget',))
+    if k2 != 1: raise SystemExit('touch_layout：主机版选项页提示条应为 1 个，找到 %d 个' % k2)
+    return new, n + k + k2 + 1
 def _drop_rows(*rows):
     """把选项表里的整行（TableRowWidget "Row <名>"）删掉：表格按剩下的行重排，不留空行。每个名字必须恰好删到一行。 | Delete whole rows (TableRowWidget "Row <name>") from the options table: the table re-lays out the remaining rows and leaves no empty row. Each name must delete exactly one row."""
     def fn(text):
@@ -1349,7 +1355,16 @@ PRESENT['controller/console/videooptionspanelhd.json'] = _custom_page
 # 手柄版选项页：原版页签条不动，只把第一项「视频」换成「自定义」——它打开的视频页就是上面那份自定义页（两种模式同一份内容）
 # Controller options page: the original tab bar is untouched, only the first item "Video" is replaced by "Custom"; the video page it opens is the Custom
 # page above (same content in both modes)
-def pad_settings(s): return _sub1(s, '"@OptionsMenuVideo"', '"@KeyBindingTypeCustom"')   # 原版串：自定义 / Custom（跟游戏语言走） | original string: "Custom" in Chinese / English (follows the game language)
+# Mac App（DM_OVERLAY_MAC）：第一项留原版「视频」（这页顶上是「显示」「图形」两节，同电脑版的视频页），第三项换成触屏那份短词（原版 Game Settings 在 266 宽的页签里截成「Game S…」）
+# Mac App (DM_OVERLAY_MAC): the first item keeps the original "Video" (this page opens with the "Display" and "Graphics" sections, like the PC version's video page), and the third item takes the touch tab bar's short word (the original Game Settings is cut to "Game S..." in the 266-wide tab)
+def pad_settings(s):
+    if _VIDEO_MAC:
+        # 页签字：原版字距 0.95 在 1600 宽出图下「Gameplay」差一点放不下 266 宽的页签、折成「GAMEPLA / Y」——字距收到 0.88（其余同原版 textStyle，派生布局按键整个替换）
+        # Tab text: at the original kerning 0.95 "Gameplay" just misses fitting the 266-wide tab at a 1600-wide render and wraps to "GAMEPLA / Y" -- kerning tightened to 0.88 (the rest as the original textStyle; a derived layout replaces the key whole)
+        s = _sub1(s, '"tabCount": 5,', '"tabCount": 5,\n                "textStyle": { "options": { "lineWrap": true }, "pointSize": "$MediumFontSize", "alignment": { "h": "center", "v": "center" }, '
+                  '"fontColor": "$FontColorWhite", "spacing": { "leading": 0.9, "kerning": 0.88 } },')
+        return _sub1(s, '"@GameSettingsTab"', '"@dmTabGameSettings"')
+    return _sub1(s, '"@OptionsMenuVideo"', '"@KeyBindingTypeCustom"')   # 原版串：自定义 / Custom（跟游戏语言走） | original string: "Custom" in Chinese / English (follows the game language)
 def pad_custom_page(s): return _custom_page(s)[0]
 # 挂进 PRESENT：build_ingame 对同一份文件（往选项页插「应用 / 默认 / 放弃」）会先套这里的变换再插按钮，不会出两份覆盖互相盖掉
 # Hooked into PRESENT: for the same file (inserting 「应用 / 默认 / 放弃」(Apply / Default / Discard) into the options page) build_ingame applies the transform here first and then inserts the buttons, so two overlays that overwrite each other are not produced
@@ -1413,6 +1428,7 @@ PAD_ROOT = {
 def build_pad_root(romfs, outdir):
     repl = {}
     for rel, fn in PAD_ROOT.items():
+        if _VIDEO_MAC: fn = _row_height(fn)   # Mac App 是手柄版布局 + 鼠标：行距同触屏（180），分节标题下的分隔线才不压在下一行上、鼠标也不点串行 | the Mac App is the controller layout plus a mouse: the same row pitch as touch (180), so a section header's divider no longer runs through the next row and mouse clicks no longer land on the wrong row
         path, text = read_layout(romfs, rel); new, n = fn(text)
         if n == 0: raise SystemExit('touch_layout：手柄版 %s 一处也没改到（原版布局变了？）' % rel)
         o = os.path.join(outdir, 'padroot_' + rel.replace('/', '_')); open(o, 'w', encoding='utf-8').write(new); repl[path.lower()] = o
@@ -1439,13 +1455,21 @@ def _widget_block(s, name):
 # and it is attached once under each of two names for the same reason as above (vendors that repair show button_repair, those that do not show
 # button_blank). The controller layout does not carry over "Repair All" (hold the left stick on the original controller scheme) or the gamble
 # page refresh (the original controller scheme has its own key)
+# Mac App 的手柄版选项页：同触屏插回「应用 / 默认 / 放弃」与右上角 X（鼠标要点得到；宿主处理同触屏，dm_cursor.c），底部键位提示条挪走（按钮就摆在它那条带上）
+# The Mac App's controller options page: like touch, insert Apply / Default / Discard and the top-right X back (a mouse has to be able to click them; the host handles them as for touch, dm_cursor.c), and move the bottom key legend away (the buttons sit on its band)
+PAD_SETTINGS_MAC = {'controller/console/settingspanelhd.json': INGAME['controller/console/settingspanelhd.json']}
+def pad_settings_legend(s):
+    s, n = offscreen(s, types=('ButtonLegendWidget',))
+    if n != 1: raise SystemExit('touch_layout：手柄版选项页提示条应为 1 个，找到 %d 个' % n)
+    return s
 PAD_VENDOR = {'controller/vendorpanellayouthd.json': ('vendorpanellayouthd.json', [INGAME['controller/vendorpanellayouthd.json'][1][0], INGAME['controller/vendorpanellayouthd.json'][1][1]])}
-def build_ingame(romfs, outdir, spec=None, present=True):   # present=False：不套触屏的摆放变换（给手柄版布局插按钮用） | present=False: do not apply the touch placement transform (used for inserting buttons into the controller layout)
+def build_ingame(romfs, outdir, spec=None, present=True, pre=None):   # present=False：不套触屏的摆放变换（给手柄版布局插按钮用）；pre = {路径: 文本变换}，插按钮前先套 | present=False: do not apply the touch placement transform (used for inserting buttons into the controller layout); pre = {path: text transform}, applied before the buttons are inserted
     """局内面板插回原生按钮。返回 ({包内逻辑路径(小写): 本地文件}, 插了几个)。 | Insert native buttons back into the in-game panels. Returns ({logical path in package (lowercase): local file}, number inserted)."""
     repl = {}; total = 0
     for rel, (src, items) in (INGAME if spec is None else spec).items():
         path, text = read_layout(romfs, rel); _, base = read_layout(romfs, src); add = ''
         if present and rel in PRESENT: text = PRESENT[rel](text)[0]   # 同一份布局在 PRESENT 里也改了摆放：先套那里的变换 | The same layout also has its placement changed in PRESENT: apply that transform first
+        if pre and rel in pre: text = pre[rel](text)
         for name, new_name, override, *alt in items:
             b = _widget_block(read_layout(romfs, alt[0])[1] if alt else base, name)   # 第 4 项 = 这个控件另取自哪份键鼠版布局（资料片版继承经典版，按钮写在经典版那份里） | Item 4 = which other keyboard-and-mouse layout this widget is taken from (the expansion version inherits the classic version, and the button is written in the classic one)
             if re.search(r'"name"\s*:\s*"%s"' % re.escape(new_name or name), text): raise SystemExit('touch_layout：%s 里已有同名控件 %s' % (rel, new_name or name))
