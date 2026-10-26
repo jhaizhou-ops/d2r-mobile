@@ -118,7 +118,8 @@ with tempfile.TemporaryDirectory() as t:
     for rel,fn in (('controller/console/settingspanelhd.json',touch_layout.pad_settings),('controller/console/videooptionspanelhd.json',touch_layout.pad_custom_page)):   # 手柄版选项页：「视频」页签换成「自定义」页 | Controller options page: the "Video" tab is replaced by the "Custom" page
         lp,lt=touch_layout.read_layout(romfs,rel); o=os.path.join(tpad,'pad_'+rel.replace('/','_')); open(o,'w',encoding='utf-8').write(fn(lt)); PR[lp.lower()]=o
     if os.environ.get('DM_OVERLAY_MAC'):   # Mac App：手柄版选项页插回「应用 / 默认 / 放弃」与 X（页签变换先套），底部键位提示条挪走 | Mac App: insert Apply / Default / Discard and the X into the controller options page (after its tab changes), and move the bottom key legend away
-        PR.update(touch_layout.build_ingame(romfs,tpad,touch_layout.PAD_SETTINGS_MAC,present=False,pre={'controller/console/settingspanelhd.json':touch_layout.pad_settings})[0])
+        for k,f in touch_layout.build_ingame(romfs,tpad,touch_layout.PAD_SETTINGS_MAC,present=False,pre={'controller/console/settingspanelhd.json':touch_layout.pad_settings})[0].items():
+            txt=open(f,encoding='utf-8').read(); open(f,'w',encoding='utf-8').write(touch_layout.pad_settings_button_glyphs(txt)); PR[k]=f   # 三个按钮各挂原版键位图标 | each of the three buttons gets the original game's button icon
         lp,lt=touch_layout.read_layout(romfs,'controller/settingspanelhd.json'); o=os.path.join(tpad,'pad_settings_legend.json'); open(o,'w',encoding='utf-8').write(touch_layout.pad_settings_legend(lt)); PR[lp.lower()]=o
     PR.update(pouch_layout.build(romfs,tpad,PR)[0]); PR.update(wide_stash.build(romfs,tpad,PR)[0])   # 储藏箱 10 → 14 列（编年史仓库第 1 步）：表、底图、宽外框、布局；要在触摸布局之后（储藏箱 / 外框布局叠在那份上） | Stash 10 → 14 columns (chronicle vault step 1): table, base image, wide outer frame, layout; must come after the touch layout (the stash / outer frame layout stacks on that copy)
     # 选项页第五个页签「附加」的那一页（Mac、iOS，touch_layout._EXTRAS_PANEL）：布局根下的新目录 2extras_lay/，手柄与触屏两种模式都落到这一份

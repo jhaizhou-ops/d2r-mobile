@@ -3103,6 +3103,28 @@ static void fe_send(const char *cat, const char *act, const char *arg) {
     LOG("前端路径：发 %s:%s %s", cat, act, arg);
     ((void (*)(uint64_t, void *))fn)(root, msg);
 }
+// 选项页「放弃」按钮下挂着返回键的图标时（Mac 覆盖层，touch_layout.py pad_settings_button_glyphs），返回键在这页就是「放弃」：丢掉没应用的改动并关页，
+// 同点那颗按钮（原版的 CancelChanges，我们的视频 / 附加行一起丢），不弹原版「有改动：应用 / 放弃？」确认框。应用 = 原版 option1、默认 = option2 本来就有键，不用管。
+// 确认框之类的模态开着时照常交给游戏；宿主自己替玩家按的返回（关页那一下，dm_ui_auto_buttons）不拦。按下那一下吃掉，按住期间也不交
+// When the options page's "Discard" button carries the back key's icon (the Mac overlay, touch_layout.py pad_settings_button_glyphs), back on this page is "Discard": drop the unapplied changes and close the page,
+// the same as clicking that button (the game's CancelChanges, with our Video / Extras rows dropped too), without the game's "changes: apply / discard?" confirmation. Apply = the game's option1 and Default = option2 already have their keys.
+// While a modal such as that confirmation is open, back goes to the game as usual; a back the host presses for the player (the one that closes the page, dm_ui_auto_buttons) is not intercepted. The press is eaten, and so is the hold
+uint64_t dm_settings_back_filter(uint64_t b) {
+    static uint64_t prev; static int eat;
+    uint64_t down = b & ~prev & DM_BTN_B; prev = b;
+    if (eat) { if (b & DM_BTN_B) return b & ~(uint64_t)DM_BTN_B; eat = 0; return b; }
+    if (!down || (dm_ui_auto_buttons() & DM_BTN_B)) return b;
+    module_t *m = main_module(); uint64_t root = 0; if (!m) return b; memcpy(&root, m->base + 0x2f05458, 8); if (!root) return b;
+    uint64_t sp = ui_find(root, "SettingsPanel", 1);
+    if (!sp || !*(uint8_t *)(sp + 0x50) || !ui_find(sp, "CancelButtonGlyph", 1)) return b;
+    uint64_t cm = ui_find(root, "ConfirmationModal", 1); if (cm && *(uint8_t *)(cm + 0x50)) return b;
+    eat = 1;
+    fe_send("OptionsPanelMessage", "CancelChanges", "");
+    dm_custom_on_uimsg("OptionsPanelMessage", "CancelChanges", "");
+    atomic_store(&g_set_back_at, dm_guest_frame() + 12);
+    LOG("选项页：返回键 = 放弃（丢掉没应用的改动，随后按返回关页）");
+    return b & ~(uint64_t)DM_BTN_B;
+}
 // ---------- 一键重开（暂停菜单「一键重开」= 保存 + 登出 + 同难度登入；标准：不慢于正常进局，只出现开门读取画面，不露主菜单 / 选角页） ----------
 // 只走原版的路：替玩家发原版「保存并退出」(PausePanelMessage:ExitGame；退出时的存档提交都在 ToFrontEnd 之前完成) → 回到前端（ToFrontEnd）的下一帧
 // 直接发原版 CharacterSelect:LoadCharacter:<原难度>：前端记着的「选中角色」就是刚退出的那个（宿主实测：玩第二行的角色退出后直接载入，进的仍是它），

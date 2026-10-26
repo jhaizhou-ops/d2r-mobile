@@ -1496,6 +1496,29 @@ def pad_settings_legend(s):
     s, n = offscreen(s, types=('ButtonLegendWidget',))
     if n != 1: raise SystemExit('touch_layout：手柄版选项页提示条应为 1 个，找到 %d 个' % n)
     return s
+# 三个按钮各带原版的键位图标（手柄玩时不用鼠标也知道按哪个键）：同原版手柄确认框的做法——按钮下挂一个只有图标的 ButtonLegendWidget
+# （锚在按钮底边中点，见 controller/addfriendmodalhd.json 的 ConfirmLegend）。动作就是这页原版提示条那三条：option1「全部接受」= 应用、
+# option2「默认」、back「返回」= 放弃（Mac 上返回在这页就是放弃，touch_mac.c）。图标跟着当前键帽样式走（键盘 / Switch / Xbox / PlayStation）
+# Each of the three buttons carries the original game's button icon (so a controller player knows which button to press without a mouse): the same way as the original controller confirmation modals -- an icon-only ButtonLegendWidget under the button
+# (anchored at the middle of the button's bottom edge, see ConfirmLegend in controller/addfriendmodalhd.json). The actions are the three entries of this page's original legend: option1 "Accept All" = Apply,
+# option2 "Default", back "Return" = Discard (on the Mac, back on this page is Discard, touch_mac.c). The icons follow the current key cap style (keyboard / Switch / Xbox / PlayStation)
+_SETTINGS_BUTTON_GLYPHS = (('AcceptButton', 'option1'), ('DefaultButton', 'option2'), ('CancelButton', 'back'))
+def pad_settings_button_glyphs(s):
+    for name, action in _SETTINGS_BUTTON_GLYPHS:
+        m = re.search(r'\{\s*"type"\s*:\s*"ButtonWidget"\s*,\s*"name"\s*:\s*"%s"' % name, s)
+        if not m: raise SystemExit('touch_layout：Mac 选项页没有按钮 ' + name)
+        f = re.compile(r'"fields"\s*:\s*\{').search(s, m.start())
+        if not f or f.start() > _block_end(s, m.start()): raise SystemExit('touch_layout：按钮 %s 没有 fields' % name)
+        fe = _block_end(s, f.end() - 1) + 1
+        glyph = ('\n                            "children": [ { "type": "ButtonLegendWidget", "name": "%sGlyph", "fields": { "anchor": { "x": 0.5, "y": 1.0 }, '
+                 '"text": { "style": "$StyleButtonLegend" }, "presets": [ { "action": "%s" } ] } } ],' % (name, action))
+        if s[fe] == ',': fe += 1   # fields 后面本来就有逗号 | fields is already followed by a comma
+        else: glyph = ',' + glyph
+        s = s[:fe] + glyph + s[fe:]
+    import json as _json
+    try: _json.loads(re.sub(r',(\s*[}\]])', r'\1', re.sub(r'(?m)^\s*//[^\n]*|(?<=[,{\[\s])//[^\n]*', '', re.sub(r'/\*[\s\S]*?\*/', '', s))))   # 同 build_ingame 的合法性检查 | the same validity check as build_ingame
+    except ValueError as e: raise SystemExit('touch_layout：Mac 选项页加键位图标后不是合法布局（%s）' % e)
+    return s
 PAD_VENDOR = {'controller/vendorpanellayouthd.json': ('vendorpanellayouthd.json', [INGAME['controller/vendorpanellayouthd.json'][1][0], INGAME['controller/vendorpanellayouthd.json'][1][1]])}
 def build_ingame(romfs, outdir, spec=None, present=True, pre=None):   # present=False：不套触屏的摆放变换（给手柄版布局插按钮用）；pre = {路径: 文本变换}，插按钮前先套 | present=False: do not apply the touch placement transform (used for inserting buttons into the controller layout); pre = {path: text transform}, applied before the buttons are inserted
     """局内面板插回原生按钮。返回 ({包内逻辑路径(小写): 本地文件}, 插了几个)。 | Insert native buttons back into the in-game panels. Returns ({logical path in package (lowercase): local file}, number inserted)."""
