@@ -99,6 +99,7 @@ host/dm_rift.c	（第一位）	刷守护者的日志行里标第几位，只进�
 host/dm_rift.c	（第二位）	同上
 host/dm_kills.c	@DM_WIDGET_OK	控件类型核对的日志标签（dm_widget.h），不上屏
 host/dm_custom.c	@DM_WIDGET_OK	同上
+host/dm_video.c	@DM_WIDGET_OK	同上（控件守卫的日志标签）
 host/dm_rift_ui.c	@DM_WIDGET_OK	同上
 host/dm_autobuff.c	*	技能名、排除理由、测试读数都只进日志；这个功能屏上没有自己的文字（玩家看到的是原版的施法动作）
 ios/Sources/dm_shader_prep.m	*	公开版壳专用的「首次准备着色器」页（整个文件在 #ifdef DM_SHELL 里，内测包不编）：这时宿主与中英表还没起，中英西三套文字就写在文件里、跟系统语言走

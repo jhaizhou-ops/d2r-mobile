@@ -8,6 +8,7 @@
 #include <sys/sysctl.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
+#import <MetalFX/MetalFX.h>
 #import <ImageIO/ImageIO.h>
 #include "dm.h"
 #include "dm_input.h"
@@ -41,6 +42,49 @@ static void full_setup(void) {
     if (h <= 0 || w / h >= 16.0 / 9 - 0.01) { LOG("画面：主屏 %.0fx%.0f 不比 16:9 窄 → 全程 16:9", w, h); return; }
     g_aspect = w / h; g_full = 1; dm_uiscreen_enable(DM_UISCREEN_BOTTOM);
     LOG("画面：主屏全屏内容区 %.0fx%.0f（比例 %.3f）比 16:9 窄 → 真全屏：窗口锁这个比例，局内铺满、界面贴底，前端 16:9 留边", w, h, g_aspect);
+}
+// 出图分辨率（主机模式的游戏出图宽，高按画面比例）：原版 1600。App 里按选项页「显示 → 分辨率」那一档（dm_video.c 的 res：1600 / 1920 / 2560），
+// 只在启动时定（游戏分辨率启动后不变）；换屏、拉窗口后由出图（MetalFX / 双线性）跟着视口缩放。DM_GAME_RES（直接给分辨率，对拍用）在时不理它
+// Output resolution (the docked game output width; height from the picture's aspect ratio): 1600 originally. In the App it follows the options page "Display → Resolution" tier (res in dm_video.c: 1600 / 1920 / 2560),
+// set only at launch (the game resolution does not change after launch); after a screen change or window resize the present (MetalFX / bilinear) scales to the viewport. Ignored with DM_GAME_RES (which gives the resolution directly, for comparisons)
+static const int k_render_w[3] = { 1600, 1920, 2560 };
+static int g_render_w = 1600, g_render_tier = -1;   // 这次启动用的那一档（-1 = 没按设置定） | the tier used for this launch (-1 = not set from the settings)
+int dm_video_get(const char *key);
+void dm_video_fullscreen_note(int on);
+static void render_setup(void) {
+    if (!getenv("DM_APP") || getenv("DM_GAME_RES")) return;
+    int t = dm_video_get("res"); if (t < 0 || t > 2) t = 0;
+    g_render_tier = t; g_render_w = k_render_w[t];
+    LOG("画面：出图宽 %d（选项页「分辨率」第 %d 档） | render width %d (Resolution tier %d)", g_render_w, t, g_render_w, t);
+}
+int front_video_running_res(void) { return g_render_tier; }
+int front_video_mfx_ok(void) { static int ok = -1; if (ok < 0) ok = [MTLFXSpatialScalerDescriptor supportsDevice:MTLCreateSystemDefaultDevice()] ? 1 : 0; return ok; }
+// 首次启动的推荐值（dm_video.c 读不到 rec_* 时调，启动时在主线程）：全屏；分辨率取「不超过主屏像素宽的 3/4」的最高一档，2560 那档只给 Pro / Max / Ultra
+// 显卡（名字里带；M6 实测 1920 出图 + MetalFX 每帧约 13.7 ms，2560 约 14.5 ms，60 帧只有 16.7 ms）；出图比画布小又支持 MetalFX 就开 MetalFX。
+// 旧版偏好（StartFullScreen / RenderScale / MetalFXUpscale）设过的当作当前值接着用。测试副本（DM_APP_SUPPORT）缺省全按原版（窗口、1600、标准），
+// 自动跑的局才稳定；DM_TEST_VIDEO_FIRSTBOOT=1 让测试也走真推荐
+// Recommended values on first boot (called by dm_video.c when it finds no rec_*, on the main thread at launch): full screen; resolution = the highest tier not wider than 3/4 of the main screen's pixel width, the 2560 tier only for
+// Pro / Max / Ultra GPUs (going by the name; on an M6 a 1920 render + MetalFX took about 13.7 ms per frame and 2560 about 14.5 ms, against 16.7 ms at 60 fps); MetalFX on when the render is smaller than the canvas and MetalFX is supported.
+// Values from the older preferences (StartFullScreen / RenderScale / MetalFXUpscale) carry over as the current values when set. The test copy (DM_APP_SUPPORT) defaults to the original throughout (windowed, 1600, standard)
+// so automated runs stay stable; DM_TEST_VIDEO_FIRSTBOOT=1 makes a test take the real recommendation
+int front_video_firstboot(int rec[3], int cur[3]) {
+    if (getenv("DM_APP_SUPPORT") && !getenv("DM_TEST_VIDEO_FIRSTBOOT")) { for (int i = 0; i < 3; i++) rec[i] = cur[i] = 0; LOG("画面设置：测试副本，推荐值按原版（窗口 / 1600 / 标准）"); return 1; }
+    NSScreen *sc = NSScreen.mainScreen; double px = sc ? sc.frame.size.width * sc.backingScaleFactor : 1600;
+    id<MTLDevice> dev = MTLCreateSystemDefaultDevice(); NSString *gpu = dev.name ?: @"";
+    int big = [gpu containsString:@" Pro"] || [gpu containsString:@" Max"] || [gpu containsString:@" Ultra"], t = 0;
+    for (int i = 0; i < 3; i++) if (k_render_w[i] <= fmax(px * 0.75, 1600) && (i < 2 || big)) t = i;
+    rec[0] = 1; rec[1] = t; rec[2] = front_video_mfx_ok() && k_render_w[t] < px ? 1 : 0;
+    for (int i = 0; i < 3; i++) cur[i] = rec[i];
+    NSUserDefaults *ud = NSUserDefaults.standardUserDefaults; int legacy = 0;
+    if ([ud objectForKey:@"StartFullScreen"]) { cur[0] = [ud boolForKey:@"StartFullScreen"]; legacy = 1; }
+    id rs = [ud objectForKey:@"RenderScale"]; double k = [rs respondsToSelector:@selector(doubleValue)] ? [rs doubleValue] : 0;   // 手写的设置可能是任何类型 | a hand-written default can be any type
+    if (k > 0 && isfinite(k)) { double w = fmin(fmax(px * fmin(k, 1.0), 1600), 2560); cur[1] = 0; for (int i = 0; i < 3; i++) if (k_render_w[i] <= w) cur[1] = i; legacy = 1; }
+    if ([ud objectForKey:@"MetalFXUpscale"]) { cur[2] = [ud boolForKey:@"MetalFXUpscale"] && front_video_mfx_ok(); legacy = 1; }
+    LOG("画面设置：首次启动 主屏 %.0f 像素宽、显卡 %s → 推荐 全屏 / %d / %s%s", px, gpu.UTF8String, k_render_w[t], rec[2] ? "MetalFX" : "标准", legacy ? "；旧版偏好设过的接着用" : "");
+    return 1;
+}
+void front_video_fullscreen(int on) {   // 选项页「显示模式」点了应用：当场切（游戏线程调，切到主线程做） | "Display Mode" applied on the options page: switch at once (called on the game thread, done on the main thread)
+    dispatch_async(dispatch_get_main_queue(), ^{ NSWindow *w = g_win; if (w && ((w.styleMask & NSWindowStyleMaskFullScreen) != 0) != (on != 0)) [w toggleFullScreen:nil]; });
 }
 // 游戏画面在视图里的位置：按游戏画面比例放进视图（比例对得上就是整个视图；对不上的四周留黑边）
 // Where the game picture sits in the view: fitted into the view by the picture's aspect ratio (if the ratios match, the whole view; otherwise black bars around)
@@ -131,6 +175,8 @@ double front_display_refresh(char *name, size_t n) {
 @implementation DmWinCtl
 - (BOOL)windowShouldClose:(NSWindow *)w { (void)w; app_quit("关窗口"); return NO; }
 - (void)windowDidResize:(NSNotification *)n { (void)n; layout_game(); }
+- (void)windowDidEnterFullScreen:(NSNotification *)n { (void)n; if (getenv("DM_APP")) dm_video_fullscreen_note(1); }   // 设置跟着窗口走（菜单 / ⌃⌘F 切的也算） | the setting follows the window (switching from the menu / ⌃⌘F counts too)
+- (void)windowDidExitFullScreen:(NSNotification *)n { (void)n; if (getenv("DM_APP")) dm_video_fullscreen_note(0); }
 - (void)windowDidChangeBackingProperties:(NSNotification *)n { (void)n; layout_game(); }
 - (void)windowDidChangeScreen:(NSNotification *)n { (void)n; screen_note(); }
 - (void)quit:(id)s { (void)s; app_quit("菜单退出"); }
@@ -146,8 +192,8 @@ void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 uint64_t front_game_res(int docked) {
     unsigned w, h; const char *e = getenv("DM_GAME_RES");
     if (e && sscanf(e, "%ux%u", &w, &h) == 2) return docked ? (uint64_t)h << 32 | w : (uint64_t)(h * 4 / 5) << 32 | (w * 4 / 5 + 3) / 4 * 4;
-    if (g_full) return docked ? (uint64_t)(llround(1600 / g_aspect / 2) * 2) << 32 | 1600 : 720ull << 32 | (uint64_t)(llround(720 * g_aspect / 8) * 8);   // 真全屏：宽 1600、高按屏幕比例（16:10 → 1600x1004） | true full screen: width 1600, height by the screen's aspect ratio (16:10 -> 1600x1004)
-    return docked ? 900ull << 32 | 1600 : 720ull << 32 | 1280;
+    if (g_full) return docked ? (uint64_t)(llround(g_render_w / g_aspect / 2) * 2) << 32 | (uint64_t)g_render_w : 720ull << 32 | (uint64_t)(llround(720 * g_aspect / 8) * 8);   // 真全屏：宽 = 出图宽（缺省 1600）、高按屏幕比例（16:10 → 1600x1004） | true full screen: width = render width (1600 by default), height by the screen's aspect ratio (16:10 -> 1600x1004)
+    return docked ? (uint64_t)(llround(g_render_w * 9.0 / 16 / 2) * 2) << 32 | (uint64_t)g_render_w : 720ull << 32 | 1280;   // 缺省 1600x900 | 1600x900 by default
 }
 
 static NSPoint g_test_last;   // 合成鼠标脚本：上一条带坐标的指令落在视图里的点（dragto 从这里起拖） | synthetic mouse script: the point in the view where the last instruction with coordinates landed (dragto starts dragging from here)
@@ -190,7 +236,7 @@ void front_run(void (*guest)(void)) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-        full_setup();
+        full_setup(); render_setup();
         NSRect r = NSMakeRect(0, 0, 1280, floor(1280 / g_aspect));
         NSWindow *win = [[NSWindow alloc] initWithContentRect:r
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
@@ -223,12 +269,12 @@ void front_run(void (*guest)(void)) {
         screen_note();
         [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; screen_note(); }];
         [NSApp activateIgnoringOtherApps:YES];
-        // 启动即全屏：defaults write org.d2rmobile.mac StartFullScreen -bool YES（旧接口版的包标识是 org.d2rmobile.mac.m3），缺省关。
-        // 测试副本（DM_APP_SUPPORT）和全屏测试开关（DM_TEST_FULLSCREEN_AT）在时不理它：自动跑的局不占玩家的屏幕，来回切的时刻表也不被打乱。等运行循环转起来再切，窗口那时已上屏。
-        // Start in full screen: defaults write org.d2rmobile.mac StartFullScreen -bool YES (the older-API build's bundle ID is org.d2rmobile.mac.m3), off by default.
-        // Ignored by the test copy (DM_APP_SUPPORT) and with the full-screen test switch (DM_TEST_FULLSCREEN_AT): automated runs don't take over the player's screen and the toggle schedule stays intact. The switch waits for the run loop, when the window is on screen.
-        if (getenv("DM_APP") && !getenv("DM_APP_SUPPORT") && !getenv("DM_TEST_FULLSCREEN_AT") && [NSUserDefaults.standardUserDefaults boolForKey:@"StartFullScreen"]) {
-            LOG("窗口：启动即全屏（StartFullScreen） | window: starts in full screen (StartFullScreen)");
+        // 启动即全屏：选项页「显示模式」是全屏（dm_video.c 的 mode；旧版偏好 StartFullScreen 首次启动时接过来）。全屏测试开关（DM_TEST_FULLSCREEN_AT）在时不理它，
+        // 来回切的时刻表才不被打乱。等运行循环转起来再切，窗口那时已上屏
+        // Start in full screen: the options page "Display Mode" is Fullscreen (mode in dm_video.c; the older StartFullScreen preference is taken over on first boot). Ignored with the full-screen test switch
+        // (DM_TEST_FULLSCREEN_AT) so its toggle schedule stays intact. The switch waits for the run loop, when the window is on screen.
+        if (getenv("DM_APP") && !getenv("DM_TEST_FULLSCREEN_AT") && dm_video_get("mode") == 1) {
+            LOG("窗口：启动即全屏（显示模式 = 全屏） | window: starts in full screen (Display Mode = Fullscreen)");
             dispatch_async(dispatch_get_main_queue(), ^{ if (!(win.styleMask & NSWindowStyleMaskFullScreen)) [win toggleFullScreen:nil]; });
         }
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {

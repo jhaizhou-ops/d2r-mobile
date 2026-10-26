@@ -82,9 +82,10 @@ const char *dm_save_commitdir(void);
 static int key_index(const char *k) { if (k) for (int i = 0; i < NK; i++) if (!strcmp(k, k_keys[i])) return i; return -1; }
 static char g_dir[1024];   // iOS 外壳启动时给的 Documents（main.m）：启动期（存档挂上之前）就要能读，覆盖层选择用 | Documents given by the iOS shell at startup (main.m): must be readable already during startup (before the save is mounted), used for overlay selection
 void dm_custom_init(const char *dir) { if (dir) strlcpy(g_dir, dir, sizeof g_dir); }
-static int file_path(char *p, size_t n) {
-    if (g_dir[0]) { snprintf(p, n, "%s/sw_custom.txt", g_dir); return 1; }
-    const char *c = dm_save_commitdir(); if (!c) return 0; snprintf(p, n, "%s/../sw_custom.txt", c); return 1; }
+int dm_custom_path(const char *name, char *p, size_t n) {   // 设置文件放哪：sw_custom.txt 与画面设置 sw_video.txt（dm_video.c）同一处 | where settings files go: sw_custom.txt and the picture settings sw_video.txt (dm_video.c) share one place
+    if (g_dir[0]) { snprintf(p, n, "%s/%s", g_dir, name); return 1; }
+    const char *c = dm_save_commitdir(); if (!c) return 0; snprintf(p, n, "%s/../%s", c, name); return 1; }
+static int file_path(char *p, size_t n) { return dm_custom_path("sw_custom.txt", p, n); }
 
 static void load_once(void) {
     if (atomic_load(&g_loaded)) return;
@@ -134,6 +135,7 @@ static void save(void) {
     LOG("自定义设置：存盘%s", ok ? "" : "【红】失败");
 }
 void dm_custom_on_uimsg(const char *cat, const char *act, const char *arg) {
+    { void dm_video_on_uimsg(const char *cat, const char *act, const char *arg); dm_video_on_uimsg(cat, act, arg); }   // Mac 画面设置（dm_video.c） | Mac picture settings (dm_video.c)
     (void)arg; if (!cat || !act || strcmp(cat, "OptionsPanelMessage")) return;
     load_once();
     if (!strcmp(act, "AcceptChanges")) { int ch = 0;
@@ -152,6 +154,7 @@ static uint64_t find_w(uint64_t w, const char *name, int dep) {   // 按名字�
     for (uint64_t i = 0; i < n; i++) { uint64_t r = find_w(*(uint64_t *)(ch + 8 * i), name, dep + 1); if (r) return r; }
     return 0;
 }
+uint64_t dm_custom_find_w(uint64_t w, const char *name) { return find_w(w, name, 0); }   // dm_video.c 用 | used by dm_video.c
 // 勾选框的状态（本机逐字节差分，点一下只变这几处）：+0xa88 是它自己的「勾上」标志（点击按它翻转）；
 // +0x6e8..+0x6f4 是「常态 / 按下 / 悬停 / 禁用」四个帧号，勾上 = 4 5 6 -1、没勾 = 0 1 3 2（= 布局里 toggled* / untoggled* 那几项）；+0x610 是此刻画的帧
 // 读写这几处之前核控件是勾选框那个类（dm_widget.h）：不是就当没勾、不写，并记红
@@ -171,7 +174,8 @@ void dm_custom_ui_pump(unsigned long long root) {
     uint64_t sp = dm_ui_top(root, "VideoOptionsPanel"); if (!sp || !*(uint8_t *)(sp + 0x50)) {   // 「自定义」页 = 借来的视频页（界面根的直接子，与设置页并列）。页不在屏上：没点「应用」的勾选作废（同原版不应用就离开），下次出现重摆 | The 「自定义」(Custom) page = the borrowed video page (a direct child of the UI root, alongside the settings page). Page not on screen: checkbox changes without tapping 「应用」(Apply) are discarded (same as leaving without applying in the original game), and it is laid out again the next time it appears
         int was = 0; for (int i = 0; i < NK; i++) was |= seen[i].w != 0;
         if (was) for (int i = 0; i < NK; i++) atomic_store(&g_pend[i], -1);
-        memset(seen, 0, sizeof seen); return; }
+        memset(seen, 0, sizeof seen); { void dm_video_pump(uint64_t sp); dm_video_pump(0); } return; }
+    { void dm_video_pump(uint64_t sp); dm_video_pump(sp); }   // Mac：页顶「显示」「图形」两节（dm_video.c） | Mac: the "Display" and "Graphics" sections at the top of the page (dm_video.c)
     load_once(); if (atomic_exchange(&g_repaint, 0)) memset(seen, 0, sizeof seen);
     if (atomic_load(&g_lang_explicit) < 0) atomic_store(&g_val[0], lang_running());   // 语言那一格没点过应用：生效值 = 此刻实际在跑的语言（读盘时游戏还没设语言，那时取到的不准） | Apply never tapped for the language cell: effective value = the language actually running right now (when read from disk the game has not set the language yet, so the value fetched then is not accurate)
 #if VOICE_ROW
@@ -185,16 +189,20 @@ void dm_custom_ui_pump(unsigned long long root) {
       { uint64_t cm = find_w(root, "ConfirmationModal", 1); if (cm && *(uint8_t *)(cm + 0x50)) pad = 0; }   // 原版「设定已更改，应用 / 放弃」确认框开着：键全还给它（实测：不让的话 A 落在我们这一行上、点不到「应用」） | The original "Settings changed, Apply / Discard" confirmation box is open: hand all keys back to it (measured: otherwise A lands on our row and "Apply" cannot be reached)
       if (dm_wref_get(&sel_sp) != sp) { dm_wref_set(&sel_sp, sp); sel = 0; }
       uint64_t dm = find_w(sp, "TouchCustomSel", 0), tw = 0, cw = 0; char nm[64];
-      if (pad) { uint64_t ev = dm_padmode_page_keys(DM_BTN_UP | DM_BTN_DOWN | DM_BTN_A);
-          if (ev & DM_BTN_DOWN) sel = sel + 1 < NK ? sel + 1 : sel; else if (ev & DM_BTN_UP) sel = sel > 0 ? sel - 1 : 0;
-          snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[sel]); cw = find_w(sp, sel == 0 ? k_lang_box[LANG_N - 1] : nm, 0); snprintf(nm, sizeof nm, "TouchCustom_%s_Text", k_keys[sel]); tw = find_w(sp, nm, 0);   // 语言行：框住标签到最右那一格 | Language row: box from the label to the rightmost cell
-          if ((ev & DM_BTN_A) && cw && dm_wref_get(&seen[sel]) == cw) {
-              if (sel == K_VOICE || sel == K_Q3D || sel == K_TOUCH_SWAP) { int p0 = atomic_load(&g_pend[sel]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[sel]); atomic_store(&g_pend[sel], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, rev_box(sel), 0); if (z) set_toggle(z, sh); }
-                  LOG("自定义设置：%s → %d（手柄 A 在两项间切换；点「应用」生效）",k_keys[sel],!sh); }
-              else if (sel == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]), to = (sh + 1) % LANG_N; atomic_store(&g_pend[0], to);   // 语言行是单选的五项：A 依次轮换，四个框当场摆好
+      int dm_video_rows(uint64_t sp); void dm_video_row(uint64_t sp, int i, uint64_t *tw, uint64_t *cw); void dm_video_pad(uint64_t sp, int i, int dir);
+      int nv = dm_video_rows(sp);   // Mac：页顶「显示」「图形」两节的行数（没有 = 0）；手柄行号先数这几行，自定义各行排在后面 | Mac: number of rows in the "Display" and "Graphics" sections at the top of the page (none = 0); controller row numbers count these first, the custom rows come after
+      if (pad) { uint64_t ev = dm_padmode_page_keys(DM_BTN_UP | DM_BTN_DOWN | DM_BTN_A | (sel < nv ? DM_BTN_LEFT | DM_BTN_RIGHT : 0));   // 左右只在画面设置行上收（切换框的上一项 / 下一项） | left / right are only taken on picture-setting rows (previous / next option of the selector)
+          if (ev & DM_BTN_DOWN) sel = sel + 1 < nv + NK ? sel + 1 : sel; else if (ev & DM_BTN_UP) sel = sel > 0 ? sel - 1 : 0;
+          if (sel < nv) { dm_video_row(sp, sel, &tw, &cw); if (ev & (DM_BTN_LEFT | DM_BTN_RIGHT | DM_BTN_A)) dm_video_pad(sp, sel, ev & DM_BTN_LEFT ? -1 : ev & DM_BTN_RIGHT ? 1 : 2); }
+          else { int cs = sel - nv;   // 自定义行的键号 | key index of the custom row
+          snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[cs]); cw = find_w(sp, cs == 0 ? k_lang_box[LANG_N - 1] : nm, 0); snprintf(nm, sizeof nm, "TouchCustom_%s_Text", k_keys[cs]); tw = find_w(sp, nm, 0);   // 语言行：框住标签到最右那一格 | Language row: box from the label to the rightmost cell
+          if ((ev & DM_BTN_A) && cw && dm_wref_get(&seen[cs]) == cw) {
+              if (cs == K_VOICE || cs == K_Q3D || cs == K_TOUCH_SWAP) { int p0 = atomic_load(&g_pend[cs]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[cs]); atomic_store(&g_pend[cs], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, rev_box(cs), 0); if (z) set_toggle(z, sh); }
+                  LOG("自定义设置：%s → %d（手柄 A 在两项间切换；点「应用」生效）",k_keys[cs],!sh); }
+              else if (cs == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]), to = (sh + 1) % LANG_N; atomic_store(&g_pend[0], to);   // 语言行是单选的五项：A 依次轮换，四个框当场摆好
                   for (int k = 0; k < LANG_N; k++) { uint64_t z = find_w(sp, k_lang_box[k], 0); if (z) set_toggle(z, k == to); }
                   LOG("自定义设置：语言 → %s（手柄 A 在五项间轮换；点「应用」生效）", k_lang_name[to]); }
-              else set_toggle(cw, !TOGGLED(cw)); } }
+              else set_toggle(cw, !TOGGLED(cw)); } } }
       if (dm) { int32_t *r = (int32_t *)(dm + 0x70), want[4] = { 99999, 0, r[2], r[3] };   /* 不用时只把 x 挪出屏：它在滚动区里，y 放远了会撑大可滚范围 | when unused only x is moved off screen: it is inside the scroll area, and a far-away y would enlarge the scrollable range */
           if (dm_padmode_current() && tw && cw) { int32_t *t = (int32_t *)(tw + 0x70), *c = (int32_t *)(cw + 0x70); int top = t[1] < c[1] ? t[1] : c[1], bot = t[1] + t[3] > c[1] + c[3] ? t[1] + t[3] : c[1] + c[3];   // 框住整行：文字与勾选框两者的上下沿取并，再各放 10 单位（原先只按文字框的高度算，文字框比字矮，框成了横穿文字中线的一条） | Frame the whole row: take the union of the top and bottom edges of the text and the checkbox, then pad 10 units on each side (previously computed from the text box height only; the text box is shorter than the glyphs, so the frame became a strip cutting across the middle of the text)
               want[0] = t[0] - 30; want[1] = top - 10; want[2] = c[0] + c[2] + 30 - want[0]; want[3] = bot - top + 20;
@@ -207,7 +215,7 @@ void dm_custom_ui_pump(unsigned long long root) {
       if (pad && tw && cw) { uint64_t rw = find_w(sp, "TouchCustomRows", 0), view = rw ? *(uint64_t *)(rw + 0x30) : 0, sv = view ? *(uint64_t *)(view + 0x30) : 0; static uint64_t lf; uint64_t dm_guest_frame(void); uint64_t f = dm_guest_frame();
           if (sv && f - lf >= 4) { int32_t *t = (int32_t *)(tw + 0x70), *c = (int32_t *)(cw + 0x70); int top = (t[1] < c[1] ? t[1] : c[1]) - 10, bot = (t[1] + t[3] > c[1] + c[3] ? t[1] + t[3] : c[1] + c[3]) + 10;
               int off = -*(int32_t *)(view + 0x74), vh = *(int32_t *)(sv + 0x7c); if (vh <= 0) vh = 1260; void dm_ui_wheel_on(uint64_t, int); if (sel == 0) top = 0;   /* 选回第一行：一直滚到最顶，把标题行露出来 | selection back on the first row: scroll all the way to the top so that the header row is revealed */
-              if (top < off) { lf = f; dm_ui_wheel_on(sv, 1); } else if (bot > off + vh) { lf = f; dm_ui_wheel_on(sv, -1); } } } }
+              if (top < off) { lf = f; dm_ui_wheel_on(sv, 1); } else if (bot > off + vh && bot - top <= vh) { lf = f; dm_ui_wheel_on(sv, -1); } } } }   // 顶要钉住时整行放不下（选回第一行、行比框高）：只管顶，不再往下滚——原先上下来回滚，页面抖 | if the whole row cannot fit with the top pinned (selection back on the first row, or a row taller than the box): only keep the top, no scrolling down -- it used to scroll up and down and the page shook
     { uint64_t bx[LANG_N]; int ok = 1; for (int k = 0; k < LANG_N; k++) { bx[k] = find_w(sp, k_lang_box[k], 0); ok &= bx[k] && *(uint8_t *)(bx[k] + 0x50); }   // 语言行：四项单选，存一个键 lang（0 中 / 1 英 / 2 西 / 3 俄） | Language row: four-option radio, stores one key lang (0 Chinese / 1 English / 2 Spanish / 3 Russian)
       if (ok) { int pd0 = atomic_load(&g_pend[0]), shown = pd0 >= 0 ? pd0 : atomic_load(&g_val[0]), to = shown;
           if (dm_wref_get(&seen[0]) != bx[0]) dm_wref_set(&seen[0], bx[0]);   // 页刚出现（布局里一律是没勾）：先摆成该显示的值，这一帧不当玩家点了 | The page has just appeared (in the layout everything is unchecked): first set it to the value it should show, and do not treat this frame as a player tap
@@ -240,6 +248,6 @@ void dm_custom_ui_pump(unsigned long long root) {
     static uint64_t vt_ok_for; static int vt_ok; if (vt_ok_for != *(uint64_t *)sp) { vt_ok_for = *(uint64_t *)sp; vt_ok = 0;
         for (int k = 0; k < 96 && !vt_ok; k++) vt_ok = *(uint64_t *)(vt_ok_for + 8 * k) == (uint64_t)main_base() + 0xae5f28;
         if (!vt_ok) LOG("【红】自定义设置：借来的视频页虚表里没有 main+0xae5f28，不写「有改动」位（原版版本变了？）"); }
-    if (vt_ok) { int dirty = 0; for (int i = 0; i < NK; i++) { int pd = atomic_load(&g_pend[i]); dirty |= pd >= 0 && pd != atomic_load(&g_val[i]); }
+    if (vt_ok) { int dm_video_dirty(void); int dirty = dm_video_dirty(); for (int i = 0; i < NK; i++) { int pd = atomic_load(&g_pend[i]); dirty |= pd >= 0 && pd != atomic_load(&g_val[i]); }
         if (*(uint8_t *)(sp + 0x1a0) != dirty) { *(uint8_t *)(sp + 0x1a0) = (uint8_t)dirty; LOG("自定义设置：有未应用的改动 → %d（「应用 / 放弃」%s）", dirty, dirty ? "点亮" : "变灰"); } }
 }

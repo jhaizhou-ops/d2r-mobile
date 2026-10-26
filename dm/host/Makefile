@@ -74,6 +74,7 @@ SRC=\
 	dm_update.c \
 	dm_vault.c \
 	dm_vault_ui.c \
+	dm_video.c \
 	dm_world.c \
 	dm_prof.c \
 	thread.c \

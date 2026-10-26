@@ -1207,8 +1207,51 @@ _CUSTOM_TEST_ROWS = int(os.environ.get('DM_CUSTOM_TEST_ROWS', '0'))   # 测试�
 # "3D Quality" (q3d) is a radio with two options, each with a line of small description text below, taking two rows of height (_CUSTOM_Q3D_H); every other row is one row high
 _CUSTOM_Q3D_H = 2 * _CUSTOM_LINE_H
 _CUSTOM_ROW_H = [(_CUSTOM_Q3D_H if k in ('voice', 'q3d', 'touch_swap_above') else _CUSTOM_LINE_H) for k, _ in _CUSTOM_ALL] + [_CUSTOM_LINE_H] * _CUSTOM_TEST_ROWS
-_CUSTOM_Y = [_CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H[:i]) for i in range(len(_CUSTOM_ROW_H))]
-_CUSTOM_H = _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H)
+# Mac App（DM_OVERLAY_MAC）：这一页顶上先放「显示」「图形」两节画面设置（宿主 dm_video.c），再接「自定义」一节。
+# 照原版主机版视频页 / 电脑版图形页的样子：分节标题（原版标题字样 + 金色分隔线）、每行左边标签、右边原版的左右切换框（CarouselWidget，
+# 与主机版「图形模式」同一组字段，摆在第二栏正中：x 1000 + (700 − 596) / 2）。标签和选项尽量用原版串（显示 / 显示模式 / 窗口 / 全屏 / 分辨率 /
+# 图形 / 图形预设 / 性能 / 品质 / 自定义），游戏有几种语言就有几种；原版没有的（放大方式、MetalFX、标准、推荐、各档分辨率）在中英表里。
+# 切换框的消息发 TouchVideoMessage:<键>，游戏里没人认这一类：切换框会拿自己的值替换消息的第三段，勾选框那条无害的 PanelManager:ClosePanel:<名> 就成了不带名字的 ClosePanel（main+0xb1ee2c 按空名字找子控件，崩）。宿主读切换框的当前项，按应用 / 放弃 / 默认处理。「分辨率」下面留一行，
+# 改了没重启时宿主把「重启游戏后生效」挪进来（同语言行的提示）。有鼠标悬停，所以各行带原版式的悬停说明
+# Mac App (DM_OVERLAY_MAC): this page first gets two sections of picture settings, "Display" and "Graphics" (host dm_video.c), followed by the "Custom" section.
+# Modeled on the original console video page / PC graphics page: section headers (original heading style + gold divider), a label on the left of each row and the original left/right selector (CarouselWidget,
+# the same fields as the console "Graphics Mode", centered in the second column: x 1000 + (700 - 596) / 2) on the right. Labels and choices use original strings where they exist (Display / Display Mode / Windowed / Fullscreen / Resolution /
+# Graphics / Graphic Presets / Performance / Quality / Custom), so they come in every language the game has; the ones the game lacks (Upscaling, MetalFX, Standard, Recommended, the resolution tiers) are in the string table.
+# A selector sends TouchVideoMessage:<key>, a category nothing in the game handles: a selector replaces the message's third part with its own value, so the checkboxes' harmless PanelManager:ClosePanel:<name> became ClosePanel with no name, which crashed (lookup of a NULL child name at main+0xb1ee2c). The host reads each selector's current choice and handles apply / discard / default. The Resolution row keeps a line below it,
+# where the host puts "Takes effect after restarting the game" while a change is waiting for a restart (like the language row's hint). There is mouse hover, so each row has an original-style hover description
+_VIDEO_MAC = bool(os.environ.get('DM_OVERLAY_MAC'))
+_VIDEO = ((('mode', '@OptionsMenuDisplayMode', ('Windowed', 'Fullscreen'), 'dmVideoModeTip'),
+           ('res', '@ScreenResolution', ('dmVideoRes1600', 'dmVideoRes1920', 'dmVideoRes2560'), 'dmVideoResTip'),
+           ('hdr', '@Graphics'),
+           ('preset', '@GraphicPresetsText', ('dmVideoPresetRec', 'Performance', 'Quality', 'Custom'), 'dmVideoPresetTip'),
+           ('upscale', '@dmVideoUpscale', ('dmVideoUpStandard', 'dmVideoUpMetalFX'), 'dmVideoUpscaleTip'),
+           ('hdr', '@KeyBindingTypeCustom')) if _VIDEO_MAC else ())
+_VIDEO_H = _CUSTOM_LINE_H * len(_VIDEO)
+_CUSTOM_Y = [_VIDEO_H + _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H[:i]) for i in range(len(_CUSTOM_ROW_H))]
+_CUSTOM_H = _VIDEO_H + _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H)
+def _video_rows():
+    out = ''
+    for i, row in enumerate(_VIDEO):
+        y = _CUSTOM_TITLE_H + i * _CUSTOM_LINE_H
+        if row[0] == 'hdr':   # 分节标题：同表格标题行（原版标题字样，分隔金线在标题框里 y 90） | section header: same as the table's header row (original heading style, gold divider at y 90 inside the heading box)
+            out += ('        { "type": "TextBoxWidget", "name": "TouchVideoHdr%d", "fields": { "rect": { "x": 0, "y": %d, "width": 1700, "height": %d }, "text": "%s", "style": "$StyleSettingsTitle" }, "children": [\n'
+                    '            { "type": "ImageWidget", "name": "Divider", "fields": { "rect": "$OptionsDividerRect", "filename": "PauseMenu\\\\Divider" } },\n'
+                    '        ] },\n') % (i, y, _CUSTOM_LINE_H, row[1])
+            continue
+        key, label, states, tip = row
+        lh = 112 if key == 'res' else _CUSTOM_LINE_H   # 分辨率行：标签与切换框占上 112，下面 68 留给「重启后生效」 | Resolution row: label and selector take the top 112; the bottom 68 is left for "takes effect after restarting"
+        out += ('        { "type": "TextBoxWidget", "name": "TouchVideo_%s_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "%s", "style": "$StyleSettingsText" } },\n'
+                '        { "type": "CarouselWidget", "name": "TouchVideo_%s", "fields": {\n'
+                '            "rect": { "x": 1052, "y": %d, "width": 596, "height": 72 },\n'
+                '            "focusIndicatorPadding": "$OptionsCarouselFocusIndicatorPadding", "focusIndicatorFilename": "$OptionsCarouselFocusIndicatorFilename",\n'
+                '            "states": [ %s ], "fontType": "8ptE", "onUpdateMessage": "TouchVideoMessage:%s",\n'
+                '            "style": "$StyleSettingsCarousel", "enabledColor": "$CarouselEnabledColor", "disabledColor": "$CarouselDisabledColor",\n'
+                '            "tooltipString": "@%s", "tooltipStyle": { "fontStyle": { "options": { "newlineHandling": "standard" } }, "showAfterDelay": true } } },\n'
+                ) % (key, y, lh, label, key, y + (lh - 72) // 2, ', '.join('"%s"' % s for s in states), key, tip)
+        if key == 'res':   # 「重启游戏后生效」：先放在屏外，宿主挪到标签下面 | "Takes effect after restarting the game": starts off screen, the host moves it under the label
+            out += ('        { "type": "TextBoxWidget", "name": "TouchVideoResHint", "fields": { "rect": { "x": 99999, "y": %d, "width": 1400, "height": 60 }, "text": "@dmVideoResHint", '
+                    '"style": { "fontColor": "$FontColorGray", "pointSize": 30, "alignment": { "h": "left", "v": "center" } } } },\n') % (y + 112)
+    return out
 def _custom_toggle_row(i, key, label):
     y, h = _CUSTOM_Y[i], _CUSTOM_LINE_H
     return ('        { "type": "TextBoxWidget", "name": "TouchCustom_%s_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "%s", "style": "$StyleSettingsText", "style/options/newlineHandling": "standard" } },\n'
@@ -1273,17 +1316,17 @@ def _custom_q3d_row(i, setting="q3d"):
 def _custom_page(text):
     if '"name": "VideoOptionsPanel"' not in text or '"name": "OptionsTable"' not in text: raise SystemExit('touch_layout：主机版视频页不是原样（原版布局变了？），自定义页没换')
     title = ('{ "type": "TableRowWidget", "name": "Row TouchCustomTitle", "children": [\n'
-             '    { "type": "TextBoxWidget", "name": "TouchCustomTitle", "fields": { "text": "@KeyBindingTypeCustom", "style": "$StyleSettingsTitle" }, "children": [\n'
+             '    { "type": "TextBoxWidget", "name": "TouchCustomTitle", "fields": { "text": "%s", "style": "$StyleSettingsTitle" }, "children": [\n'
              '        { "type": "ImageWidget", "name": "Divider", "fields": { "rect": "$OptionsDividerRect", "filename": "PauseMenu\\\\Divider" } },\n'
              '    ] },\n'
-             '] },\n')
+             '] },\n') % ('@OptionsMenuDisplay' if _VIDEO_MAC else '@KeyBindingTypeCustom')   # Mac 页首是「显示」一节，「自定义」挪成后面一节 | on the Mac the page opens with the "Display" section and "Custom" becomes a later section
     out = ('{\n    "basedOn": "VideoOptionsPanelHD.json",\n    "type": "VideoOptionsPanel", "name": "VideoOptionsPanel",\n    "children": [\n'
            '        { "type": "ImageWidget", "name": "ScrollBarBackground", "children": [ { "type": "ScrollControllerWidget", "name": "ScrollController" }, ] },\n'
            '        { "type": "ScrollViewWidget", "name": "ScrollView", "children": [\n'
            '            { "type": "TableWidget", "name": "OptionsTable", "fields": { "columns": [ "$OptionsTableColumn1", "$OptionsTableColumn2" ], "rowHeight": %d }, "children": [\n' % _CUSTOM_TITLE_H
            + title + '            ] },\n'
-           + '            { "type": "Widget", "name": "TouchCustomRows", "fields": { "rect": { "x": 0, "y": 0, "width": 1500, "height": %d } }, "children": [\n' % _CUSTOM_H
-           + _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('voice', 'q3d', 'touch_swap_above') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i) + _CUSTOM_LANG_HINT
+           + '            { "type": "Widget", "name": "TouchCustomRows", "fields": { "rect": { "x": 0, "y": 0, "width": %d, "height": %d } }, "children": [\n' % (1700 if _VIDEO_MAC else 1500, _CUSTOM_H)
+           + _video_rows() + _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('voice', 'q3d', 'touch_swap_above') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i) + _CUSTOM_LANG_HINT
            + ''.join('        { "type": "TextBoxWidget", "name": "TouchCustomTest%d_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "@KeyBindingTypeCustom", "style": "$StyleSettingsText" } },\n'
                      % (n, _CUSTOM_Y[len(_CUSTOM_ALL) + n], _CUSTOM_LINE_H) for n in range(_CUSTOM_TEST_ROWS)) +
            # 手柄模式的选中框（同符文之语清单 TouchRwSel）：框住十字键选中的那一行，宿主摆（dm_custom.c）；触屏模式一直在屏外（只把 x 挪出去、y 留在内容范围内：滚动区按子控件的范围算内容高度，y 放到 99999 会把可滚范围撑到十万）。和各行在同一个容器里，跟着滚
