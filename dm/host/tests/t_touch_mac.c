@@ -24,7 +24,8 @@ static uint64_t polled_buttons;
 static float click_x, click_y, walk_x, walk_y;
 static int test_ui_y, test_ui_h, test_real_h;
 int test_ui_item_at_now(float x, float y) { (void)x; (void)y; return test_hit; }
-void test_ui_touch(int op, float x, float y) { (void)op; (void)x; (void)y; ui_events++; }
+static int ops[512], nops;   // 前端页交给界面的每一下的相位 | the phase of each event handed to the UI on front-end pages
+void test_ui_touch(int op, float x, float y) { (void)x; (void)y; ui_events++; if (nops < 512) ops[nops++] = op; }
 void test_ui_tab_go(void) { tabs++; }
 void (*dm_pad_hook)(uint64_t, uint64_t *, int32_t *, int32_t *, int32_t *, int32_t *);
 uint64_t guest_ns(void) { return 0; }
@@ -181,6 +182,21 @@ static void test_live_hover(void) {
     CHECK(hovers == 3, "hover resumes after gestures complete");
 }
 
+// 前端页的拖动（同 iOS 前端）：纵向拖过 10 点 = 滚动，这一下作废、不点；横向拖不从滑块上起手 = 照旧是点击
+// Drags on front-end pages (as in the iOS front end): past 10 points vertically = scroll, and this press is voided without a click; a sideways drag not starting on a slider is still a click
+static void test_fe_drag(void) {
+    live_reset(); test_in = 0; nops = 0;
+    dm_touch_host_live(0, .40f, .40f); for (int i = 1; i <= 10; i++) dm_touch_host_live(1, .40f, .40f + i * .005f); dm_touch_host_live(2, 0, 0); live_poll();
+    int ups = 0, cancels = 0; for (int i = 0; i < nops; i++) { ups += ops[i] == 2; cancels += ops[i] == 3; }
+    CHECK(nops >= 2 && ops[0] == 0 && cancels == 1 && ups == 0, "front end: a vertical drag scrolls instead of clicking (the press is voided)");
+    nops = 0; dm_touch_host_live(0, .40f, .40f); for (int i = 1; i <= 10; i++) dm_touch_host_live(1, .40f + i * .005f, .40f); dm_touch_host_live(2, 0, 0); live_poll();
+    ups = cancels = 0; for (int i = 0; i < nops; i++) { ups += ops[i] == 2; cancels += ops[i] == 3; }
+    CHECK(nops >= 2 && ops[0] == 0 && ops[nops - 1] == 2 && ups == 1 && cancels == 0, "front end: a sideways drag off any slider is still a click");
+    nops = 0; for (int i = 1; i <= 10; i++) dm_touch_host_live(1, .40f, .40f + i * .005f); live_poll();
+    cancels = 0; for (int i = 0; i < nops; i++) cancels += ops[i] == 3;
+    CHECK(cancels == 0, "front end: drag events with no press before them start no scroll");
+}
+
 int main(void) {
     const char *path = "build/touch_host.script";
     FILE *f = fopen(path, "w"); if (!f) return 2;
@@ -212,6 +228,7 @@ int main(void) {
       dm_ui_cache_mode_leave(); CHECK(1, "界面缓存清理在没有界面根时不崩"); }
     test_live_mouse();
     test_live_hover();
+    test_fe_drag();
     printf("== touch host %d 项，失败 %d ==\n", checks, fails);
     return fails != 0;
 }

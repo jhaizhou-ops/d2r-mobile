@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 uint64_t now_ns(void);
 // 手势层的坐标是「界面矩形里的归一化」（同 iOS 的游戏视图）；点世界 / 点地走要的是「整屏归一化」。16:9 时两者一样；
@@ -217,6 +218,13 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
         while ((h = atomic_load(&g_live.head)) != atomic_load(&g_live.tail)) {
             int op = g_live.q[h % 64].op; float nx = g_live.q[h % 64].nx, ny = g_live.q[h % 64].ny; if (op != 2) { px = nx; py = ny; }
             if (op == 0) memset(&g_lm, 0, sizeof g_lm);
+            // 滚动条上按下（前端页或局内开着面板）：整笔交给拖滑块（dm_ui_drag_*，dm_cursor.c ui_drag_pump 的 kind 4）——按在滑块上 = 拖着走，按在滑槽上 = 滑块跳到指针处；
+            // 都不当点击（点击的就近吸附会落到旁边滑块的箭头上）
+            // A press on a scroll bar (front-end pages, or a panel open in game): the whole gesture goes to the thumb drag (dm_ui_drag_*, kind 4 of dm_cursor.c ui_drag_pump) -- pressed on the thumb = it follows, pressed on the track = the thumb jumps to the pointer;
+            // never a click (a click's snap to the nearest landed on the arrow of the slider next to it)
+            { static int sb; int dm_ui_scrollbar_at(float, float);
+              if (op == 0 && (!in || g_touch.state.navigation_mode || dm_game_paused()) && dm_ui_scrollbar_at(px, py)) { sb = 1; dm_ui_drag_begin(1, px, py, 44.0f / 1320); dm_ui_drag_move(px, py); fprintf(stderr, "[dm] 鼠标：按在滚动条上（%.3f,%.3f）→ 拖滑块，这一下不点\n", px, py); }
+              if (sb) { if (op == 1) dm_ui_drag_move(px, py); else if (op == 2) { dm_ui_drag_end(); sb = 0; } atomic_store(&g_live.head, h + 1); continue; } }
             if (g_lm.owned) {
                 g_lm.x = px; g_lm.y = py;
                 if (op == 2) g_lm.owned = g_lm.down = 0;
@@ -243,6 +251,17 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
                 if (op == 0 && dm_update_click_at(px, py)) upd_eat = 1;
                 if (upd_eat) { if (op == 2) upd_eat = 0; atomic_store(&g_live.head, h + 1); continue; } }
             if (!in) {   // 前端页：抬起时先问一次命中——落在页签上就走「点页签 = 按对应的手柄键」（页签不认鼠标点击；局内由手势层做同一件事），其余照旧发鼠标点击 | front-end pages: on release, hit-test once first - landing on a tab goes through "clicking a tab = pressing the corresponding gamepad key" (tabs do not take mouse clicks; in game the gesture layer does the same), everything else sends a mouse click as before
+                // 拖动（同 iOS 前端 front_ios.m uiTouch）：纵向拖过 10 点 = 滚动 / 滚动条上拖滑块，横向拖从滑块上起手 = 调值（前端的选项页有滑块），这一下都不点；
+                // 别处的横向拖照旧当点击。拖动交给宿主的界面连续手势（dm_ui_drag_*，dm_cursor.c ui_drag_pump）
+                // Drags (as the iOS front end, front_ios.m uiTouch): past 10 points vertically = scroll / drag a scroll bar's thumb, sideways starting on a slider = set its value (the front-end options page has sliders); neither clicks.
+                // A sideways drag anywhere else is still a click. Drags go to the host's continuous UI gestures (dm_ui_drag_*, dm_cursor.c ui_drag_pump)
+                static float fo_x, fo_y; static int fe_drag, fe_down;   // fe_down：这一笔有过按下（没有按下的拖动事件不算拖动，如按在黑边上再拖进画面） | fe_down: this gesture had a press (a drag event without one is not a drag, e.g. pressed on the black bars and dragged into the picture)
+                if (op == 0) { fo_x = px; fo_y = py; fe_drag = 0; fe_down = 1; } else if (op == 2) fe_down = 0;
+                if (fe_drag) { if (op == 1) dm_ui_drag_move(px, py); else if (op == 2) { dm_ui_drag_end(); fe_drag = 0; } atomic_store(&g_live.head, h + 1); continue; }
+                if (op == 1 && fe_down) { int dm_ui_fe_drag_ok(void), dm_ui_slider_at(float, float); float dx = fabsf(px - fo_x) * 2868, dy = fabsf(py - fo_y) * 1320, th = 10 * 1320.0f / 720;   // 10 点（界面高按 720 点算） | 10 points (with the UI 720 points high)
+                    int k = dy > th && dy >= dx && dm_ui_fe_drag_ok() ? 1 : dx > th && dx > dy && dm_ui_slider_at(fo_x, fo_y) ? 2 : 0;
+                    if (k) { dm_ui_touch(3, px, py); dm_ui_drag_begin(k, fo_x, fo_y, 44.0f / 1320); dm_ui_drag_move(px, py); fe_drag = k;
+                        fprintf(stderr, "[dm] 鼠标：前端页%s拖（起手 %.3f,%.3f），这一下不点\n", k == 1 ? "纵向" : "横向（滑块上）", fo_x, fo_y); atomic_store(&g_live.head, h + 1); continue; } }
                 if (op == 2 && dm_ui_item_at_now(px, py) == 2) { dm_ui_touch(3, px, py); dm_ui_tab_go(); } else dm_ui_touch(op, px, py);
                 atomic_store(&g_live.head, h + 1); continue; }
             // 只有世界区域走按下响应；菜单、物品、页签和 HUD 继续走各自的手势路径。
@@ -392,6 +411,28 @@ apply_input:
     if (g_touch.state.ly) *ly = g_touch.state.ly;
     if (g_touch.state.rx) *rx = g_touch.state.rx;
     if (g_touch.state.ry) *ry = g_touch.state.ry;
+}
+
+// 滚轮 / 触控板（Mac App 前端线程；控制口 wheel 命令也走这里）：界面上（前端各页、或局内开着面板）= 在指针处发原版键鼠版的 MouseScroll（dm_ui_ptr 排队，主线程发）；
+// 光标落在可滚区域上游戏才滚（滚动控件自己的命中函数判），别处它自己不理。一格 = 120，在 900 线高的画面上约 32 像素（dm_cursor.c ui_drag_pump）。
+// 触控板（hasPreciseScrollingDeltas）给的是点数：累计到「32/900 个视图高」出一格，内容跟手指走、快慢一比一；鼠标滚轮给的是行数：一行 2 格（约半行选项；至少 1 格）。
+// 换向或停 0.3 秒以上清零。返回 0 = 不在界面上（局内没开面板 / 菜单，同鼠标的 dm_touch_host_world_active），前端照旧当右摇杆推（原版手柄版的滚动键位）
+// Wheel / trackpad (Mac App front-end thread; the control port's wheel command comes here too): over the UI (the front-end pages, or a panel open in game) = send the original keyboard-mouse MouseScroll at the pointer (queued
+// by dm_ui_ptr, sent on the main thread); the game scrolls only when the cursor is over a scrollable area (judged by the scroll widget's own hit function) and ignores it elsewhere. One step = 120, about 32 pixels on a
+// 900-line picture (dm_cursor.c ui_drag_pump). A trackpad (hasPreciseScrollingDeltas) gives points: they add up to one step per 32/900 of the view height, so the content follows the fingers one to one; a mouse wheel
+// gives lines: 2 steps per line (about half an options row; at least 1). A change of direction or a pause over 0.3 s clears the sum. Returns 0 = not over the UI (in game with no panel / menu open, as the mouse's dm_touch_host_world_active), and the front end pushes the right stick as before
+int dm_wheel_ui(float nx, float ny, double dy, int precise, double view_h) {
+    if (dm_touch_host_world_active()) return 0;   // 局内、没开面板 / 菜单、没暂停 | in game, no panel / menu open, not paused
+    static double acc; static uint64_t last; uint64_t now = now_ns();
+    if (now - last > 300000000ull || (acc > 0) != (dy > 0)) acc = 0;
+    last = now;
+    int n;
+    if (precise) { double step = view_h > 0 ? view_h * 32 / 900 : 24; acc += dy; n = (int)(acc / step); acc -= n * step; }
+    else { n = (int)lround(dy * 2); if (!n) n = dy > 0 ? 1 : -1; }
+    if (!n) return 1;
+    if (n > 6) n = 6; if (n < -6) n = -6;   // 一次最多 6 格（甩动的惯性段一帧能给上百点） | at most 6 steps at once (a flick's momentum can give hundreds of points in one frame)
+    dm_ui_ptr(DM_UP_MOVE, nx, ny, 0); dm_ui_ptr(DM_UP_SCROLL, nx, ny, n * 120);   // 正 = 内容往下（露出上面的行），同触控板的自然滚动 | positive = content moves down (revealing the rows above), as with natural trackpad scrolling
+    return 1;
 }
 
 __attribute__((constructor)) static void touch_mac_register(void) { if (dm_touch_host_enabled()) dm_pad_hook = dm_touch_host_step; }

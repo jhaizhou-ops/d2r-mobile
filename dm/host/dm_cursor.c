@@ -1569,7 +1569,7 @@ static void ui_ptr_pump(module_t *m, uint64_t root, int width, int height) {
     if (!vb) ui_send_mouse(m, root, hs[0], x, y);
     if (!pend) return;
     int k = g_up_q[r % 32].kind, a = g_up_q[r % 32].arg; atomic_store(&g_up_r, r + 1);
-    if (k == DM_UP_END) atomic_store(&g_up_hold, 0); else if (k >= DM_UP_LDOWN && k <= DM_UP_KEYUP && !vb) { ui_send_mouse_arg(m, root, hs[k], x, y, a); LOG("界面指针：事件 %d 参数 %d @(%d,%d)", k, a, x, y); }
+    if (k == DM_UP_END) atomic_store(&g_up_hold, 0); else if (k >= DM_UP_LDOWN && k <= DM_UP_KEYUP && !vb) { ui_send_mouse_arg(m, root, hs[k], x, y, a); static int nsc; if (k != DM_UP_SCROLL || nsc++ < 3) LOG("界面指针：事件 %d 参数 %d @(%d,%d)", k, a, x, y); }   // 滚轮（Mac 触控板一秒几十次）只记前 3 次 | wheel (dozens a second on a Mac trackpad): only the first 3 are logged
 }
 // ---------- 界面连续手势：上下拖 = 滚动、按住滑块横拖 = 值跟手 ----------
 // 读码 + 实测（Mac 宿主，选项页）：
@@ -1588,11 +1588,12 @@ static void ui_ptr_pump(module_t *m, uint64_t root, int width, int height) {
 //         Slider widget = vtable main+0x20bad70; both the starting hit and the two ends of the track are probed with the widget's own hit-test function (vtable +0x48), without reading rect fields; hit area = the track (excluding the arrows at both ends).
 // The front-end thread only writes the few atomics below; the widget tree and messages are touched only on the main thread (ui_drag_pump, once per presented frame).
 #define UI_SCROLL_STEP(h) ((h) * 32 / 900 > 4 ? (h) * 32 / 900 : 4)   // 一格滚轮对应手指走多少像素 | How many pixels of finger travel correspond to one wheel notch
-static _Atomic int g_dg_kind; static _Atomic uint64_t g_dg_o, g_dg_c; static _Atomic unsigned g_dg_seq; static _Atomic uint32_t g_dg_tol;
+static _Atomic int g_dg_kind, g_dg_kreq; static _Atomic uint64_t g_dg_o, g_dg_c;   // g_dg_kreq = 这次拖动要的种类（松手后也留着：一下快点在主线程看到之前就已松开） | g_dg_kreq = the kind this drag asked for (kept after release: a quick click may be over before the main thread sees it)
+ static _Atomic unsigned g_dg_seq; static _Atomic uint32_t g_dg_tol;
 static uint64_t dg_pack(float nx, float ny) { nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny; return ((uint64_t)(uint32_t)(nx * 65535 + .5f) << 16) | (uint32_t)(ny * 65535 + .5f); }
 void dm_ui_drag_begin(int kind, float ox, float oy, float tol_ny) {
     uint64_t o = dg_pack(ox, oy); atomic_store(&g_dg_o, o); atomic_store(&g_dg_c, o); atomic_store(&g_dg_tol, (uint32_t)((tol_ny < 0 ? 0 : tol_ny > 0.5f ? 0.5f : tol_ny) * 65535));
-    atomic_store(&g_dg_kind, kind == 2 ? 2 : 1); atomic_fetch_add(&g_dg_seq, 1);
+    atomic_store(&g_dg_kind, kind == 2 ? 2 : 1); atomic_store(&g_dg_kreq, kind == 2 ? 2 : 1); atomic_fetch_add(&g_dg_seq, 1);
 }
 void dm_ui_drag_move(float x, float y) { if (atomic_load(&g_dg_kind)) atomic_store(&g_dg_c, dg_pack(x, y)); }
 void dm_ui_drag_end(void) { atomic_store(&g_dg_kind, 0); }
@@ -1606,6 +1607,16 @@ static void dg_sliders(uint64_t w, uint64_t vt, int dep, uint64_t *out, int *n) 
     uint64_t ch = *(uint64_t *)(w + 0x58), k = *(uint64_t *)(w + 0x60); if (!ch || k > 256) return;
     for (uint64_t i = 0; i < k; i++) dg_sliders(*(uint64_t *)(ch + 8 * i), vt, dep + 1, out, n);
 }
+// 滚动条上起手的纵向拖 = 拖滑块（kind 4）：滑块跟着指针走，不是「内容跟着手指走」（那样往下拖滑块、列表反倒往上滚）。
+// 滚动条 = 虚表 main+0x20b9d38 的 ScrollController，子控件 Bar（虚表 main+0x20ba278，命中区 = 滑槽）下挂滑块 Indicator；Bar 的高（+0x7c，布局单位）与 Indicator 的 y / 高（+0x74 / +0x7c）
+// 宿主实读（3.3.94012，Mac 选项页）：列表滚 600 单位 Indicator.y 0 → 442。游戏只认滚轮，所以按「滑块该在哪 − 现在在哪」发滚轮格数，每格走多少滑块单位边滚边量；
+// 发出去的格数落定（滑块动了或等过 3 帧）才发下一批，免得列表还没动又补发、冲过头。滚轮发在滑槽左边的列表里（滚动区的命中函数认那里）
+// A vertical drag starting on a scroll bar = dragging its thumb (kind 4): the thumb follows the pointer, rather than "the content follows the finger" (which scrolled the list up when the thumb was dragged down).
+// Scroll bar = ScrollController with vtable main+0x20b9d38, whose child Bar (vtable main+0x20ba278, hit area = the track) holds the thumb Indicator; Bar's height (+0x7c, layout units) and the Indicator's y / height (+0x74 / +0x7c)
+// read on the host (3.3.94012, Mac options page): scrolling the list 600 units moves Indicator.y 0 -> 442. The game only takes the wheel, so send wheel steps from "where the thumb should be - where it is", measuring the thumb units per step
+// as it goes; the next batch waits until the last one has landed (the thumb moved, or 3 frames passed), so it does not send more before the list has moved and overshoot. The wheel goes to the list just left of the track (the scroll area's hit function takes it there)
+static uint64_t dg_child_vt(uint64_t w, uint64_t vt) { uint64_t ch = *(uint64_t *)(w + 0x58), k = *(uint64_t *)(w + 0x60); if (!ch || k > 64) return 0; for (uint64_t i = 0; i < k; i++) { uint64_t c = *(uint64_t *)(ch + 8 * i); if (c && *(uint64_t *)c == vt) return c; } return 0; }
+static struct { uint64_t bar, ind; int top, bot, len, grab, x, last, wait, rel; double k; } g_th;
 static void ui_drag_pump(module_t *m, uint64_t root, int W, int H) {
     static unsigned seen; static int kind, sent, s_ok, s_y, s_l, s_r, s_last, s_down; static uint64_t h_mv, h_dn, h_up, h_sc;
     if (!h_mv) { h_mv = ui_hash("MouseMove"); h_dn = ui_hash("LeftMouseButtonDown"); h_up = ui_hash("LeftMouseButtonUp"); h_sc = ui_hash("MouseScroll"); }
@@ -1614,7 +1625,7 @@ static void ui_drag_pump(module_t *m, uint64_t root, int W, int H) {
     int ox = (int)(((o >> 16) & 0xffff) / 65535.0 * (W - 1)), oy = (int)((o & 0xffff) / 65535.0 * (H - 1)), cx = (int)(((c >> 16) & 0xffff) / 65535.0 * (W - 1)), cy = (int)((c & 0xffff) / 65535.0 * (H - 1));
     if (kind == 2 && s_down) { ui_send_mouse(m, root, h_mv, s_last, s_y); ui_send_mouse(m, root, h_up, s_last, s_y); s_down = 0; return; }   // 上一帧按下的，这一帧抬起 | Pressed on the previous frame, released on this frame
     if (seq != seen) {   // 新的一次拖动 | A new drag
-        seen = seq; kind = live; sent = 0; s_ok = 0; s_down = 0; s_last = -100000;
+        seen = seq; kind = atomic_load(&g_dg_kreq); sent = 0; s_ok = 0; s_down = 0; s_last = -100000;
         { int dm_vault_ui_drag(int, int, int), dm_vault_ui_over(int, int); if ((dm_ui_panel_state() & DM_PS_VAULT) && dm_vault_ui_drag(0, ox, oy)) { kind = 3; return; }   // 编年史格子上起拖 = 往背包取（dm_vault_ui.c） | A drag started on a chronicle cell = take into the inventory (dm_vault_ui.c)
           if ((dm_ui_panel_state() & DM_PS_VAULT) && dm_vault_ui_over(ox, oy)) { kind = 0; return; } }   // 编年史页上别处起拖：什么都不发（不发滚轮 / 滑块点击给底下的原版魔盒容器，独立页面） | Drag started elsewhere on the chronicle page: send nothing (no wheel / slider clicks to the original game's cube container underneath; independent page)
         if (kind == 2) {
@@ -1632,10 +1643,32 @@ static void ui_drag_pump(module_t *m, uint64_t root, int W, int H) {
                 int hh = bot - top + 1; s_y = (top + bot) / 2; s_ok = s_r - s_l > 16;   // 命中区就是滑槽本身（两端箭头是它外面的子控件，实测音效滑块命中区 917–1148、箭头在 898 / 1165） | The hit area is the slider track itself (the arrows at both ends are child widgets outside it; measured for the sound-effects slider: hit area 917–1148, arrows at 898 / 1165)
                 LOG("界面拖动：起手 (%d,%d) 命中滑块 %s，行 y=%d 高 %d，滑槽 x %d–%d%s", ox, oy, *(uint64_t *)(w + 8) ? (const char *)*(uint64_t *)(w + 8) : "?", s_y, hh, s_l, s_r, s_ok ? "" : "（太窄，不做）");
             } else LOG("界面拖动：横向拖的起手 (%d,%d) 不在滑块上（可见滑块 %d 个，上下放宽 %d 像素），不发任何输入", ox, oy, n, tol);
-        } else if (kind == 1) { static int once; if (!once++) LOG("界面拖动：首例纵向拖 → 在起手位置 (%d,%d) 发滚轮，每 %d 像素一格", ox, oy, UI_SCROLL_STEP(H)); }
+        } else if (kind == 1) {
+            static uint64_t sc[48]; int n = 0, tol = H / 60 > 4 ? H / 60 : 4; dg_sliders(root, (uint64_t)m->base + 0x20b9d38, 0, sc, &n);
+            for (int i = 0; i < n && kind == 1; i++) { uint64_t bar = dg_child_vt(sc[i], (uint64_t)m->base + 0x20ba278), ind = bar ? dg_child_vt(bar, (uint64_t)m->base + 0x20b8650) : 0; if (!ind) continue;
+                for (int e = 0; e < 5 && kind == 1; e++) { int x = ox + (e == 1 ? -tol / 2 : e == 2 ? tol / 2 : e == 3 ? -tol : e == 4 ? tol : 0); if (x < 0 || x >= W || !dg_hit(bar, x, oy)) continue;
+                    int a, b, len = *(int32_t *)(bar + 0x7c), ih = *(int32_t *)(ind + 0x7c), iy = *(int32_t *)(ind + 0x74); if (len <= ih || ih <= 0) continue;
+                    for (a = 0, b = oy; a < b;) { int mid = (a + b) / 2; if (dg_hit(bar, x, mid)) b = mid; else a = mid + 1; } g_th.top = a;
+                    for (a = oy, b = H - 1; a < b;) { int mid = (a + b + 1) / 2; if (dg_hit(bar, x, mid)) a = mid; else b = mid - 1; } g_th.bot = a;
+                    if (g_th.bot - g_th.top < 16) continue;
+                    double sc1 = (double)(g_th.bot - g_th.top + 1) / len; int p = (int)((oy - g_th.top) / sc1);
+                    g_th.bar = bar; g_th.ind = ind; g_th.len = len; g_th.grab = p >= iy && p <= iy + ih ? p - iy : ih / 2; g_th.x = x - W / 12; g_th.last = iy; g_th.wait = 0; g_th.k = 0; g_th.rel = 30; kind = 4;
+                    LOG("界面拖动：起手 (%d,%d) 在滚动条上 → 拖滑块（滑槽 y %d–%d，%d 单位，滑块 y %d 高 %d，%s）", ox, oy, g_th.top, g_th.bot, len, iy, ih, p >= iy && p <= iy + ih ? "按在滑块上" : "按在滑槽上：滑块先跳到指针处"); } }
+            if (kind == 1) { static int once; if (!once++) LOG("界面拖动：首例纵向拖 → 在起手位置 (%d,%d) 发滚轮，每 %d 像素一格", ox, oy, UI_SCROLL_STEP(H)); } }
     }
     if (!kind) return;
     if (kind == 3) { int dm_vault_ui_drag(int, int, int); if (live) dm_vault_ui_drag(1, cx, cy); else { dm_vault_ui_drag(2, cx, cy); kind = 0; } return; }
+    if (kind == 4) {
+        if (!*(uint8_t *)(g_th.bar + 0x50) || (!live && --g_th.rel <= 0)) { kind = 0; return; }   // 滚动条不见了（翻页 / 关面板）就停；松手后再追 30 帧（点一下滑槽 = 滑块跳过去，要几批滚轮） | stops when the scroll bar is gone (tab switch / panel closed); after release it keeps converging for 30 frames (a click on the track = the thumb jumps there, which takes a few wheel batches)
+        int len = g_th.len, ih = *(int32_t *)(g_th.ind + 0x7c), cur = *(int32_t *)(g_th.ind + 0x74);
+        double sc1 = (double)(g_th.bot - g_th.top + 1) / len; int want = (int)((cy - g_th.top) / sc1) - g_th.grab;
+        if (want < 0) want = 0; if (want > len - ih) want = len - ih;
+        if (g_th.wait > 0) { if (cur == g_th.last && --g_th.wait > 0) return; if (cur != g_th.last && sent) { double k1 = fabs((double)(cur - g_th.last) / sent); g_th.k = g_th.k > 0 ? (g_th.k + k1) / 2 : k1; } g_th.wait = 0; }
+        int err = want - cur; if (abs(err) <= (g_th.k > 0 ? g_th.k / 2 : 2)) { if (!live) kind = 0; return; }
+        int d = g_th.k > 0 ? -(int)lround(err / g_th.k) : (err > 0 ? -1 : 1); if (!d) d = err > 0 ? -1 : 1; if (d > 12) d = 12; if (d < -12) d = -12;   // 滑块往下 = 内容往上 = 滚轮负 | thumb down = content up = negative wheel
+        ui_send_mouse(m, root, h_mv, g_th.x, cy); ui_send_mouse_arg(m, root, h_sc, g_th.x, cy, d * 120);
+        sent = d; g_th.last = cur; g_th.wait = 3; return;
+    }
     if (kind == 1) {
         if (!live) { kind = 0; return; }   // 松手即停 | Stops as soon as the finger lifts
         int want = (cy - oy) / UI_SCROLL_STEP(H), d = want - sent; if (!d) return;   // 手指往下 = 内容跟着往下 = 滚轮正 | Finger moves down = content follows down = positive wheel
@@ -1646,6 +1679,29 @@ static void ui_drag_pump(module_t *m, uint64_t root, int W, int H) {
     int x = cx < s_l ? s_l : cx > s_r ? s_r : cx;
     if (x != s_last && (x - s_last >= 2 || s_last - x >= 2 || !live || x == s_l || x == s_r)) { ui_send_mouse(m, root, h_mv, x, s_y); ui_send_mouse(m, root, h_dn, x, s_y); s_last = x; s_down = 1; return; }   // 按下：值跳到手指下面；下一帧抬起 | Press: the value jumps under the finger; release on the next frame
     if (!live) kind = 0;   // 最后的位置已发过 | The last position has already been sent
+}
+// 指针处（界面归一化）有没有可见的滑块（游戏主线程；Mac 前端页的鼠标据此决定横拖是调滑块还是照旧点击，touch_mac.c）。上下放宽同手势层的 44 / 1320
+// Whether a visible slider is under the pointer (UI-normalised; game main thread; the Mac front-end mouse uses it to decide whether a sideways drag sets a slider or stays a click, touch_mac.c). Widened up and down like the gesture layer's 44 / 1320
+// 指针处（界面归一化）是不是可见的滚动条（ScrollController 的滑槽 Bar，左右放宽同 ui_drag_pump 的 H / 60）。Mac 真鼠标据此把滚动条上的按下整笔交给拖滑块（touch_mac.c），
+// 不让它变成一下点击——点击的「就近吸附」会把滑槽上的一下吸到旁边滑块的箭头上、改掉音量
+// Whether a visible scroll bar is under the pointer (UI-normalised; the track Bar of a ScrollController, widened sideways by H / 60 like ui_drag_pump). The Mac real mouse uses it to hand a press on a scroll bar to the thumb drag whole (touch_mac.c)
+// instead of letting it become a click -- the click's "snap to the nearest" moved a click on the track onto the arrow of the slider next to it and changed a volume
+int dm_ui_scrollbar_at(float nx, float ny) {
+    module_t *m = main_module(); uint64_t root = 0; if (!m) return 0; memcpy(&root, m->base + 0x2f05458, 8); if (!root) return 0;
+    int W = *(int32_t *)(m->base + 0x211da38), H = *(int32_t *)(m->base + 0x211da3c); if (W <= 0 || H <= 0) return 0;
+    static uint64_t sc[48]; int n = 0; dg_sliders(root, (uint64_t)m->base + 0x20b9d38, 0, sc, &n);
+    int x = (int)(nx * (W - 1)), y = (int)(ny * (H - 1)), tol = H / 60 > 4 ? H / 60 : 4;
+    for (int i = 0; i < n; i++) { uint64_t bar = dg_child_vt(sc[i], (uint64_t)m->base + 0x20ba278); if (!bar) continue;
+        for (int d = -tol; d <= tol; d += 2) if (x + d >= 0 && x + d < W && dg_hit(bar, x + d, y)) return 1; }
+    return 0;
+}
+int dm_ui_slider_at(float nx, float ny) {
+    module_t *m = main_module(); uint64_t root = 0; if (!m) return 0; memcpy(&root, m->base + 0x2f05458, 8); if (!root) return 0;
+    int W = *(int32_t *)(m->base + 0x211da38), H = *(int32_t *)(m->base + 0x211da3c); if (W <= 0 || H <= 0) return 0;
+    static uint64_t sl[48]; int n = 0; dg_sliders(root, (uint64_t)m->base + 0x20bad70, 0, sl, &n);
+    int x = (int)(nx * (W - 1)), y0 = (int)(ny * (H - 1)), tol = H * 44 / 1320;
+    for (int d = -tol; d <= tol; d += 4) for (int i = 0; i < n; i++) if (y0 + d >= 0 && y0 + d < H && dg_hit(sl[i], x, y0 + d)) return 1;
+    return 0;
 }
 static void ui_auto_key(uint64_t mask);
 static uint64_t ui_find(uint64_t w, const char *name, int dep);

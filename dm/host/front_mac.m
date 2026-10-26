@@ -88,6 +88,14 @@ void front_video_fullscreen(int on) {   // 选项页「显示模式」点了应�
 }
 // 游戏画面在视图里的位置：按游戏画面比例放进视图（比例对得上就是整个视图；对不上的四周留黑边）
 // Where the game picture sits in the view: fitted into the view by the picture's aspect ratio (if the ratios match, the whole view; otherwise black bars around)
+// 真全屏下画面归一化坐标 → 界面矩形归一化坐标（鼠标点击与滚轮共用，两步见鼠标那段的说明） | true full screen: picture-normalised → interface-rectangle-normalised coordinates (shared by mouse clicks and the wheel; the two steps are described at the mouse handler)
+static void full_ui_point(NSRect gr, float nx, float ny, float *vx, float *uy) {
+    int rw = 0, rh = 0; double cx = 0, cy = 0, cw = 1, ch = 1;
+    if (dm_screen_real(&rw, &rh) && rw > 0 && rh > 0) { double ca = (double)rw / rh, ga = gr.size.width / gr.size.height;
+        if (fabs(ga / ca - 1) >= 0.01) { if (ga > ca) { cw = ca / ga; cx = (1 - cw) / 2; } else { ch = ga / ca; cy = (1 - ch) / 2; } } }
+    *vx = (float)((nx - cx) / cw); float vy = (float)((ny - cy) / ch);
+    double fy = 0, fh = 1; ui_rect_frac(&fy, &fh); *uy = fh > 0 ? (float)((vy - fy) / fh) : vy;
+}
 static NSRect game_rect(void) {
     NSSize b = g_view.bounds.size; CGFloat w = b.width, h = b.height;
     if (fabs(w / h / g_aspect - 1) < 0.003) { }   // 比例差 0.3% 以内（窗口高取整的零头、全屏内容区比按刘海安全区算的少 1 点）当对得上，铺满 | within 0.3% (the remainder from rounding the window height, and the full-screen content area being 1 point less than computed from the notch safe area) counts as matching, and it fills
@@ -302,11 +310,7 @@ void front_run(void (*guest)(void)) {
                 // ② 再换到界面矩形（局内贴底）。局内界面矩形外是 3D 世界，带符号交下去（点世界换回整屏，touch_mac.c）；不在局内时显示块外是黑边，不算点
                 // (1) First map to "the block actually shown": the game's current resolution (16:9 in the front end, the whole screen in game) placed centred in the game picture by aspect ratio, the same measure as presentation (nvn_mtl.m present_encode: fill when the aspect ratios differ by less than 1%);
                 // (2) then map to the interface rectangle (along the bottom in game). In game, outside the interface rectangle is the 3D world, passed down with a sign (tapping the world maps back to the whole screen, touch_mac.c); outside the game the area beyond the shown block is the black bars, not counted as a tap
-                int rw = 0, rh = 0; double cx = 0, cy = 0, cw = 1, ch = 1;
-                if (dm_screen_real(&rw, &rh) && rw > 0 && rh > 0) { double ca = (double)rw / rh, ga = gr.size.width / gr.size.height;
-                    if (fabs(ga / ca - 1) >= 0.01) { if (ga > ca) { cw = ca / ga; cx = (1 - cw) / 2; } else { ch = ga / ca; cy = (1 - ch) / 2; } } }
-                float vx = (float)((nx - cx) / cw), vy = (float)((ny - cy) / ch);
-                double fy = 0, fh = 1; ui_rect_frac(&fy, &fh); float uy = fh > 0 ? (float)((vy - fy) / fh) : vy;
+                float vx, uy; full_ui_point(gr, nx, ny, &vx, &uy);
                 if (e.type == NSEventTypeLeftMouseDown && !dm_uiscreen_ingame() && (vx < 0 || vx > 1 || uy < 0 || uy > 1)) return nil;
                 dm_touch_host_live(hover ? 3 : e.type == NSEventTypeLeftMouseDown ? 0 : 1, vx, uy); return hover ? e : nil; }
             if (hover) { dm_touch_host_live(3, nx, ny); return e; }
@@ -314,8 +318,8 @@ void front_run(void (*guest)(void)) {
             if (g_live) { dm_touch_host_live(e.type == NSEventTypeLeftMouseDown ? 0 : 1, t.x, t.y); return nil; }
             dm_touch_set(&t, 1); return nil;
         }];
-        // 右键 = 手柄 B（返回 / 关面板）；滚轮 = 右摇杆上下推 0.12 秒（滚列表）。只在 App 形态接（命令行宿主的测试不受影响）
-        // Right click = gamepad B (back / close panel); wheel = push the right stick up or down for 0.12 s (scroll lists). Only wired in App form (tests of the command-line host are unaffected)
+        // 右键 = 手柄 B（返回 / 关面板）；滚轮 = 界面上在指针处发原版滚轮（touch_mac.c dm_wheel_ui），局内没开面板时右摇杆上下推 0.12 秒。只在 App 形态接（命令行宿主的测试不受影响）
+        // Right click = gamepad B (back / close panel); wheel = over the UI, the original wheel at the pointer (touch_mac.c dm_wheel_ui); in game with no panel open, push the right stick up or down for 0.12 s. Only wired in App form (tests of the command-line host are unaffected)
         if (g_live) {
             [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown | NSEventMaskRightMouseUp handler:^NSEvent *(NSEvent *e) {
                 if (e.window != win) return e;
@@ -324,6 +328,13 @@ void front_run(void (*guest)(void)) {
             }];
             [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel handler:^NSEvent *(NSEvent *e) {
                 if (e.window != win || e.scrollingDeltaY == 0) return e;
+                NSPoint p = [v convertPoint:e.locationInWindow fromView:nil]; NSRect gr = game_rect();
+                if (gr.size.width > 0 && gr.size.height > 0) {
+                    float nx = (float)((p.x - gr.origin.x) / gr.size.width), ny = (float)(1.0 - (p.y - gr.origin.y) / gr.size.height), ux = nx, uy = ny;
+                    if (g_full) full_ui_point(gr, nx, ny, &ux, &uy);
+                    int dm_wheel_ui(float, float, double, int, double);
+                    if (dm_wheel_ui(ux, uy, e.scrollingDeltaY, e.hasPreciseScrollingDeltas, gr.size.height)) return nil;
+                }
                 static int gen; int my = ++gen; g_wheel = e.scrollingDeltaY > 0 ? 1 : -1; push();
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (my == gen) { g_wheel = 0; push(); } });
                 return nil;
