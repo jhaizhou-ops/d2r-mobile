@@ -79,7 +79,7 @@ if [ "$1" = build ]; then
   # 老机型补充包（DM_ASTC_PACK = 补充包目录，dm/tools/astc_pack.py 的产物）：设了才另出一套 ASTC 版覆盖层（Gen/romfs_overlay_astc*），不支持 BC 的机型用；没设（如 TestFlight）这两个目录为空
   # RomFS overlay (bottom UI v4: Gen/assets/NativeHUD/v4 → base image at the borrowed path + controller HUD layout); at App launch this layer is looked up first according to DM_ROMFS_OVERLAY
   # Legacy Device Pack (DM_ASTC_PACK = Legacy Device Pack directory, the build output of dm/tools/astc_pack.py): only when set is an additional ASTC overlay produced (Gen/romfs_overlay_astc*), used by devices that do not support BC; when unset (e.g. TestFlight) these two directories are empty
-  python3 tools/gen_romfs_overlay.py "${DM_ROMFS_SRC:-${DM_ROOT:-$HOME/dm-work}/data/switch/3.3.94012/Update/RomFS}" Gen/romfs_overlay > /dev/null || { t "🔴 gen_romfs_overlay 失败"; exit 1; }
+  DM_OVERLAY_IOS=1 python3 tools/gen_romfs_overlay.py "${DM_ROMFS_SRC:-${DM_ROOT:-$HOME/dm-work}/data/switch/3.3.94012/Update/RomFS}" Gen/romfs_overlay > /dev/null || { t "🔴 gen_romfs_overlay 失败"; exit 1; }
   # 游戏的配置文件只认 App 自带的这份（玩家那边的资源只核档案文件，见 host/romfs_validate.c）：每一套覆盖层里都得有，缺一套出包失败
   # The game only accepts the config file bundled with the App (on the player's side only the archive files of the resources are checked, see
   # host/romfs_validate.c): every overlay set must contain one, and packaging fails if any set lacks it

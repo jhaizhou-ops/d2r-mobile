@@ -1219,13 +1219,22 @@ _CUSTOM_ROW_H = [(_CUSTOM_Q3D_H if k in ('voice', 'q3d', 'touch_swap_above') els
 # Graphics / Graphic Presets / Performance / Quality / Custom), so they come in every language the game has; the ones the game lacks (Upscaling, MetalFX, Standard, Recommended, the resolution tiers) are in the string table.
 # A selector sends TouchVideoMessage:<key>, a category nothing in the game handles: a selector replaces the message's third part with its own value, so the checkboxes' harmless PanelManager:ClosePanel:<name> became ClosePanel with no name, which crashed (lookup of a NULL child name at main+0xb1ee2c). The host reads each selector's current choice and handles apply / discard / default. The Resolution row keeps a line below it,
 # where the host puts "Takes effect after restarting the game" while a change is waiting for a restart (like the language row's hint). There is mouse hover, so each row has an original-style hover description
+# iOS（DM_OVERLAY_IOS，dm/ios/run.sh 生成覆盖层时设；安卓共用生成器但不设）：只有「图形」一节，标题行就是它——3D 清晰度（75% / 85% / 100%）、图形预设、放大方式
+# （游戏的 3D 放大趟用不用 MetalFX）；没有显示模式与分辨率（手机按屏幕原生出图）。触屏没有悬停，不带悬停说明
+# iOS (DM_OVERLAY_IOS, set by dm/ios/run.sh when it generates the overlay; Android shares the generator but does not set it): only the "Graphics" section, which is the header row itself -- 3D Resolution (75% / 85% / 100%), Graphic Presets, Upscaling
+# (whether the game's 3D upscale pass uses MetalFX); no display mode or resolution (phones render at the screen's native size). Touch has no hover, so no hover descriptions
 _VIDEO_MAC = bool(os.environ.get('DM_OVERLAY_MAC'))
+_VIDEO_IOS = bool(os.environ.get('DM_OVERLAY_IOS')) and not _VIDEO_MAC
 _VIDEO = ((('mode', '@OptionsMenuDisplayMode', ('Windowed', 'Fullscreen'), 'dmVideoModeTip'),
            ('res', '@ScreenResolution', ('dmVideoRes1600', 'dmVideoRes1920', 'dmVideoRes2560'), 'dmVideoResTip'),
            ('hdr', '@Graphics'),
            ('preset', '@GraphicPresetsText', ('dmVideoPresetRec', 'Performance', 'Quality', 'Custom'), 'dmVideoPresetTip'),
            ('upscale', '@dmVideoUpscale', ('dmVideoUpStandard', 'dmVideoUpMetalFX'), 'dmVideoUpscaleTip'),
-           ('hdr', '@KeyBindingTypeCustom')) if _VIDEO_MAC else ())
+           ('hdr', '@KeyBindingTypeCustom')) if _VIDEO_MAC else
+          (('res', '@dmVideo3DRes', ('dmVideoScale75', 'dmVideoScale85', 'dmVideoScale100'), None),
+           ('preset', '@GraphicPresetsText', ('dmVideoPresetRec', 'Performance', 'Quality', 'Custom'), None),
+           ('upscale', '@dmVideoUpscale', ('dmVideoUpStandard', 'dmVideoUpMetalFX'), None),
+           ('hdr', '@KeyBindingTypeCustom')) if _VIDEO_IOS else ())
 _VIDEO_H = _CUSTOM_LINE_H * len(_VIDEO)
 _CUSTOM_Y = [_VIDEO_H + _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H[:i]) for i in range(len(_CUSTOM_ROW_H))]
 _CUSTOM_H = _VIDEO_H + _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H)
@@ -1239,16 +1248,16 @@ def _video_rows():
                     '        ] },\n') % (i, y, _CUSTOM_LINE_H, row[1])
             continue
         key, label, states, tip = row
-        lh = 112 if key == 'res' else _CUSTOM_LINE_H   # 分辨率行：标签与切换框占上 112，下面 68 留给「重启后生效」 | Resolution row: label and selector take the top 112; the bottom 68 is left for "takes effect after restarting"
+        lh = 112 if key == 'res' and _VIDEO_MAC else _CUSTOM_LINE_H   # 分辨率行：标签与切换框占上 112，下面 68 留给「重启后生效」 | Resolution row: label and selector take the top 112; the bottom 68 is left for "takes effect after restarting"
         out += ('        { "type": "TextBoxWidget", "name": "TouchVideo_%s_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "%s", "style": "$StyleSettingsText" } },\n'
                 '        { "type": "CarouselWidget", "name": "TouchVideo_%s", "fields": {\n'
                 '            "rect": { "x": 1052, "y": %d, "width": 596, "height": 72 },\n'
                 '            "focusIndicatorPadding": "$OptionsCarouselFocusIndicatorPadding", "focusIndicatorFilename": "$OptionsCarouselFocusIndicatorFilename",\n'
                 '            "states": [ %s ], "fontType": "8ptE", "onUpdateMessage": "TouchVideoMessage:%s",\n'
-                '            "style": "$StyleSettingsCarousel", "enabledColor": "$CarouselEnabledColor", "disabledColor": "$CarouselDisabledColor",\n'
-                '            "tooltipString": "@%s", "tooltipStyle": { "fontStyle": { "options": { "newlineHandling": "standard" } }, "showAfterDelay": true } } },\n'
-                ) % (key, y, lh, label, key, y + (lh - 72) // 2, ', '.join('"%s"' % s for s in states), key, tip)
-        if key == 'res':   # 「重启游戏后生效」：先放在屏外，宿主挪到标签下面 | "Takes effect after restarting the game": starts off screen, the host moves it under the label
+                '            "style": "$StyleSettingsCarousel", "enabledColor": "$CarouselEnabledColor", "disabledColor": "$CarouselDisabledColor"%s } },\n'
+                ) % (key, y, lh, label, key, y + (lh - 72) // 2, ', '.join('"%s"' % s for s in states), key,
+                     (',\n            "tooltipString": "@%s", "tooltipStyle": { "fontStyle": { "options": { "newlineHandling": "standard" } }, "showAfterDelay": true }' % tip) if tip else '')
+        if key == 'res' and _VIDEO_MAC:   # 「重启游戏后生效」：先放在屏外，宿主挪到标签下面 | "Takes effect after restarting the game": starts off screen, the host moves it under the label
             out += ('        { "type": "TextBoxWidget", "name": "TouchVideoResHint", "fields": { "rect": { "x": 99999, "y": %d, "width": 1400, "height": 60 }, "text": "@dmVideoResHint", '
                     '"style": { "fontColor": "$FontColorGray", "pointSize": 30, "alignment": { "h": "left", "v": "center" } } } },\n') % (y + 112)
     return out
@@ -1319,7 +1328,7 @@ def _custom_page(text):
              '    { "type": "TextBoxWidget", "name": "TouchCustomTitle", "fields": { "text": "%s", "style": "$StyleSettingsTitle" }, "children": [\n'
              '        { "type": "ImageWidget", "name": "Divider", "fields": { "rect": "$OptionsDividerRect", "filename": "PauseMenu\\\\Divider" } },\n'
              '    ] },\n'
-             '] },\n') % ('@OptionsMenuDisplay' if _VIDEO_MAC else '@KeyBindingTypeCustom')   # Mac 页首是「显示」一节，「自定义」挪成后面一节 | on the Mac the page opens with the "Display" section and "Custom" becomes a later section
+             '] },\n') % ('@OptionsMenuDisplay' if _VIDEO_MAC else '@Graphics' if _VIDEO_IOS else '@KeyBindingTypeCustom')   # Mac 页首是「显示」一节，「自定义」挪成后面一节 | on the Mac the page opens with the "Display" section and "Custom" becomes a later section
     out = ('{\n    "basedOn": "VideoOptionsPanelHD.json",\n    "type": "VideoOptionsPanel", "name": "VideoOptionsPanel",\n    "children": [\n'
            '        { "type": "ImageWidget", "name": "ScrollBarBackground", "children": [ { "type": "ScrollControllerWidget", "name": "ScrollController" }, ] },\n'
            '        { "type": "ScrollViewWidget", "name": "ScrollView", "children": [\n'

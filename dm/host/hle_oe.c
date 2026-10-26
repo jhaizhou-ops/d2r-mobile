@@ -175,14 +175,15 @@ static int s3_max_level(float cfg, float floor) {
     int n = 0; for (int k = 0; k < S3_NLV; k++) if (g_s3_levels[k] < cfg - 1e-4f && g_s3_levels[k] >= floor - 1e-4f) n++;
     return n;
 }
-// 配置值：DM_3D_SCALE（0.5–1.0），缺省手机 0.75、Mac 宿主 1.0；读一次
-// Configured value: DM_3D_SCALE (0.5–1.0), default 0.75 on phones and 1.0 on the Mac host; read once
-static float s3_cfg(void) {
-    static float cfg = -1;
-    if (cfg < 0) { const char *e = getenv("DM_3D_SCALE"); float v = DM_PHONE ? 0.75f : 1.0f;
-        if (e) { char *end; v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); }
-        cfg = v; }
-    return cfg;
+// 配置值：DM_3D_SCALE（0.5–1.0，读一次），否则 iOS 选项页的「3D 清晰度」，再否则缺省手机 0.75、Mac 宿主 1.0
+// Configured value: DM_3D_SCALE (0.5–1.0, read once), else the iOS options page's "3D Resolution", else the default: 0.75 on phones, 1.0 on the Mac host
+__attribute__((weak)) float dm_video_scale3d(void) { return 0; }   // 宿主 dm_video.c 给强定义（手机选项页「3D 清晰度」）；单测不链它时恒 0 | the host's dm_video.c gives the strong definition (phone options page "3D Resolution"); 0 when a unit test does not link it
+static float s3_cfg(void) {   // 配置的 3D 比例：DM_3D_SCALE 定死；没给就按选项页（手机，点「应用」后 scale3d_tick 下一拍就换），再没有就平台缺省 | configured 3D scale: DM_3D_SCALE fixes it; otherwise the options page (phones; scale3d_tick switches on the next tick after "Apply"), otherwise the platform default
+    static float env = -1;
+    if (env < 0) { const char *e = getenv("DM_3D_SCALE"); env = 0;
+        if (e) { char *end; float v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); env = v; } }
+    if (env > 0) return env;
+    float v = dm_video_scale3d(); return v >= 0.5f && v <= 1.0f ? v : DM_PHONE ? 0.75f : 1.0f;
 }
 #define S3_FLOOR_DEF 0.60f   // 待真机扫档（热机稳态最后 30 秒掉帧 ≤ 1%）定 | To be set by a device level sweep (dropped frames ≤ 1% in the last 30 s of warm steady state)
 // 纯函数控制器（单测 t_oe.c 直接喂序列）：level 0 = 配置值，越大越低。判据只认实际上屏：
@@ -238,6 +239,13 @@ static int scale3d_ctl_step(scale3d_ctl *c, double iv_ms, uint64_t now) {   // �
     else c->good_run = 0;
     return c->level;
 }
+// 配置值变了（手机选项页「3D 清晰度」点了「应用」）：最深一档按新配置值和下限重算，回到 0 档（新配置值）并停判 3 秒——
+// 档位是相对配置值数的，旧的最深档套在新配置上会越过下限（100% → 75% 时能降到 0.50）或降不够（75% → 100% 时最低只到 0.85）。
+// The configured value changed (the phone options page's "3D Resolution" was applied): recompute the deepest level from the new value and the floor, go back to level 0 (the new value) and pause judging for 3 s.
+// Levels count down from the configured value, so the old deepest level applied to a new value goes past the floor (100% → 75% could drop to 0.50) or not far enough (75% → 100% only reached 0.85).
+static void scale3d_ctl_retarget(scale3d_ctl *c, float cfg, float floor, uint64_t now) {
+    c->max_level = s3_max_level(cfg, floor); c->level = 0; c->last_up = 0; c->need_good = 0; scale3d_ctl_hold(c, now, 3 * S3_SEC);
+}
 // 画质设置（做界面，这里给接口）：0 = 流畅优先（缺省，掉帧就自动降 3D 比例）；1 = 画质优先（不自动降，保持配置值）。档位名与缺省值等
 // Quality setting (UI to be built; this provides the interface): 0 = smoothness first (default; automatically lowers the 3D scale on frame drops); 1 = quality first (no automatic lowering, keeps the configured value). Level names, defaults, etc.
 static _Atomic int g_3d_quality_mode;
@@ -276,16 +284,18 @@ static void s3g_feed(double iv_ms) {
         LOG("3D 比例控制（按 GPU 耗时）：帧 %.1f ms、GPU %.1f ms → %s到第 %d 档（3D 比例 %.2f）", fr, g, lv > old ? "降" : "升", lv, lv ? cfg * g_s3g_mult[lv - 1] : cfg); }
 }
 void dm_3d_scale_feed(double iv_ms) {   // 出图线程每帧调（diag.c dm_perf_present 转来）：实际上屏间隔 ms，−1 = 被丢弃，0 = 无读数 | called by the present thread every frame (forwarded from diag.c dm_perf_present): actual present interval in ms, −1 = dropped, 0 = no reading
-    static scale3d_ctl c; static int on = -1; static long inj0 = -1, inj1 = -1;
+    static scale3d_ctl c; static int on = -1; static long inj0 = -1, inj1 = -1; static float fl, cfg_at;   // cfg_at：c.max_level 按哪个配置值算的 | cfg_at: the configured value c.max_level was computed for
     if (on < 0) { const char *e = getenv("DM_3D_SCALE_DYN"), *j = getenv("DM_3D_SCALE_DYN_INJECT"); on = !(e && !strcmp(e, "0")) && !getenv("DM_THERMAL_NOFALLBACK");
         if (j) { inj0 = atol(j); inj1 = strchr(j, '-') ? atol(strchr(j, '-') + 1) : inj0; }
-        const char *fe = getenv("DM_3D_SCALE_FLOOR"); float fl = fe ? strtof(fe, NULL) : S3_FLOOR_DEF;   // 下限：档位表里不低于它的最深一档 | Floor: the deepest level in the level table that is not below it
-        c.max_level = s3_max_level(s3_cfg(), fl);
-        LOG("3D 比例控制：%s，配置 %.2f，下限 %.2f（第 %d 档）", on ? "开" : "关", s3_cfg(), s3_level_scale(s3_cfg(), c.max_level), c.max_level); }
+        const char *fe = getenv("DM_3D_SCALE_FLOOR"); fl = fe ? strtof(fe, NULL) : S3_FLOOR_DEF;   // 下限：档位表里不低于它的最深一档 | Floor: the deepest level in the level table that is not below it
+        cfg_at = s3_cfg(); c.max_level = s3_max_level(cfg_at, fl);
+        LOG("3D 比例控制：%s，配置 %.2f，下限 %.2f（第 %d 档）", on ? "开" : "关", cfg_at, s3_level_scale(cfg_at, c.max_level), c.max_level); }
     if (!on) return;
     if (s3g_on() && atomic_load(&g_3d_quality_mode) != 1) { s3g_feed(iv_ms); return; }
     if (atomic_load(&g_3d_quality_mode) == 1) { if (c.level) { c.level = 0; LOG("3D 比例控制：画质优先，回到配置值"); } atomic_store(&g_scale3d_level, 0); return; }
     uint64_t now = now_ns();
+    { float cfg = s3_cfg(); if (cfg != cfg_at) { scale3d_ctl_retarget(&c, cfg, fl, now); atomic_store(&g_scale3d_level, 0);   // 选项页换了 3D 清晰度：档位按新值重算 | the options page changed the 3D resolution: levels recomputed for the new value
+        LOG("3D 比例控制：配置 %.2f → %.2f，回到配置值，下限 %.2f（第 %d 档）", cfg_at, cfg, s3_level_scale(cfg, c.max_level), c.max_level); cfg_at = cfg; } }
     if (atomic_exchange(&g_scale3d_resumed, 0)) scale3d_ctl_hold(&c, now, 3 * S3_SEC);
     { static int was; int in = dm_ingame_now();   // 不在局内（菜单 / 读取）不判；刚进局的 20 秒也不判（进局头十几秒的慢帧是装载，不是 GPU 吃紧） | not judged outside a run (menu / loading); not judged in the first 20 seconds of a run either (slow frames in the first ten-odd seconds of a run are loading, not GPU pressure)
       if (!in) { was = 0; scale3d_ctl_hold(&c, now, S3_SEC); return; }
@@ -302,11 +312,9 @@ void dm_3d_scale_hot(int hot) { (void)hot; }   // 过热不再直接降档（改
 static _Atomic float g_scale3d_cur = 1.0f;
 float dm_3d_scale_cur(void) { return atomic_load(&g_scale3d_cur); }
 static void scale3d_tick(void) {
-    static float want_cfg = -1, cur = 1.0f; static module_t *main;
-    if (want_cfg < 0) {
-        want_cfg = s3_cfg();
-        for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) main = &g_mod[i];
-    }
+    static float cur = 1.0f; static module_t *main;
+    if (!main) for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) main = &g_mod[i];
+    float want_cfg = s3_cfg();   // 每拍读：手机选项页改了 3D 清晰度，下一拍就按新值重建 3D 目标 | read every tick: when the phone options page changes the 3D resolution, the 3D targets are rebuilt at the new value on the next tick
     // 动态档：0 = 配置值，k = 表里第 k 个低于配置值的比例
     // Dynamic level: 0 = configured value, k = the k-th table scale below the configured value
     int lv = atomic_load(&g_scale3d_level); float dyn = s3_level_scale(want_cfg, lv);

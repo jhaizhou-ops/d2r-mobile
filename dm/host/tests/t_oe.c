@@ -102,6 +102,15 @@ static void test_scale3d(void) {
     CHECK(s3_max_level(0.75f, 0.60f) == 3 && s3_level_scale(0.75f, 0) == 0.75f && s3_level_scale(0.75f, 1) == 0.70f && s3_level_scale(0.75f, 3) == 0.60f, "档位：配置 0.75 → 0.70 / 0.65 / 0.60，最深第 3 档");
     CHECK(s3_max_level(0.85f, 0.60f) == 5 && s3_level_scale(0.85f, 1) == 0.80f && s3_level_scale(0.85f, 2) == 0.75f && s3_level_scale(0.85f, 5) == 0.60f, "档位：配置 0.85 → 0.80 / 0.75 / 0.70 / 0.65 / 0.60，最深第 5 档");
     CHECK(s3_max_level(1.0f, 0.70f) == 6 && s3_level_scale(1.0f, 1) == 0.95f && s3_level_scale(1.0f, 9) == 0.55f && s3_level_scale(0.72f, 1) == 0.70f, "档位：配置 1.0 的第 1 档 0.95；超出取最低；配置 0.72 的第 1 档 0.70");
+    // 改配置值（选项页「3D 清晰度」点「应用」）：最深档按新值重算、回 0 档、停判 3 秒；之后一直掉帧也停在下限 0.60（配置 1.0 下限 0.60 时最深第 8 档，0.75 时第 3 档）
+    // Changing the configured value (options page "3D Resolution" applied): the deepest level is recomputed for the new value, back to level 0, judging paused for 3 s; constant dropped frames afterwards still stop at the 0.60 floor (with floor 0.60: deepest level 8 for 1.0, level 3 for 0.75)
+    s3 = (scale3d_ctl){.max_level = s3_max_level(1.0f, 0.60f), .level = 6}; s3_now = 1500 * S3_SEC;
+    scale3d_ctl_retarget(&s3, 0.75f, 0.60f, s3_now);
+    CHECK(s3.max_level == 3 && s3.level == 0 && s3.hold_until == s3_now + 3 * S3_SEC, "改配置 1.0 → 0.75：最深档 8 → 3，从第 6 档回到 0 档并停判 3 秒");
+    s3_hold_pass(); s3_n(6000, D60);
+    CHECK(s3.level == 3 && s3_level_scale(0.75f, s3.level) == 0.60f, "改配置后一直掉帧：停在第 3 档 0.60，不再降到 0.55 / 0.50");
+    scale3d_ctl_retarget(&s3, 1.0f, 0.60f, s3_now);
+    CHECK(s3.max_level == 8 && s3.level == 0, "改回 1.0：最深档 3 → 8（能一路降到 0.60），回 0 档");
     // 慢降：每窗 3 帧掉帧 + 114 帧正常（3 × 33.4 + 114 × 16.6667 = 2000.2 ms，一窗 117 帧，掉帧率 2.56%）
     // Slow lowering: per window 3 dropped frames + 114 normal frames (3 × 33.4 + 114 × 16.6667 = 2000.2 ms, 117 frames per window, dropped-frame rate 2.56%)
     s3 = (scale3d_ctl){.max_level = 2}; s3_now = 2000 * S3_SEC;

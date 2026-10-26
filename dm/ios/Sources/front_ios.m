@@ -12,6 +12,7 @@ static volatile int g_dm_thermal = -1;
 int dm_thermal_now(void) { return g_dm_thermal; }   // 最近的温控档位（0 正常 / 1 微热 / 2 严重 / 3 危急；−1 = 未读）   // 最近一次读到的屏幕亮度（−1 = 未读） | Most recent thermal state (0 nominal / 1 fair / 2 serious / 3 critical; −1 = not read)   // Most recently read screen brightness (−1 = not read)
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
+#import <MetalFX/MetalFX.h>
 #include <signal.h>
 #include "front.h"
 #include "dm_input.h"
@@ -949,6 +950,24 @@ UIView *front_ios_view(CGRect frame) {
 }
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
+// 画面设置（dm_video.c）的平台钩子：MetalFX 能不能用（旧接口的 MetalFX 或 Metal 4 的都算）；首次启动的推荐值 = 3D 清晰度 75%（原来的缺省）+ 能用就开 MetalFX。
+// supportsMetal4FX: 要 iOS 26 起才有：旧接口版（DM_NVN_M3，部署到 iOS 18）不编它，Metal 4 版也按 @available 判过再调——老系统上直接调是找不到方法，首次启动即崩。
+// Platform hooks for the picture settings (dm_video.c): whether MetalFX is available (the older-API MetalFX or the Metal 4 one both count); recommended values on first boot = 3D resolution 75% (the previous default) + MetalFX when available.
+// supportsMetal4FX: exists only from iOS 26: the older-API build (DM_NVN_M3, deployed to iOS 18) leaves it out, and the Metal 4 build checks @available before calling it; on an older system a direct call is an unrecognized selector and crashes the first launch.
+int front_video_mfx_ok(void) {
+    static int ok = -1;
+    if (ok < 0) { id<MTLDevice> d = MTLCreateSystemDefaultDevice(); ok = d && [MTLFXSpatialScalerDescriptor supportsDevice:d];
+#if !DM_NVN_M3
+        if (d && !ok) { if (@available(iOS 26.0, *)) ok = [MTLFXSpatialScalerDescriptor supportsMetal4FX:d]; }
+#endif
+    }
+    return ok;
+}
+int front_video_firstboot(int rec[3], int cur[3]) {
+    rec[0] = 0; rec[1] = 0; rec[2] = front_video_mfx_ok() ? 1 : 0; for (int i = 0; i < 3; i++) cur[i] = rec[i];
+    LOG("画面设置：首次启动 → 推荐 3D 清晰度 75%%、%s", rec[2] ? "MetalFX" : "标准（本机不支持 MetalFX）");
+    return 1;
+}
 // 主机档 = 屏幕原生像素（界面文字原生，3D 由游戏自带的渲染比例另缩，见 hle_oe.c scale3d_tick）：
 // iPhone 17 Pro Max → 2868x1320。掌机档仍按原版高度 720 × 屏幕比例（宽取 8 的倍数，1568x720），只在 DM_OPMODE=0 / 脚本切换时用到。
 // DM_GAME_RES=宽x高（主机模式；掌机按 720/900 同比）覆盖：DM_GAME_RES=1600x900 即原版 16:9 保底（负对照），DM_GAME_RES=1952x900 即早先的缺省

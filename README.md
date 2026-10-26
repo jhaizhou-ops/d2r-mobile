@@ -90,6 +90,7 @@ This is not a gamepad pasted onto the screen. Every panel and every action was r
 - **Items**: tap, double-tap, long-press and drag and drop all track your finger. Double-tap gear to equip or unequip it; drag an item anywhere onto the vendor panel to sell it; on a stack, double-tap takes 1 and long-press takes 3; long-press an empty inventory slot to sort everything.
 - **Text**: typed with the system keyboard. Character names can be in Chinese; leave the name blank for a random one.
 - **Screen**: on iPhone the 19.5:9 display is filled edge to edge, clear of the notch and rounded corners; on iPad the game fills the entire screen, and the interface centers itself when you open a panel; the 3D picture can be brightened.
+- **Graphics**: Options → Custom has a Graphics section. **3D Resolution** (75% / 85% / 100%) is the scale the 3D scene renders at, and it changes as soon as you press Apply; when frames drop the game still lowers it on its own and comes back up afterwards. **Upscaling** (Standard / MetalFX) is how that scene is enlarged to the screen: MetalFX, Apple's upscaler, replaces the game's own bilinear pass for clearly sharper edges, at about 0.6 ms of GPU time per frame on an iPhone 17 Pro. **Graphic Presets**: *Recommended* is what the App picked on first launch (75% with MetalFX), *Performance* is 75% Standard (lightest on the battery), *Quality* is 100% with MetalFX. **Default** puts the rows back to Recommended.
 
 ### Controller
 
@@ -367,11 +368,11 @@ Download our prebuilt "shell" package (`D2RMobile-shell-build-input.zip`; `D2RMo
 
 **Taking it to other games:** someone has already tried other Switch games on the same host. The host has some behaviour that is on by default on iOS and was written for this one game; another game runs into these first, so turn them off or move them out before you start:
 
-- `dm/host/hle_oe.c`: the 3D render scale defaults to 0.75 on phones (the Android app sets 0.85), and `scale3d_tick` rewrites it at offsets inside this game's renderer — with another game that is a wild pointer.
+- `dm/host/hle_oe.c`: the 3D render scale defaults to 0.75 on phones (the Android app sets 0.85; on iOS the 3D Resolution setting picks it), and `scale3d_tick` rewrites it at offsets inside this game's renderer — with another game that is a wild pointer.
 - `dm/host/hle_fs.c`: seeding the shared stash on first launch (`DM_STASH_SEED`) and the touch-layout default settings (`DM_TOUCH_DEFAULTS`) are on by default on iOS.
 - `dm/host/main.c`: the save-flush throttle patches a constant at a fixed address in the game program; `argv[0]` is hard-coded to `"D2R"`.
 - `dm/host/hle_time.c`: the fixed-time test switch recognises a fixed address in the game program.
-- `front_game_res` in `dm/host/front_mac.m`: the docked / handheld resolutions are hard-coded to 1600×900 / 1280×720.
+- `front_game_res` in `dm/host/front_mac.m`: the docked resolution is the Mac App's Resolution setting (1600, 1920 or 2560 wide, 16:9) and the handheld one is hard-coded to 1280×720.
 - `dm/host/dm_cloudsync.c`: character directories are recognised by `.d2s`.
 - `dm/host/dm_cursor.c` and `dm/host/dm_world.c`: the whole files are specific to this game.
 

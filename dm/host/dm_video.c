@@ -16,7 +16,14 @@
 // (dm_custom.c lights "Apply" from dm_video_dirty too).
 // Selector (CarouselWidget, read on the host, 3.3.94012): option count +0x7e8, current option +0x7ec, one byte per option from +0x7d8 saying whether it can be chosen (0 = skipped);
 // the current option is set through the game's main+0xab0c84(widget, index) (clamps to the count, skips options that cannot be chosen, puts that option's text in the current language). The vtable and option count are checked before reading or writing.
+// 手机（DM_PHONE，iOS 覆盖层 DM_OVERLAY_IOS）：页上只有「图形」一节——res 是 3D 清晰度（0.75 / 0.85 / 1.0，交给 hle_oe.c 的 3D 比例，点应用当场换），
+// up 是游戏 3D 放大趟用不用 MetalFX（nvn_mtl.m mfx3d_draw），没有显示模式那一行；预设：推荐 = 首次启动按机型定，性能 = 75% 标准（最省电），品质 = 100% + MetalFX。
+// 页上有哪几行就管哪几行（dm_video_rows 按实际找到的切换框排）
+// Phones (DM_PHONE, iOS overlay DM_OVERLAY_IOS): the page only has the "Graphics" section -- res is the 3D resolution (0.75 / 0.85 / 1.0, handed to the 3D scale in hle_oe.c, switching as soon as Apply is pressed),
+// up is whether the game's 3D upscale pass uses MetalFX (nvn_mtl.m mfx3d_draw), and there is no display mode row; presets: Recommended = chosen per device on first boot, Performance = 75% Standard (lightest on the battery), Quality = 100% + MetalFX.
+// Only the rows the page actually has are handled (dm_video_rows lists the selectors it finds)
 #include "hle.h"
+#include "dm.h"
 #include "dm_cursor.h"
 #include "dm_widget.h"
 #include <pthread.h>
@@ -53,6 +60,9 @@ static void save_locked(void) {
     LOG("画面设置：存盘%s mode=%d res=%d up=%d（推荐 %d/%d/%d）", ok ? "" : "【红】失败", g_val[K_MODE], g_val[K_RES], g_val[K_UP], g_rec[K_MODE], g_rec[K_RES], g_rec[K_UP]);
 }
 static void load_once(void) {
+#ifndef __APPLE__
+    return;   // 安卓 / 鸿蒙的覆盖层没有这几行：不读不写 sw_video.txt，取值全为 0，3D 比例照旧按各自的缺省 | the Android / HarmonyOS overlays have none of these rows: sw_video.txt is never read or written, every value reads 0, and the 3D scale keeps each platform's own default
+#endif
     if (atomic_load(&g_loaded)) return;
     pthread_mutex_lock(&g_mu);
     char p[1100];
@@ -78,24 +88,31 @@ int dm_video_get(const char *key) {   // 生效值；设置目录还不知道时
     load_once(); for (int i = 0; i < NV; i++) if (key && !strcmp(key, k_keys[i])) return atomic_load(&g_loaded) ? atomic_load(&g_val[i]) : 0;
     return 0;
 }
-int dm_video_upscale(void) { return dm_video_get("up"); }   // 出图每帧读（nvn_mtl.m mfx_on） | read by the present every frame (nvn_mtl.m mfx_on)
+int dm_video_upscale(void) { return dm_video_get("up"); }
+float dm_video_scale3d(void) {   // 手机：3D 清晰度（hle_oe.c s3_cfg 每拍读；> 0 才算数）；别的平台 0 = 不管 | phone: the 3D resolution (read every tick by s3_cfg in hle_oe.c; only > 0 counts); other platforms 0 = not ours
+    static const float k[3] = { 0.75f, 0.85f, 1.0f };
+    if (!DM_PHONE) return 0; load_once(); if (!atomic_load(&g_loaded)) return 0;
+    int t = atomic_load(&g_val[K_RES]); return t >= 0 && t < 3 ? k[t] : 0;
+}   // 出图每帧读（nvn_mtl.m mfx_on） | read by the present every frame (nvn_mtl.m mfx_on)
 void dm_video_fullscreen_note(int on) {   // 玩家用菜单 / ⌃⌘F 切了全屏：设置跟着窗口走（同电脑版「显示模式」） | the player switched full screen from the menu / ⌃⌘F: the setting follows the window (as the PC "Display Mode")
     load_once(); if (!atomic_load(&g_loaded) || atomic_load(&g_val[K_MODE]) == (on != 0)) return;
     pthread_mutex_lock(&g_mu); atomic_store(&g_val[K_MODE], on != 0); save_locked(); pthread_mutex_unlock(&g_mu);
     atomic_store(&g_repaint, 1);
 }
 static int shown(int k) { int p = atomic_load(&g_pend[k]); return p >= 0 ? p : atomic_load(&g_val[k]); }
+static int perf_up(void) { return DM_PHONE ? 0 : front_video_mfx_ok() ? 1 : 0; }   // 性能档的放大方式：手机 = 标准（省电），Mac = MetalFX（它很便宜） | Performance's upscaling: phone = Standard (saves power), Mac = MetalFX (cheap there)
 static int preset_of(void) {
     int m = shown(K_MODE), r = shown(K_RES), u = shown(K_UP), pu = front_video_mfx_ok() ? 1 : 0;
     if (m == g_rec[K_MODE] && r == g_rec[K_RES] && u == g_rec[K_UP]) return P_REC;
-    if (r == 0 && u == pu) return P_PERF;
+    if (r == 0 && u == perf_up()) return P_PERF;
     if (r == 2 && u == pu) return P_QUAL;
     return P_CUSTOM;
 }
 static void apply_preset(int p) {   // 选了某档：改待定值（推荐 = 三项全回推荐；性能 / 品质只管分辨率与放大方式） | a preset was chosen: change pending values (Recommended = all three back to the recommendation; Performance / Quality set only resolution and upscaling)
     int pu = front_video_mfx_ok() ? 1 : 0;
     if (p == P_REC) for (int i = 0; i < NV; i++) atomic_store(&g_pend[i], atomic_load(&g_rec[i]));
-    else if (p == P_PERF || p == P_QUAL) { atomic_store(&g_pend[K_RES], p == P_PERF ? 0 : 2); atomic_store(&g_pend[K_UP], pu); }
+    else if (p == P_PERF) { atomic_store(&g_pend[K_RES], 0); atomic_store(&g_pend[K_UP], perf_up()); }
+    else if (p == P_QUAL) { atomic_store(&g_pend[K_RES], 2); atomic_store(&g_pend[K_UP], pu); }
 }
 int dm_video_dirty(void) { int d = 0; for (int i = 0; i < NV; i++) { int p = atomic_load(&g_pend[i]); d |= p >= 0 && p != atomic_load(&g_val[i]); } return d; }
 void dm_video_on_uimsg(const char *cat, const char *act, const char *arg) {
@@ -123,11 +140,16 @@ static int car_ok(uint64_t w, int n) {
 static int car_get(uint64_t w) { return *(int32_t *)(w + 0x7ec); }
 static void car_set(uint64_t w, int i) { if (car_get(w) != i) ((void (*)(uint64_t, int))(main_base() + 0xab0c84))(w, i); }
 static void preset_enable(uint64_t w, int custom) { *(uint8_t *)(w + 0x7d8 + P_CUSTOM) = custom != 0; }   // 「自定义」只在不对应任何一档时可选（箭头跳过它） | "Custom" can only be chosen when no preset matches (the arrows skip it)
-int dm_video_rows(uint64_t sp) { uint64_t w = sp ? row_w(sp, 0) : 0; return w && *(uint8_t *)(w + 0x50) ? 4 : 0; }
-void dm_video_row(uint64_t sp, int i, uint64_t *tw, uint64_t *cw) {   // 手柄选中框：这一行的标签与切换框 | controller selection frame: this row's label and selector
-    char nm[48]; snprintf(nm, sizeof nm, "TouchVideo_%s_Text", k_rows[i]); *tw = dm_custom_find_w(sp, nm); *cw = row_w(sp, i);
+static int present_rows(uint64_t sp, int idx[4]) {   // 页上实际有的行（按页上的顺序）：Mac 四行，手机没有显示模式 | the rows the page really has (in page order): four on the Mac, no display mode on phones
+    int n = 0; for (int i = 0; i < 4 && sp; i++) { uint64_t w = row_w(sp, i); if (w && *(uint8_t *)(w + 0x50)) idx[n++] = i; } return n;
 }
-void dm_video_pad(uint64_t sp, int i, int dir) {   // 手柄：左右 = 上一项 / 下一项，A = 下一项（到头回第一项）；之后 dm_video_pump 当玩家改了处理 | controller: left / right = previous / next option, A = next (wrapping to the first); dm_video_pump then handles it as a player change
+int dm_video_rows(uint64_t sp) { int idx[4]; return present_rows(sp, idx); }
+void dm_video_row(uint64_t sp, int i, uint64_t *tw, uint64_t *cw) {   // 手柄选中框：第 i 个画面设置行的标签与切换框 | controller selection frame: label and selector of the i-th picture row
+    int idx[4], n = present_rows(sp, idx); *tw = *cw = 0; if (i < 0 || i >= n) return;
+    char nm[48]; snprintf(nm, sizeof nm, "TouchVideo_%s_Text", k_rows[idx[i]]); *tw = dm_custom_find_w(sp, nm); *cw = row_w(sp, idx[i]);
+}
+void dm_video_pad(uint64_t sp, int r, int dir) {   // 手柄：左右 = 上一项 / 下一项，A = 下一项（到头回第一项）；之后 dm_video_pump 当玩家改了处理 | controller: left / right = previous / next option, A = next (wrapping to the first); dm_video_pump then handles it as a player change
+    int idx[4], nr = present_rows(sp, idx); if (r < 0 || r >= nr) return; int i = idx[r];
     uint64_t w = row_w(sp, i); if (!car_ok(w, k_row_n[i])) return;
     int n = k_row_n[i], cur = car_get(w), to = cur;
     for (int k = 0; k < n; k++) { to = dir == 2 ? (to + 1) % n : to + dir; if (to < 0 || to >= n) { to = cur; break; } if (*(uint8_t *)(w + 0x7d8 + to)) break; }
@@ -140,18 +162,19 @@ static void hint(uint64_t sp) {   // 分辨率改了还没重启：「重启游�
 }
 void dm_video_pump(uint64_t sp) {   // 自定义页在屏上时每帧调（dm_custom.c）；sp = 0：页不在屏上 | called every frame while the custom page is on screen (dm_custom.c); sp = 0: the page is not on screen
     static dm_wref seen[4];
-    uint64_t w[4]; int ok = sp != 0;
-    for (int i = 0; ok && i < 4; i++) { w[i] = row_w(sp, i); ok = w[i] && *(uint8_t *)(w[i] + 0x50); }
+    uint64_t w[4] = { 0, 0, 0, 0 }; int ok = sp != 0 && dm_video_rows(sp) > 0;
+    for (int i = 0; ok && i < 4; i++) { w[i] = row_w(sp, i); if (w[i] && !*(uint8_t *)(w[i] + 0x50)) w[i] = 0; }   // 页上没有的行 = 0，下面跳过 | rows the page lacks = 0, skipped below
     if (!ok) { int was = 0; for (int i = 0; i < 4; i++) was |= seen[i].w != 0;   // 页没了：没点「应用」的改动作废（同自定义页） | the page is gone: changes without "Apply" are dropped (as the custom page)
         if (was) for (int i = 0; i < NV; i++) atomic_store(&g_pend[i], -1);
         memset(seen, 0, sizeof seen); return; }
-    for (int i = 0; i < 4; i++) if (!car_ok(w[i], k_row_n[i])) return;
+    for (int i = 0; i < 4; i++) if (w[i] && !car_ok(w[i], k_row_n[i])) return;
     load_once(); if (!atomic_load(&g_loaded)) return;
     if (atomic_exchange(&g_repaint, 0)) memset(seen, 0, sizeof seen);
     int want[4], ch = -1;   // 先按改之前的值算各行该显示什么，再找玩家动了哪一行（一帧只认一行）：原先边改边比，预设刚改的待定值被后面几行当成玩家又改回去了
                             // first work out what each row should show from the values before any change, then find the row the player moved (one per frame): comparing while changing used to let the later rows read a preset's fresh pending values as the player changing them back
     for (int i = 0; i < 4; i++) want[i] = k_row_key[i] < 0 ? preset_of() : shown(k_row_key[i]);
     for (int i = 0; i < 4; i++) {
+        if (!w[i]) continue;
         if (dm_wref_get(&seen[i]) != w[i]) { dm_wref_set(&seen[i], w[i]); if (k_row_key[i] < 0) preset_enable(w[i], want[i] == P_CUSTOM); car_set(w[i], want[i]); continue; }   // 页刚出现：摆成该显示的值，这一帧不当玩家改了 | the page just appeared: show the value it should, and do not treat this frame as a player change
         if (ch < 0 && car_get(w[i]) != want[i]) ch = i;
     }
@@ -159,7 +182,7 @@ void dm_video_pump(uint64_t sp) {   // 自定义页在屏上时每帧调（dm_cu
         int k = k_row_key[ch], cur = car_get(w[ch]);
         if (k < 0) { if (cur != P_CUSTOM) apply_preset(cur); LOG("画面设置：图形预设 → %d（点「应用」生效）", cur); }
         else { atomic_store(&g_pend[k], cur); LOG("画面设置：%s → %d（点「应用」生效）", k_keys[k], cur); }
-        for (int i = 0; i < 4; i++) { int kk = k_row_key[i], v = kk < 0 ? preset_of() : shown(kk); if (kk < 0) preset_enable(w[i], v == P_CUSTOM); car_set(w[i], v); }   // 预设带动其余几项、其余几项带动预设 | presets move the other rows, and the other rows move the preset
+        for (int i = 0; i < 4; i++) { if (!w[i]) continue; int kk = k_row_key[i], v = kk < 0 ? preset_of() : shown(kk); if (kk < 0) preset_enable(w[i], v == P_CUSTOM); car_set(w[i], v); }   // 预设带动其余几项、其余几项带动预设 | presets move the other rows, and the other rows move the preset
     }
     hint(sp);
 }
