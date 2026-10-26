@@ -1,3 +1,5 @@
+// 仅供控件测试的合成表，不含游戏条目或生成资源。
+// Synthetic widget-test table, containing no game entries or generated resources.
 #include <stdint.h>
 #define VT_NPART 1
 static const char *vt_part_name[VT_NPART] = {"test-part"};

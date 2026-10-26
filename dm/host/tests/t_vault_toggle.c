@@ -1,3 +1,5 @@
+// 用合成控件调用生产代码，检查说明覆盖时的页签绘制与选择状态。
+// Exercise production code with synthetic widgets to check covered tab frames and selection.
 #include "../dm_vault_ui.c"
 #include <assert.h>
 
