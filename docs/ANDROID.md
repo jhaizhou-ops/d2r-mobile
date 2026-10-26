@@ -49,6 +49,14 @@ android/pack_info.txt which release this import pack is for
 
 Steps already done are skipped on the next run. This folder contains game content; keep it to yourself and do not distribute it.
 
+**Optional: a warm-up seed.** The first time the game reaches a place, the phone builds the GPU pipelines that place needs, and the first fight stutters while it does. A seed (`vk-pipeline-list.seed`, a list of the pipelines other phones have already seen) lets the App build them during start-up instead. If you have one, add it when making the pack:
+
+```
+python3 dm/tools/d2rm_android.py --warm-seed <seed file> <game files directory> <output directory>
+```
+
+A seed at `dm/android/warm/vk-pipeline-list.seed` in the repository is used without the option. The seed is only read on the App's first launch; later launches use the list the phone records itself.
+
 ## Step 2: copy the files to the phone
 
 Connect the phone by USB (choose "File transfer" on the phone) and, in the phone's `Download`, create `S2X/D2R Mobile/` holding two things:
