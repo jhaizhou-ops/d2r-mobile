@@ -103,9 +103,9 @@ enum { VT_TOGGLE = DM_VT_TOGGLE, VT_TABBAR = DM_VT_TABBAR };   // 勾选框 / �
 static int vu_is(uint64_t w, uint64_t vt) { uint8_t *b = vu_base(); if (!w || !b) return 0; if (dm_widget_is(b, w, vt)) return 1;
     static int n; if (n++ < 10) { const char *nm = *(const char **)(w + 8); LOG("【红】编年史仓库：控件「%s」不是预期的类（虚表 main+0x%llx，应为 0x%llx），不按偏移读写", nm ? nm : "?", (unsigned long long)(*(uint64_t *)w - (uint64_t)(uintptr_t)b), (unsigned long long)vt); }
     return 0; }
-static void vu_toggle(uint64_t w, int on, int covered) {   // 同 dm_kills.c kb_toggle（勾选框四帧 / 子页签两帧） | Same as dm_kills.c kb_toggle (checkbox four frames / sub-tab two frames)
+static void vu_toggle(uint64_t w, int on) {   // 同 dm_kills.c kb_toggle（勾选框四帧 / 子页签两帧） | Same as dm_kills.c kb_toggle (checkbox four frames / sub-tab two frames)
     if (!vu_guard(w, "改勾选") || !vu_is(w, VT_TOGGLE)) return; static const int32_t fr[2][4] = { { 0, 1, 3, 2 }, { 4, 5, 6, -1 } }; int32_t f[4]; int k = *(int32_t *)(w + 0x6f0) == 3 || *(int32_t *)(w + 0x6e8) == 4;
-    if (k) memcpy(f, fr[on != 0], sizeof f); else for (int i = 0; i < 4; i++) f[i] = on && !covered ? 1 : 0;
+    if (k) memcpy(f, fr[on != 0], sizeof f); else for (int i = 0; i < 4; i++) f[i] = on ? 1 : 0;
     *(uint8_t *)(w + 0xa88) = on != 0; memcpy((void *)(w + 0x6e8), f, sizeof f); *(int32_t *)(w + 0x610) = f[0];
 }
 // 编年史收录过没有：客户端玩家（main+0x45f9d0([main+0x2d20e4c])）的玩家数据 +0x220 起三张散列表
@@ -427,7 +427,7 @@ void dm_vault_ui_pump(void) {
       // （vt1：原先只在本进程第一次写，重进局后三个框全不勾、列表却照全看显示）
       // When the panel is newly built (first open, or the game rebuilds the stash after re-entering a run) the checkboxes are at the layout default "unchecked": write them back from the current filter (first time = all checked) so the picture matches the filter
       // (vt1: previously this was written only the first time in the process; after re-entering a run all three boxes were unchecked while the list still showed everything)
-      static dm_wref lastvt; if (vt != dm_wref_get(&lastvt)) { dm_wref_set(&lastvt, vt); for (int i = 0; i < 3; i++) { char nm[16]; snprintf(nm, sizeof nm, "TouchV_T%d", i); vu_toggle(vu_find(vt, nm, 1), g_tiers >> i & 1, 0); } tm = g_tiers; }
+      static dm_wref lastvt; if (vt != dm_wref_get(&lastvt)) { dm_wref_set(&lastvt, vt); for (int i = 0; i < 3; i++) { char nm[16]; snprintf(nm, sizeof nm, "TouchV_T%d", i); vu_toggle(vu_find(vt, nm, 1), g_tiers >> i & 1); } tm = g_tiers; }
       if (!tm) tm = 7;   // 三个都不勾 = 全看（同原版编年史） | None of the three checked = show all (same as the original game's chronicle)
       if (tm != g_tiers) { g_tiers = tm; atomic_store(&g_dirty, 1); } }
     { int dm_ui_vault_drop(void); static uint32_t held; static int wait;   // 拖进编年史页：手上那件放回原格（手空了）再隔几帧（等服务端也放好）请求存入 | Dragged into the chronicle page: put the item in hand back into its original cell (hand now empty), then a few frames later (waiting for the server to finish placing it too) request the store
@@ -447,10 +447,8 @@ void dm_vault_ui_pump(void) {
       if (q && qn && qn < sizeof nq) { memcpy(nq, q, qn); nq[qn] = 0; } if (strcmp(nq, g_query)) { strlcpy(g_query, nq, sizeof g_query); g_page_q = 0; atomic_store(&g_dirty, 1); LOG("编年史仓库：搜索「%s」", g_query); } }
     static int gen = -1; int g = dm_vault_gen(); if (g != gen) { gen = g; atomic_store(&g_dirty, 1); }
     if (g_tip_on) { vu_tip_exact(b, vt); vu_tip_place(vu_find(vt, "TouchV_Tip", 0), vu_find(vt, "TouchV_TipBg", 0)); }
-    // 页签高亮会盖过说明框；只收起高亮帧，保留选中状态，说明关闭即恢复。
-    // Tab highlights overdraw the tooltip; suppress only their visual frame, retaining selection until the tooltip closes.
-    vu_toggle(vu_find(vt, "TouchV_SubU", 1), g_sub == 0, g_tip_on); vu_toggle(vu_find(vt, "TouchV_SubS", 1), g_sub == 1, g_tip_on);
     static int fr; int dirty = atomic_exchange(&g_dirty, 0); if (!dirty && ++fr % 30) return;   // 编年史收录在服务端拍里变：开着时每半秒重写一次（字没变不写） | Chronicle records change in the server tick: while open, rewrite once every half second (no write if the text did not change)
+    vu_toggle(vu_find(vt, "TouchV_SubU", 1), g_sub == 0); vu_toggle(vu_find(vt, "TouchV_SubS", 1), g_sub == 1);
     vu_show(vu_find(vt, "TouchV_Parts", 0), g_sub == 0); vu_show(vu_find(vt, "TouchV_Tiers", 0), g_sub == 0 && !g_query[0]);
     {   // 档次勾选的排法跟语言走（英文版）：中文照布局（wide_stash.py：块右对齐宽 590、三格间距 200）；英文三个标签宽窄不一、统计行也长， | the layout of the quality tier checkboxes follows the language (English version): Chinese follows the layout (wide_stash.py: block right-aligned and 590 wide, three cells spaced 200 apart); in English the three labels differ in width and the stats row is longer too,
         // 块改宽 650、各格按标签宽排（Norm 140 / Exc 100 / Elite 136 单位，Mac 上的 iOS 包截图量，标签后各留 15），让出的地方给统计行（左对齐，宽到 780）。勾选框在 x、标签在 x + 75、y − 5（同 _vt_check）

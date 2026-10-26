@@ -1,5 +1,3 @@
-# 检查生成的编年史页签尺寸与标签边界，不读取游戏文件。
-# Check generated Chronicle tab and label bounds without reading game files.
 from pathlib import Path
 import sys
 
