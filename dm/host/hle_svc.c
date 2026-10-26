@@ -127,6 +127,22 @@ static void map_add(uint64_t b, uint64_t n, uint64_t src, uint32_t st) {
 }
 static void map_del(int i) { pthread_mutex_lock(&g_map_lock); g_map[i] = g_map[--g_nmap]; pthread_mutex_unlock(&g_map_lock); }
 
+#ifdef _WIN32
+// VirtualQuery 从查询页开始，不能用栈顶所在页代替完整的 Horizon 栈映射。
+// VirtualQuery starts at the queried page; that page is not the lower bound of the Horizon stack mapping.
+int svc_guest_stack_limit(uint64_t sp, uint64_t *limit) {
+    int found = 0;
+    pthread_mutex_lock(&g_map_lock);
+    for (int i = 0; i < g_nmap; i++) {
+        if (g_map[i].state == 0x0B && sp > g_map[i].base && sp - g_map[i].base <= g_map[i].size) {
+            *limit = g_map[i].base; found = 1; break;
+        }
+    }
+    pthread_mutex_unlock(&g_map_lock);
+    return found;
+}
+#endif
+
 int svc_thread(int num, uint64_t *regs);   // hle_thread.c：线程与同步类 | hle_thread.c: thread and synchronization kind
 
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {

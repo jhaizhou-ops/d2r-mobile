@@ -5,11 +5,13 @@
 #define dm_ui_touch test_ui_touch
 #define dm_ui_tab_go test_ui_tab_go
 #define dm_ui_mouse_hover_now test_mouse_hover
+#define dm_ui_fe_name_wants_input test_name_wants_input
 #include "../touch_mac.c"
 #undef dm_ui_item_at_now
 #undef dm_ui_touch
 #undef dm_ui_tab_go
 #undef dm_ui_mouse_hover_now
+#undef dm_ui_fe_name_wants_input
 #include "../../ios/Sources/dm_touch_controls.c"
 
 static uint64_t test_now;
@@ -17,6 +19,9 @@ uint64_t now_ns(void) { return test_now; }
 static int test_in, test_paused, test_hit, clicks, walks, ui_events, tabs, result = -1;
 static int test_hud;
 static int hovers;
+static int ui_cancels;
+static int test_name_input, test_plus_legend;
+int test_name_wants_input(void) { return test_name_input; }
 static float hover_x, hover_y;
 int test_mouse_hover(float x, float y) { hovers++; hover_x = x; hover_y = y; return 1; }
 static unsigned click_seq;
@@ -24,7 +29,7 @@ static uint64_t polled_buttons;
 static float click_x, click_y, walk_x, walk_y;
 static int test_ui_y, test_ui_h, test_real_h;
 int test_ui_item_at_now(float x, float y) { (void)x; (void)y; return test_hit; }
-void test_ui_touch(int op, float x, float y) { (void)op; (void)x; (void)y; ui_events++; }
+void test_ui_touch(int op, float x, float y) { (void)x; (void)y; if (op == 3) ui_cancels++; else ui_events++; }
 void test_ui_tab_go(void) { tabs++; }
 void (*dm_pad_hook)(uint64_t, uint64_t *, int32_t *, int32_t *, int32_t *, int32_t *);
 uint64_t guest_ns(void) { return 0; }
@@ -32,7 +37,7 @@ uint64_t dm_guest_frame(void) { return 0; }   // 界面鼠标 / 前端路径按�
 int dm_world_has_target(void) { return 1; }   // 点世界（dm_world.c）的桩：有目标 = 主按钮照常发键 | stub for world tapping (dm_world.c): has a target = the primary button sends its key as usual
 unsigned dm_world_tap(float nx, float ny) { (void)nx; (void)ny; return 0; }
 void dm_world_walk(float nx, float ny) { walks++; walk_x = nx; walk_y = ny; } unsigned dm_world_click(float nx, float ny) { clicks++; click_x = nx; click_y = ny; return ++click_seq; } int dm_update_click_at(float nx, float ny) { (void)nx; (void)ny; return 0; } int dm_world_tap_result(unsigned q) { (void)q; return result; }
-uint64_t dm_padmode_legend_click(float nx, float ny) { (void)nx; (void)ny; return 0; } int dm_padmode_hud_click(float nx, float ny, uint64_t *b) { (void)nx; (void)ny; if (test_hud) *b = DM_BTN_A; return test_hud; } int dm_padmode_legend_has(uint32_t g) { (void)g; return 0; } int dm_game_paused(void) { return test_paused; }
+uint64_t dm_padmode_legend_click(float nx, float ny) { (void)nx; (void)ny; return 0; } int dm_padmode_hud_click(float nx, float ny, uint64_t *b) { (void)nx; (void)ny; if (test_hud) *b = DM_BTN_A; return test_hud; } int dm_padmode_legend_has(uint32_t g) { return g == 0xe005 && test_plus_legend; } int dm_game_paused(void) { return test_paused; }
 int dm_shop_open(void) { return 0; }   // 商人页（dm_actions.c）的桩：没开 | stub for the vendor page (dm_actions.c): not open
 int dm_padmode_current(void) { return 0; }   // 手柄 / 触屏模式（dm_padmode.c）的桩：触屏 | Stub for controller / touch mode (dm_padmode.c): touch
 uint64_t dm_padmode_page_keys(uint64_t m) { (void)m; return 0; } void dm_padmode_legend_hide(const char *l, int a) { (void)l; (void)a; } int dm_padmode_busy(void) { return 0; } uint64_t dm_padmode_page_held(void) { return 0; } void dm_padmode_page_pulse(uint64_t m) { (void)m; } void dm_padmode_ident_hint(int on) { (void)on; } void dm_padmode_legend(int a, const char *t) { (void)a; (void)t; } const char *dm_str(uint8_t *b, const char *k) { (void)b; return k; }   // 手柄页键 / 提示条 / 取串的桩（个人仓库手柄翻页用，触屏下不走） | Stubs for controller page keys / button legend / string fetch (used by controller paging of the personal stash, not reached under touch)
@@ -84,17 +89,19 @@ static int checks, fails;
 
 // 真鼠标经公开事件入口推进；世界查询的答案由下一次宿主轮询提供，不绕过事件队列。
 // Drive the real mouse through its public event entry point; the next host poll supplies the world-pick answer, without bypassing the event queue.
-static void live_poll(void) {
-    uint64_t b = 0; int32_t lx = 0, ly = 0, rx = 0, ry = 0;
+static void live_poll_keys(uint64_t b) {
+    int32_t lx = 0, ly = 0, rx = 0, ry = 0;
     dm_touch_host_step(0, &b, &lx, &ly, &rx, &ry); polled_buttons = b;
 }
+static void live_poll(void) { live_poll_keys(0); }
 static void live_reset(void) {
     unsetenv("DM_TOUCH_SCRIPT"); memset(&g_touch, 0, sizeof g_touch); memset(&g_lm, 0, sizeof g_lm);
     atomic_store(&g_live.head, 0); atomic_store(&g_live.tail, 0);
     g_live_on = g_live_based = 0; g_live_btn = 0;
     test_now = 1000000000ull; test_in = 1; test_paused = 0; test_hit = 3;
     test_hud = test_ui_y = test_ui_h = test_real_h = 0;
-    clicks = walks = ui_events = tabs = 0; result = -1; click_seq = 0;
+    test_name_input = test_plus_legend = 0;
+    clicks = walks = ui_events = ui_cancels = tabs = 0; result = -1; click_seq = 0;
     dm_touch_host_live_enable(); live_poll();
 }
 static void live_event(int op, float x, float y) { test_now += 33333334ull; dm_touch_host_live(op, x, y); live_poll(); }
@@ -151,6 +158,40 @@ static void test_live_mouse(void) {
     live_reset(); dm_tc_set_navigation_mode(&g_touch.state, 1); test_hit = 1;
     live_event(0, .7f, .4f); test_now += 40000000ull; live_event(1, .8f, .5f); live_event(2, 0, 0);
     CHECK(clicks == 0 && walks == 0, "inventory drag never enters the immediate world-click path");
+
+    live_reset(); live_event(0, .7f, .4f); live_event(DM_TOUCH_HOST_CANCEL, 0, 0);
+    result = 0; test_now += 400000000ull; live_poll();
+    CHECK(walks == 0 && !g_lm.owned && !g_lm.tap_seq, "capture loss cancels pending world fallback and held steering");
+    live_reset(); test_hud = 1; live_event(0, .7f, .9f); live_event(DM_TOUCH_HOST_CANCEL, 0, 0);
+    CHECK(polled_buttons == 0, "capture loss immediately releases a held HUD button");
+    live_reset(); test_in = 0; live_event(0, .2f, .2f); live_event(DM_TOUCH_HOST_CANCEL, 0, 0);
+    CHECK(ui_events == 1 && ui_cancels == 1, "front-end capture loss cancels instead of submitting a release click");
+    live_event(0, .3f, .3f); live_event(2, 0, 0);
+    CHECK(ui_events == 3, "a new front-end click works after capture loss");
+    live_reset(); dm_tc_set_navigation_mode(&g_touch.state, 1); test_hit = 1;
+    dm_touch_host_live(0, .7f, .4f); dm_touch_host_live(DM_TOUCH_HOST_CANCEL, 0, 0); live_poll();
+    CHECK(g_touch.state.pointer_slot == DM_TC_NONE && !g_touch.state.buttons && !g_touch.state.pulse_button,
+          "same-poll cancellation clears queued inventory input without a drop or action pulse");
+}
+
+static void test_live_keyboard(void) {
+    live_reset(); test_in = 0;
+    live_poll_keys(1ull << 40);
+    CHECK(polled_buttons == DM_BTN_A, "Return confirms and never leaks its desktop signal bit");
+    live_poll(); test_name_input = test_plus_legend = 1;
+    live_poll_keys(1ull << 40);
+    CHECK(polled_buttons == DM_BTN_A, "Return opens name entry before accepting character creation");
+    test_name_input = 0; live_poll_keys(1ull << 40);
+    CHECK(polled_buttons == DM_BTN_A, "holding Return does not turn name entry into character creation");
+    live_poll(); live_poll_keys(1ull << 40);
+    CHECK(polled_buttons == DM_BTN_PLUS, "a new Return press accepts once the name is filled");
+    live_poll(); live_poll_keys(1ull << 41);
+    CHECK(polled_buttons == DM_BTN_B, "Esc goes back on front-end pages");
+    live_poll(); test_in = 1; live_poll_keys(1ull << 41);
+    CHECK(polled_buttons == DM_BTN_PLUS, "Esc opens the function page from the world");
+    live_poll(); dm_tc_set_navigation_mode(&g_touch.state, 1); live_poll_keys(1ull << 41);
+    CHECK(polled_buttons == DM_BTN_B, "Esc goes back from an in-game panel");
+    live_poll();
 }
 
 // 悬停与点击独立：大量移动不能挤掉点击，按住 / 拖放时不改手势目标。
@@ -211,6 +252,7 @@ int main(void) {
       dm_ui_auto_mode_leave(); CHECK(dm_ui_auto_buttons() == 0, "切换清理后在途的键脉冲作废");
       dm_ui_cache_mode_leave(); CHECK(1, "界面缓存清理在没有界面根时不崩"); }
     test_live_mouse();
+    test_live_keyboard();
     test_live_hover();
     printf("== touch host %d 项，失败 %d ==\n", checks, fails);
     return fails != 0;

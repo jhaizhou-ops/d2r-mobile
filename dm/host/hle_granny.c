@@ -34,6 +34,7 @@
 //   Known not covered: when a chunk read fails (bytes read not equal to bytes requested) the game leaves the loop early and the deferred ctx stays in its initial state -- this only happens on an I/O error, in which case the segment read itself has already failed.
 // DM_GRANNY_PROF=1 (needs DM_BOOTPROF=1 to fix the character select moment): accumulates call count, input bytes and time per guest thread, in two phases "boot → character select main menu" and "after character select".
 #include "hle.h"
+#include "dm_alloc.h"
 #include <pthread/qos.h>
 #include <stdatomic.h>
 uint32_t thr_cur_handle(void);
@@ -97,15 +98,15 @@ static unsigned gh_hash(uint32_t clen, const uint8_t *p, uint32_t n) {
 }
 static void gs_free(gseg *s) {            // 持 g_gl | holds g_gl
     if (s->out) atomic_fetch_sub(&g_gout, (int64_t)s->dlen + G_CTX);
-    free(s->out); free(s->ctx); free(s->cmp); free(s->wm); s->out = s->ctx = s->cmp = s->wm = NULL;
+    free(s->out); dm_aligned_free(s->ctx); free(s->cmp); free(s->wm); s->out = s->ctx = s->cmp = s->wm = NULL;
     atomic_store(&s->st, GS_GONE); pthread_cond_broadcast(&g_gc);
 }
 
 // 在宿主内存里照 0x11f29d0 建 ctx 并按游戏切法解完；成功返回 1（out / ctx 留给调用方）
 // Build the ctx in host memory the way 0x11f29d0 does and decode to the end with the game's split; returns 1 on success (out / ctx are left to the caller)
 static int pre_decode(const uint8_t *cmp, uint32_t clen, uint32_t dlen, uint8_t fill, uint8_t **pout, uint8_t **pctx, uint32_t *olen) {
-    uint8_t *ctx = aligned_alloc(64, (G_CTX + 63) & ~63u), *out = malloc(dlen ? dlen : 1);
-    if (!ctx || !out) { free(ctx); free(out); return 0; }
+    uint8_t *ctx = dm_aligned_alloc(64, (G_CTX + 63) & ~63u), *out = malloc(dlen ? dlen : 1);
+    if (!ctx || !out) { dm_aligned_free(ctx); free(out); return 0; }
     memset(ctx, fill, G_CTX);
     uint64_t o = (uint64_t)out, one = 0x100000001ull;
     memcpy(ctx + 0x00, &o, 8); memcpy(ctx + 0x08, &o, 8); memcpy(ctx + 0x10, &o, 8); o += dlen; memcpy(ctx + 0x18, &o, 8);
@@ -116,10 +117,10 @@ static int pre_decode(const uint8_t *cmp, uint32_t clen, uint32_t dlen, uint8_t 
     v = 0xfac688; memcpy(ctx + 0x44, &v, 4); uint64_t z = 0; memcpy(ctx + 0x58, &z, 8); memcpy(ctx + 0x80, &z, 8);
     for (uint32_t pos = 0; pos < clen; pos += G_CHUNK) {
         uint32_t n = clen - pos < G_CHUNK ? clen - pos : G_CHUNK;
-        if (!(g_dec((uint64_t)ctx, (uint64_t)(cmp + pos), n) & 1)) { free(ctx); free(out); return 0; }
+        if (!(g_dec((uint64_t)ctx, (uint64_t)(cmp + pos), n) & 1)) { dm_aligned_free(ctx); free(out); return 0; }
     }
     uint64_t cur; memcpy(&cur, ctx + 0x08, 8);
-    if (cur < (uint64_t)out || cur > (uint64_t)out + dlen) { free(ctx); free(out); return 0; }
+    if (cur < (uint64_t)out || cur > (uint64_t)out + dlen) { dm_aligned_free(ctx); free(out); return 0; }
     *olen = (uint32_t)(cur - (uint64_t)out); *pout = out; *pctx = ctx; return 1;
 }
 
@@ -131,14 +132,14 @@ static uint8_t g_st_unw[G_CTX]; static _Atomic uint32_t g_st_n, g_st_bad; static
 static void selftest_one(gseg *s) {
     uint8_t *o1, *c1, *o2, *c2; uint32_t l1, l2;
     if (!pre_decode(s->cmp, s->clen, s->dlen, 0x00, &o1, &c1, &l1)) return;
-    if (!pre_decode(s->cmp, s->clen, s->dlen, 0xff, &o2, &c2, &l2)) { free(o1); free(c1); return; }
+    if (!pre_decode(s->cmp, s->clen, s->dlen, 0xff, &o2, &c2, &l2)) { free(o1); dm_aligned_free(c1); return; }
     int bad = l1 != l2 || memcmp(o1, o2, l1);
     for (int k = 0; k < 4; k++) { uint64_t a, b; memcpy(&a, c1 + 8 * k, 8); memcpy(&b, c2 + 8 * k, 8); if (a - (uint64_t)o1 != b - (uint64_t)o2) bad = 1; }
     pthread_mutex_lock(&g_gl);
     for (uint32_t i = 0x20; i < G_CTX; i++) { if (c1[i] != c2[i]) g_st_unw[i] = 1; else if (i > g_st_maxw) g_st_maxw = i; }
     pthread_mutex_unlock(&g_gl);
     atomic_fetch_add(&g_st_n, 1); if (bad) atomic_fetch_add(&g_st_bad, 1);
-    free(o1); free(c1); free(o2); free(c2);
+    free(o1); dm_aligned_free(c1); free(o2); dm_aligned_free(c2);
 }
 static void selftest_report(void) {
     uint32_t nu = 0, lo = 0, hi = 0; for (uint32_t i = 0x20; i < G_CTX; i++) if (g_st_unw[i]) { if (!nu++) lo = i; hi = i; }
@@ -168,12 +169,12 @@ static void *g_worker(void *arg) {
         // when moving in, only these bytes are moved, the rest keep the original values given by the game allocator ⇒ the whole ctx block is byte-for-byte identical to never having been replaced
         uint8_t *out, *ctx, *o2 = NULL, *c2 = NULL, *wm = NULL; uint32_t olen, l2;
         int ok = pre_decode(s->cmp, s->clen, s->dlen, 0x00, &out, &ctx, &olen);
-        if (ok && !(ok = pre_decode(s->cmp, s->clen, s->dlen, 0xff, &o2, &c2, &l2))) { free(out); free(ctx); }
+        if (ok && !(ok = pre_decode(s->cmp, s->clen, s->dlen, 0xff, &o2, &c2, &l2))) { free(out); dm_aligned_free(ctx); }
         if (ok) {
             ok = l2 == olen && !memcmp(out, o2, olen) && (wm = calloc(G_CTX / 8 + 1, 1));
             if (ok) for (uint32_t i = 0x20; i < G_CTX; i++) if (ctx[i] == c2[i]) wm[i >> 3] |= 1 << (i & 7);
-            free(o2); free(c2);
-            if (!ok) { free(out); free(ctx); free(wm); }
+            free(o2); dm_aligned_free(c2);
+            if (!ok) { free(out); dm_aligned_free(ctx); free(wm); }
         }
         pthread_mutex_lock(&g_gl);
         if (ok && !atomic_load(&g_gstop)) {
@@ -181,7 +182,7 @@ static void *g_worker(void *arg) {
             int64_t v = atomic_fetch_add(&g_gout, (int64_t)s->dlen + G_CTX) + s->dlen + G_CTX;
             for (int64_t pk = atomic_load(&g_gpeak); v > pk && !atomic_compare_exchange_weak(&g_gpeak, &pk, v);) {}
             atomic_store(&s->st, GS_READY); atomic_fetch_add(&g_ndone, 1);
-        } else { if (ok) { free(out); free(ctx); free(wm); } else atomic_fetch_add(&g_nfail, 1); free(s->cmp); s->cmp = NULL; atomic_store(&s->st, GS_GONE); }
+        } else { if (ok) { free(out); dm_aligned_free(ctx); free(wm); } else atomic_fetch_add(&g_nfail, 1); free(s->cmp); s->cmp = NULL; atomic_store(&s->st, GS_GONE); }
         pthread_cond_broadcast(&g_gc); pthread_mutex_unlock(&g_gl);
     }
     return NULL;

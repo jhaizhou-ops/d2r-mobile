@@ -41,6 +41,11 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry 布局");
 // all game reads and writes happen in the working directory; Commit = clonefile(work → <commit>.new), then renamex_np(RENAME_SWAP) swaps it atomically with commit, then the swapped-out old version is deleted.
 // Killed at any moment, commit is either the old version or the new version, never half-written / a mix of old and new; the next mount discards leftover .work / .new.
 typedef struct { char name[32]; char dir[1024]; char overlay[4096]; char commit[1024]; int ro; } mount_t;
+#ifdef _WIN32
+#define DM_OVERLAY_SEPARATOR ";"
+#else
+#define DM_OVERLAY_SEPARATOR ":"
+#endif
 static mount_t g_mnt[MAX_MOUNT];   // commit 非空 = 事务式存档挂载 | commit non-empty = transactional save mount
 static int g_nmnt;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -208,9 +213,9 @@ static int root_path(const char *root, const char *rest, char *out, size_t n) {
 int dm_overlay_file(const char *rel, char *out, size_t n) {
     const char *ov = getenv("DM_ROMFS_OVERLAY");
     for (const char *p = ov ? ov : ""; *p;) {
-        size_t l = strcspn(p, ":");
+        size_t l = strcspn(p, DM_OVERLAY_SEPARATOR);
         if (l && snprintf(out, n, "%.*s/%s", (int)l, p, rel) < (int)n && !access(out, R_OK)) return 1;
-        p += l; if (*p == ':') p++;
+        p += l; if (*p == DM_OVERLAY_SEPARATOR[0]) p++;
     }
     if (n) out[0] = 0;
     return 0;
@@ -219,7 +224,7 @@ static int rom_overlay_path(const mount_t *m, const char *rest, char *out, size_
     char *roots = strdup(m->overlay);
     if (!roots) die("rom overlay 路径分配失败");
     char *save = NULL;
-    for (char *root = strtok_r(roots, ":", &save); root; root = strtok_r(NULL, ":", &save)) {
+    for (char *root = strtok_r(roots, DM_OVERLAY_SEPARATOR, &save); root; root = strtok_r(NULL, DM_OVERLAY_SEPARATOR, &save)) {
         char candidate[1024];
         if (root_path(root, rest, candidate, sizeof candidate) && !access(candidate, F_OK)) {
             strlcpy(out, candidate, n); free(roots); return 1;
@@ -716,7 +721,7 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
     int nn = 0, nr = 0;
     all[nr++] = m->dir;
     char *save = NULL;
-    for (char *root = strtok_r(roots, ":", &save); root && nr < 65; root = strtok_r(NULL, ":", &save)) all[nr++] = root;
+    for (char *root = strtok_r(roots, DM_OVERLAY_SEPARATOR, &save); root && nr < 65; root = strtok_r(NULL, DM_OVERLAY_SEPARATOR, &save)) all[nr++] = root;
     for (int ri = nr - 1; ri >= 0; ri--) {
         if (!root_path(all[ri], rest, parent, 1024)) continue;
         DIR *x = opendir(parent); if (!x) continue;

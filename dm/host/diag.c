@@ -37,6 +37,16 @@ void dm_mtl_l3_tick(uint32_t tick) __attribute__((weak));
 // Cannot probe one by one up to getdtablesize(): the host limit is 1048576, 5 s of CPU each time, once every 250 ticks, so every host run kept half a core busy in the background (found while investigating intermittent inv_tap failures under load).
 // Only when /dev/fd cannot be opened (sandbox) fall back to fcntl probing, capped at 4096; the method is printed once on first use
 static int l3_fd_count(void) {
+#ifdef _WIN32
+    // Windows 统计内核句柄，而不是 CRT 文件描述符。
+    // Windows counts kernel handles, not CRT file descriptors.
+    DWORD count;
+    if (!GetProcessHandleCount(GetCurrentProcess(), &count)) {
+        LOG("【红】GetProcessHandleCount failed: %lu", GetLastError());
+        return -1;
+    }
+    return (int)count;
+#else
     static int said; int n = 0;
     DIR *d = opendir("/dev/fd");
     if (d) {
@@ -50,6 +60,7 @@ static int l3_fd_count(void) {
     for (int fd = 0; fd < top; fd++) if (fcntl(fd, F_GETFD) != -1) n++;
     if (!said++) LOG("L3MEM 句柄计数：/dev/fd 打不开，fcntl 探测前 %d 个", top);
     return n;
+#endif
 }
 
 static pthread_mutex_t g_l3mem_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -488,6 +499,7 @@ void probe_install(void) {
 
 // ---------- 采样 DM_SAMPLE=毫秒：定时打断调用 crash_sample_self() 的那个线程（客体主线程），打印 pc 与回溯 ----------
 // ---------- Sampling DM_SAMPLE=milliseconds: periodically interrupt the thread that called crash_sample_self() (the guest main thread) and print pc and backtrace ----------
+#ifndef _WIN32
 static pthread_t g_sample_pt;
 // 信号处理里只做异步信号安全的事：把 pc / lr / 帧指针链拷进无锁环形缓冲；符号化与打印由采样线程做
 // （曾在处理函数里直接 fprintf：被打断的线程若正持 stderr 锁，处理函数自锁死、客体主线程挂住）
@@ -544,6 +556,11 @@ void crash_sample_self(void) {
     sigaction(SIGUSR2, &sa, 0);
     pthread_t t; pthread_create(&t, NULL, sampler, (void *)(uintptr_t)(atoi(e) * 1000)); pthread_detach(t);
 }
+#else
+void crash_sample_self(void) {
+    if (getenv("DM_SAMPLE")) die("DM_SAMPLE requires POSIX thread signals and is not supported on Windows");
+}
+#endif
 
 // ---------- DM_INFLATE_BENCH=<样本文件>：用游戏映像里的 zlib（main 0xf3a930 inflateInit_、0xf3aa90 inflate）解同一批样本并计时 ----------
 // 样本格式同 scratchpad infl/bench.c：{CKey16, 原始长, 块数, [模式, 压缩长, 解压长, 数据]...}；逐文件核 MD5 == CKey。

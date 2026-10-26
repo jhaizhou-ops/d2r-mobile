@@ -13,11 +13,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-// 句柄 → 路径：苹果 fcntl(F_GETPATH)，Linux 读 /proc/self/fd/<fd> 链接
-// Handle → path: Apple fcntl(F_GETPATH), Linux reads the /proc/self/fd/<fd> link
+// 句柄 → 路径：苹果 fcntl(F_GETPATH)，Windows 查询原生句柄，Linux 读 /proc/self/fd/<fd> 链接。
+// Handle → path: Apple fcntl(F_GETPATH), Windows queries native handles, Linux reads /proc/self/fd/<fd>.
 static int fd_path(int fd, char *p, size_t n) {
 #ifdef F_GETPATH
     (void)n; return fcntl(fd, F_GETPATH, p);
+#elif defined(_WIN32)
+    wchar_t wide[32768];
+    DWORD k = GetFinalPathNameByHandleW((HANDLE)_get_osfhandle(fd), wide, 32768, FILE_NAME_NORMALIZED);
+    if (!k || k >= 32768 || !WideCharToMultiByte(CP_UTF8, 0, wide, -1, p, (int)n, NULL, NULL)) return -1;
+    for (char *c = p; *c; c++) if (*c == '\\') *c = '/';
+    return 0;
 #else
     char l[32]; snprintf(l, sizeof l, "/proc/self/fd/%d", fd);
     ssize_t k = readlink(l, p, n - 1); if (k < 0) return -1;

@@ -1,3 +1,5 @@
+// Mac / Windows 桌面鼠标及测试脚本复用 iOS 手势状态机，界面命中与世界指令经共享宿主执行。
+// Mac / Windows desktop mouse and test scripts reuse the iOS gesture state machine; the shared host executes UI hit tests and world commands.
 #include "touch_mac.h"
 #include "dm_input.h"
 #include "dm_cursor.h"
@@ -28,7 +30,7 @@ int dm_touch_host_is_live(void) { return g_live_on; }   // 真鼠标模式（Mac
 static uint32_t touch_cur_tick(void) { return g_live_on ? (uint32_t)(now_ns() / 33333333ull) : dm_cur_tick(); }
 
 typedef struct { uint64_t beat; int op, slot; float x, y; } touch_event;
-enum { TOUCH_DOWN, TOUCH_MOVE, TOUCH_UP };
+enum { TOUCH_DOWN, TOUCH_MOVE, TOUCH_UP, TOUCH_CANCEL };
 enum { START_BEATS = 60, LATE_LIMIT_BEATS = 125, LATE_LIMIT_FAST_BEATS = 2000, TICKS_PER_SECOND = 25 };   // 快进（DM_DETCLOCK）下拍跑在加载前面，读取画面几百拍才撤，时限另给   // 读取画面晚撤可顺延，ToGame 后 125 拍（5 s 游戏时间；负载下最晚实测第 67 拍撤，用例共跑 240 拍）仍未撤报红 | in fast-forward (DM_DETCLOCK) ticks run ahead of loading and the loading screen takes hundreds of ticks to come down, so a separate limit is given   // a late loading screen may postpone the start; still up 125 ticks after ToGame (5 s game time; latest measured under load is tick 67, the case runs 240 ticks in total) is reported as a failure
 
 static struct {
@@ -61,7 +63,7 @@ static _Atomic uint64_t g_live_hover;
 // 世界手势从按下到抬起独占；点选答案只用于空地回退，不能让抬起再触发一次。
 // Own a world gesture from down through up; the pick result only supplies the ground fallback, never a second click on release.
 static struct { int owned, down, repeat; uint32_t last; float x, y; unsigned tap_seq; float tap_x, tap_y; } g_lm;
-void dm_touch_host_live(int op, float nx, float ny) {   // 前端线程：op 0 按下 1 拖动 2 抬起 3 悬停；坐标 = 界面归一化，悬停可在画面外 | Front-end thread: op 0 down, 1 drag, 2 up, 3 hover; coordinates = UI-normalized, hover may be outside the picture
+void dm_touch_host_live(int op, float nx, float ny) {   // 前端线程：op 0 按下 1 拖动 2 抬起 3 悬停 4 取消；坐标 = 界面归一化，悬停可在画面外 | Front-end thread: op 0 down, 1 drag, 2 up, 3 hover, 4 cancel; coordinates = UI-normalized, hover may be outside the picture
     if (!g_live_on) return;
     if (op == 3) {
         uint64_t p = 1ull << 63;
@@ -197,6 +199,13 @@ void dm_touch_host_game_start(uint64_t now) {
     if (g_touch.enabled && !g_touch.prefix) { g_touch.started = 1; g_touch.based = 1; g_touch.loaded = 1; g_touch.tick_set = 1; g_touch.to_game_tick = touch_cur_tick() - START_BEATS; g_touch.start_tick = touch_cur_tick(); }
 }
 
+static int live_append(int op, float x, float y) {
+    if (g_touch.next == g_touch.count) g_touch.next = g_touch.count = 0;
+    if (g_touch.count >= 256) return 0;
+    touch_event *e = &g_touch.event[g_touch.count++];
+    e->beat = 0; e->slot = 0; e->op = op; e->x = x * 2868; e->y = y * 1320;
+    return 1;
+}
 void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     if (!g_touch.ready) touch_init(now);
     if (g_live_on) {   // Mac 键盘的回车与 Esc（front_mac.m 用两个游戏不认的高位送来）：按下那一刻按当前页定成哪个手柄键，按住期间不变 | Return and Esc on a Mac keyboard (sent by front_mac.m as two high bits the game does not recognise): decided as a gamepad key by the current page at the moment of pressing, unchanged while held
@@ -211,11 +220,19 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
         if (!(kb & (1ull << 41))) esc = 0; else if (!esc) esc = dm_uiscreen_ingame() && !g_touch.state.navigation_mode && !dm_game_paused() ? DM_BTN_PLUS : DM_BTN_B;
         *buttons |= ent | esc; }
     if (g_live_on) {   // 真鼠标：前端页直通界面点击；局内并进事件表（拍 = 此刻），与脚本事件同一段处理 | Real mouse: on front-end pages it goes straight to a UI click; in game it joins the event table (tick = now) and is handled in the same pass as script events
-        int dm_uiscreen_ingame(void); int in = dm_uiscreen_ingame(); static float px, py; unsigned h;
+        int dm_uiscreen_ingame(void); int in = dm_uiscreen_ingame(); static float px, py; static int eat, hold, upd_eat; unsigned h;
         if (in && !g_live_based) { g_live_based = 1; g_live_tick0 = touch_cur_tick(); if (!g_touch.based) { g_touch.started = 1; g_touch.based = 1; g_touch.loaded = 1; g_touch.tick_set = 1; g_touch.start_tick = g_live_tick0; g_touch.to_game_tick = g_live_tick0; } }
         if (!in) g_live_based = 0;
         while ((h = atomic_load(&g_live.head)) != atomic_load(&g_live.tail)) {
             int op = g_live.q[h % 64].op; float nx = g_live.q[h % 64].nx, ny = g_live.q[h % 64].ny; if (op != 2) { px = nx; py = ny; }
+            // 取消与抬起不同：不补点击、不买卖、不让待回报的世界点选再触发地面回退。
+            // Cancellation is not release: no synthetic click, purchase/sale or ground fallback from a pending world pick.
+            if (op == DM_TOUCH_HOST_CANCEL) {
+                memset(&g_lm, 0, sizeof g_lm); g_live_btn = 0; eat = hold = upd_eat = 0;
+                if (in) { if (!live_append(TOUCH_CANCEL, 0, 0)) break; }
+                else { dm_tc_cancel_all(&g_touch.state); dm_ui_touch(3, 0, 0); }
+                atomic_store(&g_live.head, h + 1); continue;
+            }
             if (op == 0) memset(&g_lm, 0, sizeof g_lm);
             if (g_lm.owned) {
                 g_lm.x = px; g_lm.y = py;
@@ -226,7 +243,7 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
             // HUD 上没有对应键的东西（血球、魔球、经验条）：吃掉。都吞到抬起为止
             // Pressed on an entry of the key-hint bar: this is not treated as a click but as pressing that key for 4 ticks (dm_padmode.c); pressed on a skill slot / belt cell / button of the in-game bottom HUD: the corresponding key is held while the mouse is down and released on mouse up (at least 3 ticks);
             // things on the HUD with no corresponding key (life orb, mana orb, experience bar): swallowed. All are swallowed until release
-            { uint64_t dm_padmode_legend_click(float, float); int dm_padmode_hud_click(float, float, uint64_t *), dm_game_paused(void); static int eat, hold; uint64_t lb = op == 0 ? dm_padmode_legend_click(px, py) : 0, hb = 0; int hk = op == 0 && !lb && in && !g_touch.state.navigation_mode ? dm_padmode_hud_click(px, py, &hb) : 0;   /* 有面板开着：不认 HUD（面板底下那排 HUD 还画着） | a panel is open: the HUD is not recognised (the HUD row under the panel is still drawn) */
+            { uint64_t dm_padmode_legend_click(float, float); int dm_padmode_hud_click(float, float, uint64_t *), dm_game_paused(void); uint64_t lb = op == 0 ? dm_padmode_legend_click(px, py) : 0, hb = 0; int hk = op == 0 && !lb && in && !g_touch.state.navigation_mode ? dm_padmode_hud_click(px, py, &hb) : 0;   /* 有面板开着：不认 HUD（面板底下那排 HUD 还画着） | a panel is open: the HUD is not recognised (the HUD row under the panel is still drawn) */
               if (lb) { eat = 1; hold = 0; g_live_btn = lb; g_live_btn_until = touch_cur_tick() + 4; }
               else if (hk == 1) { eat = 1; hold = 1; g_live_btn = hb; g_live_btn_until = touch_cur_tick() + 30 * 600; }
               else if (hk == 2) { eat = 1; hold = 0; }
@@ -239,7 +256,7 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
                   else if (dm_ui_minimap_rect(mr)) { float band = (mr[3] - mr[1]) / 4; if (band < 0.042f) band = 0.042f; if (band > (mr[3] - mr[1]) * 0.4f) band = (mr[3] - mr[1]) * 0.4f;
                       if (px >= mr[0] && px <= mr[2] && py >= mr[1] && py <= mr[1] + band) { dm_ui_map_full(1); eat = 1; hold = 0; fprintf(stderr, "[dm] 鼠标：点在小地图顶上那一条 → 切到全屏地图\n"); } } }
               if (eat) { if (op == 2) { eat = 0; if (hold) { hold = 0; g_live_btn_until = touch_cur_tick() + 3; } } atomic_store(&g_live.head, h + 1); continue; } }
-            if (!in) { static int upd_eat; int dm_update_click_at(float, float);   // 主菜单右上角的「有新版本…」那行：点它 = 打开下载页（dm_update.c），这一下从按下到抬起都不再交给界面 | the "New version..." line at the top right of the main menu: clicking it = open the download page (dm_update.c); this click is no longer passed to the interface from press to release
+            if (!in) { int dm_update_click_at(float, float);   // 主菜单右上角的「有新版本…」那行：点它 = 打开下载页（dm_update.c），这一下从按下到抬起都不再交给界面 | the "New version..." line at the top right of the main menu: clicking it = open the download page (dm_update.c); this click is no longer passed to the interface from press to release
                 if (op == 0 && dm_update_click_at(px, py)) upd_eat = 1;
                 if (upd_eat) { if (op == 2) upd_eat = 0; atomic_store(&g_live.head, h + 1); continue; } }
             if (!in) {   // 前端页：抬起时先问一次命中——落在页签上就走「点页签 = 按对应的手柄键」（页签不认鼠标点击；局内由手势层做同一件事），其余照旧发鼠标点击 | front-end pages: on release, hit-test once first - landing on a tab goes through "clicking a tab = pressing the corresponding gamepad key" (tabs do not take mouse clicks; in game the gesture layer does the same), everything else sends a mouse click as before
@@ -253,9 +270,7 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
                 g_lm.tap_y = ui_y_to_screen(py); g_lm.tap_seq = dm_world_click(px, g_lm.tap_y);
                 atomic_store(&g_live.head, h + 1); continue;
             }
-            if (g_touch.next == g_touch.count) g_touch.next = g_touch.count = 0;   // 表里的都处理完了：从头复用 | Everything in the table has been handled: reuse from the start
-            if (g_touch.count >= 256) break;
-            touch_event *e = &g_touch.event[g_touch.count++]; e->beat = 0; e->slot = 0; e->op = op == 0 ? TOUCH_DOWN : op == 1 ? TOUCH_MOVE : TOUCH_UP; e->x = px * 2868; e->y = py * 1320;
+            if (!live_append(op == 0 ? TOUCH_DOWN : op == 1 ? TOUCH_MOVE : TOUCH_UP, px, py)) break;
             atomic_store(&g_live.head, h + 1);
         }
         // 空地答案一到就走；按住时每 30 Hz 拍更新目的地，不再等 0.3 秒起步、每 0.2 秒转向。
@@ -340,7 +355,11 @@ apply_input:
             dm_tc_finger *f = &g_touch.state.finger[e->slot];
             if (g_touch.state.navigation_mode && e->slot == g_touch.state.pointer_slot && f->ui_drag) { if (!g_touch.ui_drag_on) { g_touch.ui_drag_on = 1; dm_ui_drag_lift(DM_TC_POINTER_LIFT_PT / 1320); dm_ui_drag_begin(f->ui_drag, f->aim_origin_x / 2868, f->aim_origin_y / 1320, 44.0f / 1320); }
                 dm_ui_drag_move(e->x / 2868, e->y / 1320); } }
-        else {
+        else if (e->op == TOUCH_CANCEL) {
+            if (g_touch.ui_drag_on) { g_touch.ui_drag_on = 0; dm_ui_drag_end(); }
+            dm_tc_cancel_all(&g_touch.state); dm_ui_touch(3, 0, 0); dm_cursor_clear();
+            g_touch.pulse_end_beat = g_touch.pulse_resume_beat = 0;
+        } else {
             if (g_touch.ui_drag_on && e->slot == g_touch.state.pointer_slot) { g_touch.ui_drag_on = 0; dm_ui_drag_end(); }   // 松手前告诉手势层这根手指是否落在物品区（这里就在游戏主线程，直接问） | before release tell the gesture layer whether this finger landed on an item area (this is already the game main thread, so ask directly)
             if (g_touch.state.navigation_mode && e->slot == g_touch.state.pointer_slot) { dm_tc_finger *f = &g_touch.state.finger[e->slot];
                 if (f->shop_drag) { if (dm_ui_drop_at_now(f->x / 2868, (f->y - DM_TC_POINTER_LIFT_PT) / 1320, f->y / 1320) == 5) { dm_ui_shop_buy_at(f->aim_origin_x / 2868, f->aim_origin_y / 1320); g_touch.state.pointer_x = f->aim_origin_x; g_touch.state.pointer_y = f->aim_origin_y; } }   // 从货架起拖、落在背包类物品区 = 买（光标先放回那件货上） | drag started from the shelf and dropped on an inventory-type item area = buy (the cursor is first put back on that piece of merchandise)

@@ -22,6 +22,13 @@ static dm_sem sem_new(void) { return dispatch_semaphore_create(0); }
 static void sem_up(dm_sem s) { dispatch_semaphore_signal(s); }
 static void sem_down(dm_sem s) { dispatch_semaphore_wait(s, DISPATCH_TIME_FOREVER); }
 static void sem_free(dm_sem s) { dispatch_release(s); }
+#elif defined(_WIN32)
+#include "../windows/audio.h"
+typedef HANDLE dm_sem;
+static dm_sem sem_new(void) { HANDLE s = CreateSemaphoreW(NULL, 0, LONG_MAX, NULL); if (!s) die("audio semaphore"); return s; }
+static void sem_up(dm_sem s) { if (!ReleaseSemaphore(s, 1, NULL)) die("audio semaphore release"); }
+static void sem_down(dm_sem s) { if (WaitForSingleObject(s, INFINITE) != WAIT_OBJECT_0) die("audio semaphore wait"); }
+static void sem_free(dm_sem s) { CloseHandle(s); }
 #elif defined(__OHOS__)
 #include <ohaudio/native_audiorenderer.h>
 #include <ohaudio/native_audiostreambuilder.h>
@@ -232,6 +239,19 @@ static int au_open(aout *a) {   // 0 = 声卡开好了；-1 = 开不了（a->au 
 static int dev_start(aout *a) { return AudioOutputUnitStart(a->au) ? -1 : 0; }
 static void dev_stop(aout *a) { AudioOutputUnitStop(a->au); }
 static void dev_close(aout *a) { AudioUnitUninitialize(a->au); AudioComponentInstanceDispose(a->au); a->au = NULL; }
+#elif defined(_WIN32)
+static void windows_render(void *context, void *data, uint32_t bytes) { render(context, data, bytes); }
+static int au_open(aout *a) {
+    a->mix = a->ch == 6;
+    if (a->mix && !a->mixbuf) a->mixbuf = malloc(MIXMAX * 12);
+    if (a->mix && !a->mixbuf) { LOG("audio: mix buffer allocation failed; using silent sink"); return -1; }
+    a->au = dm_audio_open(a->mix ? 2 : a->ch, windows_render, a);
+    if (!a->au) { LOG("audio: WASAPI unavailable; using real-time silent sink"); return -1; }
+    return 0;
+}
+static int dev_start(aout *a) { return dm_audio_start(a->au); }
+static void dev_stop(aout *a) { dm_audio_stop(a->au); nq_report(nq_phase()); }
+static void dev_close(aout *a) { dm_audio_close(a->au); a->au = NULL; }
 #elif defined(__OHOS__)
 // 鸿蒙：OHAudio 低时延渲染流（16 位、48 kHz、游戏用途），写数据回调直接调 render。
 // 系统报错（音频服务重启等）时与安卓一样交给普通线程关掉重开，原来在播就接着播；路由切换（耳机、蓝牙）由 OHAudio 自行跟随。

@@ -93,7 +93,16 @@ static void flags_init(void) {
 // Zero point of the boot timeline = process creation time (p_starttime from sysctl KERN_PROC_PID, wall clock) converted to the now_ns monotonic time base; same definition on Mac / iOS
 uint64_t g_proc_start_ns;
 static uint64_t proc_start_mono_ns(void) {
-#ifndef __APPLE__
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user, current;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) die("GetProcessTimes failed");
+    uint64_t mono = now_ns();
+    GetSystemTimePreciseAsFileTime(&current);
+    uint64_t start = ((uint64_t)created.dwHighDateTime << 32) | created.dwLowDateTime;
+    uint64_t now = ((uint64_t)current.dwHighDateTime << 32) | current.dwLowDateTime;
+    uint64_t age = now > start ? (now - start) * 100 : 0;
+    return age < mono ? mono - age : 0;
+#elif !defined(__APPLE__)
     // 安卓 App 用 Java 交来的启动时刻：App 进程可能是系统预先分叉备用的（USAP 池），/proc/self/stat 记的是那次分叉，可早于本次启动数小时
     // The Android App uses the start time handed over from Java: the App process may have been forked ahead of time by the system (USAP pool), and /proc/self/stat records that fork, which can be hours before this launch
     if (g_proc_start_ns) return g_proc_start_ns;

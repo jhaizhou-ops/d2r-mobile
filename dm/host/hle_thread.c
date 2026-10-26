@@ -213,7 +213,9 @@ static void lock_acquire_for(thr_t *t, uint64_t addr, uint32_t tag) {
 
 // ---------- 线程 ----------
 // ---------- Threads ----------
+#ifndef _WIN32
 extern void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp);   // entry.S
+#endif
 uint32_t (*dm_thread_tick_fn)(void);   // 取当前游戏拍；diag.c 初始化时登记（单测不登记，拍号记 0） | Gets the current game tick; registered when diag.c initializes (unit tests do not register it, the tick number is recorded as 0)
 void crash_thread_init(void);
 void guest_thread_init(void);   // thread.c：每线程 TSD 槽（门、x18、TLS、TLR）唯一设置点 | thread.c: the single place that sets the per-thread TSD slots (gate, x18, TLS, TLR)
@@ -227,7 +229,13 @@ static void *thread_main(void *p) {
     crash_thread_init();
     guest_thread_init();
     pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); pthread_mutex_unlock(&G);
+#ifdef _WIN32
+    uint64_t stack_limit;
+    if (!svc_guest_stack_limit(t->stack_top, &stack_limit)) die("invalid Windows guest stack mapping sp=%#llx", t->stack_top);
+    dm_thread_enter(t->entry, t->arg, t->stack_top, stack_limit);
+#else
     dm_thread_enter(t->entry, t->arg, t->stack_top);   // 不返回：客体须经 ExitThread 退出 | Does not return: the guest must exit through ExitThread
+#endif
     die("客体线程入口返回");
 }
 static void thr_free(thr_t *t) {   // 持 G；从全部线程链摘下并释放 | Holding G; unlink from the all-threads chain and free
@@ -245,7 +253,11 @@ static void thread_exit(thr_t *t) {
     pthread_setspecific(g_keythr, NULL);
     if (t->closed) thr_free(t);
     pthread_mutex_unlock(&G);
+#ifdef _WIN32
+    dm_windows_thread_exit();
+#else
     pthread_exit(NULL);
+#endif
 }
 void dm_thread_returned(void) { die("客体线程入口函数返回（Horizon 要求 ExitThread）"); }
 

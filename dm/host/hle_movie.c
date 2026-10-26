@@ -32,6 +32,7 @@
 //   → Read reports 0x2000 → (looping) SeekTo re-arms the timer / (one-shot) at Send(flag 4) "output available" is sent on the decode thread → Acquire hands over the flag 4 item.
 // Clock: host monotonic clock (not per frame). Unused virtual slots are all failure traps (abort and report the name when called), not stubs returning 0 that pass by luck.
 #include "hle.h"
+#include "dm_alloc.h"
 #include <time.h>
 
 #define MV_SKIP_NS   100000000ll   // 不带视频数据时每段「播放」的时长：0.1 秒 | duration of each "playback" when there is no video data: 0.1 s
@@ -134,7 +135,7 @@ static void timer_ensure(void) {                          // 在客体线程上�
     void (*start)(void *) = guest_sym("_ZN2nn2os11StartThreadEPNS0_10ThreadTypeE");
     g_signal_event = guest_sym("_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
     if (!create || !start || !g_signal_event) die("movie 剪口：缺 nn::os 线程 / 事件符号");
-    size_t ss = 0x10000; void *stack = aligned_alloc(0x1000, ss);
+    size_t ss = 0x10000; void *stack = dm_aligned_alloc(0x1000, ss);
     uint32_t r = create(thread_obj, timer_main, NULL, stack, ss, NN_OS_DEFAULT_THREAD_PRIORITY);
     if (r) die("movie 剪口：建计时线程失败 %#x", r);
     start(thread_obj);

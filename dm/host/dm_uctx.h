@@ -5,7 +5,14 @@
 #pragma once
 #include <stdint.h>
 #include <sys/ucontext.h>
-#ifdef __APPLE__
+#ifdef _WIN32
+#define UC_PC(uc) ((uc)->context->Pc)
+#define UC_LR(uc) ((uc)->context->Lr)
+#define UC_SP(uc) ((uc)->context->Sp)
+#define UC_FP(uc) ((uc)->context->Fp)
+#define UC_X(uc, i) ((uc)->context->X[i])
+static inline uint64_t UC_ESR(const ucontext_t *uc) { return uc->esr; }
+#elif defined(__APPLE__)
 #define UC_PC(uc) ((uc)->uc_mcontext->__ss.__pc)
 #define UC_LR(uc) ((uc)->uc_mcontext->__ss.__lr)
 #define UC_SP(uc) ((uc)->uc_mcontext->__ss.__sp)

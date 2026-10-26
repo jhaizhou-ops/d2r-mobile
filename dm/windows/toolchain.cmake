@@ -1,0 +1,17 @@
+# LLVM-MinGW ARM64 工具链；通过 LLVM_MINGW 指定解压目录。
+# LLVM-MinGW ARM64 toolchain; LLVM_MINGW names the extracted directory.
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR ARM64)
+if(NOT LLVM_MINGW)
+  set(LLVM_MINGW "$ENV{LLVM_MINGW}")
+endif()
+if(NOT LLVM_MINGW)
+  message(FATAL_ERROR "Set LLVM_MINGW to an LLVM-MinGW UCRT installation")
+endif()
+file(TO_CMAKE_PATH "${LLVM_MINGW}" LLVM_MINGW)
+set(LLVM_MINGW "${LLVM_MINGW}" CACHE PATH "LLVM-MinGW UCRT root" FORCE)
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES LLVM_MINGW)
+set(CMAKE_C_COMPILER "${LLVM_MINGW}/bin/aarch64-w64-mingw32-clang.exe")
+set(CMAKE_CXX_COMPILER "${LLVM_MINGW}/bin/aarch64-w64-mingw32-clang++.exe")
+set(CMAKE_ASM_COMPILER "${CMAKE_C_COMPILER}")
+set(CMAKE_RC_COMPILER "${LLVM_MINGW}/bin/aarch64-w64-mingw32-windres.exe")

@@ -8,6 +8,8 @@
 
 English: [README.md](README.md) · Español: [README.es.md](README.es.md)
 
+开发者预览：[Windows ARM64 平台](dm/windows/README.zh-CN.md)——已实测原生 Vulkan 启动、营地移动、物品拖放及存档重启重载；性能、可听音频、实体手柄与更广泛玩法仍待验收。
+
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/hero_zh.jpg" width="100%" alt="iPhone 上全面屏铺满的游戏画面：地狱难度的哈洛加斯，红门通往秘境">
 </p>

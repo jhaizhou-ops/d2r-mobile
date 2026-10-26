@@ -210,7 +210,14 @@ static int plan_compute(uint64_t G, uint64_t player, const char *wd) {
 //   1 = after the first item is put into the inventory (not yet saved); 2 = pre-commit hook found the proof, list not yet written; 3 = list written into the working directory, this commit not yet swapped in;
 //   4 = after gold was added a save commit already happened, gold not yet proven (the item commit is on disk, the gold one is not)
 static void cm_kill(int at) { static int k = -1; if (k < 0) { const char *e = getenv("DM_TEST_KILL_AT"); k = e && !strncmp(e, "cm:", 3) ? atoi(e + 3) : 0; }
-    if (k == at) { LOG("DM_TEST_KILL_AT：iCloud 并回时刻 %d，对自己发 SIGKILL", at); kill(getpid(), SIGKILL); for (;;) pause(); } }   // 信号送达前不再往下跑 | Do not continue until the signal is delivered
+    if (k == at) { LOG("DM_TEST_KILL_AT：iCloud 并回时刻 %d，对自己发 SIGKILL", at);
+#ifdef _WIN32
+        if (!TerminateProcess(GetCurrentProcess(), 137)) die("TerminateProcess failed: %lu", GetLastError());
+        for (;;) Sleep(INFINITE);
+#else
+        kill(getpid(), SIGKILL); for (;;) pause();
+#endif
+    } }   // 信号送达前不再往下跑 | Do not continue until the signal is delivered
 // ---- 放一件进背包（同百宝囊 pouch_take）：1 = 放了，0 = 放不下 / 建不出
 // ---- Put one item into the inventory (same as pouch pouch_take): 1 = placed, 0 = no room / could not be created
 static int take_one(uint64_t G, uint64_t player, int idx) {

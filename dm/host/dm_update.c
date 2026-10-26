@@ -117,7 +117,7 @@ void dm_update_pump(void) {   // 取手柄处每帧调（游戏主线程） | Ca
     static dm_wref lw; static int ls = -1, lnw; int st = normal ? 1 : urg ? 2 : fail ? 2 + fail : 0;
     if (dm_wref_get(&lw) != bw || ls != st || (normal && lnw != nw)) { dm_wref_set(&lw, bw); ls = st; lnw = nw; LOG("更新：选角页写上构建 %d%s（提示字宽 %d）", g_own, normal ? "，普通更新提示" : urg ? "，建议立即更新提示" : fail == 1 ? "，查更新失败提示（无线数据许可）" : fail ? "，查更新失败提示（浏览器手动更新）" : "，无提示", normal ? nw : 0); }
 }
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX || defined(_WIN32)
 // Mac App：鼠标点主菜单右上角那行「有新版本…」= 按 Y（打开下载页）。Mac 玩家第一反应是点它；这一行在手柄版里是纯文字、没有按钮可点，所以按位置认：
 // 提示字的文字框摆在 (屏宽 − 2000 − 边距, 130)、宽 2000、字靠右（见上面 pad 那一支），认它靠右的 1400 单位、上下各放宽到 100–230（布局单位：屏高 = 2160）。
 // 条件同 Y 键那条：有普通更新提示、主菜单面板显示着、选角 / 建角 / 设置页没开。游戏主线程调（touch_mac.c 取手柄处）；nx / ny = 画面归一化坐标。返回 1 = 点中并已处理

@@ -643,7 +643,7 @@ void dm_actions_pump(void) {
               // Test switch DM_TEST_BELTFILL_SWITCH=1: as soon as a fill starts, create the "UI rebuilt mid-fill" situation through the same entry point as real input:
               // on iOS, request a switch to the controller layout (same as touching a physical controller, dm_padmode_request); the Mac App is always in controller layout, so what rebuilds there is the key-cap swap (same as alternating keyboard / controller, dm_padmode_request_kbd)
               if (getenv("DM_TEST_BELTFILL_SWITCH")) {
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX || defined(_WIN32)
                   int dm_padmode_kbd(void); dm_padmode_request_glyph(dm_padmode_kbd() ? DM_GLYPH_PAD : DM_GLYPH_KBD); LOG("测试 DM_TEST_BELTFILL_SWITCH：补满开始，请求换键帽");
 #else
                   void dm_padmode_request(int); dm_padmode_request(1); LOG("测试 DM_TEST_BELTFILL_SWITCH：补满开始，请求切到手柄版");

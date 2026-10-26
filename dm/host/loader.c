@@ -32,12 +32,18 @@ static pthread_key_t key_value(unsigned i) {
     }
 }
 static void create_keys(void) {
+#ifdef _WIN32
+#define pthread_key_create(key, destructor) dm_windows_guest_key_create(key)
+#endif
     if (pthread_key_create(&g_key18, NULL) || pthread_key_create(&g_keytls, NULL) ||
         pthread_key_create(&g_keytlr, NULL) || pthread_key_create(&g_keygate, NULL)) die("创建宿主键失败");
     // 参数位键一律建（不按产物有没有用到判断：iOS 包里没有 params.tsv，按文件判断会漏建、键页写成 0 → 游戏读到 TSD 0 号槽）
     // Parameter slot keys are always created (not decided by whether the build output uses them: an iOS app has no params.tsv, so deciding by file would miss creating them and the key page would be written as 0 → the game reads TSD slot 0)
     if (pthread_key_create(&g_keyres[0], NULL) || pthread_key_create(&g_keyres[1], NULL) ||
         pthread_key_create(&g_keyaspect, NULL) || pthread_key_create(&g_keyaspectui, NULL)) die("创建参数位键失败");
+#ifdef _WIN32
+#undef pthread_key_create
+#endif
     // 键号先转 unsigned 再放宽：bionic 的 pthread_key_t 是 int（有效键带最高位，如 0x80000020），直接转 unsigned long 会符号扩展成 0xffffffff80000020；苹果是 unsigned long 小整数，打印不变
     // Keys go through unsigned before widening: bionic's pthread_key_t is int (valid keys carry the top bit, e.g. 0x80000020), and a direct unsigned long cast sign-extends to 0xffffffff80000020; on Apple it is a small unsigned long, printed unchanged
     LOG("键号 K18=%lu KTLS=%lu KTLR=%lu KGATE=%lu KRES0=%lu KRES1=%lu KASPECT=%lu KASPECTUI=%lu",
@@ -54,7 +60,15 @@ static void create_keys(void) {
 // Apple: the pthread TSD layout is fixed, slot = tpidrro_el0 + 8*key.
 // Android: tpidr_el0 → bionic TCB, TCB[-1] (TLS_SLOT_BIONIC_TLS) = bionic_tls, the value of key k lives at bionic_tls + key table offset + 16k + 8
 // (pthread_key_data_t = {seq, data}). The key table offset is a bionic internal layout and is not hard-coded: at load time set a known value, find it in bionic_tls to derive the offset, then re-check with a second key.
-#ifdef __ANDROID__
+#ifdef _WIN32
+#define DM_PATCH_TARGET 3
+static uint8_t *tsd_base(void) { return dm_windows_tsd_base(); }
+static uint64_t slot_off(pthread_key_t key) { return dm_windows_slot_offset(key); }
+static void tsd_probe(void) {
+    for (unsigned i = 0; i < KEY_N; i++)
+        if (!dm_windows_tsd_check(key_value(i))) die("Windows TEB TLS layout mismatch");
+}
+#elif defined(__ANDROID__)
 #define DM_PATCH_TARGET 1
 static uint64_t g_tsd_off;
 static uint8_t *tsd_base(void) { uint64_t tp; __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp)); return ((uint8_t **)tp)[-1]; }
@@ -233,9 +247,9 @@ static void read_layout(module_t *m, const char *dir) {
     fclose(f);
     if (!m->patch_off || m->key_page_off % 0x4000 || m->key_page_size != 0x4000 || seen != 0xff)
         die("%s: 产物是旧改写器出的，换成当前代号（dm/PRODUCT）的产物", path);
-    static const char *const tname[] = {"苹果", "安卓", "鸿蒙"}, *const tflag[] = {"apple", "android", "ohos"};
+    static const char *const tname[] = {"苹果", "安卓", "鸿蒙", "Windows"}, *const tflag[] = {"apple", "android", "ohos", "windows"};
     if (target != DM_PATCH_TARGET) die("%s: 产物是给%s出的（TARGET %lu），本机要 %s 的产物（patch_nso.py 用 DM_TARGET=%s 重出）", path,
-                                       target < 3 ? tname[target] : "未知平台", target, tname[DM_PATCH_TARGET], tflag[DM_PATCH_TARGET]);
+                                       target < 4 ? tname[target] : "未知平台", target, tname[DM_PATCH_TARGET], tflag[DM_PATCH_TARGET]);
 }
 
 static void install_key_page(module_t *m) {

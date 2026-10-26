@@ -9,6 +9,7 @@
 // Constraints: must be called on a guest thread (SDK thread creation goes through the SVC gate); not exposed to the game.
 // Self-test DM_GUEST_SPAWN_TEST=1: before guest_main enters nnMain, start one thread that does "SDK malloc/free + lock an nn::os mutex and check that the owner is itself", and report the result after WaitThread finishes.
 #include "hle.h"
+#include "dm_alloc.h"
 #include <stdatomic.h>
 #include <unistd.h>
 typedef int (*create_fn)(void *tt, void (*fn)(void *), void *arg, void *stack, size_t size, int prio);
@@ -17,7 +18,7 @@ static void *need(const char *n) { void *p = guest_sym(n); if (!p) die("宿主�
 void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack_size) {
     stack_size = (stack_size + 0xfff) & ~(size_t)0xfff;
     void *tt = calloc(1, 0x200);                                 // nn::os::ThreadType（0x1c0 字节，留余量） | nn::os::ThreadType (0x1c0 bytes, with headroom)
-    void *stack = aligned_alloc(0x1000, stack_size);              // SDK 要求栈 4 KiB 对齐、大小 4 KiB 整数倍 | the SDK requires the stack to be 4 KiB aligned and its size a multiple of 4 KiB
+    void *stack = dm_aligned_alloc(0x1000, stack_size);           // SDK 要求栈 4 KiB 对齐、大小 4 KiB 整数倍 | the SDK requires the stack to be 4 KiB aligned and its size a multiple of 4 KiB
     if (!tt || !stack) die("宿主客体线程：分配失败");
     int rc = ((create_fn)need("_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi"))(tt, fn, arg, stack, stack_size, prio);
     if (rc) die("宿主客体线程：CreateThread 失败 %#x", rc);

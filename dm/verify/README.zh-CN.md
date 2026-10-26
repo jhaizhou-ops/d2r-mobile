@@ -57,6 +57,19 @@ dm/verify/regress.sh [--fresh] [--struct-only] [产物目录] [模块…]
 - `keypage_check.py`：检查键页间接访问的工具，用法见文件头。
 - `nsoimg.py`：把 NSO 解成内存映像的公共模块，上面几个工具共用。
 
+## Windows ARM64：独立等价检查
+
+`equiv.py` 也支持 Windows **TARGET 3** 产物。使用 `DM_TARGET=windows` 准备自己的 3.3.94012 模块，然后在 PowerShell 中用装有 `lz4`、`capstone`、`unicorn` 的 Python 环境运行：
+
+```powershell
+python .\dm\verify\equiv.py C:\dm-work\windows\out main C:\games\Update\ExeFS\main --jobs 4 --tsv C:\dm-work\windows\main.equiv.tsv
+python .\dm\verify\equiv.py C:\dm-work\windows\out sdk C:\games\Update\ExeFS\sdk --jobs 4 --tsv C:\dm-work\windows\sdk.equiv.tsv
+```
+
+Windows 模型保持真实 x18 指向合成 TEB，客体 x18 保存在 `TEB + 0x1480 + 槽号*8` 的直接 TLS 槽，键页写入字节偏移。单独核对 TEB 指针未变（包括访存异常试验），内存写入比较只排除已登记的 TLS 槽，不排除整个 TEB。与安卓一样，SP 以下读取判失败。Windows 的 Python 工作进程使用 `spawn`，其他系统仍使用 `fork`。
+
+覆盖改写站点语义、独占窗口分支的两个方向和故意破坏的变异，**不**执行宿主门语义或有意的剪口。Windows CMake 自测另外覆盖原生门 / TLS / 栈行为。`structck.py`、`regress.sh`、真值闸门和完整验收套件尚未移植 / 验收到 Windows；独立检查成功不能写成 `REGRESS OK`。参见 [Windows 准备与启动](../windows/README.zh-CN.md)。
+
 ## 宿主验收：`accept.sh`
 
 把各项检查并行跑一遍，任一项红即整体红。

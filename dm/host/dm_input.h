@@ -15,7 +15,7 @@ enum {
 #define DM_STICK_MAX 32767
 // 手柄版键位图标（键帽）样式：前端按最近一次输入的来源报（dm_padmode.c 在没开面板时换图；覆盖层没有那套就用原版 Switch 键帽）
 // Button-icon (glyph) style of the controller layout: the front end reports the source of the latest input (dm_padmode.c swaps the images while no panel is open; without that set in the overlay the original Switch glyphs are used)
-enum { DM_GLYPH_PAD, DM_GLYPH_KBD, DM_GLYPH_XBOX, DM_GLYPH_PS, DM_GLYPH_N };   // 原版 Switch 键帽 / 键盘键帽（Mac App）/ Xbox 键帽 / PlayStation 键帽
+enum { DM_GLYPH_PAD, DM_GLYPH_KBD, DM_GLYPH_XBOX, DM_GLYPH_PS, DM_GLYPH_N };   // 原版 Switch 键帽 / 键盘键帽（桌面 App）/ Xbox 键帽 / PlayStation 键帽
 void dm_padmode_request_glyph(int glyph);
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 uint64_t dm_input_samples(void);   // 游戏已取手柄的累计次数 | Cumulative number of times the game has sampled the controller
@@ -39,6 +39,6 @@ void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry
 // Private skill-aim-v1: takes only paired received samples of the right axis that GetNpad has actually returned, not values the front end has not yet had consumed.
 void dm_input_sampled_right(int32_t *rx,int32_t *ry);
 
-// 手柄状态注入点：GetNpadState 填完原状态后、伪键覆盖前调用。Mac 宿主触点脚本（touch_mac.c，Mac 专用、按 _mac 约定不进 iOS 包）启动时注册；iOS 不带该文件，保持空
-// Controller state injection point: called after GetNpadState has filled in the original state and before the pseudo-key override. The Mac host touch point script (touch_mac.c, Mac only, kept out of the iOS app by the _mac convention) registers at startup; iOS does not carry that file and it stays empty
+// 手柄状态注入点：GetNpadState 填完原状态后、伪键覆盖前调用。桌面宿主的鼠标 / 触点脚本（touch_mac.c，Windows 显式纳入）注册；iOS 不带该文件，保持空。
+// Controller state injection point: after GetNpadState fills the original state and before pseudo-key overrides. Desktop mouse / touch scripts register it (touch_mac.c, explicitly included on Windows); iOS omits the file and leaves it empty.
 extern void (*dm_pad_hook)(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);

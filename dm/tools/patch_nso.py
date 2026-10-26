@@ -278,16 +278,19 @@ def MRS_TPIDR(t): return 0xD53BD040 | t
 # 安卓（DM_TARGET=android）= bionic 的 pthread 键表：tpidr_el0 指向 TCB，TCB[-1]（TLS_SLOT_BIONIC_TLS）是 bionic_tls，
 # 键页里放「键表偏移 + 键号 × 16 + 8」（装载器实测后写入）；其余补丁代码两边逐字相同，只多一条 ldur。
 # 鸿蒙（DM_TARGET=ohos）= musl：tpidr_el0 − 272 处是 struct pthread 的 tsd 指针，槽 = tsd + 键号 × 8（真机实测，装载器复核）。
+# Windows（DM_TARGET=windows）保留 x18 中的 TEB，键页存运行时复核过的 TlsSlots 字节偏移。
 # Thread slot base: Apple = tpidrro_el0 (the pthread TSD array, slot = base + key number × 8);
 # Android (DM_TARGET=android) = bionic's pthread key table: tpidr_el0 points to the TCB, TCB[-1] (TLS_SLOT_BIONIC_TLS) is bionic_tls,
 # the key page holds "key table offset + key number × 16 + 8" (measured and written by the loader); the rest of the patch code is word-for-word the same on both, with just one more ldur.
 # HarmonyOS (DM_TARGET=ohos) = musl: tpidr_el0 - 272 holds struct pthread's tsd pointer, slot = tsd + key number × 8 (measured on device, re-checked by the loader).
+# Windows (DM_TARGET=windows) preserves the TEB in x18; the key page holds runtime-checked TlsSlots byte offsets.
 TARGET = os.environ.get('DM_TARGET', 'apple')
-assert TARGET in ('apple', 'android', 'ohos'), f'DM_TARGET 只能是 apple / android / ohos：{TARGET}'
+assert TARGET in ('apple', 'android', 'ohos', 'windows'), f'Invalid DM_TARGET: {TARGET}'
 OHOS_TSD_OFF = 272
 def emit_tp(t):
     if TARGET == 'android': emit(MRS_TPIDR(t)); emit(LDUR(t, t, -8))
     elif TARGET == 'ohos': emit(MRS_TPIDR(t)); emit(SUBI(t, t, OHOS_TSD_OFF)); emit(LDRX(t, t))   # −272 超出 ldur 的 ±256 | −272 is outside ldur's ±256
+    elif TARGET == 'windows': emit(0xAA1203E0 | t)   # mov xT,x18；Windows x18 保留 TEB | mov xT,x18; Windows reserves x18 for the TEB
     else: emit(MRS_TPIDRRO(t))
 # 安卓的改写块不把寄存器暂存在 sp 下方：Linux / 安卓的 AAPCS64 没有红区，处理函数没设 SA_ONSTACK 的信号（libcore 34、heapprofd 36、
 # ART 38 等）在线程栈上建信号帧，正好盖掉 sp-8 / sp-16。所以先下移 sp 再存（[sp, #-16]!），恢复时连 sp 一起收回（[sp], #16）；
@@ -298,7 +301,7 @@ def emit_tp(t):
 # down first ([sp, #-16]!) and comes back with the restore ([sp], #16); an original instruction that uses sp gets those 16 bytes added
 # to its offset, and one that writes sp back gets its own stack layout (see sp_frame). The odd site that cannot be encoded keeps the
 # old layout and is counted as below_sp. The Apple target is unchanged (Apple's arm64 ABI has a 128-byte red zone).
-NOREDZONE = TARGET == 'android'   # 鸿蒙（ohos）暂沿用旧排法：现有鸿蒙改写产物都按它生成并实测过；musl 同样没有红区，改用新排法需重出产物再实测 | HarmonyOS (ohos) keeps the old layout for now: every HarmonyOS module so far was generated and tested with it; musl has no red zone either, so switching needs regenerated modules and a new device test
+NOREDZONE = TARGET in ('android', 'windows')   # Windows 不借用 ABI 的小红区；鸿蒙保留既有产物排法 | Windows does not borrow the ABI's small red zone; HarmonyOS keeps its existing output layout
 def STR_PRE(t, n, off): return 0xF8000C00 | ((off & 0x1FF) << 12) | (n << 5) | t
 def LDR_POST(t, n, off): return 0xF8400400 | ((off & 0x1FF) << 12) | (n << 5) | t
 def stash(S, T, nrz=None):
@@ -447,6 +450,7 @@ def site_plain(ins):
         emit(STRX(S, T))
         emit(LDP_POST(S, T, 31, F + dlt)); emit(B(here(), ins.address + 4))
         return start
+    if TARGET == 'windows': raise RuntimeError(f'Windows stack rewrite is not encodable: {ins.address:#x} {ins.mnemonic} {ins.op_str}')
     if NOREDZONE: stat('below_sp')
     save = -16 if dlt == 0 else -112          # 改 sp 的指令会写到 sp 下方，暂存放到保留区深处 | Instructions that modify sp write below sp, so the scratch save is placed deep in the reserved area
     assert dlt == 0 or dlt >= -96, f'sp delta {dlt} at {ins.address:x}'
@@ -511,6 +515,15 @@ def site_br(ins, base, count):
 def site_sysreg_read(ins, kind):
     """mrs xN, tpidr_el0 / tpidrro_el0 → xN = 线程槽值。 | mrs xN, tpidr_el0 / tpidrro_el0 → xN = thread slot value."""
     N = ins.bytes[0] & 31
+    if TARGET == 'windows' and N in (18, 31):
+        start = here()
+        if N == 18:
+            S, T = pick({18})
+            stash(S, T); emit_tp(T); emit_slot_addr(T, S, kind); emit(LDRX(S, T))
+            emit(STR_PRE(S, 31, -16)); emit_tp(T); emit_slot_addr(T, S, 'K18')
+            emit(LDR_POST(S, 31, 16)); emit(STRX(S, T)); unstash(S, T)
+        emit(B(here(), ins.address + 4))
+        return start
     tmp = 16 if N != 16 else 17
     start = here()
     emit(STR_PRE(tmp, 31, -16) if NOREDZONE else STUR(tmp, 31, -16)); emit_tp(N); emit_slot_addr(N, tmp, kind); emit(LDRX(N, N)); emit(LDR_POST(tmp, 31, 16) if NOREDZONE else LDUR(tmp, 31, -16))   # tmp 存红区借用 | tmp is saved by borrowing the red zone
@@ -523,7 +536,13 @@ def site_tpidr_write(ins):
     start = here()
     tmp = next(x for x in (16, 17) if x not in (N, T))
     if NOREDZONE:
-        emit(STP_PRE(T, tmp, 31, -16)); emit_tp(T); emit_slot_addr(T, tmp, 'KTLS'); emit(STRX(N, T)); emit(LDP_POST(T, tmp, 31, 16))
+        emit(STP_PRE(T, tmp, 31, -16))
+        if TARGET == 'windows' and N == 18:
+            emit_tp(T); emit_slot_addr(T, tmp, 'K18'); emit(LDRX(tmp, T)); emit(STR_PRE(tmp, 31, -16))
+            emit_tp(T); emit_slot_addr(T, tmp, 'KTLS'); emit(LDR_POST(tmp, 31, 16)); emit(STRX(tmp, T))
+        else:
+            emit_tp(T); emit_slot_addr(T, tmp, 'KTLS'); emit(STRX(N, T))
+        emit(LDP_POST(T, tmp, 31, 16))
         emit(B(here(), ins.address + 4))
         return start
     emit(0xF81F0000 | (31 << 5) | T)           # stur xT,[sp,#-16]
@@ -597,6 +616,7 @@ def site_window(seg):
     # 窗口里的原指令用到 sp 的（本映像没有），保持旧排法。
     # A window whose original instructions use sp (none in this image) keeps the old layout.
     nrz = NOREDZONE and not any(uses_sp(x) for x in seg)
+    if TARGET == 'windows' and not nrz: raise RuntimeError(f'Windows exclusive window uses sp: {seg[0].address:#x}')
     if NOREDZONE and not nrz: stat('below_sp')
     lo, hi = seg[0].address, seg[-1].address + 4
     start = here()
@@ -984,7 +1004,7 @@ if RULE_RUN:
 elif os.path.exists(P('rules.tsv')):
     os.unlink(P('rules.tsv'))  # 重出native时清本模块旧规则登记，不让旧manifest混入原资源域 | When rebuilding native, clear this module's old rule registration so the old manifest does not leak into the original-resource domain
 with open(P('fixups.tsv'), 'w') as f:
-    f.write(f'# TARGET\t{ {"apple": 0, "android": 1, "ohos": 2}[TARGET]:#x}\n')   # 0 = 苹果，1 = 安卓，2 = 鸿蒙；装载器核对与自己相符 | 0 = Apple, 1 = Android, 2 = HarmonyOS; the loader checks it matches itself
+    f.write(f'# TARGET\t{ {"apple": 0, "android": 1, "ohos": 2, "windows": 3}[TARGET]:#x}\n')   # 0 苹果 / 1 安卓 / 2 鸿蒙 / 3 Windows；装载器必须匹配 | 0 Apple / 1 Android / 2 HarmonyOS / 3 Windows; the loader must match
     f.write(f'# PATCH_OFF\t{PATCH_OFF:#x}\n# KEY_PAGE_OFF\t{KEY_PAGE_OFF:#x}\n# KEY_PAGE_SIZE\t0x4000\n# TEXT_END\t{TEXT_END:#x}\n# RO_OFF\t{RO_OFF:#x}\n# DATA_OFF\t{DATA_OFF:#x}\n')
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
 with open(P('gates.tsv'), 'w') as f:

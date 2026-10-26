@@ -73,6 +73,9 @@ void dm_quiet_difficulty_msg(int on);   // 秘境局里拦原版「游戏难度�
 int gate_svc_present(int num);   // 产物里有没有这个 svc 号的门（剪口引入的宿主调用号用）   // 产物里有没有这个观测门（gates.tsv 登记过） | Whether the build output has a gate for this svc number (for host call numbers introduced by cuts)   // whether the build output has this observation gate (registered in gates.tsv)
 uint64_t now_ns(void);
 uint64_t guest_ns(void);              // 客体时钟（hle_os.c；DM_TICK_HOLD 冻结时不走） | Guest clock (hle_os.c; does not advance while DM_TICK_HOLD is frozen)
+#ifdef _WIN32
+int svc_guest_stack_limit(uint64_t sp, uint64_t *limit);
+#endif
 int dm_detclock_enabled(void);
 void dm_guest_clock_advanced(void);
 void guest_clock_freeze(int on);

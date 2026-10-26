@@ -8,6 +8,8 @@ Platforms: iPhone / iPad (iOS 26 and later; iOS 18 – 25 with the older-API bui
 
 中文: [README.zh-CN.md](README.zh-CN.md) · Español: [README.es.md](README.es.md)
 
+Developer preview: [Windows ARM64 platform](dm/windows/README.md) — native Vulkan startup, camp movement, item drag/drop and save/reload across a process restart have been smoke-tested; performance, audible playback, physical controllers and broader gameplay remain unaccepted.
+
 <p align="center">
   <img src="https://github.com/jhaizhou-ops/d2r-mobile/releases/download/assets/hero_en.jpg" width="100%" alt="The game filling the whole edge-to-edge screen of an iPhone: Harrogath on Hell, with the red portal to the Greater Rift">
 </p>

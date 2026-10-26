@@ -10,6 +10,7 @@ English: [README.md](README.md)
 - 依赖与版本：[../docs/DEPENDENCIES.zh-CN.md](../docs/DEPENDENCIES.zh-CN.md)
 - 游戏文件怎么准备、放哪：[../docs/GAME_FILES.zh-CN.md](../docs/GAME_FILES.zh-CN.md)
 - 一条命令准备工作区：`../setup.sh`
+- Windows ARM64 资源准备、原生构建 / 启动与当前限制：[windows/README.zh-CN.md](windows/README.zh-CN.md)
 
 下文的 `$DM_ROOT` 指工作区根目录（缺省 `~/dm-work`）：游戏文件、改写产物、缓存和运行日志都在它下面，不进仓库。
 

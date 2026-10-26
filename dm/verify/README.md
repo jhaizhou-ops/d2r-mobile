@@ -57,6 +57,19 @@ Related standalone tools:
 - `keypage_check.py`: a tool that checks key-page indirect accesses; see the file header for usage.
 - `nsoimg.py`: a common module that unpacks an NSO into a memory image, shared by the tools above.
 
+## Windows ARM64: standalone equivalence
+
+`equiv.py` also accepts Windows **TARGET 3** outputs. Prepare your own 3.3.94012 modules with `DM_TARGET=windows`, then run from PowerShell using a Python environment with `lz4`, `capstone` and `unicorn`:
+
+```powershell
+python .\dm\verify\equiv.py C:\dm-work\windows\out main C:\games\Update\ExeFS\main --jobs 4 --tsv C:\dm-work\windows\main.equiv.tsv
+python .\dm\verify\equiv.py C:\dm-work\windows\out sdk C:\games\Update\ExeFS\sdk --jobs 4 --tsv C:\dm-work\windows\sdk.equiv.tsv
+```
+
+The Windows model keeps live x18 pointing at a synthetic TEB, stores guest x18 in a direct TLS slot at `TEB + 0x1480 + slot*8`, and writes byte offsets into the key page. It independently checks TEB-pointer preservation, including faulting trials, and excludes only registered TLS slots from memory-write comparison, not the entire TEB. Below-SP reads fail, as on Android. Windows Python workers use `spawn`; other systems retain `fork`.
+
+This verifies rewrite-site semantics, both directions of exclusive-window branches and the deliberate mutations. It does **not** execute host-gate semantics or intentional cuts. The Windows CMake tests cover native gate/TLS/stack behavior separately. `structck.py`, `regress.sh`, the ground-truth gates and the full acceptance suite are not ported/accepted on Windows; a successful standalone run must not be reported as `REGRESS OK`. See [Windows preparation and launch](../windows/README.md).
+
 ## Host acceptance: `accept.sh`
 
 Runs all the checks in parallel; if any one is red, the whole thing is red.

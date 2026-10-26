@@ -13,6 +13,12 @@
 // Fetch the start address and byte count of section name (p = NULL, bytes = 0 when the section is missing)
 #define DM_SECT_GET(name, type, p, bytes) do { unsigned long dm_sz_ = 0; \
     (p) = (type *)getsectiondata(&_mh_execute_header, "__DATA", #name, &dm_sz_); (bytes) = (p) ? dm_sz_ : 0; } while (0)
+#elif defined(_WIN32)
+#define DM_SECT(name) __attribute__((used, section(#name "$m"), aligned(8)))
+#define DM_SECT_GET(name, type, p, bytes) do { \
+    extern const char dm_section_##name##_start[], dm_section_##name##_end[]; \
+    (p) = (type *)(dm_section_##name##_start + 8); \
+    (bytes) = (unsigned long)(dm_section_##name##_end - dm_section_##name##_start - 8); } while (0)
 #else
 #define DM_SECT(name) __attribute__((used, retain, section(#name)))
 #define DM_SECT_GET(name, type, p, bytes) do { \
