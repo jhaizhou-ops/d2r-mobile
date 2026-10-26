@@ -18,6 +18,7 @@ extern "C" int xbg_completion_wait_selftest(char *report,size_t bytes);
 #include "xbg_clear.h"
 #include "xbg_blit.h"
 #include "xbg_adreno_policy.h"
+#include "xbg_pipe_guard.h"
 #include "xbg_bc_policy.h"
 #include "xbg_writeback_policy.h"
 #include "xbg_clear_spv.h"
@@ -2036,6 +2037,9 @@ void report_pipeline_cache(){
 // serialized create-info key, with shader modules identified by a stable hash of their bundle key). At start-up,
 // background threads rebuild those pipelines from the list; a draw that needs one takes it ready-made.
 // files/gfx-no-warm disables building (recording continues).
+// 预热与后台建管线也走守护（定义在下面）。
+// The warm-up and background builds go through the guard as well (defined below).
+namespace pipeguard{bool skipped(const std::vector<std::string> &keys);std::string begin(const std::vector<std::string> &keys);void end(const std::string &entry,const std::vector<std::string> &keys,bool ok);}
 namespace warm {
 std::mutex mu;std::unordered_map<VkShaderModule,uint64_t> ids;
 uint64_t fnv(const std::string &s){uint64_t h=1469598103934665603ull;for(unsigned char c:s){h^=c;h*=1099511628211ull;}return h|(1ull<<63);}
@@ -2122,7 +2126,8 @@ bool build(const Rec &rec){
     VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dy.flags=r.u();uint32_t nd=r.u();if(nd>64)return false;std::vector<VkDynamicState> ds(nd);for(auto &x:ds)x=VkDynamicState(r.u());dy.dynamicStateCount=nd;dy.pDynamicStates=ds.data();
     if(r.bad || r.i!=r.n)return false;
     ci.stageCount=ns;ci.pStages=st;ci.pVertexInputState=&v;ci.pInputAssemblyState=&a;ci.pTessellationState=ht?&t:nullptr;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&m;ci.pDepthStencilState=&d;ci.pColorBlendState=&b;ci.pDynamicState=&dy;ci.layout=layout;ci.renderPass=pass;
-    uint64_t c0=timing_clock();VkPipeline pl;if(vkCreateGraphicsPipelines(cfg.device,pipeline_cache,1,&ci,nullptr,&pl)!=VK_SUCCESS)return false;
+    if(pipeguard::skipped(rec.keys))return false;
+    const std::string guard=pipeguard::begin(rec.keys);uint64_t c0=timing_clock();VkPipeline pl;const bool made=vkCreateGraphicsPipelines(cfg.device,pipeline_cache,1,&ci,nullptr,&pl)==VK_SUCCESS;pipeguard::end(guard,rec.keys,made);if(!made)return false;
     if(timing_clock()-c0>=compile_ns)++compiled;
     std::string bytes(reinterpret_cast<const char*>(rec.words.data()),rec.words.size()*4);
     std::lock_guard<std::mutex> l(mu);if(!ready.emplace(bytes,pl).second)vkDestroyPipeline(cfg.device,pl,nullptr);return true;
@@ -2199,48 +2204,110 @@ void pstat_log(VkPipeline pl){
         std::string en=ex[i].name;for(auto &c:en)if(c==' ')c='_';
         xbg_logf("NVN PSTAT pipeline=%p what=%s exec=%u stages=%#x name=%s subgroup=%u%s",(void*)pl,pstat_what().c_str(),i,unsigned(ex[i].stages),en.c_str(),ex[i].subgroupSize,line.c_str());}
 }
-// 有的驱动在自己的着色器编译器里崩掉建管线的调用（Adreno 750：vkCreateComputePipelines 里 libllvm-qgl.so 段错误，
-// 只碰流体模拟的一个计算着色器），有的直接报错（Adreno 650：-13）。建计算管线前把着色器键写进 gfx-pipe-inflight，建完删掉；
-// 下次启动看到它还在，说明上次死在编译器里，就把这个键记进 gfx-pipe-skip，之后这条计算着色器的派发一律跳过（少一个特效，
-// 不再每次启动都崩）。驱动报错的同样记下跳过。删掉 gfx-pipe-skip 即恢复。
-// Some drivers crash inside their own shader compiler while building a pipeline (Adreno 750: a segfault in libllvm-qgl.so
-// inside vkCreateComputePipelines, on one fluid-simulation compute shader only); others return an error (Adreno 650: -13).
-// Before a compute pipeline is built its shader key is written to gfx-pipe-inflight and removed afterwards; if the next boot
-// still finds it, the last one died in the compiler, so the key goes into gfx-pipe-skip and that compute shader's dispatches
-// are skipped from then on (one effect fewer instead of a crash on every boot). A driver error is recorded the same way.
-// Deleting gfx-pipe-skip restores them.
+// 有的驱动在自己的着色器编译器里崩掉建管线的调用（Adreno 750：vkCreateComputePipelines 里 libllvm-qgl.so 段错误，流体模拟的一个
+// 计算着色器；只内联计算着色器的包在像素阶段也这样崩，见 #156），有的直接报错（Adreno 650：-13）。建管线前把这条管线里还没建成
+// 过的着色器键写进 gfx-pipe-inflight，建完去掉；下次启动看到它还在，说明上次死在编译器里。要连着两次启动死在同一处才记进
+// gfx-pipe-skip（一次可能只是进程在那几毫秒里被系统杀掉）；记下的以后不建，它的绘制或派发一律跳过（少一个特效，不再每次启动都崩）。
+// 预热有几条线程同时建：死后的下一次启动，没建成过的管线一条一条地建，再死时在建的只有元凶。图形管线有几个阶段：上次已在别的
+// 管线里建成的键（gfx-pipe-proven）不是元凶；分不清时整组记下，只跳含齐这一组的管线，哪个键以后在别处建成就从组里去掉。
+// 驱动报错的同样记下跳过（预热里的失败除外：那可能只是别的设备的记录在本机建不了）。这是零星一两个着色器的保险，不是成批崩溃的
+// 解法（那要 #156 的内联）。判定在 xbg_pipe_guard.h；删掉 gfx-pipe-skip 即恢复。测试钩子 DM_GFX_PIPE_CRASH_TEST=<键>：轮到建这个
+// 着色器时故意崩掉。
+// Some drivers crash inside their own shader compiler while building a pipeline (Adreno 750: a segfault in libllvm-qgl.so inside
+// vkCreateComputePipelines on one fluid-simulation compute shader; packs that inline only compute shaders crash the same way in the
+// pixel stage, see #156); others return an error (Adreno 650: -13). Before a pipeline is built, its shader keys not built
+// successfully yet are written to gfx-pipe-inflight and removed afterwards; if the next boot still finds them, the last one died in
+// the compiler. It takes two boots in a row dying at the same place to go into gfx-pipe-skip (once may just be the process being
+// killed during those milliseconds); what is recorded is not built again, and its draws or dispatches are skipped (one effect fewer
+// instead of a crash on every boot). The warm-up builds on several threads: the boot after a death builds its not-yet-built
+// pipelines one at a time, so when it dies again only the culprit is in flight. A graphics pipeline has several stages: keys the last
+// boot built in other pipelines (gfx-pipe-proven) are not the culprit; when they cannot be told apart the whole group is recorded,
+// only pipelines holding all of it are skipped, and a key that later builds elsewhere leaves the group. A driver error is recorded the
+// same way (except in the warm-up, where another device's record may just be unbuildable here). This is insurance for one or two
+// stray shaders, not a cure for crashes in bulk (that takes #156's inlining). The verdicts are in xbg_pipe_guard.h; deleting
+// gfx-pipe-skip restores everything. Test hook DM_GFX_PIPE_CRASH_TEST=<key>: crash on purpose when that shader's turn to be built comes.
 namespace pipeguard{
-std::unordered_set<std::string> skip;bool loaded=false;std::unordered_set<std::string> told;
+std::mutex mu,serial;xbg_pipe_guard_state st;std::atomic<bool> loaded{false},any{false};bool careful=false;thread_local bool holding=false;
+std::set<std::string> proven;std::unordered_set<std::string> told;std::vector<std::string> inflight;FILE *inflight_file=nullptr,*proven_file=nullptr;std::string crash_test;
 std::string base(){std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');return cut==std::string::npos?dir:dir.substr(0,cut);}
-void record(const std::string &key,const char *why){
-    if(!skip.insert(key).second)return;
-    if(FILE *f=fopen((base()+"/gfx-pipe-skip").c_str(),"ab")){fprintf(f,"%s\n",key.c_str());fclose(f);}
-    xbg_logf("NVN compute shader %s %s; its dispatches are skipped from now on (gfx-pipe-skip)",key.c_str(),why);
+std::vector<std::string> lines(const std::string &path){
+    std::vector<std::string> out;char line[1024];
+    if(FILE *f=fopen(path.c_str(),"rb")){while(fgets(line,sizeof line,f)){line[strcspn(line,"\r\n")]=0;if(*line)out.push_back(line);}fclose(f);}
+    return out;
 }
-void load(){
-    if(loaded)return;loaded=true;char line[128];
-    if(FILE *f=fopen((base()+"/gfx-pipe-skip").c_str(),"rb")){while(fgets(line,sizeof line,f)){line[strcspn(line,"\r\n")]=0;if(*line)skip.insert(line);}fclose(f);}
-    const std::string inflight=base()+"/gfx-pipe-inflight";
-    if(FILE *f=fopen(inflight.c_str(),"rb")){const bool got=fgets(line,sizeof line,f)!=nullptr;fclose(f);remove(inflight.c_str());
-        // 要连着两次启动死在同一个着色器上才记下：一次可能只是建管线那几毫秒里进程正好被系统杀掉。
-        // It takes two boots in a row dying on the same shader: once may just be the process being killed during those milliseconds.
-        if(got){line[strcspn(line,"\r\n")]=0;const std::string suspect=base()+"/gfx-pipe-suspect";char prev[128]={0};
-            if(FILE *g=fopen(suspect.c_str(),"rb")){if(!fgets(prev,sizeof prev,g))*prev=0;fclose(g);prev[strcspn(prev,"\r\n")]=0;}
-            if(*line && !strcmp(line,prev)){remove(suspect.c_str());record(line,"crashed the driver's shader compiler on two boots");}
-            else if(*line){if(FILE *g=fopen(suspect.c_str(),"wb")){fprintf(g,"%s\n",line);fclose(g);}xbg_logf("NVN compute shader %s was being built when the last boot ended",line);}}}
+void write_lines(const std::string &path,const std::vector<std::string> &v){
+    if(v.empty()){remove(path.c_str());return;}
+    if(FILE *f=fopen(path.c_str(),"wb")){for(const auto &l:v)fprintf(f,"%s\n",l.c_str());fclose(f);}
+}
+void save_groups(){std::vector<std::string> v;for(const auto &g:st.groups)v.push_back(xbg_pipe_guard_join(g));write_lines(base()+"/gfx-pipe-skip",v);any=!st.groups.empty();}
+void save_suspects(){write_lines(base()+"/gfx-pipe-suspect",st.suspects);}
+// 在建条目整份重写（最多几条线程各一条）；fflush 后数据在页缓存里，进程崩了也还在。
+// The in-flight entries are rewritten whole (at most one per building thread); after fflush the data sits in the page cache and survives a crash of the process.
+void write_inflight(){
+    if(!inflight_file)return;rewind(inflight_file);if(ftruncate(fileno(inflight_file),0)!=0)return;
+    for(const auto &e:inflight)fprintf(inflight_file,"%s\n",e.c_str());
+    fflush(inflight_file);
+}
+void load_locked(){
+    if(loaded.load())return;loaded=true;const std::string dir=base();
+    for(const auto &l:lines(dir+"/gfx-pipe-skip")){auto g=xbg_pipe_guard_sorted(xbg_pipe_guard_split(l));if(!g.empty() && !xbg_pipe_guard_has_group(st,g))st.groups.push_back(g);}
+    st.suspects=lines(dir+"/gfx-pipe-suspect");
+    const std::vector<std::string> died=lines(dir+"/gfx-pipe-inflight");std::set<std::string> last;for(const auto &k:lines(dir+"/gfx-pipe-proven"))last.insert(k);
+    const xbg_pipe_guard_verdict v=xbg_pipe_guard_boot(st,died,last);
+    for(const auto &e:died)xbg_logf("NVN pipeline %s was being built when the last boot ended",e.c_str());
+    for(const auto &g:v.confirmed)xbg_logf("NVN shaders %s crashed the driver's shader compiler on two boots; pipelines holding them are skipped from now on (gfx-pipe-skip)",xbg_pipe_guard_join(g).c_str());
+    if(v.groups_changed)save_groups();
+    if(v.suspects_changed)save_suspects();
+    remove((dir+"/gfx-pipe-inflight").c_str());
+    inflight_file=fopen((dir+"/gfx-pipe-inflight").c_str(),"wb+");proven_file=fopen((dir+"/gfx-pipe-proven").c_str(),"wb");
     // Adreno 750 这一族上流体模拟的累加着色器每次都让编译器崩（#123、#153 两台机器），不必先崩两次。
     // On the Adreno 750 family the fluid-simulation accumulate shader crashes the compiler every time (#123, #153, two phones);
     // there is no need to crash twice first.
-    if(properties.vendorID==0x5143){const int model=xbg_adreno_model(properties.deviceName);if(model>=750 && model<800)record("098a126f92bf533a","crashes the Adreno 750 shader compiler");}
-    if(!skip.empty())xbg_logf("NVN compute shaders skipped=%zu (gfx-pipe-skip)",skip.size());
+    if(properties.vendorID==0x5143){const int model=xbg_adreno_model(properties.deviceName);if(model>=750 && model<800 && xbg_pipe_guard_record(st,{"098a126f92bf533a"})){xbg_logf("NVN compute shader 098a126f92bf533a crashes the Adreno 750 shader compiler; its dispatches are skipped (gfx-pipe-skip)");save_groups();}}
+    any=!st.groups.empty();careful=!st.suspects.empty();
+    if(any.load())xbg_logf("NVN pipeline skip groups=%zu (gfx-pipe-skip)",st.groups.size());
+    if(careful)xbg_logf("NVN pipeline guard: the last boot died building pipelines; first builds run one at a time (suspects=%zu)",st.suspects.size());
+    if(const char *t=getenv("DM_GFX_PIPE_CRASH_TEST"))crash_test=t;
 }
-bool skipped(const std::string &key){load();if(!skip.count(key))return false;if(told.insert(key).second)xbg_logf("NVN dispatch of compute shader %s skipped (gfx-pipe-skip)",key.c_str());return true;}
-// 一个着色器第一次建成之后就不再写记号：同一着色器换布局再建不会走到编译器的另一条路，也省掉每次派发的文件操作。
-// Once a shader has built once it is no longer marked: rebuilding it for another layout does not take the compiler down a
-// different path, and dispatches do not pay for the file operations.
-std::unordered_set<std::string> proven;bool marking=false;
-void begin(const std::string &key){marking=!proven.count(key);if(marking)if(FILE *f=fopen((base()+"/gfx-pipe-inflight").c_str(),"wb")){fprintf(f,"%s\n",key.c_str());fclose(f);}}
-void end(const std::string &key,bool ok){if(!marking)return;marking=false;remove((base()+"/gfx-pipe-inflight").c_str());if(ok)proven.insert(key);}
+void load(){if(loaded.load())return;std::lock_guard<std::mutex> l(mu);load_locked();}
+// 含齐某一组的管线不建；每组只报一次。
+// A pipeline holding all of a group is not built; each is reported once.
+bool skipped(const std::vector<std::string> &keys){
+    load();if(!any.load(std::memory_order_relaxed))return false;
+    std::lock_guard<std::mutex> l(mu);if(!xbg_pipe_guard_skipped(st,keys))return false;
+    const std::string e=xbg_pipe_guard_join(keys);if(told.insert(e).second)xbg_logf("NVN pipeline %s skipped (gfx-pipe-skip)",e.c_str());
+    return true;
+}
+bool skipped(const std::string &key){if(!any.load(std::memory_order_relaxed) && loaded.load())return false;return skipped(std::vector<std::string>{key});}
+// 建之前：记下这条管线里还没建成过的键，返回条目（空串表示全都建成过，不用记）；建完：去掉条目，建成的键算建成过。
+// 有嫌疑的启动里，记条目之前先拿 serial，建完才放：同一时刻只有一条没建成过的管线在建。
+// Before a build: record the pipeline's keys not built successfully yet and return the entry (empty when all have built, nothing to
+// record); after it: remove the entry, and a successful build proves its keys. In a boot with suspects, serial is taken before the
+// entry is recorded and released after the build: only one not-yet-built pipeline is in flight at a time.
+std::string begin(const std::vector<std::string> &keys){
+    {std::lock_guard<std::mutex> l(mu);load_locked();if(xbg_pipe_guard_entry(keys,proven).empty())return std::string();}
+    if(careful){serial.lock();holding=true;}
+    std::lock_guard<std::mutex> l(mu);const std::string e=xbg_pipe_guard_entry(keys,proven);
+    if(e.empty()){if(holding){holding=false;serial.unlock();}return e;}
+    inflight.push_back(e);write_inflight();
+    if(!crash_test.empty())for(const auto &k:keys)if(k==crash_test){xbg_logf("NVN DM_GFX_PIPE_CRASH_TEST: crashing on purpose while building %s",e.c_str());abort();}
+    return e;
+}
+void end(const std::string &entry,const std::vector<std::string> &keys,bool ok){
+    if(entry.empty())return;
+    {std::lock_guard<std::mutex> l(mu);
+        const auto it=std::find(inflight.begin(),inflight.end(),entry);if(it!=inflight.end())inflight.erase(it);
+        write_inflight();
+        if(ok)for(const auto &k:keys)if(proven.insert(k).second && proven_file){fprintf(proven_file,"%s\n",k.c_str());fflush(proven_file);}}
+    if(holding){holding=false;serial.unlock();}
+}
+// 驱动报错：这条管线里没建成过的键记成一组（都建成过的就记整条）。
+// A driver error: the pipeline's keys not built yet become a group (the whole pipeline when all of them have built).
+void record(const std::vector<std::string> &keys,const char *why){
+    std::lock_guard<std::mutex> l(mu);load_locked();std::vector<std::string> g;for(const auto &k:keys)if(!proven.count(k))g.push_back(k);
+    if(g.empty())g=keys;
+    if(xbg_pipe_guard_record(st,g)){save_groups();xbg_logf("NVN pipeline %s %s; pipelines holding it are skipped from now on (gfx-pipe-skip)",xbg_pipe_guard_join(g).c_str(),why);}
+}
 }
 void pipeline_lookup(PipelineLease &out,const XbgPipelineKey &key,bool cacheable,const VkGraphicsPipelineCreateInfo *graphics,const VkComputePipelineCreateInfo *compute,bool may_skip=false){
     static std::string bytes;bytes.clear();   // reused key buffer (graphics thread only)
@@ -2253,8 +2320,8 @@ void pipeline_lookup(PipelineLease &out,const XbgPipelineKey &key,bool cacheable
     if(graphics && cacheable && warm::take(bytes,out.pipeline)){++warm::hits;}
     // A draw that may be skipped gets no pipeline while its build is queued (warm::async_request); it is not cached.
     else if(graphics && cacheable && may_skip && warm::async_request(*graphics,key,bytes)){out.pipeline=VK_NULL_HANDLE;out.transient=true;++warm::async_skips;return;}
-    else if(graphics){uint64_t t0=timing_clock();VkGraphicsPipelineCreateInfo g=*graphics;if(pipe_stats)g.flags|=VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;VK(vkCreateGraphicsPipelines(cfg.device,pipeline_cache,1,&g,nullptr,&out.pipeline));if(pipe_stats)pstat_log(out.pipeline);uint64_t dt=timing_clock()-t0;if(dt>=compile_ns)++pipelines_unsaved;++warm::creates;warm::create_ns+=dt;++hud::pipelines;hud::pipeline_ns+=dt;warm::create_max_ns=std::max(warm::create_max_ns,dt);if(cacheable)warm::record(*graphics,key);}
-    else{uint64_t t0=timing_clock();VkComputePipelineCreateInfo cc=*compute;if(pipe_stats)cc.flags|=VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;const std::string &shader_key=state.shader[5]->key;pipeguard::begin(shader_key);const VkResult made=vkCreateComputePipelines(cfg.device,pipeline_cache,1,&cc,nullptr,&out.pipeline);pipeguard::end(shader_key,made==VK_SUCCESS);if(made!=VK_SUCCESS){char why[64];snprintf(why,sizeof why,"failed to build (result=%d)",int(made));pipeguard::record(shader_key,why);out.pipeline=VK_NULL_HANDLE;out.transient=true;return;}++pipelines_unsaved;++hud::pipelines;hud::pipeline_ns+=timing_clock()-t0;if(pipe_stats)pstat_log(out.pipeline);}
+    else if(graphics){uint64_t t0=timing_clock();VkGraphicsPipelineCreateInfo g=*graphics;if(pipe_stats)g.flags|=VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;static std::vector<std::string> keys;keys.clear();for(unsigned st=0;st<5;st++)if(state.shader[st])keys.push_back(state.shader[st]->key);if(pipeguard::skipped(keys)){out.pipeline=VK_NULL_HANDLE;out.transient=true;return;}const std::string guard=pipeguard::begin(keys);const VkResult made=vkCreateGraphicsPipelines(cfg.device,pipeline_cache,1,&g,nullptr,&out.pipeline);pipeguard::end(guard,keys,made==VK_SUCCESS);if(made!=VK_SUCCESS){char why[64];snprintf(why,sizeof why,"failed to build (result=%d)",int(made));pipeguard::record(keys,why);out.pipeline=VK_NULL_HANDLE;out.transient=true;return;}if(pipe_stats)pstat_log(out.pipeline);uint64_t dt=timing_clock()-t0;if(dt>=compile_ns)++pipelines_unsaved;++warm::creates;warm::create_ns+=dt;++hud::pipelines;hud::pipeline_ns+=dt;warm::create_max_ns=std::max(warm::create_max_ns,dt);if(cacheable)warm::record(*graphics,key);}
+    else{uint64_t t0=timing_clock();VkComputePipelineCreateInfo cc=*compute;if(pipe_stats)cc.flags|=VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;const std::string &shader_key=state.shader[5]->key;const std::vector<std::string> keys{shader_key};const std::string guard=pipeguard::begin(keys);const VkResult made=vkCreateComputePipelines(cfg.device,pipeline_cache,1,&cc,nullptr,&out.pipeline);pipeguard::end(guard,keys,made==VK_SUCCESS);if(made!=VK_SUCCESS){char why[64];snprintf(why,sizeof why,"failed to build (result=%d)",int(made));pipeguard::record(keys,why);out.pipeline=VK_NULL_HANDLE;out.transient=true;return;}++pipelines_unsaved;++hud::pipelines;hud::pipeline_ns+=timing_clock()-t0;if(pipe_stats)pstat_log(out.pipeline);}
     if(!cacheable){out.transient=true;return;}
     if(pipeline_objects.size()==pipeline_object_limit){
         // All prior draws/dispatches waited their fence. This lookup occurs
