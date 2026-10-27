@@ -26,7 +26,8 @@ Mac 上直接在启动命令前加 `DM_CAM=1`；iOS 在 Xcode 的 Scheme → Run
 
 | 位置 | 做什么 |
 |---|---|
-| `dm/gfx/nvn/nvn_mtl.m`：`cam_sig` / `cam_build` / `cam_patch`，以及 `encode_args` 里的一行 | 认出主相机缓冲，按人物位置与朝向重写矩阵，绑定改过的拷贝；镜头跟随、俯仰限制 |
+| `dm/gfx/nvn/nvn_mtl.m`：`cam_mode` / `cam_build` / `cam_patch`，以及 `encode_args` 里的一行 | 认出主相机块与场景块，绑定改过的拷贝（每块每帧一份）；算法用共用的 `dm/gfx/vulkan/engine/xbg_cam.h`（跟随、转向、避墙、吊臂、视距限制、前瞻），与安卓 / 鸿蒙同一份 |
+| `dm/gfx/vulkan/engine/xbg_cam.h`、`xbg_game.cpp`（`cam` 命名空间） | Vulkan 一侧（安卓 / 鸿蒙）的同一个镜头；`tests/cam_test.cpp` 测算法 |
 | `dm/host/dm_cam.c` | 两个线程之间的共享状态（矩阵、想要的朝向）；摇杆换算、点目标换算 |
 | `dm/host/hle_hid.c`：取手柄处一行 | 摇杆在交给游戏前换算 |
 | `dm/host/dm_world.c`：`w_hit`、`w_watch_step` | 点 NPC / 物件 / 尸体时按目标深度换算触点；测试量具反查 |

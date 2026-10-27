@@ -26,7 +26,8 @@ Android / HarmonyOS use the Vulkan backend, which is not wired up: `DM_CAM` chan
 
 | Place | What it does |
 |---|---|
-| `dm/gfx/nvn/nvn_mtl.m`: `cam_sig` / `cam_build` / `cam_patch`, plus one line in `encode_args` | recognises the main camera buffer, rewrites the matrices from the character position and heading, binds the modified copy; camera follow and pitch limit |
+| `dm/gfx/nvn/nvn_mtl.m`: `cam_mode` / `cam_build` / `cam_patch`, plus one line in `encode_args` | recognises the main camera and scene blocks, binds a modified copy (one per block per frame); the math is the shared `dm/gfx/vulkan/engine/xbg_cam.h` (follow, turns, wall pull, boom, reach, look-ahead), the same as on Android / HarmonyOS |
+| `dm/gfx/vulkan/engine/xbg_cam.h`, `xbg_game.cpp` (`cam` namespace) | the same camera on the Vulkan side (Android / HarmonyOS); `tests/cam_test.cpp` tests the math |
 | `dm/host/dm_cam.c` | state shared between the two threads (matrices, wanted heading); stick conversion and tap conversion |
 | `dm/host/hle_hid.c`: one line at the controller poll | converts the sticks before the game gets them |
 | `dm/host/dm_world.c`: `w_hit`, `w_watch_step` | converts a tap per target depth when tapping NPCs / objects / corpses; reverse lookup for the test tool |
