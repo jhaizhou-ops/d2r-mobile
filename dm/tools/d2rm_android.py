@@ -8,6 +8,7 @@
 # 之后：把 android 文件夹整个拷到手机的 Download/S2X/D2R Mobile/ 下（和放游戏资源的 data 文件夹并排），打开 App 就会导入；导入完可以删掉这份。
 # 需要：Python 3.9+ 与 pillow numpy lz4 capstone unicorn；.NET SDK（编着色器翻译工具）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
 #   （Mac：brew install spirv-tools shaderc；Windows / Linux：LunarG Vulkan SDK；glslc 也可以用安卓 NDK 里的）。缺什么本工具开头会逐项报。
+#   生成素材另需本机 clang 或 DM_DESWIZZLE_LIB；Windows x64 可用 build_deswizzle.py 先编 DLL，见 docs/ANDROID.zh-CN.md。
 # 它做的事与 d2rm_pack.py（iOS 壳）同一套：改写游戏程序换成安卓目标，着色器翻成 Vulkan 用的包（dm/gfx/tools/dmsh_vk.py）而不是 Metal 库。
 # 鸿蒙：d2rm_android.py --target ohos <游戏文件目录> <输出目录>，写出 <输出目录>/harmony/dm/：改写目标换成鸿蒙（out/ 与安卓不能共用），着色器包与安卓同一份，
 #   另加 ui-art/（技能键标签 lbl_* 与技能剪影 sil_*，各 9 张，取自底栏素材生成器的输出）；把 dm 文件夹拷进手机上和游戏资源 data 并排的「D2R Mobile」文件夹，应用导入时选它。
@@ -20,6 +21,7 @@
 # Then: copy the whole android folder to Download/S2X/D2R Mobile/ on the phone (next to the data folder with the game resources); opening the App imports it, and afterwards this copy can be deleted.
 # Needs: Python 3.9+ with pillow numpy lz4 capstone unicorn; the .NET SDK (to build the shader translation tool); spirv-opt, spirv-val and glslc from the Vulkan SDK
 #   (Mac: brew install spirv-tools shaderc; Windows / Linux: the LunarG Vulkan SDK; glslc can also come from the Android NDK). The tool lists anything missing at the start.
+#   Art generation also needs host clang or DM_DESWIZZLE_LIB; Windows x64 can build the DLL with build_deswizzle.py first, see docs/ANDROID.md.
 # It does the same as d2rm_pack.py (the iOS shell): the game program is rewritten for the Android target, and the shaders become the bundles Vulkan uses (dm/gfx/tools/dmsh_vk.py) instead of a Metal library.
 # HarmonyOS: d2rm_android.py --target ohos <game files directory> <output directory> writes <output directory>/harmony/dm/: the game program is rewritten for HarmonyOS (out/ cannot be shared with Android), the shader bundles are the same as Android's,
 #   plus ui-art/ (9 skill-button labels lbl_* and 9 skill silhouettes sil_*, taken from the bottom-bar art generator's output); copy the dm folder into a "D2R Mobile" folder on the phone next to the data folder with the game resources, and pick that folder when the app asks to import.
@@ -27,10 +29,13 @@ import hashlib, os, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__)); DM = os.path.dirname(HERE); IOS = os.path.join(DM, 'ios'); GT = os.path.join(DM, 'gfx', 'tools')
 sys.path.insert(0, HERE); from d2rm_pack import ROOT, PY, MODS, say, die, run, step   # 共用 iOS 壳工具的执行与跳步框架（含 Windows 换行处理） | the run-and-skip framework shared with the iOS shell tool (including the Windows line-ending handling)
+from build_deswizzle import texture_dependency_error
 
 
 def check_env(game):
     bad = []
+    texture_error = texture_dependency_error()
+    if texture_error: bad.append(texture_error)
     for m in ('PIL', 'numpy', 'lz4', 'capstone', 'unicorn'):
         try: __import__(m)
         except Exception: bad.append('Python 包 %s：%s -m pip install pillow numpy lz4 capstone unicorn' % (m, PY))

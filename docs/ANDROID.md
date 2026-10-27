@@ -8,7 +8,7 @@ The Android version works like the iOS shell: the release page has an **APK that
 
 | Step | Status |
 |---|---|
-| Making the import pack on a computer | Works on a Mac: about 5 minutes from scratch (on an Apple silicon Mac; translating the shaders is more than half of it), an import pack of about 670 MB. Not yet tried on Windows / Linux; please open an Issue and tell us how it goes |
+| Making the import pack on a computer | About 5 minutes from scratch on an Apple silicon Mac, an import pack of about 670 MB. Windows x64 is also verified through pack generation, import and character-class selection on a Xiaomi 15; see "Windows / PowerShell" below. Linux is not yet verified |
 | Shaders in the import pack | The 6,927 game shader bundles are byte-for-byte identical to the set the port's authors tested on their phones |
 | Installing the APK, importing, playing | Works on a vivo X200 Ultra (Android 16): permission, import, character creation, playing, panels, NPC dialogs |
 | Frame rate | Measured by the port's authors: median 60 fps in the camp and in fights on a Redmi K50 Ultra (Snapdragon 8+ Gen 1); playable on a OnePlus 13 |
@@ -23,11 +23,43 @@ The Android version works like the iOS shell: the release page has an **APK that
 - The files of the game you bought: `ExeFS` and `RomFS` of the Switch version 1.0.34.0 (PC 3.3.94012); see [GAME_FILES.md](GAME_FILES.md)
 - The source of this repository **from the same release as the APK** (the App checks and tells you if they differ)
 - Python 3.9 or later with these packages: `python3 -m pip install pillow numpy lz4 capstone unicorn`
-- The .NET SDK (to build the shader translation tool): <https://dotnet.microsoft.com/download>
+- The .NET 10 SDK (to build the shader translation tool; the runtime alone is not enough): <https://dotnet.microsoft.com/download>
+- A host C compiler, `clang`, to build the native texture helper while generating UI art, or a prebuilt native library specified by `DM_DESWIZZLE_LIB`. On Windows x64, LLVM / the NDK can build the DLL separately as described below
 - `spirv-opt`, `spirv-val` and `glslc` from the Vulkan SDK: the [LunarG Vulkan SDK](https://vulkan.lunarg.com/) on Windows / Linux, `brew install spirv-tools shaderc` on macOS. `spirv-opt` must be new enough to support `--trim-capabilities` (the tool checks); the copy that ships with the Android NDK is too old, so do not let it come first on `PATH`. `glslc` from the Android NDK works too
 - About 2 GB of disk space: about 0.9 GB of caches and intermediate products (in `DM_ROOT`, default `~/dm-work`) and about 0.7 GB for the import pack
 
 The tool lists anything missing at the start and says where to get it.
+
+### Windows / PowerShell
+
+Run from the repository root, replacing the example Vulkan SDK, LLVM and game paths with your own. The LLVM directory needs `clang.exe` and one of `ld.lld.exe`, `lld-link.exe` or `lld.exe`. The tested directory is `toolchains/llvm/prebuilt/windows-x86_64/bin` from Android NDK r28c.
+
+```powershell
+$env:DM_ROOT = Join-Path $env:USERPROFILE 'dm-work'
+python -m venv (Join-Path $env:DM_ROOT 'venv')
+$python = Join-Path $env:DM_ROOT 'venv\Scripts\python.exe'
+& $python -m pip install pillow numpy lz4 capstone unicorn
+
+$env:PATH = "C:\VulkanSDK\<version>\Bin;$env:PATH"
+$llvmBin = 'C:\Android\android-ndk-r28c\toolchains\llvm\prebuilt\windows-x86_64\bin'
+$env:DM_DESWIZZLE_LIB = Join-Path $env:DM_ROOT 'build\tools\deswizzle.dll'
+& $python dm/tools/build_deswizzle.py --llvm-bin $llvmBin --output $env:DM_DESWIZZLE_LIB
+
+& $python dm/tools/d2rm_android.py 'C:\YourGame\Update' (Join-Path $env:DM_ROOT 'import')
+```
+
+`build_deswizzle.py` compiles the repository's existing `nvn_deswizzle.c` and `nvn_tex.c` into a Windows x64 DLL, supplying two minimal memory functions so it needs neither Visual Studio nor a Windows SDK. It checks all three required exports and replaces the output only after success. It needs no game files. Keep its output outside `dm/`. The environment variables affect only the current PowerShell session; then follow steps 2 and 3 to copy the resources and install.
+
+With an existing working host C toolchain containing `clang`, the art generators can also compile the library automatically. When `DM_DESWIZZLE_LIB` is set, the packer first checks that the file exists, loads and exports the required functions; an invalid explicit path is not silently replaced by automatic compilation. If neither a library nor `clang` is available, it reports this before rewriting the game program.
+
+Tested setup: Windows x64, Python 3.13, .NET SDK 10.0.402, clang 19.0.1 / glslc 2022.3 from NDK r28c, and SPIRV-Tools v2026.4-78-gb8c3b64b. All 6,927 game shaders translated and passed Vulkan 1.1 validation; with four query kernels there are 6,931 bundles in an approximately 668 MiB import pack. The official v2.0.2 APK verified the overlay and displayed Chinese character-class selection, including the Warlock, on a Xiaomi 15 (Android 16, Adreno 830). Character creation, entering a game, combat and saving/reloading were not tested, nor was byte equality with a Mac-built pack. This run started from matching `ExeFS` / `RomFS` directories and used an existing .NET / NDK installation; installing every dependency from scratch and running `extract_game.sh` on Windows were not verified.
+
+Helper tests that need no game files:
+
+```powershell
+$env:DM_TEST_LLVM_BIN = $llvmBin
+& $python -m unittest discover -s dm/tools -p test_build_deswizzle.py
+```
 
 ## Step 1: make the import pack on a computer
 
