@@ -35,11 +35,44 @@ static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &
 void dm_cam_publish(const float vpo[16], const float ivpo[16], const float vpp[16], const float ivpp[16], float px, float pz) {
     pthread_mutex_lock(&g_mu); memcpy(g_pub.vpo, vpo, 64); memcpy(g_pub.ivpo, ivpo, 64); memcpy(g_pub.vpp, vpp, 64); memcpy(g_pub.ivpp, ivpp, 64);
     g_pub.pl[0] = px; g_pub.pl[1] = pz; g_pub_t = now_s(); pthread_mutex_unlock(&g_mu); }
+
+// 镜头避墙：游戏主线程每帧在碰撞格上量出人物脚下往 32 个方向离第一面墙多远（世界单位，dm_world.c w_cam_clear；方向 k 的角度 = k × 360° / 32，
+// 从世界 +x 转向 +z），画面线程按镜头朝后的方向取相邻两个方向里近的那个（墙可能很薄，不插值）。超过 0.5 秒没更新（不在局里、镜头没开）= 不知道，返回 0。
+// 顺带给出宿主按子格算的人物位置（世界单位），画面线程拿它和矩阵反推的落地点对一对，核「子格 → 世界」的换算
+// Wall avoidance: every frame the game main thread measures on the collision grid how far the first wall is from the character's feet in 32 directions (world
+// units, dm_world.c w_cam_clear; direction k is at k * 360 / 32 degrees, turning from world +x towards +z), and the render thread takes the nearer of the two
+// directions next to the camera's backward direction (walls can be thin, so no interpolation). Not refreshed for 0.5 s (not in a game, camera off) = unknown,
+// returns 0. It also gives the character's position computed by the host from sub-cells (world units), which the render thread compares with the ground point
+// derived from the matrices, to check the sub-cell -> world conversion
+enum { CAM_DIRS = 32 };
+static float g_clear[CAM_DIRS], g_clear_p[2]; static double g_clear_t;
+void dm_cam_set_clear(const float d[32], float px, float pz) {
+    pthread_mutex_lock(&g_mu); memcpy(g_clear, d, sizeof g_clear); g_clear_p[0] = px; g_clear_p[1] = pz; g_clear_t = now_s(); pthread_mutex_unlock(&g_mu); }
+int dm_cam_clearance(float bx, float bz, float *dist, float *px, float *pz) {
+    pthread_mutex_lock(&g_mu); int ok = g_clear_t > 0 && now_s() - g_clear_t < 0.5;
+    if (ok) { float a = atan2f(bz, bx) / 6.2831853f * CAM_DIRS; if (a < 0) a += CAM_DIRS; int i = (int)a % CAM_DIRS, j = (i + 1) % CAM_DIRS;
+        *dist = g_clear[i] < g_clear[j] ? g_clear[i] : g_clear[j]; *px = g_clear_p[0]; *pz = g_clear_p[1]; }
+    pthread_mutex_unlock(&g_mu); return ok; }
 static int cam_get(cam_t *c) {
     if (dm_cam_mode() != 1) return 0;
     pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5; if (ok) *c = g_pub; pthread_mutex_unlock(&g_mu); return ok; }
 
 static void xf(const float *M, const float v[4], float o[4]) { for (int j = 0; j < 4; j++) o[j] = v[0] * M[j] + v[1] * M[4 + j] + v[2] * M[8 + j] + v[3] * M[12 + j]; }
+
+// 跟着世界走的界面字（名字牌、血条、地上物品名、飘字）也按透视画面放（dm_uiscreen.c 在游戏的「世界点 → 屏幕」main+0x1237c60 入口换镜头副本）。
+// 那个函数算 裁剪 = 投影（镜头 +0x80）× 视图 × 点，并且除以 w，所以透视矩阵也对。副本的投影换成 P' = P × 逆(原版视图投影) × 透视视图投影：
+// 按行向量写，视图 × P' = 视图 × 投影 × 逆(视图 × 投影) × 透视 = 透视视图投影。p = 镜头自己的投影（与常量块 +208 相同），排布与这里的矩阵一致。
+// 越肩镜头开着并且画面线程 0.5 秒内发布过矩阵才返回 1；点按与测试量具的单位位置也走这个函数，所以那边拿到的也是透视画面上的坐标
+// UI text that follows the world (nameplates, health bars, ground item names, floating text) is placed on the perspective picture too (dm_uiscreen.c swaps a
+// copy of the camera at the entry of the game's "world point -> screen" main+0x1237c60). That function computes clip = projection (camera +0x80) x view x point
+// and divides by w, so a perspective matrix works. The copy's projection becomes P' = P x inverse(original view-projection) x perspective view-projection:
+// in row-vector terms, view x P' = view x projection x inverse(view x projection) x perspective = perspective view-projection. p = the camera's own projection
+// (the same as the constant block's +208), laid out like the matrices here. Returns 1 only while the over-the-shoulder camera is on and the render thread
+// published matrices within 0.5 s; taps and the test tool's unit positions also go through that function, so they get perspective picture coordinates too
+static void m4mul(const float *a, const float *b, float *o) { for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { double s = 0; for (int k = 0; k < 4; k++) s += (double)a[i * 4 + k] * b[k * 4 + j]; o[i * 4 + j] = (float)s; } }
+int dm_cam_label_matrix(const float p[16], float out[16]) {
+    cam_t c; if (!cam_get(&c)) return 0;
+    float t[16]; m4mul(p, c.ivpo, t); m4mul(t, c.vpp, out); return 1; }
 // 归一化画面坐标（0..1，y 向下）↔ 裁剪空间（-1..1，y 向上） | normalized picture coordinates (0..1, y down) <-> clip space (-1..1, y up)
 static void n2c(float nx, float ny, float *x, float *y) { *x = nx * 2 - 1; *y = 1 - ny * 2; }
 static int proj(const float *VP, const float w[3], float *nx, float *ny) { float v[4] = { w[0], w[1], w[2], 1 }, o[4]; xf(VP, v, o); if (o[3] <= 1e-6f) return 0; *nx = (o[0] / o[3] + 1) / 2; *ny = (1 - o[1] / o[3]) / 2; return 1; }

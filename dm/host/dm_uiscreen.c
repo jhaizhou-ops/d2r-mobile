@@ -61,13 +61,23 @@ static int yoff(void) { int rh = atomic_load(&g_rh), uh = atomic_load(&g_uh), m 
 // swap x0 for a copy of the camera, with each projection column of the copy getting y += (2·y0 / height) × that column's w ⇒ the resulting y is smaller by exactly y0; not one byte of the game's camera is changed. When y0 = 0 (off / top-aligned / 16:9 screen), no swap.
 static _Atomic int g_proj_on;
 static void ui_project_obs(const uint64_t *regs) {
-    int dy = atomic_load(&g_ingame) ? yoff() : 0; const uint8_t *c = (const uint8_t *)(uintptr_t)regs[0]; if (!dy || !c || c[0x160]) return;   // +0x160 = 投影待重算：函数自己会重算并盖掉副本里的偏移，这一次不换（只在改分辨率后的第一次调用） | +0x160 = projection pending recompute: the function will recompute it itself and overwrite the offset in the copy, so do not swap this time (only on the first call after a resolution change)
-    float H = *(const float *)(c + 0x144); if (!(H > 0)) return;
-    static _Thread_local _Alignas(16) uint8_t cam[0x170]; memcpy(cam, c, sizeof cam); float *m = (float *)(cam + 0x80), k = 2.0f * dy / H;
-    for (int j = 0; j < 4; j++) m[j * 4 + 1] += k * m[j * 4 + 3];
-    ((uint64_t *)(uintptr_t)regs)[0] = (uint64_t)(uintptr_t)cam;
+    int dy = atomic_load(&g_ingame) ? yoff() : 0; const uint8_t *c = (const uint8_t *)(uintptr_t)regs[0]; if (!c || c[0x160]) return;   // +0x160 = 投影待重算：函数自己会重算并盖掉副本里的偏移，这一次不换（只在改分辨率后的第一次调用） | +0x160 = projection pending recompute: the function will recompute it itself and overwrite the offset in the copy, so do not swap this time (only on the first call after a resolution change)
+    // 越肩镜头（dm_cam.c dm_cam_label_matrix）：副本的投影换成「透视视图投影 ÷ 原版视图」，名字牌、血条、地上物品名和点按都落在透视画面上；界面下移照旧叠在上面
+    // Over-the-shoulder camera (dm_cam.c dm_cam_label_matrix): the copy's projection becomes "perspective view-projection / original view", so nameplates,
+    // health bars, ground item names and taps land on the perspective picture; the UI shift still applies on top
+    int dm_cam_label_matrix(const float p[16], float out[16]);
+    float pm[16]; int cam = dm_cam_label_matrix((const float *)(c + 0x80), pm); if (!dy && !cam) return;
+    float H = *(const float *)(c + 0x144); if (dy && !(H > 0)) return;
+    static _Thread_local _Alignas(16) uint8_t copy[0x170]; memcpy(copy, c, sizeof copy); float *m = (float *)(copy + 0x80);
+    if (cam) memcpy(m, pm, sizeof pm);
+    if (dy) { float k = 2.0f * dy / H; for (int j = 0; j < 4; j++) m[j * 4 + 1] += k * m[j * 4 + 3]; }
+    ((uint64_t *)(uintptr_t)regs)[0] = (uint64_t)(uintptr_t)copy;
 }
 int dm_ui_proj_dy(void) { return atomic_load(&g_proj_on) && atomic_load(&g_ingame) ? yoff() : 0; }
+// 观测门在不在（老产物没有这道门）：在的话，游戏的「世界点 → 屏幕」在越肩镜头开着时直接给透视画面上的坐标（dm_world.c 点按据此不再自己换算）
+// Whether the observation gate exists (older artifacts lack it): when it does, the game's "world point -> screen" gives perspective picture coordinates
+// directly while the over-the-shoulder camera is on (dm_world.c taps then skip their own conversion)
+int dm_ui_proj_gate(void) { return atomic_load(&g_proj_on); }
 
 // 游戏的出图分辨率（主机 / 掌机档各一个参数位，见 thread.c 与 hle_oe.c）：真全屏打开时按「玩家单位在不在」给值——不在（前端各页）= 屏宽的 16:9，
 // 游戏整个按 16:9 出图，3D、界面、点击区天然一致（就是留边模式）；在 = 屏幕原生比例。状态一变推一次「性能模式变化」通知（31），游戏重读参数位、改出图尺寸。

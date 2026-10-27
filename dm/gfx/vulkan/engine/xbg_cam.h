@@ -22,9 +22,10 @@ static inline xbg_cam_params xbg_cam_default_params(int mode) {
     return p;
 }
 
-// 跨帧状态：朝向 (fx, fz)、上一帧人物位置、上一帧与本帧改过的视图投影、本帧镜头位置与视线
-// State across frames: heading (fx, fz), the character's previous position, the previous and current modified view-projection, this frame's camera position and sight line
-typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3]; int have, have_eye; uint64_t frame; double t; } xbg_cam_state;
+// 跨帧状态：朝向 (fx, fz)、上一帧人物位置、上一帧与本帧改过的视图投影、本帧镜头位置与视线；dcur = 避墙后镜头离人物的水平距离（0 = 还没算，用 dist）
+// State across frames: heading (fx, fz), the character's previous position, the previous and current modified view-projection, this frame's camera position
+// and sight line; dcur = the camera's horizontal distance from the character after wall avoidance (0 = not computed yet, use dist)
+typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3], dcur; int have, have_eye; uint64_t frame; double t; } xbg_cam_state;
 static inline void xbg_cam_init(xbg_cam_state *s) {
     memset(s, 0, sizeof *s);
     // 朝向缺省取原版视线的水平方向（原版镜头看向 −x −z），画面一进来和原版同一个朝向
@@ -118,6 +119,19 @@ static inline int xbg_cam_follow(xbg_cam_state *s, float px, float pz, uint64_t 
     return 1;
 }
 
+// 避墙（越肩档）：clear = 人物身后、镜头那个方向上离第一面墙多远（世界单位，宿主按碰撞格量的；0 = 不知道）。镜头往里拉要快（0.08 秒），
+// 免得露出墙那边；往外放要慢（0.4 秒），沿着墙走时镜头不一跳一跳。每帧调一次，dt 是距上一帧的秒数；返回本帧的距离
+// Wall avoidance (over-the-shoulder mode): clear = how far the first wall is behind the character, in the camera's direction (world units, measured by the
+// host on the collision grid; 0 = unknown). The camera moves in fast (0.08 s) so the far side of the wall never shows, and back out slowly (0.4 s) so it does
+// not jump while walking along a wall. Call once per frame with dt = seconds since the previous frame; returns this frame's distance
+static inline float xbg_cam_pull(xbg_cam_state *s, float dist, float clear, double dt) {
+    float target = clear > 0 && clear < dist ? clear : dist;
+    if (target < 2) target = 2;
+    if (s->dcur <= 0 || dt <= 0) s->dcur = target;
+    else s->dcur += (target - s->dcur) * (float)(1 - exp(-dt / (target < s->dcur ? 0.08 : 0.4)));
+    return s->dcur;
+}
+
 // dst 已是 src 的拷贝（至少 608 字节）：按本帧人物位置与朝向重写 +80 视图、+144 逆视图、+208 投影、+272 逆投影、+336 视图投影、+400 逆视图投影、
 // +464 上一帧（改过的）视图投影，+592 深度还原改走透视分支。vp / ivp 给出新的视图投影与逆，供输入换算发布
 // dst is already a copy of src (at least 608 bytes): rewrite +80 view, +144 inverse view, +208 projection, +272 inverse projection, +336 view-projection,
@@ -133,7 +147,9 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
         eye[0] = px + fx * ah; eye[1] = h; eye[2] = pz + fz * ah;
         at[0] = eye[0] + fx * cosf(pitch); at[1] = h - sinf(pitch); at[2] = eye[2] + fz * cosf(pitch);
     } else {
-        float d = pp->dist, h = pp->h, la = pp->look, lh = pp->lookh;
+        // 避墙拉近时视角不变：高度按距离同比例降，再受下面的俯仰限制
+        // When wall avoidance pulls the camera in, the viewing angle stays: the height scales with the distance, then the pitch limit below applies
+        float d = s->dcur > 0 ? s->dcur : pp->dist, la = pp->look, lh = pp->lookh, h = pp->dist > 0 ? lh + (pp->h - lh) * d / pp->dist : pp->h;
         // 俯仰限制：画面上沿至少在水平线下 3°，地平线不进画面——原版俯视，没有天空，透视下地平线以上全黑。竖直半视角按本帧纵横比算，不够就把镜头抬高
         // Pitch limit: the top edge of the picture stays at least 3 degrees below the horizon, so the horizon never enters the picture -- the original is
         // top-down and has no sky, so everything above the horizon is black in perspective. The vertical half-angle follows this frame's aspect ratio; raise the camera when it falls short

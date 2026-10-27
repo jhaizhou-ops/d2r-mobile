@@ -107,6 +107,24 @@ int main(){
      xbg_cam_build10(&st,copy);float e[3],f[3],l[3];get(copy,16,e,3);get(copy,32,f,3);get(copy,848,l,3);
      CHECK(memcmp(e,st.eye,12)==0 && memcmp(f,st.fwd,12)==0 && l[0]==1 && l[1]==1 && l[2]==0);}
 
+    // 避墙：第一帧直接取目标；往里拉 0.08 秒走 1 − 1/e，往外放 0.4 秒走 1 − 1/e；没有墙（0）或墙比 dist 远都回到 dist；最近不小于 2
+    // Wall avoidance: the first frame takes the target directly; pulling in covers 1 - 1/e in 0.08 s, letting out covers 1 - 1/e in 0.4 s; no wall (0) or a wall
+    // further than dist goes back to dist; never closer than 2
+    {xbg_cam_state s;xbg_cam_init(&s);
+     CHECK(near(xbg_cam_pull(&s,20,8,0),8,1e-6));
+     CHECK(near(xbg_cam_pull(&s,20,0,0.4),8+12*(1-exp(-1.0)),1e-3));
+     float before=s.dcur;CHECK(near(xbg_cam_pull(&s,20,4,0.08),before+(4-before)*(1-exp(-1.0)),1e-3));
+     xbg_cam_state f;xbg_cam_init(&f);CHECK(near(xbg_cam_pull(&f,20,30,0),20,1e-6));
+     xbg_cam_state g;xbg_cam_init(&g);CHECK(near(xbg_cam_pull(&g,20,0.5f,0),2,1e-6));}
+    // 拉近后：镜头在人物身后 dcur，视线角度不变（高度同比例降，再受俯仰限制），画面上沿仍在水平线下 3° 以上
+    // Pulled in: the camera is dcur behind the character, the viewing angle stays (the height scales down, then the pitch limit applies), and the picture's
+    // top edge is still at least 3 degrees below the horizon
+    {xbg_cam_state s;xbg_cam_init(&s);xbg_cam_params p=xbg_cam_default_params(1);original(src,100,50);xbg_cam_follow(&s,100,50,1,1.0,0,0,0,p.tau);xbg_cam_pull(&s,p.dist,8,0);
+     memcpy(dst,src,sizeof dst);xbg_cam_build(&s,src,dst,1,&p,vp,ivp);
+     CHECK(near(hypot(s.eye[0]-100,s.eye[2]-50),8,2e-2) && s.eye[1]<13 && s.eye[1]>p.lookh);
+     const float t1[4]={0,1,1,1},t0[4]={0,1,0.001f,1};float a[4],b[4];xf(ivp,t1,a);xf(ivp,t0,b);
+     double dx=b[0]/b[3]-a[0]/a[3],dy=b[1]/b[3]-a[1]/a[3],dz=b[2]/b[3]-a[2]/a[3];CHECK(atan2(-dy,hypot(dx,dz))*180/3.14159265358979>=3-0.05);}
+
     if(failures){printf("%d failure(s)\n",failures);return 1;}
     printf("cam_test: all checks passed\n");return 0;
 }

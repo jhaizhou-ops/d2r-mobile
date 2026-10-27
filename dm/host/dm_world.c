@@ -140,6 +140,30 @@ static int wp_line(int x0, int y0, int x1, int y1) {   // 两点连线上每一�
     int dx = abs(x1 - x0), dy = abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx - dy;
     for (;;) { if (!wp_free(x0, y0)) return 0; if (x0 == x1 && y0 == y1) return 1; int e2 = 2 * e, mx = 0, my = 0; if (e2 > -dy) { e -= dy; mx = 1; } if (e2 < dx) { e += dx; my = 1; }
         if (mx && my && (!wp_free(x0 + sx, y0) || !wp_free(x0, y0 + sy))) return 0; if (mx) x0 += sx; if (my) y0 += sy; } }
+// 越肩镜头避墙（dm_cam.c、画面线程 xbg_game.cpp）：每帧从人物脚下（路径结构 +0 / +4 的 16.16 定点子格坐标）在碰撞格上往 32 个方向走，
+// 量出离第一面墙多远，镜头就放在墙前面。墙 = 碰撞位 0x1（挡走：墙、栅栏、树）或 0x800（门），单位与物件不算；不在已载入房间里也算墙。
+// 3D 世界 = 子格 × 2，同轴（原版镜头看向世界 -x -z，正是子格的 -x -y），DM_CAM_SUB / DM_CAM_WALL 可改；量到 12 子格（24 世界单位，镜头缺省离人 20）为止，
+// 停在墙前 0.75 子格。只读碰撞格，和路线规划一样在游戏主线程
+// Over-the-shoulder camera wall avoidance (dm_cam.c, render thread xbg_game.cpp): every frame, walk the collision grid from the character's feet (16.16
+// fixed-point sub-cell coordinates at +0 / +4 of the path structure) in 32 directions and measure how far the first wall is, so the camera can sit in
+// front of it. A wall = collision bit 0x1 (blocks walking: walls, fences, trees) or 0x800 (doors); units and objects do not count, and outside the loaded
+// rooms counts as wall. 3D world = sub-cell x 2 on the same axes (the original camera looks towards world -x -z, which is the sub-cells' -x -y);
+// DM_CAM_SUB / DM_CAM_WALL change them. Measured out to 12 sub-cells (24 world units; the camera sits 20 from the character by default), stopping 0.75
+// sub-cell short of the wall. Reads the collision grid only, on the game main thread like route planning
+static void w_cam_clear(void) {
+    int dm_cam_mode(void); void dm_cam_set_clear(const float d[32], float px, float pz);
+    if (dm_cam_mode() != 1) return;
+    uint64_t pl = w_player(), pp = pl ? *(uint64_t *)(pl + 0x38) : 0; if (!pp || !*(uint64_t *)(pp + 0x20)) return;
+    static float sub = -1; static uint32_t mask;
+    if (sub < 0) { const char *e = getenv("DM_CAM_SUB"); sub = e ? (float)atof(e) : 2.0f; e = getenv("DM_CAM_WALL"); mask = e ? (uint32_t)strtoul(e, NULL, 0) : 0x801; }
+    float x0 = *(uint32_t *)pp / 65536.0f, y0 = *(uint32_t *)(pp + 4) / 65536.0f, d[32];
+    wp_rooms(*(uint64_t *)(pp + 0x20));
+    for (int k = 0; k < 32; k++) {
+        float ux = cosf(k * 6.2831853f / 32), uy = sinf(k * 6.2831853f / 32), t = 0.5f;
+        for (; t <= 12; t += 0.25f) if ((uint32_t)wp_cell((int)floorf(x0 + ux * t), (int)floorf(y0 + uy * t)) & mask) break;
+        t -= 0.75f; d[k] = (t < 1 ? 1 : t) * sub; }
+    dm_cam_set_clear(d, x0 * sub, y0 * sub);
+}
 static int w_plan(uint8_t *b, uint64_t pl, int x, int y) {
     (void)b; uint64_t t0 = w_now_ns(); uint64_t pp = *(uint64_t *)(pl + 0x38); g_go.n = g_go.i = 0; int r = 0; uint32_t nn = 0; if (!pp) return 0;
     int px = *(uint16_t *)(pp + 2), py = *(uint16_t *)(pp + 6); wp_rooms(*(uint64_t *)(pp + 0x20));
@@ -327,6 +351,13 @@ static void w_go_step(void) {
 // Rectangle: a unit takes a body box with "feet-to-head" as height and width proportional to the height (humanoid 0.44, object 1.0), objects also union in the footprint (see below); an item on the ground takes its name label rectangle, or the feet point when there is no label;
 // any side shorter than min (about 7 mm) is padded up to min, with no further overall expansion. When several rectangles contain the touch point, take the one whose center is closest to the touch point.
 int dm_cam_on(void); int dm_cam_tap_for_unit(float tx, float ty, float fx, float fy, float *ox, float *oy); int dm_cam_unit_to_screen(float fx, float fy, float hx, float hy, float *ox, float *oy);   // dm_cam.c
+// 镜头实验要不要自己换算触点：dm_uiscreen.c 的观测门在的话，w_project 走的游戏投影已经给透视画面上的坐标（dm_cam_label_matrix），
+// 候选的框本来就在玩家看见的地方，触点直接比；只有老产物（没有这道门）才走 dm_cam_tap_for_unit / dm_cam_unit_to_screen 的换算
+// Whether the camera experiment converts taps itself: when dm_uiscreen.c's observation gate exists, the game projection behind w_project already gives
+// perspective picture coordinates (dm_cam_label_matrix), so the candidates' boxes are where the player sees them and the tap is compared directly; only
+// older artifacts (without that gate) take the dm_cam_tap_for_unit / dm_cam_unit_to_screen conversion
+int dm_ui_proj_gate(void);
+static int w_cam_convert(void) { return dm_cam_on() && !dm_ui_proj_gate(); }
 static int w_project(uint8_t *b, uint64_t scene, uint64_t u, float *out, int top) { int r = ((int (*)(uint64_t, uint64_t, float *, int))(b + 0x90d110))(scene, u, out, top); if (r) out[1] += dm_ui_proj_dy(); return r; }   // 这里要真实画面坐标：把界面矩形的 y 加回来（见 dm_uiscreen.c） | real picture coordinates are needed here: add the UI rectangle's y back (see dm_uiscreen.c)
 static int w_in_rect(float px, float py, float cx, float cy, float w, float h, float min, float *d) {
     if (w < min) w = min; if (h < min) h = min; float dx = px - cx, dy = py - cy; if (dx < 0) dx = -dx; if (dy < 0) dy = -dy;
@@ -346,7 +377,7 @@ static int w_sprite_box(uint8_t *b, uint64_t u, int out[4]) {
 }
 static uint64_t w_hit(uint8_t *b, float sx, float sy, float min, float *dist, int *by_label) {
     uint64_t pl = w_player(), scene = *(uint64_t *)(b + 0x2e2a698), best = 0; float bd = 1e9f, d; int brank = 2; *by_label = 0; if (!pl || !scene) return 0;
-    int RWi = 0, RHi = 0; dm_screen_real(&RWi, &RHi); float RW = RWi > 0 ? RWi : 1, RH = RHi > 0 ? RHi : 1; int cam = dm_cam_on();   // 镜头实验开着：逐个候选换触点（见下） | camera experiment on: convert the touch point per candidate (see below)
+    int RWi = 0, RHi = 0; dm_screen_real(&RWi, &RHi); float RW = RWi > 0 ? RWi : 1, RH = RHi > 0 ? RHi : 1; int cam = w_cam_convert();   // 镜头实验开着：逐个候选换触点（见下） | camera experiment on: convert the touch point per candidate (see below)
     static int dumps; int dump = getenv("DM_WORLD_DUMP") && dumps++ < 3;   // 诊断：前 3 次点按把全部候选及其屏幕矩形打出来 | diagnostics: for the first 3 taps print all candidates and their screen rectangles
     uint64_t L = (uint64_t)(uintptr_t)(b + 0x2f0fee0), rec = *(uint64_t *)L, n = *(uint64_t *)(L + 8);
     // 标签矩形是界面坐标（游戏投影出来的，已被减掉界面矩形的 y），点按是真实画面坐标：比的时候加回
@@ -477,7 +508,7 @@ static void w_watch_step(uint8_t *b) {
         float f[2], h[2]; if (!w_project(b, scene, u, f, 0)) continue;
         if (!w_project(b, scene, u, h, 1)) { h[0] = f[0]; h[1] = f[1]; }
         float cx = (f[0] + h[0]) / 2 / W, cy = (f[1] + h[1]) / 2 / H;
-        if (dm_cam_on()) { float ox, oy; if (!dm_cam_unit_to_screen(f[0] / W, f[1] / H, h[0] / W, h[1] / H, &ox, &oy)) continue; cx = ox; cy = oy; }   // 镜头实验：落到玩家在透视画面上真看见它的地方；在镜头背后的不算 | camera experiment: land where the player actually sees it on the perspective picture; units behind the camera do not count
+        if (w_cam_convert()) { float ox, oy; if (!dm_cam_unit_to_screen(f[0] / W, f[1] / H, h[0] / W, h[1] / H, &ox, &oy)) continue; cx = ox; cy = oy; }   // 镜头实验：落到玩家在透视画面上真看见它的地方；在镜头背后的不算 | camera experiment: land where the player actually sees it on the perspective picture; units behind the camera do not count
         if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
         v = 1ull << 32 | (uint64_t)(uint32_t)(cx * 65535) << 16 | (uint32_t)(cy * 65535); break; }
     atomic_store(&g_watch_pos, v);
@@ -678,6 +709,7 @@ void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at th
     DM_PROF(0, "w.test_seek", w_test_seek_step());
     w_test_xy_step();
     uint8_t *b = wb(); if (!b) return;
+    DM_PROF(0, "w.cam", w_cam_clear());
     if (g_it.active) w_interaction_poll(w_player(), dm_guest_frame());
     DM_PROF(0, "w.watch", w_watch_step(b));
     { void dm_potpick_step(uint8_t *); DM_PROF(0, "w.potpick", dm_potpick_step(b)); }   // 药水自动拾取（dm_potpick.c） | automatic potion pickup (dm_potpick.c)
