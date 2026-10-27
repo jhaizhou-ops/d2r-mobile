@@ -3035,6 +3035,98 @@ static uint64_t ui_mat_patch(const p_bind_buf *u, void *mb, uint64_t mo) {
     la = u->addr; ls = u->size; lp = g_pass.serial; lo = g_ui_moff; lg = ring_gpu + at; at += n;
     return lg;
 }
+// ---------- 越肩 / 第一人称镜头（实验，缺省关；DM_CAM=1 越肩、2 第一人称，见 dm/host/dm_cam.c 与 docs/over-the-shoulder-camera.zh-CN.md）----------
+// 凡是绑定内容是「主相机」的常量缓冲（608 字节、+80 视图前两行等于原版等距朝向、+208 正交），换成一份拷贝：+80 视图、+144 逆视图、+208 投影、+272 逆投影、
+// +336 视图投影、+400 逆视图投影、+464 上一帧（改过的）视图投影 全按透视镜头重写，+592 深度还原改走透视分支；片元槽 10 的场景常量（镜头位置、视线、线性深度起点）同改。
+// 阴影图那几份是光源视角，签名不匹配，不动；按正交视锥剔除的计算着色器（CAM_CULL_CS）不改，否则整片地面墙体消失。
+// ---------- Over-the-shoulder / first-person camera (experimental, off by default; DM_CAM=1 over-the-shoulder, 2 first person; see dm/host/dm_cam.c and docs/over-the-shoulder-camera.md) ----------
+// Every constant buffer whose content is the "main camera" (608 bytes, the first two view rows at +80 equal the original isometric orientation, orthographic at +208) is replaced by a copy: +80 view, +144 inverse view, +208 projection, +272 inverse projection,
+// +336 view-projection, +400 inverse view-projection, +464 previous frame's (modified) view-projection are all rewritten for the perspective camera, and +592 switches depth reconstruction to the perspective branch; the scene constants in fragment slot 10 (camera position, view direction, linear depth origin) are changed to match.
+// The shadow-map copies use the light's view and do not match the signature, so they are left alone; the compute shader that culls against the orthographic frustum (CAM_CULL_CS) is not changed, otherwise whole stretches of ground and walls vanish.
+#define CAM_CULL_CS "1188eaedc8db3285"
+int dm_cam_mode(void);
+int dm_cam_want_dir(float *wx, float *wz);
+void dm_cam_publish(const float vpo[16], const float ivpo[16], const float vpp[16], const float ivpp[16], float px, float pz);
+static float cam_envf(const char *k, float d) { const char *e = getenv(k); return e ? (float)atof(e) : d; }
+static void m4_mul(const float *a, const float *b, float *o) { for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { double s = 0; for (int k = 0; k < 4; k++) s += (double)a[i * 4 + k] * b[k * 4 + j]; o[i * 4 + j] = (float)s; } }
+static int m4_inv(const float *m, float *o) {
+    double a[4][8]; for (int i = 0; i < 4; i++) for (int j = 0; j < 8; j++) a[i][j] = j < 4 ? m[i * 4 + j] : (j - 4 == i);
+    for (int c = 0; c < 4; c++) { int p = c; for (int r = c + 1; r < 4; r++) if (fabs(a[r][c]) > fabs(a[p][c])) p = r;
+        if (fabs(a[p][c]) < 1e-12) return 0; if (p != c) for (int j = 0; j < 8; j++) { double t = a[c][j]; a[c][j] = a[p][j]; a[p][j] = t; }
+        double d = a[c][c]; for (int j = 0; j < 8; j++) a[c][j] /= d;
+        for (int r = 0; r < 4; r++) if (r != c) { double f = a[r][c]; for (int j = 0; j < 8; j++) a[r][j] -= f * a[c][j]; } }
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) o[i * 4 + j] = (float)a[i][j + 4]; return 1; }
+static int cam_sig(const uint8_t *p, uint64_t size) {   // 主相机：+80 视图第 1 行 (0.7071, -0.3536, 0.6124)、第 2 行 (0, 0.866, 0.5)，+208 正交（第 3 列为 0、右下 1） | main camera: view row 1 at +80 (0.7071, -0.3536, 0.6124), row 2 (0, 0.866, 0.5), orthographic at +208 (third column 0, bottom-right 1)
+    if (size < 608) return 0; const float *v = (const float *)(p + 80), *pr = (const float *)(p + 208);
+    return fabsf(v[0] - 0.70711f) < 2e-3f && fabsf(v[1] + 0.35355f) < 2e-3f && fabsf(v[2] - 0.61237f) < 2e-3f && fabsf(v[5] - 0.86603f) < 2e-3f && fabsf(v[6] - 0.5f) < 2e-3f
+        && pr[3] == 0 && pr[7] == 0 && pr[11] == 0 && fabsf(pr[15] - 1) < 1e-4f; }
+static int cam_sig10(const uint8_t *p, uint64_t size) {   // 片元槽 10 的场景常量（1440 字节）：+16 镜头位置、+32 视线方向 (-0.612, -0.5, -0.612)、+848 线性深度换算（尺度、1/尺度、起点） | scene constants of fragment slot 10 (1440 bytes): +16 camera position, +32 view direction (-0.612, -0.5, -0.612), +848 linear depth conversion (scale, 1/scale, origin)
+    if (size != 1440) return 0; const float *v = (const float *)(p + 32);
+    return fabsf(v[0] + 0.61237f) < 2e-3f && fabsf(v[1] + 0.5f) < 2e-3f && fabsf(v[2] + 0.61237f) < 2e-3f; }
+// 朝向缺省取原版视线的水平方向（原版镜头看向 −x −z），画面一进来和原版同一个朝向 | the heading defaults to the horizontal direction of the original sight line (the original camera looks towards -x -z), so the picture starts out facing the same way as the original
+static struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3]; int have, have_eye; uint64_t frame, n; double t; } g_cam = { .fx = -0.70711f, .fz = -0.70711f };
+static void cam_build(const uint8_t *src, uint8_t *dst, int m) {   // dst 已是 src 的拷贝；按本帧人物位置与朝向重写各矩阵 | dst is already a copy of src; rewrite the matrices for this frame's character position and heading
+    const float *iv = (const float *)(src + 144), *pr = (const float *)(src + 208);   // 逆视图：第 3 行 = 视图 +z 的世界方向，第 4 行 = 镜头位置 | inverse view: row 3 = world direction of view +z, row 4 = camera position
+    float bx = iv[8], by = iv[9], bz = iv[10], cx = iv[12], cy = iv[13], cz = iv[14];
+    float t = by != 0 ? cy / by : 0, px = cx - t * bx, pz = cz - t * bz;   // 原版镜头总对准人物：视线落地 = 人物 | the original camera always aims at the character: where the sight line meets the ground = the character
+    uint64_t f = atomic_load(&g_cur_frame);
+    if (f != g_cam.frame) {   // 每帧更新一次朝向 | update the heading once per frame
+        g_cam.frame = f;
+        // 镜头跟随：想要的朝向 = 宿主给的（瞄准拖拽 > 移动摇杆，已换成世界方向）> 人物位移方向；没有就保持。按墙钟一阶阻尼转角度（DM_CAM_TAU，缺省 0.35 秒；各帧率下转速一致），走最短的那一边。
+        // 首帧、位移一帧超过 20（换区域 / 传送 / 过门）：朝向重置为原版视线的水平方向
+        // Camera follow: wanted heading = the host's (aim drag > move stick, already converted to a world direction) > the character's displacement; keep the heading when there is none. Turn the angle with a wall-clock first-order lag (DM_CAM_TAU, default 0.35 s; same turn rate at every frame rate), taking the shorter way round.
+        // First frame, or a displacement above 20 in one frame (area change / teleport / door): reset the heading to the horizontal direction of the original sight line
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); double now = ts.tv_sec + ts.tv_nsec * 1e-9, dt = g_cam.t ? now - g_cam.t : 0; g_cam.t = now; if (dt > 0.25) dt = 0.25;
+        float dx = px - g_cam.px, dz = pz - g_cam.pz, l = sqrtf(dx * dx + dz * dz), wx = 0, wz = 0; int want = 0;
+        if (!g_cam.have || l >= 20) g_cam.fx = g_cam.fz = -0.70711f;
+        else { want = dm_cam_want_dir(&wx, &wz); if (!want && l > 0.05f) { wx = dx / l; wz = dz / l; want = 1; }
+            if (want && dt > 0) { float a = atan2f(g_cam.fz, g_cam.fx), d2 = atan2f(wz, wx) - a; while (d2 > 3.14159265f) d2 -= 6.2831853f; while (d2 < -3.14159265f) d2 += 6.2831853f;
+                a += d2 * (float)(1 - exp(-dt / cam_envf("DM_CAM_TAU", 0.35f))); g_cam.fx = cosf(a); g_cam.fz = sinf(a); } }
+        g_cam.px = px; g_cam.pz = pz; g_cam.have = 1; memcpy(g_cam.vp_prev, g_cam.vp_last, 64);
+    }
+    float fx = g_cam.fx, fz = g_cam.fz, eye[3], at[3], fov;
+    if (m == 2) { float h = cam_envf("DM_CAM_EYE", 6.0f), ah = cam_envf("DM_CAM_FWD", 2.2f), pitch = cam_envf("DM_CAM_PITCH", 8.0f) * 3.14159265f / 180;
+        eye[0] = px + fx * ah; eye[1] = h; eye[2] = pz + fz * ah; at[0] = eye[0] + fx * cosf(pitch); at[1] = h - sinf(pitch); at[2] = eye[2] + fz * cosf(pitch); fov = cam_envf("DM_CAM_FOV", 75); }
+    else { float d = cam_envf("DM_CAM_DIST", 20.0f), h = cam_envf("DM_CAM_H", 13.0f), la = cam_envf("DM_CAM_LOOK", 4.0f), lh = cam_envf("DM_CAM_LOOKH", 3.0f);
+        fov = cam_envf("DM_CAM_FOV", 65);
+        // 俯仰限制：画面上沿至少在水平线下 3°，地平线不进画面——原版俯视，没有天空，透视下地平线以上全黑。竖直半视角按本帧纵横比算，不够就把镜头抬高
+        // Pitch limit: the top edge of the picture stays at least 3° below the horizon, so the horizon never enters the picture -- the original is top-down and has no sky, so everything above the horizon is black in perspective. The vertical half-angle follows this frame's aspect ratio; raise the camera when it falls short
+        float tvh = tanf(fov * 3.14159265f / 360) * (pr[5] != 0 ? fabsf(pr[0] / pr[5]) : 9.0f / 16), hmin = lh + (d + la) * tanf(atanf(tvh) + 3 * 3.14159265f / 180);
+        if (h < hmin) h = hmin;
+        eye[0] = px - fx * d; eye[1] = h; eye[2] = pz - fz * d; at[0] = px + fx * la; at[1] = lh; at[2] = pz + fz * la; }
+    float b[3] = { eye[0] - at[0], eye[1] - at[1], eye[2] - at[2] }, bl = sqrtf(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]); for (int i = 0; i < 3; i++) b[i] /= bl;   // 视图 +z = 朝后 | view +z = backwards
+    float r[3] = { b[2], 0, -b[0] }, rl = sqrtf(r[0] * r[0] + r[2] * r[2]); r[0] /= rl; r[2] /= rl;   // 右 = 上(0,1,0) × 后 | right = up(0,1,0) x back
+    float u[3] = { b[1] * r[2] - b[2] * r[1], b[2] * r[0] - b[0] * r[2], b[0] * r[1] - b[1] * r[0] };   // 上 = 后 × 右 | up = back x right
+    float V[16] = { r[0], u[0], b[0], 0,  r[1], u[1], b[1], 0,  r[2], u[2], b[2], 0,
+        -(eye[0] * r[0] + eye[1] * r[1] + eye[2] * r[2]), -(eye[0] * u[0] + eye[1] * u[1] + eye[2] * u[2]), -(eye[0] * b[0] + eye[1] * b[1] + eye[2] * b[2]), 1 };
+    float n = cam_envf("DM_CAM_NEAR", 0.3f), F = 3000, sx = 1.0f / tanf(fov * 3.14159265f / 360), sy = sx * (pr[0] != 0 ? pr[5] / pr[0] : 16.0f / 9);   // 水平视角 fov，纵横比照原投影 | horizontal field of view fov, aspect ratio taken from the original projection
+    float A = n / (F - n), B = n * F / (F - n);   // 反向 Z：视图 z = -n → 1，-F → 0 | reversed Z: view z = -n -> 1, -F -> 0
+    float P[16] = { sx, 0, 0, 0,  0, sy, 0, 0,  0, 0, A, -1,  0, 0, B, 0 }, VP[16], iV[16], iP[16], iVP[16];
+    m4_mul(V, P, VP); m4_inv(V, iV); m4_inv(P, iP); m4_inv(VP, iVP);
+    memcpy(dst + 80, V, 64); memcpy(dst + 144, iV, 64); memcpy(dst + 208, P, 64); memcpy(dst + 272, iP, 64); memcpy(dst + 336, VP, 64); memcpy(dst + 400, iVP, 64);
+    memcpy(dst + 464, g_cam.have && g_cam.vp_prev[15] != 0 ? g_cam.vp_prev : VP, 64); memcpy(g_cam.vp_last, VP, 64);   // 上一帧填我们改过的那份，运动矢量才对 | the previous frame gets our modified one, so motion vectors stay right
+    if (m == 1) dm_cam_publish((const float *)(src + 336), (const float *)(src + 400), VP, iVP, px, pz);   // 给输入换算（dm_cam.c）；第一人称不换算输入 | for input conversion (dm_cam.c); first person does not convert input
+    // +592 = (远, 近, ?, 正交标志 1)。着色器按标志选深度还原：正交 距离 = 远 + d·(近 − 远)；透视 距离 = x / max(d − y, ε)。本投影 d = B/距离 − A → 距离 = B / (d + A)
+    // +592 = (far, near, ?, orthographic flag 1). The shaders pick depth reconstruction by the flag: orthographic distance = far + d*(near - far); perspective distance = x / max(d - y, eps). For this projection d = B/distance - A -> distance = B / (d + A)
+    { int32_t zero = 0; float xy[2] = { B, -A }; memcpy(dst + 592, xy, 8); memcpy(dst + 604, &zero, 4); }
+    for (int i = 0; i < 3; i++) { g_cam.eye[i] = eye[i]; g_cam.fwd[i] = -b[i]; } g_cam.have_eye = 1;
+}
+static void cam_build10(uint8_t *dst) {
+    if (!g_cam.have_eye) return; memcpy(dst + 16, g_cam.eye, 12); memcpy(dst + 32, g_cam.fwd, 12);
+    ((float *)(dst + 848))[2] = 0; }   // 线性深度起点：原版 550（正交镜头离地很远），透视镜头从 0 起 | linear depth origin: 550 in the original (the orthographic camera sits far above the ground), 0 for the perspective camera
+static uint64_t cam_patch(const p_bind_buf *u, void *mb, uint64_t mo) {   // 返回改过的拷贝的 GPU 地址；不是主相机返回 0 | returns the GPU address of the modified copy; 0 when it is not the main camera
+    enum { RING = 4 << 20 }; static __strong id<MTLBuffer> ring; static uint64_t ring_gpu, la, lf, lg; static size_t at;
+    const uint8_t *src = [(__bridge id<MTLBuffer>)mb contents]; if (!src || u->size < 608 || u->size > 4096) return 0; src += mo;
+    int k10 = 0; if (!cam_sig(src, u->size)) { if (!cam_sig10(src, u->size)) return 0; k10 = 1; }
+    uint64_t f = atomic_load(&g_cur_frame); if (!k10 && la == u->addr && lf == f && lg) return lg;
+    if (!ring) { ring = [g_dev newBufferWithLength:RING options:MTLResourceStorageModeShared]; res_add(ring); ring_gpu = ring.gpuAddress; }
+    size_t sz = (u->size + 255) & ~(size_t)255; if (at + sz > RING) at = 0;
+    uint8_t *dst = (uint8_t *)ring.contents + at; memcpy(dst, src, u->size);
+    if (k10) { cam_build10(dst); uint64_t g = ring_gpu + at; at += sz; return g; }
+    cam_build(src, dst, dm_cam_mode());
+    if (g_cam.n++ % 600 == 0) MLOG("镜头实验：第 %llu 次改相机（档 %d，人物 %.1f,%.1f 朝向 %.2f,%.2f）", (unsigned long long)g_cam.n, dm_cam_mode(), g_cam.px, g_cam.pz, g_cam.fx, g_cam.fz);
+    la = u->addr; lf = f; lg = ring_gpu + at; at += sz; return lg;
+}
 #if DM_NVN_M3
 // 旧接口的资源声明去重：同一渲染编码器内对同一资源重复 useResource 是幂等的，而每次新编参数块都会把它引用的资源全声明一遍——
 // 营地实测每次绘制声明 9.7 次、其中 9.2 次是本编码器里已经声明过的，每次约 227 条指令。这里记下本通道（g_pass.serial，与渲染编码器一一对应：
@@ -3090,6 +3182,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             if (!u || !u->addr || !mtl_gpu_addr(u->addr, 1, &mb, &mo, &gpu)) { RED_ONCE(16, "阶段 %d cb%d 没有绑定 uniform 缓冲", nvn_stage, reg); continue; }
             use_rec("buf", u->addr, u->size, 0, NULL);
             if (nvn_stage == 0 && reg == 0 && g_ui_moff != 0) { uint64_t pg = ui_mat_patch(u, mb, mo); if (pg) gpu = pg; }
+            if (dm_cam_mode() > 0 && (nvn_stage != 5 || strncmp(sh->key, CAM_CULL_CS, 16) != 0)) { uint64_t pg = cam_patch(u, mb, mo); if (pg) gpu = pg; }   // 镜头实验：主相机换成透视拷贝（任何槽位、任何阶段；按正交视锥剔除的计算着色器除外） | camera experiment: swap the main camera for the perspective copy (any slot, any stage; except the compute shader that culls against the orthographic frustum)
             if (bl) {
                 PD("B %llu st%d cb reg%d addr=%#llx size=%llu pool=%#llx+%#llx f=%g,%g,%g,%g", g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr, (unsigned long long)u->size,
                    (unsigned long long)(u->addr - mo), (unsigned long long)mo, ((float *)u->addr)[0], ((float *)u->addr)[1], ((float *)u->addr)[2], ((float *)u->addr)[3]);
@@ -5396,7 +5489,7 @@ static int rt_want(void) {
 }
 static int rt_want_raw(void) { static int forced; if (g_rt.env < 0) { const char *e = getenv("DM_RT_AB"); g_rt.env = e ? atoi(e) : 0; forced = e != NULL; if (e) MLOG("DM_RT_AB=%d：画法由环境变量钉住（测试用，自定义页的开关不再起作用）", g_rt.env); }
     if (forced) g_dm_rt_ab = g_rt.env;
-    return g_dm_rt_ab == 1 && !g_rt.disabled && g_frz_on <= 0 && tbdr_on() && g_ruler_truth <= 0 && mtl_fps_target() == 60; }   // 面板开着世界冻结时让给冻结那条（更省）；省电模式（30 帧）每帧真画 | When a panel is open and the world is frozen, yield to the freeze path (saves more); power-saving mode (30 frames) really draws every frame
+    return g_dm_rt_ab == 1 && dm_cam_mode() <= 0 && !g_rt.disabled && g_frz_on <= 0 && tbdr_on() && g_ruler_truth <= 0 && mtl_fps_target() == 60; }   // 面板开着世界冻结时让给冻结那条（更省）；省电模式（30 帧）每帧真画 | When a panel is open and the world is frozen, yield to the freeze path (saves more); power-saving mode (30 frames) really draws every frame
 #include "nvn_rtex.inc"
 static uint64_t rt_key(const p_set_rt *r) { uint64_t s_; int lv, sl; rt_sub(r, 8, &s_, &lv, &sl); return s_ * 64 + (uint64_t)lv * 8 + (uint64_t)sl; }
 static int rt_is_shadow(const p_set_rt *r) { return !r->n && r->depth && r->depth->d.width == r->depth->d.height; }

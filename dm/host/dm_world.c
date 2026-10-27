@@ -326,6 +326,7 @@ static void w_go_step(void) {
 // Hit = the touch point falls inside the target's own screen rectangle (criterion changed: snapping only makes up for finger error and does not turn empty ground into an NPC -- real touch points on empty ground 50–73 pixels from an NPC were measured as taps on him).
 // Rectangle: a unit takes a body box with "feet-to-head" as height and width proportional to the height (humanoid 0.44, object 1.0), objects also union in the footprint (see below); an item on the ground takes its name label rectangle, or the feet point when there is no label;
 // any side shorter than min (about 7 mm) is padded up to min, with no further overall expansion. When several rectangles contain the touch point, take the one whose center is closest to the touch point.
+int dm_cam_on(void); int dm_cam_tap_for_unit(float tx, float ty, float fx, float fy, float *ox, float *oy); int dm_cam_unit_to_screen(float fx, float fy, float hx, float hy, float *ox, float *oy);   // dm_cam.c
 static int w_project(uint8_t *b, uint64_t scene, uint64_t u, float *out, int top) { int r = ((int (*)(uint64_t, uint64_t, float *, int))(b + 0x90d110))(scene, u, out, top); if (r) out[1] += dm_ui_proj_dy(); return r; }   // 这里要真实画面坐标：把界面矩形的 y 加回来（见 dm_uiscreen.c） | real picture coordinates are needed here: add the UI rectangle's y back (see dm_uiscreen.c)
 static int w_in_rect(float px, float py, float cx, float cy, float w, float h, float min, float *d) {
     if (w < min) w = min; if (h < min) h = min; float dx = px - cx, dy = py - cy; if (dx < 0) dx = -dx; if (dy < 0) dy = -dy;
@@ -345,6 +346,7 @@ static int w_sprite_box(uint8_t *b, uint64_t u, int out[4]) {
 }
 static uint64_t w_hit(uint8_t *b, float sx, float sy, float min, float *dist, int *by_label) {
     uint64_t pl = w_player(), scene = *(uint64_t *)(b + 0x2e2a698), best = 0; float bd = 1e9f, d; int brank = 2; *by_label = 0; if (!pl || !scene) return 0;
+    int RWi = 0, RHi = 0; dm_screen_real(&RWi, &RHi); float RW = RWi > 0 ? RWi : 1, RH = RHi > 0 ? RHi : 1; int cam = dm_cam_on();   // 镜头实验开着：逐个候选换触点（见下） | camera experiment on: convert the touch point per candidate (see below)
     static int dumps; int dump = getenv("DM_WORLD_DUMP") && dumps++ < 3;   // 诊断：前 3 次点按把全部候选及其屏幕矩形打出来 | diagnostics: for the first 3 taps print all candidates and their screen rectangles
     uint64_t L = (uint64_t)(uintptr_t)(b + 0x2f0fee0), rec = *(uint64_t *)L, n = *(uint64_t *)(L + 8);
     // 标签矩形是界面坐标（游戏投影出来的，已被减掉界面矩形的 y），点按是真实画面坐标：比的时候加回
@@ -360,6 +362,9 @@ static uint64_t w_hit(uint8_t *b, float sx, float sy, float min, float *dist, in
             int cat = ((int (*)(int, uint64_t, uint64_t))(b + 0x2f7b7c))(0x165, pl, u); if (t == 0 ? cat != 9 : t == 1 ? (cat != 5 && !W_MON_OK(cat)) : t == 2 ? cat != 2 : 0) continue;   // 类别 9 = 死亡状态的玩家单位（0x2f7c28–0x2f7c34：main+0x4667a0 对玩家类判模式 0x11）= 尸体，点它 = 取回装备（游戏点击入口对玩家类发 0x13） | category 9 = a player unit in the dead state (0x2f7c28–0x2f7c34: main+0x4667a0 checks mode 0x11 for the player type) = corpse, tapping it = retrieve equipment (the game's click entry sends 0x13 for the player type)
             float f[2], h[2]; if (!w_project(b, scene, u, f, 0)) continue;
             if (t == 4 || !w_project(b, scene, u, h, 1)) { h[0] = f[0]; h[1] = f[1]; }
+            // 镜头实验（dm_cam.c）：触点是透视画面上的点，这个单位的框是原版正交画面上的——把触点搬到「过它脚底的竖直面」那一层，换回原版画面再比；镜头背后的不算
+            // Camera experiment (dm_cam.c): the touch point is on the perspective picture while this unit's boxes are on the original orthographic picture -- move the touch point to the vertical plane through its feet, convert back to the original picture, then compare; units behind the camera do not count
+            float csx = sx, csy = sy; if (cam) { float ox, oy; if (!dm_cam_tap_for_unit(sx / RW, sy / RH, f[0] / RW, f[1] / RH, &ox, &oy)) continue; csx = ox * RW; csy = oy * RH; }
             float hh = fabsf(f[1] - h[1]), ww = hh * (t == 1 ? 0.44f : 1.0f), cx = (f[0] + h[0]) / 2, cy = (f[1] + h[1]) / 2, dhw = 0, dhv = 0, sbx = 0, sby = 0, sbw = 0, sbh = 0;
             if (t == 0) { cx = f[0]; cy = f[1]; ww = hh; hh = 0; }   // 尸体躺在地上：框取以脚底点为中心、宽 = 身长的一条（高不足补到 min），不用「脚底—头顶」那根竖柱（截图核过，竖柱在尸体上方） | a corpse lies on the ground: the box is a strip centered on the feet point, width = body length (height padded up to min), not the "feet-to-head" vertical column (checked by screenshot, the column is above the corpse)
             if (t == 2) {   // 物件：再并上它的占地范围——贴地的（小站法阵）「身高」很小，光靠身体框只盖住上半截（真实触点：点法阵中心没有目标）。 | object: also union in its footprint -- ground-hugging ones (the waypoint circle) have a very small "height", and the body box alone covers only the upper half (real touch point: tapping the center of the circle found no target).
@@ -385,9 +390,9 @@ static uint64_t w_hit(uint8_t *b, float sx, float sy, float min, float *dist, in
                         if (r > l) { sbw = (r - l) * k; sbh = (bt - tp) * k; sbx = f[0] + (l + r) / 2.0f * k; sby = f[1] + (tp + bt) / 2.0f * k; } } } }
             if (dump) { int sb[4] = {0, 0, 0, 0}; int okb = w_sprite_box(b, u, sb); LOG("世界目标：  [诊断] 类型 %d cls %u 游戏图形范围 %s 左 %d 右 %d 上 %d 下 %d（经典像素）", t, *(uint32_t *)(u + 4), okb ? "有" : "没有", sb[0], sb[1], sb[2], sb[3]); }
             if (dump) LOG("世界目标：候选 类型 %d cls %u id %u 身体框 中心 (%.0f,%.0f) %.0fx%.0f（不足 %.0f 的边补到 %.0f）；占地菱形 中心 (%.0f,%.0f) 半宽 %.0f 半高 %.0f；选择框 中心 (%.0f,%.0f) %.0fx%.0f", t, *(uint32_t *)(u + 4), *(uint32_t *)(u + 8), cx, cy, ww, hh, min, min, f[0], f[1], dhw, dhv, sbx, sby, sbw, sbh);
-            int in = w_in_rect(sx, sy, cx, cy, ww, hh, min, &d);
-            if (!in && dhw > 0) { float ax = fabsf(sx - f[0]), ay = fabsf(sy - f[1]); if (ax / dhw + ay / dhv <= 1) { in = 1; d = sqrtf(ax * ax + ay * ay); } }
-            int rank = 0; if (!in && sbw > 0) { in = w_in_rect(sx, sy, sbx, sby, sbw, sbh, min, &d); rank = 1; }   // 只靠选择框命中的排在身体框 / 菱形 / 标签命中的之后（别让门的大框压过站在门旁、被自己身体框点中的 NPC） | hits by selection box alone rank after hits by body box / diamond / label (do not let a door's large box beat an NPC standing by the door who was hit through his own body box)
+            int in = w_in_rect(csx, csy, cx, cy, ww, hh, min, &d);
+            if (!in && dhw > 0) { float ax = fabsf(csx - f[0]), ay = fabsf(csy - f[1]); if (ax / dhw + ay / dhv <= 1) { in = 1; d = sqrtf(ax * ax + ay * ay); } }
+            int rank = 0; if (!in && sbw > 0) { in = w_in_rect(csx, csy, sbx, sby, sbw, sbh, min, &d); rank = 1; }   // 只靠选择框命中的排在身体框 / 菱形 / 标签命中的之后（别让门的大框压过站在门旁、被自己身体框点中的 NPC） | hits by selection box alone rank after hits by body box / diamond / label (do not let a door's large box beat an NPC standing by the door who was hit through his own body box)
             if (in && (rank < brank || (rank == brank && d < bd))) { bd = d; best = u; brank = rank; *by_label = 0; } } }
     *dist = best ? bd : 0; return best;
 }
@@ -471,7 +476,9 @@ static void w_watch_step(uint8_t *b) {
         if (cls != 0xffffff ? *(uint32_t *)(u + 4) != cls : (t == 4 && *(uint32_t *)(u + 0xc) != 3)) continue;   // 类号 0xffffff（开关里写 any）= 这一类里任意一个；物品只认在地上的 | class number 0xffffff (written as any in the switch) = any one of this type; items only count when on the ground
         float f[2], h[2]; if (!w_project(b, scene, u, f, 0)) continue;
         if (!w_project(b, scene, u, h, 1)) { h[0] = f[0]; h[1] = f[1]; }
-        float cx = (f[0] + h[0]) / 2 / W, cy = (f[1] + h[1]) / 2 / H; if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
+        float cx = (f[0] + h[0]) / 2 / W, cy = (f[1] + h[1]) / 2 / H;
+        if (dm_cam_on()) { float ox, oy; if (!dm_cam_unit_to_screen(f[0] / W, f[1] / H, h[0] / W, h[1] / H, &ox, &oy)) continue; cx = ox; cy = oy; }   // 镜头实验：落到玩家在透视画面上真看见它的地方；在镜头背后的不算 | camera experiment: land where the player actually sees it on the perspective picture; units behind the camera do not count
+        if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
         v = 1ull << 32 | (uint64_t)(uint32_t)(cx * 65535) << 16 | (uint32_t)(cy * 65535); break; }
     atomic_store(&g_watch_pos, v);
 }
