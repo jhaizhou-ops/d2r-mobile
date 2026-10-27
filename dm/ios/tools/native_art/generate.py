@@ -72,7 +72,8 @@ def main(romfs, output=None):
             f'const char dm_ta_binding_sha[]="{sha(binding.read_bytes())}";', 'static const struct { uint32_t id; int atlas,frame; } rows[]={']
     out += [' {%d,%d,%d},' % tuple(row) for row in rows]; out += ['};']
     out += [(HERE / 'implementation.c.inc').read_text()]
-    (destination / 'dm_touch_native_art.c').write_text('\n'.join(out) + '\n', encoding='utf-8', newline='\n')
+    with (destination / 'dm_touch_native_art.c').open('w', encoding='utf-8', newline='\n') as f:
+      f.write('\n'.join(out) + '\n')
     print(f'native_art：{len(rows)} 条技能索引、{len(atlases)} 张 PNG（原件 SHA256 + MD5、尺寸与 RGBA SHA256 都核过）→ {art}')
 
 
