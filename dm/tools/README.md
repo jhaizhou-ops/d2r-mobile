@@ -11,6 +11,7 @@ Three kinds of things live here. The first you will use when following the front
 | `patch_nso.py` | The program rewriter: rewrites the few instructions in the game program that cannot run unchanged under Apple's kernel and leaves everything else byte-for-byte intact. Called by `setup.sh` |
 | `extract_game.sh` | Extracts the two parts this project needs (program files and resources) from your own game package into the workspace |
 | `d2rm_pack.py` | Produces a playable install package without Xcode by building your own game files into the "shell"; see [docs/NO_XCODE.md](../../docs/NO_XCODE.md) |
+| `build_deswizzle.py` | Builds the generators' native texture DLL on Windows x64 from this repository's C sources using LLVM / the NDK; no game files, Visual Studio or Windows SDK needed. See [docs/ANDROID.md](../../docs/ANDROID.md) |
 | `guest_dylib.py` | Writes the rewritten game program as an Apple-format dynamic library (pure Python, byte-identical output on every system); called by `d2rm_pack.py` |
 | `winlf/` | Makes the packaging tool chain use `\n` line endings on Windows, so packages made on different systems match |
 | `product.sh` | The identifier of the current rewrite output lives in one place (`dm/PRODUCT`); scripts get paths through this |
