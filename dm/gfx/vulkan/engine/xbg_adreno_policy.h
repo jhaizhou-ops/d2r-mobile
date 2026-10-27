@@ -45,3 +45,16 @@ inline bool xbg_adreno_rewrite_option(bool marker_present,int marker,const char 
     if(driver_faults)return false;
     return environment && atoi(environment)!=0;
 }
+
+// Adreno 750–799 这一族（骁龙 8 Gen 3 等）的高通着色器编译器 libllvm-qgl.so，遇到「子组指令写在被调用的
+// 辅助函数里」的着色器会在建管线时段错误（addr=0x48，#123、#153、#166 与一份私下反馈，三星与小米共四台机器）。这一族上引擎
+// 载入这种着色器时先把辅助函数内联进入口（导入包不变）；标记文件 gfx-inline 可显式开关（1 / 0）。
+// The Qualcomm shader compiler of the Adreno 750-799 family (Snapdragon 8 Gen 3 and others; libllvm-qgl.so) segfaults while building a pipeline from a shader
+// whose subgroup instructions sit in a called helper function (addr=0x48; #123, #153, #166 and one private report: four
+// Samsung and Xiaomi phones). On this family the engine inlines the helpers into the entry point when it loads such a shader
+// (the import pack is unchanged); the marker file gfx-inline turns it on or off explicitly (1 / 0).
+inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *device_name){
+    if(vendor_id!=0x5143)return false;
+    const int model=xbg_adreno_model(device_name);
+    return model>=750 && model<800;
+}

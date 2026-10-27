@@ -78,6 +78,7 @@ English: [DEPENDENCIES.md](DEPENDENCIES.md)
 | `dm/third_party/libdeflate` | 解压 | MIT | <https://github.com/ebiggers/libdeflate> |
 | `dm/gfx/vulkan/engine/third_party/bcdec` | 安卓 Vulkan 图形层里解压 BC 贴图（与上面的 bcdec 同源，单独固定了版本） | MIT 或 Unlicense（任选） | <https://github.com/iOrange/bcdec> |
 | `dm/gfx/vulkan/engine/third_party/pillow_reference` | Pillow 的 BC6 解码参考表，只用于 Vulkan 图形层的测试 | HPND（Pillow 的许可证） | <https://github.com/python-pillow/Pillow> |
+| `dm/third_party/spirv-tools` | SPIRV-Tools 的优化器库和它引用的 SPIR-V 头文件，编进安卓包，用来在 Adreno 750 这一族上内联着色器的辅助函数 | Apache 2.0（SPIR-V 头文件：Khronos 的 MIT 式许可） | <https://github.com/KhronosGroup/SPIRV-Tools>、<https://github.com/KhronosGroup/SPIRV-Headers> |
 | `dm/third_party/ryujinx` | Ryujinx 1.3.2 的着色器翻译库（三个项目，未修改），把 Switch 原版着色器翻译成 SPIR-V | MIT | <https://github.com/Ryubing> |
 | `dm/gfx/nvn/include/nvn.h` | 图形接口声明 | MIT | 文件头注明作者 |
 | `dm/gfx/nvn/nvn_tex.c` 中的排布尺寸算法 | 移植自 deko3d | zlib | <https://github.com/devkitPro/deko3d> |

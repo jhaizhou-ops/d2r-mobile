@@ -78,6 +78,7 @@ These are already in the repository; nothing to download. Each keeps its license
 | `dm/third_party/libdeflate` | Decompression | MIT | <https://github.com/ebiggers/libdeflate> |
 | `dm/gfx/vulkan/engine/third_party/bcdec` | BC texture decompression in the Android Vulkan graphics layer (same project as the bcdec above, pinned separately) | MIT or Unlicense (your choice) | <https://github.com/iOrange/bcdec> |
 | `dm/gfx/vulkan/engine/third_party/pillow_reference` | Pillow's BC6 decoding reference tables, used only by the Vulkan graphics layer's tests | HPND (Pillow's license) | <https://github.com/python-pillow/Pillow> |
+| `dm/third_party/spirv-tools` | SPIRV-Tools optimizer library and the SPIR-V headers it includes, built into the Android package to inline shader helpers on the Adreno 750 family | Apache 2.0 (SPIR-V headers: Khronos MIT-style) | <https://github.com/KhronosGroup/SPIRV-Tools>, <https://github.com/KhronosGroup/SPIRV-Headers> |
 | `dm/third_party/ryujinx` | The shader translator from Ryujinx 1.3.2 (three projects, unmodified), which translates the original Switch shaders to SPIR-V | MIT | <https://github.com/Ryubing> |
 | `dm/gfx/nvn/include/nvn.h` | Graphics interface declarations | MIT | Author named in the file header |
 | Layout size algorithm in `dm/gfx/nvn/nvn_tex.c` | Ported from deko3d | zlib | <https://github.com/devkitPro/deko3d> |

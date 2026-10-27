@@ -79,9 +79,13 @@ void crash_off(const char *tag, uint64_t a) {   // diag.c 也用 | Also used by 
 #define off crash_off
 
     module_t *m = module_of((void *)a);
-    Dl_info di;
+    Dl_info di = {0};
     if (m) fprintf(stderr, " %s%s%s+%#llx", tag, *tag ? "=" : "", m->name, a - (uint64_t)m->base);
     else if (dladdr((void *)a, &di) && di.dli_sname) fprintf(stderr, " %s%s%s+%#lx", tag, *tag ? "=" : "", di.dli_sname, (unsigned long)(a - (uint64_t)di.dli_saddr));
+    // 没有符号的库（例如高通驱动的 libllvm-qgl.so）：打库名 + 库内偏移，不同手机之间能直接比（#153、#166）
+    // A library without symbols (Qualcomm's libllvm-qgl.so for one): print the library name and the offset in it, comparable
+    // across phones (#153, #166)
+    else if (di.dli_fname && di.dli_fbase) { const char *n = strrchr(di.dli_fname, '/'); fprintf(stderr, " %s%s%s+%#llx", tag, *tag ? "=" : "", n ? n + 1 : di.dli_fname, (unsigned long long)(a - (uint64_t)di.dli_fbase)); }
     else fprintf(stderr, " %s%s%#llx", tag, *tag ? "=" : "", a);
 }
 // 帧指针回溯：x29 链 [fp]=上一帧 fp、[fp+8]=返回地址；只走 8 字节对齐、单调上升的帧

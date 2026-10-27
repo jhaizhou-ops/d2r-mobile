@@ -22,6 +22,7 @@ get_filename_component(DM_PATH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUTE)
 foreach(map "${CMAKE_BINARY_DIR}=build" "${DM_GEN_DIR}=gen" "${CMAKE_ANDROID_NDK}=ndk" "${DM_PATH_ROOT}=src")
   add_compile_options("-ffile-prefix-map=${map}")
 endforeach()
+add_subdirectory(../third_party/spirv-tools ${CMAKE_CURRENT_BINARY_DIR}/spirv-tools)   # 先于引擎：Adreno 750 载入时内联辅助函数 | before the engine: Adreno 750 helper inlining at load
 add_subdirectory(../gfx/vulkan ${CMAKE_CURRENT_BINARY_DIR}/vulkan)
 
 set(DM ${CMAKE_CURRENT_SOURCE_DIR}/..)

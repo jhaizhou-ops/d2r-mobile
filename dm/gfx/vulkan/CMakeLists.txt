@@ -12,5 +12,11 @@ target_compile_options(dm_vulkan_engine PRIVATE -O2 -fno-strict-aliasing -Wall -
 set_source_files_properties(${E}/xbg_texture.c PROPERTIES COMPILE_OPTIONS -fsigned-char)
 set_target_properties(dm_vulkan_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(dm_vulkan_engine PUBLIC vulkan log)
+# 宿主工程先加入了 SPIRV-Tools（dm_spirv_opt，安卓）时，Adreno 750 的辅助函数内联才编进来（gfx-inline）。
+# Adreno 750 helper inlining (gfx-inline) is built in only when the host project added SPIRV-Tools first (dm_spirv_opt, Android).
+if(TARGET dm_spirv_opt)
+  target_link_libraries(dm_vulkan_engine PRIVATE dm_spirv_opt)
+  target_compile_definitions(dm_vulkan_engine PRIVATE XBG_HAVE_SPIRV_OPT=1)
+endif()
 # nvn_vk.c is compiled in dmcore (host compatibility flags); engine deliberately
 # reuses dmcore's nvn_tex.c / nvn_deswizzle.c rather than duplicate definitions.

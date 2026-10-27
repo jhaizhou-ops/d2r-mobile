@@ -36,6 +36,17 @@ int main(){
     CHECK(!xbg_adreno_rewrites_fault(0x10002,"Adreno (TM) 740"));
     CHECK(!xbg_adreno_rewrites_fault(0,"Adreno 750"));
 
+    // 载入时内联辅助函数的只有高通 750–799（编译器崩的那一族）；740 只关改写。
+    // Only Qualcomm's 750-799 family (whose compiler crashes) inlines the helpers at load; 740 only has the rewrites off.
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 750"));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno 799"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 740"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 735"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 730"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 830"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,nullptr));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x10002,"Adreno 750"));
+
     // 优先级：标记文件 > 机型判断 > 环境变量。
     // Precedence: marker file > device family > environment.
     CHECK(xbg_adreno_rewrite_option(true,'1',nullptr,false));
@@ -53,6 +64,6 @@ int main(){
     CHECK(xbg_adreno_rewrite_option(false,-1,"2",false));
 
     if(failures){printf("FAIL %d check(s)\n",failures);return 1;}
-    printf("PASS Adreno policy: 740/750 default off, 730/830 and other vendors unchanged, marker file still wins\n");
+    printf("PASS Adreno policy: 740/750 default off, 750-799 inline helpers, 730/830 and other vendors unchanged, marker file still wins\n");
     return 0;
 }

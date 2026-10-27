@@ -8,9 +8,7 @@
 #   ② 裁剪（③）之后，补「未定格式」存储图像读写的能力（Ryujinx 不声明，见 add_format_caps）；
 #   ③ spirv-opt --trim-capabilities：Ryujinx 无条件声明 Float64 / GroupNonUniform* / DrawParameters 等，引擎只放行白名单、见到扩展即报错。其余不优化
 #     （quad / warp 改写器按 Ryujinx 原始写法匹配）。最后 spirv-val --target-env vulkan1.1。
-#   ④ 只在 DM_VK_INLINE_CS=1 时（缺省不做）：计算着色器里「非入口函数含子组指令」的，把辅助函数全部内联进入口（S24 Ultra / Adreno 750
-#     的高通驱动在这种结构上启动即崩）。只动计算着色器：像素着色器的 quad 改写器认 Ryujinx 的 SHFL 辅助函数调用形式，内联后 176 个就改不了了；
-#     计算着色器内联后 warp32 仍能改写（5 个里 5 个）。
+#   不在这里内联：Adreno 750 要的「辅助函数内联」由引擎在手机上载入时做（gfx-inline，见 xbg_adreno_policy.h），导入包对所有机型一样。
 # 绑定来源（贴图 / 采样器 / 存储缓冲槽、c0 / c2 驱动段、c1）与 dmsh_build.py 的 reflect() / decode_tex() 同一套解码。
 # 用法：dmsh_vk.py <Switch 包目录> <输出目录> [键…]     环境：XLATE（翻译器）、MAIN（main NSO）、J（并发）、SPIRV_OPT / SPIRV_VAL
 #       dmsh_vk.py --compare <参考 .xgs 目录> <本次输出目录>    逐个比字节：一致 / 不一致（不一致的再分 SPIR-V / 绑定表 / 其他）
@@ -23,9 +21,7 @@
 #   ② after trimming (③), add the capabilities for reading and writing storage images of unknown format (Ryujinx does not declare them, see add_format_caps);
 #   ③ spirv-opt --trim-capabilities: Ryujinx always declares Float64 / GroupNonUniform* / DrawParameters and others, while the engine allows only a whitelist and fails on any extension. No other optimization
 #     (the quad / warp rewriters match Ryujinx's original form). Finally spirv-val --target-env vulkan1.1.
-#   ④ Only with DM_VK_INLINE_CS=1 (off by default): compute shaders where a non-entry function contains subgroup instructions get every helper inlined into the entry point (the Qualcomm driver on the S24 Ultra / Adreno 750
-#     crashes at startup on that shape). Compute shaders only: the pixel shaders' quad rewriter matches Ryujinx's SHFL helper-call form, and 176 of them could no longer be rewritten after inlining;
-#     after inlining, warp32 still rewrites the compute shaders (5 of 5).
+#   No inlining here: the helper inlining the Adreno 750 needs is done by the engine on the phone at load time (gfx-inline, see xbg_adreno_policy.h), so the import pack is the same for every phone.
 # Binding sources (texture / sampler / storage buffer slots, the c0 / c2 driver banks, c1) use the same decoding as reflect() / decode_tex() in dmsh_build.py.
 # Usage: dmsh_vk.py <Switch package directory> <output directory> [keys...]     environment: XLATE (translator), MAIN (main NSO), J (parallelism), SPIRV_OPT / SPIRV_VAL
 #        dmsh_vk.py --compare <reference .xgs directory> <output directory>    compare byte by byte: identical / different (the different ones split into SPIR-V / binding table / other)
@@ -35,21 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')
 OPT, VAL = (os.environ.get(k, d) for k, d in (('SPIRV_OPT', 'spirv-opt'), ('SPIRV_VAL', 'spirv-val')))
 STAGE_NO = {'vs': 0, 'hs': 1, 'ds': 2, 'gs': 3, 'ps': 4, 'cs': 5}
-INLINE_CS = os.environ.get('DM_VK_INLINE_CS') == '1'
 
-
-def helper_has_subgroup(spv):
-    """非入口函数里有没有子组指令（OpGroupNonUniform*，操作码 333–366） | Whether a non-entry function contains subgroup instructions (OpGroupNonUniform*, opcodes 333–366)"""
-    w = struct.unpack('<%dI' % (len(spv) // 4), spv[:len(spv) // 4 * 4]); i, entry, cur = 5, set(), None
-    while i < len(w):
-        op, wc = w[i] & 0xffff, w[i] >> 16
-        if not wc: break
-        if op == 15: entry.add(w[i + 2])
-        elif op == 54: cur = w[i + 2]
-        elif op == 56: cur = None
-        elif 333 <= op <= 366 and cur is not None and cur not in entry: return True
-        i += wc
-    return False
 TEX_BASE, SAMP_BASE, IMG_BASE = 0x168, 0x568, 0x120   # 同 dmsh_build.py：c[2] 贴图句柄表、采样器句柄表、图像句柄表 | as dmsh_build.py: the texture handle, sampler handle and image handle tables in c[2]
 
 
@@ -276,11 +258,6 @@ def one(key):
     open(f1, 'wb').write(spv)
     r = subprocess.run([OPT, '--trim-capabilities', f1, '-o', f2], capture_output=True, text=True)
     if r.returncode: return key, 'spirv-opt 失败', r.stderr.strip()[:160]
-    if INLINE_CS and stage == 'cs' and helper_has_subgroup(open(f2, 'rb').read()):
-        f3 = os.path.join(work, key + '.i.spv')
-        r = subprocess.run([OPT, '--merge-return', '--inline-entry-points-exhaustive', '--eliminate-dead-functions', f2, '-o', f3], capture_output=True, text=True)
-        if r.returncode: return key, 'spirv-opt 内联失败', r.stderr.strip()[:160]
-        os.replace(f3, f2)
     spv = add_format_caps(open(f2, 'rb').read()); open(f2, 'wb').write(spv)
     r = subprocess.run([VAL, '--target-env', 'vulkan1.1', f2], capture_output=True, text=True)
     if r.returncode: return key, 'spirv-val 失败', r.stderr.strip().splitlines()[0][:160] if r.stderr.strip() else '?'
