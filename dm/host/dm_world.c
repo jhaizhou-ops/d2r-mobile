@@ -378,6 +378,7 @@ static int w_sprite_box(uint8_t *b, uint64_t u, int out[4]) {
 static uint64_t w_hit(uint8_t *b, float sx, float sy, float min, float *dist, int *by_label) {
     uint64_t pl = w_player(), scene = *(uint64_t *)(b + 0x2e2a698), best = 0; float bd = 1e9f, d; int brank = 2; *by_label = 0; if (!pl || !scene) return 0;
     int RWi = 0, RHi = 0; dm_screen_real(&RWi, &RHi); float RW = RWi > 0 ? RWi : 1, RH = RHi > 0 ? RHi : 1; int cam = w_cam_convert();   // 镜头实验开着：逐个候选换触点（见下） | camera experiment on: convert the touch point per candidate (see below)
+    int persp = !cam && dm_cam_on();
     static int dumps; int dump = getenv("DM_WORLD_DUMP") && dumps++ < 3;   // 诊断：前 3 次点按把全部候选及其屏幕矩形打出来 | diagnostics: for the first 3 taps print all candidates and their screen rectangles
     uint64_t L = (uint64_t)(uintptr_t)(b + 0x2f0fee0), rec = *(uint64_t *)L, n = *(uint64_t *)(L + 8);
     // 标签矩形是界面坐标（游戏投影出来的，已被减掉界面矩形的 y），点按是真实画面坐标：比的时候加回
@@ -393,6 +394,13 @@ static uint64_t w_hit(uint8_t *b, float sx, float sy, float min, float *dist, in
             int cat = ((int (*)(int, uint64_t, uint64_t))(b + 0x2f7b7c))(0x165, pl, u); if (t == 0 ? cat != 9 : t == 1 ? (cat != 5 && !W_MON_OK(cat)) : t == 2 ? cat != 2 : 0) continue;   // 类别 9 = 死亡状态的玩家单位（0x2f7c28–0x2f7c34：main+0x4667a0 对玩家类判模式 0x11）= 尸体，点它 = 取回装备（游戏点击入口对玩家类发 0x13） | category 9 = a player unit in the dead state (0x2f7c28–0x2f7c34: main+0x4667a0 checks mode 0x11 for the player type) = corpse, tapping it = retrieve equipment (the game's click entry sends 0x13 for the player type)
             float f[2], h[2]; if (!w_project(b, scene, u, f, 0)) continue;
             if (t == 4 || !w_project(b, scene, u, h, 1)) { h[0] = f[0]; h[1] = f[1]; }
+            // 越肩镜头、框已在透视画面上（persp）：紧贴镜头近平面的单位，投影会炸成远大于画面的框，点哪都中它（实测沃里夫站在镜头旁：框 12937 × 29403、
+            // 框心在画面外，点远处的游侠却跟他说上了话）。框心不在画面里（四周各留 1/4）或比画面高两倍的，玩家不可能是在点它，不算
+            // Over-the-shoulder camera with boxes already on the perspective picture (persp): a unit hugging the camera's near plane projects to a box far
+            // larger than the picture, and every tap hits it (measured: Warriv standing next to the camera got a 12937 x 29403 box centred off the picture,
+            // and tapping a distant rogue started a talk with him). A box whose centre is off the picture (with a quarter of margin on every side) or that is
+            // more than twice the picture's height cannot be what the player tapped, so it does not count
+            if (persp) { float bx = (f[0] + h[0]) / 2, by = (f[1] + h[1]) / 2; if (bx < -RW / 4 || bx > RW * 1.25f || by < -RH / 4 || by > RH * 1.25f || fabsf(f[1] - h[1]) > 2 * RH) continue; }
             // 镜头实验（dm_cam.c）：触点是透视画面上的点，这个单位的框是原版正交画面上的——把触点搬到「过它脚底的竖直面」那一层，换回原版画面再比；镜头背后的不算
             // Camera experiment (dm_cam.c): the touch point is on the perspective picture while this unit's boxes are on the original orthographic picture -- move the touch point to the vertical plane through its feet, convert back to the original picture, then compare; units behind the camera do not count
             float csx = sx, csy = sy; if (cam) { float ox, oy; if (!dm_cam_tap_for_unit(sx / RW, sy / RH, f[0] / RW, f[1] / RH, &ox, &oy)) continue; csx = ox * RW; csy = oy * RH; }
