@@ -25,7 +25,10 @@ static inline xbg_cam_params xbg_cam_default_params(int mode) {
 // 跨帧状态：朝向 (fx, fz)、上一帧人物位置、上一帧与本帧改过的视图投影、本帧镜头位置与视线；dcur = 避墙后镜头离人物的水平距离（0 = 还没算，用 dist）
 // State across frames: heading (fx, fz), the character's previous position, the previous and current modified view-projection, this frame's camera position
 // and sight line; dcur = the camera's horizontal distance from the character after wall avoidance (0 = not computed yet, use dist)
-typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3], dcur; int have, have_eye; uint64_t frame; double t; } xbg_cam_state;
+// hold = 体感转向进行中（宿主 dm_cam_turn_age 一秒内有转动）：跟随不动朝向，免得和玩家转手机抢
+// hold = sensor steering in progress (the host's dm_cam_turn_age saw a turn within a second): the follow leaves the heading alone, so it does not
+// fight the player turning the phone
+typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3], dcur; int have, have_eye, hold; uint64_t frame; double t; } xbg_cam_state;
 static inline void xbg_cam_init(xbg_cam_state *s) {
     memset(s, 0, sizeof *s);
     // 朝向缺省取原版视线的水平方向（原版镜头看向 −x −z），画面一进来和原版同一个朝向
@@ -101,7 +104,7 @@ static inline int xbg_cam_follow(xbg_cam_state *s, float px, float pz, uint64_t 
     if (dt > 0.25) dt = 0.25;
     float dx = px - s->px, dz = pz - s->pz, l = sqrtf(dx * dx + dz * dz);
     if (!s->have || l >= 20) s->fx = s->fz = -0.70711f;
-    else {
+    else if (!s->hold) {
         if (!want && l > 0.05f) { wx = dx / l; wz = dz / l; want = 1; }
         if (want && dt > 0) {
             float a = atan2f(s->fz, s->fx), d = atan2f(wz, wx) - a;
@@ -117,6 +120,15 @@ static inline int xbg_cam_follow(xbg_cam_state *s, float px, float pz, uint64_t 
     s->have = 1;
     memcpy(s->vp_prev, s->vp_last, 64);
     return 1;
+}
+
+// 体感转向：朝向转 rad 弧度，正 = 往画面右边转（朝向 f 转向 右 = (−f.z, f.x)，即世界 xz 平面里角度增大）
+// Sensor steering: turn the heading by rad radians, positive = towards the right of the picture (heading f turns towards right = (-f.z, f.x), i.e. the
+// angle in the world xz plane increases)
+static inline void xbg_cam_turn(xbg_cam_state *s, float rad) {
+    float a = atan2f(s->fz, s->fx) + rad;
+    s->fx = cosf(a);
+    s->fz = sinf(a);
 }
 
 // 避墙（越肩档）：clear = 人物身后、镜头那个方向上离第一面墙多远（世界单位，宿主按碰撞格量的；0 = 不知道）。镜头往里拉要快（0.08 秒），

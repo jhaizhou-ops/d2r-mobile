@@ -312,6 +312,12 @@ JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeStart(JNIEnv *env
 }
 
 static ANativeWindow *g_win;
+// 越肩镜头的体感转向（dm/host/dm_cam.c、CamSensor.java）：开哪种传感器（0 = 不开），以及每次转动的弧度（正 = 往画面右边转）
+// Sensor steering of the over-the-shoulder camera (dm/host/dm_cam.c, CamSensor.java): which sensor to listen to (0 = none), and each turn in radians
+// (positive = towards the right of the picture)
+int dm_cam_sensor_mode(void); void dm_cam_turn(float rad);
+JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamSensor(JNIEnv *env, jclass cls) { (void)env; (void)cls; return dm_cam_sensor_mode(); }
+JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamTurn(JNIEnv *env, jclass cls, jfloat rad) { (void)env; (void)cls; dm_cam_turn(rad); }
 JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeRefresh(JNIEnv *env, jclass cls, jfloat hz) {
     (void)env; (void)cls;
     front_android_set_refresh(hz);

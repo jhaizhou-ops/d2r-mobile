@@ -115,11 +115,27 @@ static int remap_one(const cam_t *c, int32_t *x, int32_t *y, float wdir[2]) {
 // 锁住以后：按住右推 = 朝按下时画面的右边一直跑，镜头约 1.5 秒转到人背后；下一次推再按新镜头算
 // The reference camera is locked per push: the perspective camera at the moment the stick goes from 0 to non-zero is the reference until release. Without the lock the stick is relative to a camera that is turning while the camera chases the stick's world direction, and holding right runs in circles.
 // With the lock: holding right = keep running towards the right of the picture as it was when pressed, and the camera swings behind the character in about 1.5 s; the next push uses the new camera
-static cam_t g_ref_l, g_ref_r; static int g_ref_l_on, g_ref_r_on;
+// 体感转向（安卓 CamSensor.java → jni_android.c → 这里）：DM_CAM_SENSOR=1 转手机 / 转身看四周（陀螺仪），=2 像方向盘那样侧倾手机转（重力）。
+// 前端把每次转动（弧度，正 = 往画面右边转）累加进来，画面线程每帧取走一次（xbg_game.cpp）；最近一秒内转过 = 体感转向进行中，镜头跟随让开。
+// 体感转过以后参照镜头跟着重锁：玩家转手机就是要换「前方」，推上 = 朝现在看的方向走（跟随引起的转动不重锁，那是上面说的转圈问题）
+// Sensor steering (Android CamSensor.java -> jni_android.c -> here): DM_CAM_SENSOR=1 turn the phone / your body to look around (gyroscope), =2 tilt the
+// phone like a steering wheel (gravity). The front end adds each turn (radians, positive = towards the right of the picture) here, and the render thread
+// takes the sum once per frame (xbg_game.cpp); a turn within the last second = sensor steering in progress, and the camera follow stands aside.
+// After a sensor turn the reference camera is re-locked: turning the phone means a new "ahead", so pushing up walks where the player now looks (turns caused
+// by the follow are not re-locked, that is the running-in-circles problem described above)
+int dm_cam_sensor_mode(void) { static int m = -1; if (m < 0) { const char *e = getenv("DM_CAM_SENSOR"); m = dm_cam_mode() == 1 && e ? atoi(e) : 0; if (m) LOG("DM_CAM_SENSOR=%d：体感转向开（1 转手机看四周 / 2 侧倾转向）", m); } return m; }
+static float g_turn, g_turn_total; static double g_turn_t;
+void dm_cam_turn(float rad) { if (rad == 0) return; pthread_mutex_lock(&g_mu); g_turn += rad; g_turn_total += rad; g_turn_t = now_s(); pthread_mutex_unlock(&g_mu); }
+float dm_cam_take_turn(void) { pthread_mutex_lock(&g_mu); float r = g_turn; g_turn = 0; pthread_mutex_unlock(&g_mu); return r; }
+double dm_cam_turn_age(void) { pthread_mutex_lock(&g_mu); double a = g_turn_t > 0 ? now_s() - g_turn_t : 1e9; pthread_mutex_unlock(&g_mu); return a; }
+static float turn_total(void) { pthread_mutex_lock(&g_mu); float t = g_turn_total; pthread_mutex_unlock(&g_mu); return t; }
+
+static cam_t g_ref_l, g_ref_r; static int g_ref_l_on, g_ref_r_on; static float g_ref_l_turn, g_ref_r_turn;
 void dm_cam_remap_stick(int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     cam_t c; if (!cam_get(&c)) { atomic_store(&g_want_on, 0); g_ref_l_on = g_ref_r_on = 0; return; }
-    if (!*lx && !*ly) g_ref_l_on = 0; else if (!g_ref_l_on) { g_ref_l = c; g_ref_l_on = 1; }
-    if (!*rx && !*ry) g_ref_r_on = 0; else if (!g_ref_r_on) { g_ref_r = c; g_ref_r_on = 1; }
+    float tt = turn_total();
+    if (!*lx && !*ly) g_ref_l_on = 0; else if (!g_ref_l_on || fabsf(tt - g_ref_l_turn) > 0.035f) { g_ref_l = c; g_ref_l_on = 1; g_ref_l_turn = tt; }
+    if (!*rx && !*ry) g_ref_r_on = 0; else if (!g_ref_r_on || fabsf(tt - g_ref_r_turn) > 0.035f) { g_ref_r = c; g_ref_r_on = 1; g_ref_r_turn = tt; }
     cam_t cl = c, cr = c; memcpy(cl.vpp, g_ref_l.vpp, 64); memcpy(cl.ivpp, g_ref_l.ivpp, 64); memcpy(cr.vpp, g_ref_r.vpp, 64); memcpy(cr.ivpp, g_ref_r.ivpp, 64);   // 只借参照镜头的朝向；原版正交与人物位置用当前的 | borrow only the reference camera's heading; the original orthographic matrices and character position are current
     float wl[2], wr[2]; int l = g_ref_l_on && remap_one(&cl, lx, ly, wl), r = g_ref_r_on && remap_one(&cr, rx, ry, wr);
     const float *w = r ? wr : l ? wl : NULL;   // 瞄准拖拽优先（朝攻击方向），其次移动方向 | aim drag first (face the attack), then the move direction

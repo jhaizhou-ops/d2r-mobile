@@ -48,6 +48,10 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     static native void nativeTouch(int n, int[] ids, float[] xs, float[] ys);
     static native void nativeFocus(int ev);
     static native void nativeTextResult(long id, boolean accepted, String text);
+    // 越肩镜头的体感转向（CamSensor）：开哪种传感器（0 = 不开），每次转动的弧度
+    // Sensor steering of the over-the-shoulder camera (CamSensor): which sensor to listen to (0 = none), each turn in radians
+    static native int nativeCamSensor();
+    static native void nativeCamTurn(float rad);
 
     private static WeakReference<DmActivity> current = new WeakReference<>(null);
     private static volatile int bootFailure;
@@ -61,6 +65,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     private boolean libraryLoaded;
     private boolean resumed;
     private DisplayManager displays;
+    private CamSensor camSensor;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -73,6 +78,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         current = new WeakReference<>(this);
         displays = getSystemService(DisplayManager.class);
         if (displays != null) displays.registerDisplayListener(this, null);
+        camSensor = new CamSensor(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getAttributes().layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         view = new SurfaceView(this);
@@ -268,6 +274,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         }
         started = true;
         touchOverlay.setInputEnabled(true);
+        if (camSensor != null) camSensor.start(nativeCamSensor());
         nativeFocus(3);
     }
 
@@ -389,8 +396,8 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     @Override public void onDisplayAdded(int id) { updateRefresh(); }
     @Override public void onDisplayRemoved(int id) { updateRefresh(); }
     @Override public void onDisplayChanged(int id) { updateRefresh(); }
-    @Override protected void onResume() { super.onResume(); resumed = true; immersive(); startHost(); updateRefresh(); if (started) { nativeFocus(3); if (touchOverlay != null && bootFailure == 0) touchOverlay.setInputEnabled(true); } }
-    @Override protected void onPause() { resumed = false; if (inputDialog != null) inputDialog.dismiss(); releaseTouches(); if (touchOverlay != null) touchOverlay.setInputEnabled(false); if (started) nativeFocus(0); super.onPause(); }
+    @Override protected void onResume() { super.onResume(); resumed = true; immersive(); startHost(); updateRefresh(); if (started) { nativeFocus(3); if (touchOverlay != null && bootFailure == 0) touchOverlay.setInputEnabled(true); if (camSensor != null) camSensor.start(nativeCamSensor()); } }
+    @Override protected void onPause() { resumed = false; if (camSensor != null) camSensor.stop(); if (inputDialog != null) inputDialog.dismiss(); releaseTouches(); if (touchOverlay != null) touchOverlay.setInputEnabled(false); if (started) nativeFocus(0); super.onPause(); }
     @Override protected void onStart() { super.onStart(); if (started) nativeFocus(2); }
     @Override protected void onStop() { if (started) nativeFocus(1); com.xiaoboluo.d2r.widget.HeroWidgetProvider.requestUpdate(this); super.onStop(); }
     @Override protected void onDestroy() { if (displays != null) displays.unregisterDisplayListener(this); if (inputDialog != null) inputDialog.dismiss(); if (current.get() == this) current.clear(); super.onDestroy(); }

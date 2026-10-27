@@ -125,6 +125,15 @@ int main(){
      const float t1[4]={0,1,1,1},t0[4]={0,1,0.001f,1};float a[4],b[4];xf(ivp,t1,a);xf(ivp,t0,b);
      double dx=b[0]/b[3]-a[0]/a[3],dy=b[1]/b[3]-a[1]/a[3],dz=b[2]/b[3]-a[2]/a[3];CHECK(atan2(-dy,hypot(dx,dz))*180/3.14159265358979>=3-0.05);}
 
+    // 体感转向：正 = 往画面右边转（朝向转向 右 = (−f.z, f.x)）；hold 时跟随不动朝向（宿主的朝向、位移都不管），但换区域照样重置
+    // Sensor steering: positive = towards the right of the picture (the heading turns towards right = (-f.z, f.x)); with hold the follow leaves the
+    // heading alone (neither the host's heading nor the displacement), but an area change still resets it
+    {xbg_cam_state s;xbg_cam_init(&s);xbg_cam_follow(&s,0,0,1,1.0,0,0,0,0.2f);s.fx=1;s.fz=0;
+     const float rx=-s.fz,rz=s.fx;xbg_cam_turn(&s,0.1f);CHECK(s.fx*rx+s.fz*rz>0 && near(heading_deg(s),0.1*180/3.14159265358979,1e-3));
+     s.hold=1;const float hx=s.fx,hz=s.fz;xbg_cam_follow(&s,0,3,2,1.2,1,0,1,0.2f);CHECK(s.fx==hx && s.fz==hz);
+     xbg_cam_follow(&s,0,40,3,1.4,1,0,1,0.2f);CHECK(near(s.fx,-0.70711,1e-4) && near(s.fz,-0.70711,1e-4));
+     s.hold=0;xbg_cam_follow(&s,0,40,4,1.6,1,0,1,0.2f);CHECK(heading_deg(s)>-135+1);}
+
     if(failures){printf("%d failure(s)\n",failures);return 1;}
     printf("cam_test: all checks passed\n");return 0;
 }
