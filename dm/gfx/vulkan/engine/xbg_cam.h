@@ -167,7 +167,11 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
         // When wall avoidance pulls the camera in, the camera rises ("boom"): its distance to the look height stays the same, so a shorter horizontal distance
         // means a higher camera; right against a wall it looks down from nearly overhead, close to the original view, instead of sitting on the character's
         // back (measured on a OnePlus 13: with a wall one cell behind, the camera dropped to 2 from the character at shoulder height)
-        float d = s->dcur > 0 ? s->dcur : pp->dist, la = pp->look, lh = pp->lookh, boom = pp->dist * pp->dist + (pp->h - lh) * (pp->h - lh);
+        float d = s->dcur > 0 ? s->dcur : pp->dist, lh = pp->lookh, boom = pp->dist * pp->dist + (pp->h - lh) * (pp->h - lh);
+        // 拉近时看点也往人身上收（前看距离同比例缩）：镜头又近又陡时还看人前方 4，人会沉到画面底下、被底栏盖住（Redmi 实测：离 8、高 23.9 时人在画面 86% 高处）
+        // When pulled in, the look point moves back onto the character too (the look-ahead shrinks in proportion): close and steep while still looking 4 ahead,
+        // the character sinks to the bottom of the picture under the bottom bar (measured on the Redmi: 8 out and 23.9 high put the character at 86% of the height)
+        float la = pp->dist > 0 && d < pp->dist ? pp->look * d / pp->dist : pp->look;
         float h = d < pp->dist ? lh + sqrtf(fmaxf(boom - d * d, 0)) : pp->h;
         // 俯仰限制：画面上沿在水平线下至少 3°，并且上沿那条视线落地不超过人前方 reach——原版俯视，没有天空；游戏也只备好原版正交画面那一片
         // （约 98 × 88 世界单位），更远处还没画，透视下就是黑的（OnePlus 13：走近了才画出来）。竖直半视角按本帧纵横比算；落地点随高度变，迭代几次就收敛

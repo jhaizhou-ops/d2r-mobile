@@ -129,7 +129,10 @@ int main(){
      memcpy(dst,src,sizeof dst);xbg_cam_build(&s,src,dst,1,&p,vp,ivp);
      const double boom=p.lookh+sqrt(p.dist*p.dist+(p.h-p.lookh)*(p.h-p.lookh)-64.0);
      CHECK(near(hypot(s.eye[0]-100,s.eye[2]-50),8,2e-2) && s.eye[1]>=boom-1e-3);
-     CHECK(top_edge(ivp)>=3-0.05 && top_ground(ivp,100,50)<=p.reach+0.5);}
+     CHECK(top_edge(ivp)>=3-0.05 && top_ground(ivp,100,50)<=p.reach+0.5);
+     // 人还在画面中间一带：脚在中线以下、不到下半屏的 3/4（不沉到底栏底下）
+     // The character stays around the middle of the picture: the feet below the centre line but within three quarters of the lower half (not sunk under the bottom bar)
+     const float feet[4]={100,0,50,1};float c[4];xf(vp,feet,c);CHECK(c[3]>0 && c[1]/c[3]<0 && c[1]/c[3]>-0.75);}
     // 不拉近时也受 reach 限制：上沿视线落地在人前方 reach 以内（原来只要求 3°，会看到游戏还没画的远处）
     // Not pulled in, reach still applies: the top-edge sight line meets the ground within reach ahead of the character (only 3 degrees used to be required,
     // which showed far ground the game had not drawn yet)
