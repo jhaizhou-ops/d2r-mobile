@@ -68,7 +68,15 @@ static void ui_project_obs(const uint64_t *regs) {
     int dm_cam_label_matrix(const float p[16], float out[16]);
     float pm[16]; int cam = dm_cam_label_matrix((const float *)(c + 0x80), pm); if (!dy && !cam) return;
     float H = *(const float *)(c + 0x144); if (dy && !(H > 0)) return;
-    static _Thread_local _Alignas(16) uint8_t copy[0x170]; memcpy(copy, c, sizeof copy); float *m = (float *)(copy + 0x80);
+    // 副本放在 64 份的静态环里轮着用（原子取号），不用 _Thread_local：安卓上 dlopen 进来的库，线程第一次碰线程局部变量要现场 malloc，
+    // 这道门跑在游戏线程自己的栈上，有的游戏线程栈很小——镜头开着时每次调用都走到这里，实测 OnePlus 13 上 libc 里一路调深、栈溢出（sig 11，出错地址 = sp）。
+    // 这个函数只做投影，几微秒就用完副本，64 份不会在用着的时候被轮到
+    // The copy lives in a static ring of 64 taken in turn (atomic counter) rather than _Thread_local: in a library loaded with dlopen on Android, a thread's
+    // first touch of a thread-local variable mallocs on the spot, and this gate runs on the game thread's own stack, which is small on some game threads --
+    // with the camera on every call reaches here, and on a OnePlus 13 that went deep into libc and overflowed the stack (sig 11, fault address = sp).
+    // The function only projects and is done with the copy within microseconds, so none of the 64 comes round again while still in use
+    static _Alignas(16) uint8_t ring[64][0x170]; static _Atomic unsigned slot;
+    uint8_t *copy = ring[atomic_fetch_add(&slot, 1) & 63]; memcpy(copy, c, sizeof ring[0]); float *m = (float *)(copy + 0x80);
     if (cam) memcpy(m, pm, sizeof pm);
     if (dy) { float k = 2.0f * dy / H; for (int j = 0; j < 4; j++) m[j * 4 + 1] += k * m[j * 4 + 3]; }
     ((uint64_t *)(uintptr_t)regs)[0] = (uint64_t)(uintptr_t)copy;

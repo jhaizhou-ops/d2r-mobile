@@ -70,9 +70,13 @@ static void xf(const float *M, const float v[4], float o[4]) { for (int j = 0; j
 // (the same as the constant block's +208), laid out like the matrices here. Returns 1 only while the over-the-shoulder camera is on and the render thread
 // published matrices within 0.5 s; taps and the test tool's unit positions also go through that function, so they get perspective picture coordinates too
 static void m4mul(const float *a, const float *b, float *o) { for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { double s = 0; for (int k = 0; k < 4; k++) s += (double)a[i * 4 + k] * b[k * 4 + j]; o[i * 4 + j] = (float)s; } }
+// 跑在游戏线程自己的栈上（dm_uiscreen.c 的观测门），所以不拷整份 cam_t，锁里直接算
+// Runs on the game thread's own stack (dm_uiscreen.c's observation gate), so it does not copy a whole cam_t and computes under the lock instead
 int dm_cam_label_matrix(const float p[16], float out[16]) {
-    cam_t c; if (!cam_get(&c)) return 0;
-    float t[16]; m4mul(p, c.ivpo, t); m4mul(t, c.vpp, out); return 1; }
+    if (dm_cam_mode() != 1) return 0;
+    float t[16]; pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5;
+    if (ok) { m4mul(p, g_pub.ivpo, t); m4mul(t, g_pub.vpp, out); }
+    pthread_mutex_unlock(&g_mu); return ok; }
 // 归一化画面坐标（0..1，y 向下）↔ 裁剪空间（-1..1，y 向上） | normalized picture coordinates (0..1, y down) <-> clip space (-1..1, y up)
 static void n2c(float nx, float ny, float *x, float *y) { *x = nx * 2 - 1; *y = 1 - ny * 2; }
 static int proj(const float *VP, const float w[3], float *nx, float *ny) { float v[4] = { w[0], w[1], w[2], 1 }, o[4]; xf(VP, v, o); if (o[3] <= 1e-6f) return 0; *nx = (o[0] / o[3] + 1) / 2; *ny = (1 - o[1] / o[3]) / 2; return 1; }
