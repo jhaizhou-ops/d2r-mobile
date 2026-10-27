@@ -96,7 +96,23 @@ int dm_cam_on(void) { cam_t c; return cam_get(&c); }
 // 镜头跟随要的朝向（世界 xz，单位向量 × 1000）：瞄准拖拽 > 移动摇杆；由 dm_cam_remap_stick 记下，nvn_mtl.m cam_build 每帧取
 // Heading the camera follow wants (world xz, unit vector * 1000): aim drag > move stick; recorded by dm_cam_remap_stick, read every frame by nvn_mtl.m cam_build
 static _Atomic int g_want_x1000, g_want_z1000, g_want_on;
-int dm_cam_want_dir(float *wx, float *wz) { if (!atomic_load(&g_want_on)) return 0; *wx = atomic_load(&g_want_x1000) / 1000.0f; *wz = atomic_load(&g_want_z1000) / 1000.0f; return 1; }
+// 两根摇杆都没推时，再看放技能的方向（diag.c cam_c2s：玩家到技能目标，子格方向 = 世界方向）：0.8 秒内镜头转去看它。
+// 点按技能钮时游戏自己选目标、不给瞄准方向；原地放远程技能人不动，镜头原先只跟位移，打身后的怪时人转过去了、镜头不跟（OnePlus 13 实测）
+// When neither stick is pushed, the direction of the last skill cast comes next (diag.c cam_c2s: player to the skill's target, sub-cell direction = world
+// direction): for 0.8 s the camera turns to look at it. Tapping a skill button lets the game pick the target and gives no aim direction; a ranged skill cast
+// in place does not move the character, and the camera used to follow only displacement, so attacking a monster behind turned the character but not the
+// camera (measured on a OnePlus 13)
+static _Atomic int g_atk_x1000, g_atk_z1000; static double g_atk_t;
+void dm_cam_attack(float dx, float dz) {
+    float l = hypotf(dx, dz); if (dm_cam_mode() != 1 || !(l >= 1)) return;
+    atomic_store(&g_atk_x1000, (int)lroundf(dx / l * 1000)); atomic_store(&g_atk_z1000, (int)lroundf(dz / l * 1000));
+    pthread_mutex_lock(&g_mu); g_atk_t = now_s(); pthread_mutex_unlock(&g_mu);
+    static _Atomic int said; if (atomic_fetch_add(&said, 1) < 8) LOG("镜头：放技能，朝目标转 %.2f,%.2f（距 %.1f 子格）", dx / l, dz / l, l); }
+int dm_cam_want_dir(float *wx, float *wz) {
+    if (atomic_load(&g_want_on)) { *wx = atomic_load(&g_want_x1000) / 1000.0f; *wz = atomic_load(&g_want_z1000) / 1000.0f; return 1; }
+    pthread_mutex_lock(&g_mu); double t = g_atk_t; pthread_mutex_unlock(&g_mu);
+    if (!(t > 0 && now_s() - t < 0.8)) return 0;
+    *wx = atomic_load(&g_atk_x1000) / 1000.0f; *wz = atomic_load(&g_atk_z1000) / 1000.0f; return 1; }
 
 // 一根摇杆：(x, y) 是 Horizon 摇杆值（上为正）。返回 1 = 改过；wdir 给出这根摇杆在世界里的方向。
 // 角度直接按镜头水平朝向转（不走「透视画面上人物所在的点」：那样随人在画面里的位置会偏几度，实测推正上偏 6°）

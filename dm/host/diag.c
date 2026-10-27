@@ -1169,6 +1169,28 @@ static FILE *g_c2sfp;
 static struct c2s_ent { uint32_t tick, unit, len; int has_unit, sys; uint8_t *pkt; } *g_rp; static size_t g_nrp, g_irp;
 static uint64_t g_lastG; static uint32_t g_sysclient; static int g_sysclient_set; static unsigned g_sysdrop;   // 最近一次拍入口的 G；系统类消息的客户端号（取宿主自己的加入消息） | G of the most recent tick entry; client number for system-class messages (taken from the host's own join message)
 static int64_t g_rplast = -1; static unsigned g_rpdrop;
+// 越肩镜头（dm_cam.c dm_cam_attack）：放技能的命令包带着目标——对地点（0x05 / 0x08 / 0x0c / 0x0f：x、y 各 2 字节，子格）或对单位
+// （0x06 / 0x07 / 0x09 / 0x0a / 0x0d / 0x0e / 0x10 / 0x11：类型、单位号各 4 字节；只认玩家 0 与怪 1，它们的路径 +0x38 → +0 / +4 是 16.16 定点子格坐标）。
+// 把玩家到目标的方向交给镜头，原地放远程技能时镜头也转去看目标。只读服务端单位表，镜头没开时什么都不做
+// Over-the-shoulder camera (dm_cam.c dm_cam_attack): skill cast commands carry their target -- a location (0x05 / 0x08 / 0x0c / 0x0f: x, y, 2 bytes each,
+// sub-cells) or a unit (0x06 / 0x07 / 0x09 / 0x0a / 0x0d / 0x0e / 0x10 / 0x11: type and unit id, 4 bytes each; only players 0 and monsters 1, whose path
+// +0x38 -> +0 / +4 holds 16.16 fixed-point sub-cell coordinates). The direction from the player to the target goes to the camera, so a ranged skill cast in
+// place also turns the camera towards the target. Reads the server unit tables only, and does nothing while the camera is off
+static void cam_c2s(uint64_t G, uint64_t pl, const uint8_t *b, uint32_t n) {
+    int dm_cam_mode(void); void dm_cam_attack(float dx, float dz);
+    if (!n || !pl || dm_cam_mode() != 1) return;
+    uint8_t op = b[0]; float tx, ty;
+    if ((op == 0x05 || op == 0x08 || op == 0x0c || op == 0x0f) && n >= 5) { tx = (float)(b[1] | b[2] << 8); ty = (float)(b[3] | b[4] << 8); }
+    else if ((op == 0x06 || op == 0x07 || op == 0x09 || op == 0x0a || op == 0x0d || op == 0x0e || op == 0x10 || op == 0x11) && n >= 9) {
+        uint32_t type = b[1] | b[2] << 8 | b[3] << 16 | (uint32_t)b[4] << 24, id = b[5] | b[6] << 8 | b[7] << 16 | (uint32_t)b[8] << 24; if (type > 1) return;
+        uint64_t u = 0, hit = 0;
+        for (int bk = 0; bk < 128 && !hit; bk++) if (tk_rd(G + 0x2230 + type * 0x400 + 8 * bk, &u, 8)) for (int k = 0; u && k < 4096; k++) { uint32_t i2 = 0; if (tk_rd(u + 8, &i2, 4) && i2 == id) { hit = u; break; } if (!tk_rd(u + 0x158, &u, 8)) break; }
+        uint64_t tp = 0; uint32_t xy[2]; if (!hit || !tk_rd(hit + 0x38, &tp, 8) || !tp || !tk_rd(tp, xy, 8)) return;
+        tx = xy[0] / 65536.0f; ty = xy[1] / 65536.0f;
+    } else return;
+    uint64_t pp = 0; uint32_t pxy[2]; if (!tk_rd(pl + 0x38, &pp, 8) || !pp || !tk_rd(pp, pxy, 8)) return;
+    dm_cam_attack(tx - pxy[0] / 65536.0f, ty - pxy[1] / 65536.0f);
+}
 static void c2s_obs(const uint64_t *regs) {
     uint32_t tick = 0, uid = 0, len = (uint32_t)regs[3]; int hu = 0;
     tk_rd(regs[0] + 0x170, &tick, 4);
@@ -1176,6 +1198,7 @@ static void c2s_obs(const uint64_t *regs) {
     uint8_t b[512]; uint32_t n = len < 512 ? len : 512; if (!tk_rd(regs[2], b, n)) n = 0;
     if (n >= 1 && b[0] == 0x20) cube_diag_req(regs[0], regs[1], b, n);   // 合成读数 | Transmute readout
     dm_bossrush_c2s(regs[0], regs[1], b, n);
+    cam_c2s(regs[0], regs[1], b, n);
     { void dm_rift_c2s(uint64_t, const uint8_t *, uint32_t); dm_rift_c2s(regs[0], b, n); }
     { void dm_pouch_c2s(uint64_t *); dm_pouch_c2s((uint64_t *)(uintptr_t)regs); }   // 珍宝匣：符文 / 宝石 / 材料拖进共享页时改道进高级仓库（dm_pouch.c；会换掉 x2 / x3 指向的包） | Trove: runes / gems / materials dragged into the shared tab are rerouted into the advanced stash tabs (dm_pouch.c; replaces the packet x2 / x3 point to)
     { void dm_shoprefresh_c2s(uint64_t, uint64_t, const uint8_t *, uint32_t); dm_shoprefresh_c2s(regs[0], regs[1], b, n); }   // 商人交易页「刷新货架」（dm_shoprefresh.c）   // 首领连战：玩家点了连战的门（门只是外观，换关由 dm_bossrush.c 做） | Vendor trade page 「刷新货架」(Refresh Stock) (dm_shoprefresh.c)   // Boss rush: the player tapped the boss rush door (the door is appearance only; the level change is done by dm_bossrush.c)
