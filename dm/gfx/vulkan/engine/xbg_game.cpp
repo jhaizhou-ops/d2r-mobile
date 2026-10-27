@@ -30,6 +30,7 @@ extern "C" int xbg_completion_wait_selftest(char *report,size_t bytes);
 #include "xbg_spirv_ldc.h"
 #include "xbg_spirv_temps.h"
 #include "xbg_spirv_raster.h"
+#include "xbg_cam.h"
 #include "../../nvn/nvn_cover.h"
 extern "C" {
 #include "../../tex/nvn_deswizzle.h"
@@ -43,6 +44,12 @@ __attribute__((weak)) void nvn_dirty_slot_stats(int *live,int *used_slots,uint64
 // 3D 画面加亮的曝光 k（宿主 dm/host/dm_bright.c）；弱：不链宿主的图形单测不加亮
 // Exposure k of the 3D picture brightening (the host's dm/host/dm_bright.c); weak: graphics unit tests without the host do not brighten
 __attribute__((weak)) float dm_bright_k(void);
+// 越肩 / 第一人称镜头的宿主一侧（dm/host/dm_cam.c）：开关、跟随要的朝向、给输入换算发布的矩阵；弱：不链宿主的图形单测镜头关着
+// The host side of the over-the-shoulder / first-person camera (dm/host/dm_cam.c): the switch, the heading the follow wants, the matrices published
+// for input conversion; weak: graphics unit tests without the host keep the camera off
+__attribute__((weak)) int dm_cam_mode(void);
+__attribute__((weak)) int dm_cam_want_dir(float *wx,float *wz);
+__attribute__((weak)) void dm_cam_publish(const float vpo[16],const float ivpo[16],const float vpp[16],const float ivpp[16],float px,float pz);
 }
 #include <algorithm>
 #include <array>
@@ -2424,11 +2431,70 @@ void fill_driver(uint8_t *data,unsigned ns,unsigned bank){
 size_t uniform_range(size_t copy){return std::max<size_t>(16,(copy+15)&~size_t(15));}
 Buffer uniform_snapshot_slow(uint64_t address,size_t copy);
 Buffer uniform_snapshot_cached(uint64_t address,size_t copy);
-Buffer uniform_snapshot(uint64_t address,size_t copy){
+// ---------- 越肩 / 第一人称镜头（实验，缺省关；DM_CAM=1 越肩、2 第一人称。宿主 dm/host/dm_cam.c，算法 xbg_cam.h，设计见 docs/over-the-shoulder-camera.zh-CN.md）----------
+// 同 nvn_mtl.m 的 cam_patch：主相机常量块（608 字节）与片元槽 10 的场景常量块（1440 字节）按内容认出，绑一份改过的拷贝。拷贝不进快照缓存，
+// 所以不改的那条按正交视锥剔除的计算着色器（cull_cs）读到的仍是原版；阴影图那几份是光源视角，签名不匹配。
+// Vulkan 只绑着色器读得到的那段（spirv_uniform_extent），只读前几行的着色器拿到的拷贝不到 608 字节：认出主相机或场景块就把绑定长度放到整块（bound），
+// 描述符备忘的键、绑定范围与命中时的重拍都用这个长度。Vulkan 没有运行时外推，不用关。
+// ---------- Over-the-shoulder / first-person camera (experimental, off by default; DM_CAM=1 over-the-shoulder, 2 first person. Host dm/host/dm_cam.c,
+// math xbg_cam.h, design in docs/over-the-shoulder-camera.md) ----------
+// As nvn_mtl.m's cam_patch: the main camera constant block (608 bytes) and the scene constant block of fragment slot 10 (1440 bytes) are recognised by
+// their content and bound as a modified copy. Copies stay out of the snapshot caches, so the compute shader that culls against the orthographic frustum
+// (cull_cs), which is left alone, still reads the original; the shadow-map copies use the light's view and do not match the signature.
+// Vulkan binds only the part a shader can read (spirv_uniform_extent), so a shader reading only the first rows gets a copy shorter than 608 bytes: when the
+// main camera or scene block is recognised the bound length becomes the whole block (bound), and the descriptor memo key, the bound range and the
+// re-snapshot on a memo hit all use that length. Vulkan has no runtime extrapolation to switch off.
+namespace cam {
+const char *const cull_cs="1188eaedc8db3285";
+int mode_=-1;xbg_cam_params params;xbg_cam_state st;uint64_t patches=0,scenes=0,widened=0;
+struct Copy{uint64_t address=0,bytes=0,epoch=0;Buffer buffer;};std::array<Copy,8> copies;unsigned next=0;
+float envf(const char *k,float d){const char *e=getenv(k);return e?float(atof(e)):d;}
+int mode(){
+    if(mode_<0){mode_=dm_cam_mode?dm_cam_mode():0;
+        if(mode_>0){params=xbg_cam_default_params(mode_);
+            params.dist=envf("DM_CAM_DIST",params.dist);params.h=envf("DM_CAM_H",params.h);params.look=envf("DM_CAM_LOOK",params.look);params.lookh=envf("DM_CAM_LOOKH",params.lookh);
+            params.eye=envf("DM_CAM_EYE",params.eye);params.fwd=envf("DM_CAM_FWD",params.fwd);params.pitch=envf("DM_CAM_PITCH",params.pitch);params.fov=envf("DM_CAM_FOV",params.fov);
+            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);xbg_cam_init(&st);
+            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_);}}
+    return mode_;
+}
+// 绑定长度：认出主相机或场景块（先读客体内存里签名那几行，便宜）就返回整块长度，否则原样返回 copy
+// Bound length: the whole block's length when the main camera or scene block is recognised (the signature rows are read from guest memory first, which is
+// cheap), otherwise copy unchanged
+size_t bound(uint64_t address,size_t copy,size_t full,bool ok){
+    if(!ok || mode()<=0)return copy;
+    const uint8_t *g=reinterpret_cast<const uint8_t*>(address);
+    if(copy<XBG_CAM_BLOCK && full>=XBG_CAM_BLOCK && full<=4096 && xbg_cam_sig(g,272,full)){++widened;return XBG_CAM_BLOCK;}
+    if(copy<XBG_CAM_SCENE && full==XBG_CAM_SCENE && xbg_cam_sig10(g,44,full)){++widened;return XBG_CAM_SCENE;}
+    return copy;
+}
+Buffer patch(uint64_t address,size_t copy,const Buffer &src){
+    if(copy<XBG_CAM_BLOCK || copy>4096)return src;
+    for(auto &c:copies)if(c.epoch==snapshot_epoch && c.address==address && c.bytes==copy)return c.buffer;
+    const uint8_t *p=static_cast<const uint8_t*>(src.mapped);if(!p)return src;
+    const bool main=xbg_cam_sig(p,copy,copy),scene=!main && xbg_cam_sig10(p,copy,copy);if(!main && !scene)return src;
+    Buffer b=stream_buffer(uniform_range(copy),p,copy);uint8_t *d=static_cast<uint8_t*>(b.mapped);
+    if(main){
+        // 每帧一次跟随：宿主给的朝向（瞄准拖拽 > 移动摇杆）优先，其次人物位移方向；越肩档把两套矩阵发布给输入换算，第一人称不换算输入
+        // Follow once per frame: the host's heading (aim drag > move stick) first, then the character's displacement; the over-the-shoulder mode
+        // publishes both matrix sets for input conversion, first person does not convert input
+        float px,pz,wx=0,wz=0;xbg_cam_ground(p,&px,&pz);const int want=dm_cam_want_dir?dm_cam_want_dir(&wx,&wz):0;
+        xbg_cam_follow(&st,px,pz,stats.presents.load(),timing_clock()*1e-9,want,wx,wz,params.tau);
+        float vp[16],ivp[16];xbg_cam_build(&st,p,d,mode_,&params,vp,ivp);
+        if(mode_==1 && dm_cam_publish)dm_cam_publish(reinterpret_cast<const float*>(p+336),reinterpret_cast<const float*>(p+400),vp,ivp,px,pz);
+        if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d bytes=%zu player=%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,copy,px,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2]);
+    }else{xbg_cam_build10(&st,d);++scenes;}
+    b.flush();Copy &c=copies[next++%copies.size()];c.address=address;c.bytes=copy;c.epoch=snapshot_epoch;c.buffer=b;return b;
+}
+}
+// cam_ok = false：按正交视锥剔除的计算着色器，读原版
+// cam_ok = false: the compute shader that culls against the orthographic frustum, which reads the original
+Buffer uniform_snapshot(uint64_t address,size_t copy,bool cam_ok=true){
     if(g_ui_moff!=0 && address==g_ui_moff_addr && copy>=64){   // 界面下移：投影矩阵另拷一份加纵向偏移，不进快照缓存 | UI shift: a separate copy of the projection matrix with a vertical offset, kept out of the snapshot caches
         Buffer src=uniform_snapshot_cached(address,copy);Buffer b=stream_buffer(uniform_range(copy),src.mapped,copy);
         float m[16],o=float(g_ui_moff);memcpy(m,b.mapped,64);m[1]+=o*m[3];m[5]+=o*m[7];m[9]+=o*m[11];m[13]+=o*m[15];memcpy(b.mapped,m,64);b.flush();return b;}
-    return uniform_snapshot_cached(address,copy);
+    Buffer b=uniform_snapshot_cached(address,copy);
+    return cam_ok && cam::mode()>0?cam::patch(address,copy,b):b;
 }
 Buffer uniform_snapshot_cached(uint64_t address,size_t copy){CPU_SCOPE(Snapshot);
     SnapFront &f=snap_front_for(1,address,copy);if(f.epoch==snapshot_epoch && f.address==address && f.bytes==copy){++perf.snapshot_hits;++snap_front_hits;return f.buffer;}
@@ -2589,7 +2655,7 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
                 for(unsigned element=0;element<b.count;element++){unsigned slot=b.slot+element;
                     switch(b.source){
                     case XBG_SOURCE_UNIFORM:case XBG_SOURCE_STORAGE:{if(slot>=16){ok=false;break;}auto r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][slot]:state.sb[ns][slot];
-                        if(UBO_DYN(dmode,b) && b.source==XBG_SOURCE_UNIFORM && r.address && r.size){size_t copy=std::min<size_t>(r.size,b.bytes?b.bytes:65536);key.push_back(copy);if(tags)ktag.push_back(2);dyn_ubos.push_back({(uint64_t(b.binding)<<32)|element,r.address,copy});} // address only moves the dynamic offset
+                        if(UBO_DYN(dmode,b) && b.source==XBG_SOURCE_UNIFORM && r.address && r.size){size_t copy=cam::bound(r.address,std::min<size_t>(r.size,b.bytes?b.bytes:65536),r.size,true);key.push_back(copy);if(tags)ktag.push_back(2);dyn_ubos.push_back({(uint64_t(b.binding)<<32)|element,r.address,copy});} // address only moves the dynamic offset
                         else{key.push_back(r.address);key.push_back(r.size);if(tags){ktag.push_back(b.source==XBG_SOURCE_UNIFORM?3:10);ktag.push_back(4);}}break;}
                     case XBG_SOURCE_SUPPORT:key.push_back((uint64_t(uint32_t(state.viewport.width))<<32)|uint32_t(state.viewport.height));key.push_back(state.color.alpha_func);if(tags){ktag.push_back(5);ktag.push_back(6);}break;
                     case XBG_SOURCE_C1:break;
@@ -2719,7 +2785,12 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
                 Buffer *buffer=nullptr;bool is_storage=b.type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;uint32_t slot=b.slot+element;size_t n=0,buffer_offset=0;const void *data=nullptr;size_t copy=0;
                 if(b.source==XBG_SOURCE_UNIFORM || b.source==XBG_SOURCE_STORAGE){need(slot<16,"Buffer slot out of bounds");auto r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][slot]:state.sb[ns][slot];need(r.address && r.size,"Required NVN buffer slot is unbound");data=reinterpret_cast<void*>(r.address);copy=r.size;
                     if(is_storage){n=copy;for(auto &v:out.storage)if(r.address>=v.first.first && r.address+r.size<=v.first.first+v.first.second){buffer=v.second;buffer_offset=r.address-v.first.first;break;}need(buffer,"Storage alias allocation not found");need(buffer_offset%properties.limits.minStorageBufferOffsetAlignment==0,"NVN storage offset violates Vulkan alignment");}
-                    else{copy=std::min<size_t>(copy,b.bytes?b.bytes:65536);n=uniform_range(copy);buffer=out.keep(uniform_snapshot(r.address,copy));}
+                    else{
+                        // 镜头实验：除了按正交视锥剔除的那条计算着色器，任何阶段、任何槽位的主相机都换成透视拷贝（cam::bound / cam::patch）
+                        // Camera experiment: the main camera in any stage and any slot becomes the perspective copy (cam::bound / cam::patch), except for the
+                        // compute shader that culls against the orthographic frustum
+                        const bool cam_ok=!(compute && shader.key.compare(0,16,cam::cull_cs)==0);
+                        copy=cam::bound(r.address,std::min<size_t>(copy,b.bytes?b.bytes:65536),r.size,cam_ok);n=uniform_range(copy);buffer=out.keep(uniform_snapshot(r.address,copy,cam_ok));}
                 }else if(b.source==XBG_SOURCE_SUPPORT){n=1392;need(state.color.alpha_func==8,"Nontrivial NVN alpha test not translated");
                     Buffer &sb=support_block();data=sb.mapped;copy=n;buffer=out.keep(sb);}
                 else if(b.source==XBG_SOURCE_C1){
