@@ -2458,8 +2458,8 @@ int mode(){
         if(mode_>0){params=xbg_cam_default_params(mode_);
             params.dist=envf("DM_CAM_DIST",params.dist);params.h=envf("DM_CAM_H",params.h);params.look=envf("DM_CAM_LOOK",params.look);params.lookh=envf("DM_CAM_LOOKH",params.lookh);
             params.eye=envf("DM_CAM_EYE",params.eye);params.fwd=envf("DM_CAM_FWD",params.fwd);params.pitch=envf("DM_CAM_PITCH",params.pitch);params.fov=envf("DM_CAM_FOV",params.fov);
-            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);xbg_cam_init(&st);
-            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_);}}
+            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);xbg_cam_init(&st);
+            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g reach=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_,params.reach);}}
     return mode_;
 }
 // 绑定长度：认出主相机或场景块（先读客体内存里签名那几行，便宜）就返回整块长度，否则原样返回 copy

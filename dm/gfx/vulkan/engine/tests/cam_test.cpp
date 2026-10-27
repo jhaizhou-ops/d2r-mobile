@@ -33,6 +33,12 @@ static void original(uint8_t *block,float px,float pz){
     const float depth[4]={1000,100,0,1};put(block,592,depth,4);
 }
 static double heading_deg(const xbg_cam_state &s){return atan2(s.fz,s.fx)*180/3.14159265358979;}
+// 画面上沿正中那条视线：在水平线下几度；落到地面 y = 0 处离 (px, pz) 多远（水平距离）
+// The sight line through the middle of the picture's top edge: how many degrees below the horizon; how far from (px, pz) it meets the ground y = 0 (horizontally)
+static void top_ray(const float *ivp,double o[3],double d[3]){const float t1[4]={0,1,1,1},t0[4]={0,1,0.001f,1};float a[4],b[4];xf(ivp,t1,a);xf(ivp,t0,b);
+    for(int i=0;i<3;i++){o[i]=a[i]/a[3];d[i]=b[i]/b[3]-o[i];}}
+static double top_edge(const float *ivp){double o[3],d[3];top_ray(ivp,o,d);return atan2(-d[1],hypot(d[0],d[2]))*180/3.14159265358979;}
+static double top_ground(const float *ivp,double px,double pz){double o[3],d[3];top_ray(ivp,o,d);double t=-o[1]/d[1];return hypot(o[0]+t*d[0]-px,o[2]+t*d[2]-pz);}
 
 int main(){
     uint8_t src[XBG_CAM_BLOCK],dst[XBG_CAM_BLOCK];original(src,100,50);
@@ -116,14 +122,22 @@ int main(){
      float before=s.dcur;CHECK(near(xbg_cam_pull(&s,20,4,0.08),before+(4-before)*(1-exp(-1.0)),1e-3));
      xbg_cam_state f;xbg_cam_init(&f);CHECK(near(xbg_cam_pull(&f,20,30,0),20,1e-6));
      xbg_cam_state g;xbg_cam_init(&g);CHECK(near(xbg_cam_pull(&g,20,0.5f,0),2,1e-6));}
-    // 拉近后：镜头在人物身后 dcur，视线角度不变（高度同比例降，再受俯仰限制），画面上沿仍在水平线下 3° 以上
-    // Pulled in: the camera is dcur behind the character, the viewing angle stays (the height scales down, then the pitch limit applies), and the picture's
-    // top edge is still at least 3 degrees below the horizon
+    // 拉近后：镜头在人物身后 dcur，沿「吊臂」升高（到看点高度的距离不变，再受俯仰限制），画面上沿仍在水平线下 3° 以上，上沿视线落地不超过人前方 reach
+    // Pulled in: the camera is dcur behind the character and rises along the "boom" (its distance to the look height stays, then the pitch limit applies);
+    // the picture's top edge is still at least 3 degrees below the horizon, and its sight line meets the ground no further than reach ahead of the character
     {xbg_cam_state s;xbg_cam_init(&s);xbg_cam_params p=xbg_cam_default_params(1);original(src,100,50);xbg_cam_follow(&s,100,50,1,1.0,0,0,0,p.tau);xbg_cam_pull(&s,p.dist,8,0);
      memcpy(dst,src,sizeof dst);xbg_cam_build(&s,src,dst,1,&p,vp,ivp);
-     CHECK(near(hypot(s.eye[0]-100,s.eye[2]-50),8,2e-2) && s.eye[1]<13 && s.eye[1]>p.lookh);
-     const float t1[4]={0,1,1,1},t0[4]={0,1,0.001f,1};float a[4],b[4];xf(ivp,t1,a);xf(ivp,t0,b);
-     double dx=b[0]/b[3]-a[0]/a[3],dy=b[1]/b[3]-a[1]/a[3],dz=b[2]/b[3]-a[2]/a[3];CHECK(atan2(-dy,hypot(dx,dz))*180/3.14159265358979>=3-0.05);}
+     const double boom=p.lookh+sqrt(p.dist*p.dist+(p.h-p.lookh)*(p.h-p.lookh)-64.0);
+     CHECK(near(hypot(s.eye[0]-100,s.eye[2]-50),8,2e-2) && s.eye[1]>=boom-1e-3);
+     CHECK(top_edge(ivp)>=3-0.05 && top_ground(ivp,100,50)<=p.reach+0.5);}
+    // 不拉近时也受 reach 限制：上沿视线落地在人前方 reach 以内（原来只要求 3°，会看到游戏还没画的远处）
+    // Not pulled in, reach still applies: the top-edge sight line meets the ground within reach ahead of the character (only 3 degrees used to be required,
+    // which showed far ground the game had not drawn yet)
+    {xbg_cam_state s;xbg_cam_init(&s);xbg_cam_params p=xbg_cam_default_params(1);original(src,100,50);xbg_cam_follow(&s,100,50,1,1.0,0,0,0,p.tau);
+     memcpy(dst,src,sizeof dst);xbg_cam_build(&s,src,dst,1,&p,vp,ivp);
+     CHECK(near(hypot(s.eye[0]-100,s.eye[2]-50),20,2e-2) && top_ground(ivp,100,50)<=p.reach+0.5 && top_ground(ivp,100,50)>p.reach-5);
+     xbg_cam_params far=p;far.reach=0;xbg_cam_state t;xbg_cam_init(&t);xbg_cam_follow(&t,100,50,1,1.0,0,0,0,p.tau);xbg_cam_build(&t,src,dst,1,&far,vp,ivp);
+     CHECK(near(top_edge(ivp),3,0.05));}
 
     // 体感转向：正 = 往画面右边转（朝向转向 右 = (−f.z, f.x)）；hold 时跟随不动朝向（宿主的朝向、位移都不管），但换区域照样重置
     // Sensor steering: positive = towards the right of the picture (the heading turns towards right = (-f.z, f.x)); with hold the follow leaves the

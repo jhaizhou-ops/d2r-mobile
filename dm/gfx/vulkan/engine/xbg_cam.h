@@ -16,9 +16,12 @@ enum { XBG_CAM_BLOCK = 608, XBG_CAM_SCENE = 1440 };
 
 // 参数：越肩（档 1）用 dist / h / look / lookh，第一人称（档 2）用 eye / fwd / pitch；fov 是水平视角（度）
 // Parameters: over-the-shoulder (mode 1) uses dist / h / look / lookh, first person (mode 2) uses eye / fwd / pitch; fov is the horizontal field of view (degrees)
-typedef struct { float dist, h, look, lookh, eye, fwd, pitch, fov, tau, near_; } xbg_cam_params;
+// reach = 画面上沿那条视线最远落到人前方多远（世界单位；游戏只备好原版画面那一片，见 xbg_cam_build 的俯仰限制）
+// reach = how far ahead of the character the picture's top-edge sight line may meet the ground (world units; the game only prepares the original picture's
+// area, see the pitch limit in xbg_cam_build)
+typedef struct { float dist, h, look, lookh, eye, fwd, pitch, fov, tau, near_, reach; } xbg_cam_params;
 static inline xbg_cam_params xbg_cam_default_params(int mode) {
-    xbg_cam_params p = { 20.0f, 13.0f, 4.0f, 3.0f, 6.0f, 2.2f, 8.0f, mode == 2 ? 75.0f : 65.0f, 0.35f, 0.3f };
+    xbg_cam_params p = { 20.0f, 13.0f, 4.0f, 3.0f, 6.0f, 2.2f, 8.0f, mode == 2 ? 75.0f : 65.0f, 0.35f, 0.3f, 45.0f };
     return p;
 }
 
@@ -159,14 +162,25 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
         eye[0] = px + fx * ah; eye[1] = h; eye[2] = pz + fz * ah;
         at[0] = eye[0] + fx * cosf(pitch); at[1] = h - sinf(pitch); at[2] = eye[2] + fz * cosf(pitch);
     } else {
-        // 避墙拉近时视角不变：高度按距离同比例降，再受下面的俯仰限制
-        // When wall avoidance pulls the camera in, the viewing angle stays: the height scales with the distance, then the pitch limit below applies
-        float d = s->dcur > 0 ? s->dcur : pp->dist, la = pp->look, lh = pp->lookh, h = pp->dist > 0 ? lh + (pp->h - lh) * d / pp->dist : pp->h;
-        // 俯仰限制：画面上沿至少在水平线下 3°，地平线不进画面——原版俯视，没有天空，透视下地平线以上全黑。竖直半视角按本帧纵横比算，不够就把镜头抬高
-        // Pitch limit: the top edge of the picture stays at least 3 degrees below the horizon, so the horizon never enters the picture -- the original is
-        // top-down and has no sky, so everything above the horizon is black in perspective. The vertical half-angle follows this frame's aspect ratio; raise the camera when it falls short
-        float tvh = tanf(fov * 3.14159265f / 360) * (pr[5] != 0 ? fabsf(pr[0] / pr[5]) : 9.0f / 16), hmin = lh + (d + la) * tanf(atanf(tvh) + 3 * 3.14159265f / 180);
-        if (h < hmin) h = hmin;
+        // 避墙拉近时镜头往上升（「吊臂」）：镜头到看点高度的距离不变，水平距离变短高度就变高；贴着墙时差不多从头顶往下看，近似原版视角，
+        // 不再贴在人背后（OnePlus 13 实测：背后一格就是墙时镜头落到离人 2、肩高，看着像贴在背上）
+        // When wall avoidance pulls the camera in, the camera rises ("boom"): its distance to the look height stays the same, so a shorter horizontal distance
+        // means a higher camera; right against a wall it looks down from nearly overhead, close to the original view, instead of sitting on the character's
+        // back (measured on a OnePlus 13: with a wall one cell behind, the camera dropped to 2 from the character at shoulder height)
+        float d = s->dcur > 0 ? s->dcur : pp->dist, la = pp->look, lh = pp->lookh, boom = pp->dist * pp->dist + (pp->h - lh) * (pp->h - lh);
+        float h = d < pp->dist ? lh + sqrtf(fmaxf(boom - d * d, 0)) : pp->h;
+        // 俯仰限制：画面上沿在水平线下至少 3°，并且上沿那条视线落地不超过人前方 reach——原版俯视，没有天空；游戏也只备好原版正交画面那一片
+        // （约 98 × 88 世界单位），更远处还没画，透视下就是黑的（OnePlus 13：走近了才画出来）。竖直半视角按本帧纵横比算；落地点随高度变，迭代几次就收敛
+        // Pitch limit: the top edge of the picture is at least 3 degrees below the horizon, and the top edge's sight line meets the ground no further than reach
+        // ahead of the character -- the original is top-down with no sky, and the game only prepares the area of the original orthographic picture (about
+        // 98 x 88 world units), so further away nothing is drawn yet and it shows black in perspective (OnePlus 13: drawn only on walking closer). The vertical
+        // half-angle follows this frame's aspect ratio; the ground point moves with the height, and a few iterations converge
+        float vhalf = atanf(tanf(fov * 3.14159265f / 360) * (pr[5] != 0 ? fabsf(pr[0] / pr[5]) : 9.0f / 16));
+        for (int k = 0; k < 16; k++) {
+            float top = fmaxf(3 * 3.14159265f / 180, pp->reach > 0 ? atanf(h / (d + pp->reach)) : 0), hmin = lh + (d + la) * tanf(vhalf + top);
+            if (h >= hmin - 1e-3f) break;
+            h = hmin;
+        }
         eye[0] = px - fx * d; eye[1] = h; eye[2] = pz - fz * d;
         at[0] = px + fx * la; at[1] = lh; at[2] = pz + fz * la;
     }
