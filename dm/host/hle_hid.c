@@ -405,8 +405,15 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     { uint64_t ax = atomic_load(&g_pad_axes); int16_t plx = (int16_t)ax, ply = (int16_t)(ax >> 16), prx = (int16_t)(ax >> 32), pry = (int16_t)(ax >> 48);
       if (!(s->lx || s->ly) && (plx || ply)) { s->lx = plx; s->ly = ply; } if (!(s->rx || s->ry) && (prx || pry)) { s->rx = prx; s->ry = pry; } }
     { int dm_padmode_input_gate(uint64_t *); if (dm_padmode_input_gate(&s->buttons)) s->lx = s->ly = s->rx = s->ry = 0; }   // 手柄 / 触屏切换事务进行中：键和摇杆都不交给游戏；触发切换时按着的键松开前也不交（dm_padmode.c） | Controller / touch switch transaction in progress: neither keys nor sticks are handed to the game; keys held when the switch was triggered are not handed over either until released (dm_padmode.c)
-    { void dm_cam_remap_stick(int32_t *, int32_t *, int32_t *, int32_t *); dm_cam_remap_stick(&s->lx, &s->ly, &s->rx, &s->ry); }   // 镜头实验：摇杆 / 瞄准按透视画面方向换成原版方向（dm_cam.c；镜头关着原样不动） | camera experiment: sticks / aim converted from perspective-picture directions to original directions (dm_cam.c; unchanged while the camera is off)
     if (dm_pad_hook) dm_pad_hook(guest_ns(), &s->buttons, &s->lx, &s->ly, &s->rx, &s->ry);
+    // 镜头实验：摇杆 / 瞄准按透视画面方向换成原版方向（dm_cam.c；镜头关着原样不动）。放在 dm_pad_hook 之后：安卓的触屏摇杆是在那里才填进来的
+    // （touch_android.c dm_android_touch_step），放在前面它就没被换算，镜头转过以后推上仍按原版画面的「上」走（OnePlus 13 实测）。
+    // iOS 与 Mac 键盘的摇杆从 dm_input_set 进来、早就在 s 里；Mac 的 dm_pad_hook 不给摇杆值，所以挪到这里对它们没有影响
+    // Camera experiment: sticks / aim converted from perspective-picture directions to original directions (dm_cam.c; unchanged while the camera is off).
+    // After dm_pad_hook: Android's touch stick is filled in only there (touch_android.c dm_android_touch_step), so before it the touch stick was not
+    // converted, and after the camera turned, pushing up still walked "up" on the original picture (measured on a OnePlus 13). The iOS and Mac keyboard
+    // sticks come in through dm_input_set and are already in s, and the Mac's dm_pad_hook gives no stick values, so this move does not affect them
+    { void dm_cam_remap_stick(int32_t *, int32_t *, int32_t *, int32_t *); dm_cam_remap_stick(&s->lx, &s->ly, &s->rx, &s->ry); }
     { uint64_t dm_runeword_pad_filter(uint64_t); s->buttons = dm_runeword_pad_filter(s->buttons); }   // 手柄模式符文之语清单开着时十字键 / A / B / L / R 归清单（dm_runeword.c） | While the runeword list is open in controller mode, the D-pad / A / B / L / R belong to the list (dm_runeword.c)
     { uint64_t dm_padmode_page_filter(uint64_t); s->buttons = dm_padmode_page_filter(s->buttons); }   // 手柄模式我们自己的页（自定义页等）开着时，页声明的键归页（dm_padmode.c） | While one of our own pages (the Custom page etc.) is open in controller mode, the buttons the page declares belong to the page (dm_padmode.c)
     { uint64_t dm_swapskill_filter(uint64_t); s->buttons = dm_swapskill_filter(s->buttons); }   // 副手组技能：换武器好之前压住那个键（dm_actions.c） | off-hand set skill: hold that key back until the weapon swap is done (dm_actions.c)
