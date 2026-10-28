@@ -31,7 +31,12 @@ static inline xbg_cam_params xbg_cam_default_params(int mode) {
 // hold = 体感转向进行中（宿主 dm_cam_turn_age 一秒内有转动）：跟随不动朝向，免得和玩家转手机抢
 // hold = sensor steering in progress (the host's dm_cam_turn_age saw a turn within a second): the follow leaves the heading alone, so it does not
 // fight the player turning the phone
-typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3], dcur; int have, have_eye, hold; uint64_t frame; double t; } xbg_cam_state;
+// tilt = 玩家上下拖出来的俯仰偏移（弧度，正 = 视线往上；宿主 dm_cam_tilt_get，调用方每帧填）；tilt_lo / tilt_hi = 本帧机位下它能取的范围，
+// 由 xbg_cam_build 算出，调用方拿去夹宿主的累计值（免得拖过头后往回拖先有一段没反应）
+// tilt = the pitch offset the player dragged (radians, positive = look up; the host's dm_cam_tilt_get, filled in by the caller every frame); tilt_lo /
+// tilt_hi = the range it can take for this frame's rig, computed by xbg_cam_build, which the caller uses to clamp the host's sum (so dragging back after
+// overshooting does not start with a dead stretch)
+typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3], dcur, tilt, tilt_lo, tilt_hi; int have, have_eye, hold; uint64_t frame; double t; } xbg_cam_state;
 static inline void xbg_cam_init(xbg_cam_state *s) {
     memset(s, 0, sizeof *s);
     // 朝向缺省取原版视线的水平方向（原版镜头看向 −x −z），画面一进来和原版同一个朝向
@@ -158,7 +163,11 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
     xbg_cam_ground(src, &px, &pz);
     float fx = s->fx, fz = s->fz, eye[3], at[3], fov = pp->fov;
     if (mode == 2) {
-        float h = pp->eye, ah = pp->fwd, pitch = pp->pitch * 3.14159265f / 180;
+        // 俯仰 = 缺省下俯减去玩家拖的偏移，夹在下俯 60° 到上仰 10° 之间
+        // Pitch = the default look-down minus the player's offset, clamped between 60 degrees down and 10 degrees up
+        const float deg = 3.14159265f / 180, p0 = pp->pitch * deg;
+        s->tilt_lo = p0 - 60 * deg; s->tilt_hi = p0 + 10 * deg;
+        float h = pp->eye, ah = pp->fwd, pitch = p0 - fminf(fmaxf(s->tilt, s->tilt_lo), s->tilt_hi);
         eye[0] = px + fx * ah; eye[1] = h; eye[2] = pz + fz * ah;
         at[0] = eye[0] + fx * cosf(pitch); at[1] = h - sinf(pitch); at[2] = eye[2] + fz * cosf(pitch);
     } else {
@@ -185,6 +194,16 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
             if (h >= hmin - 1e-3f) break;
             h = hmin;
         }
+        // 玩家上下拖（tilt）：在上面这个缺省机位上绕看点转，镜头到看点的距离不变；视线下俯夹在 4° 到 75° 之间。往上转过缺省就越过了上面的
+        // 俯仰限制，画面上方会露出游戏还没画的地方——这是玩家自己选的
+        // The player's vertical drag (tilt): orbit around the look point from the default rig above, keeping the camera's distance to it; the sight line's
+        // look-down is clamped between 4 and 75 degrees. Turning up past the default crosses the pitch limit above, so the top of the picture shows
+        // ground the game has not drawn yet -- the player's own choice
+        const float deg = 3.14159265f / 180, run = d + la, rise = h - lh, R = sqrtf(run * run + rise * rise), e0 = atan2f(rise, run);
+        s->tilt_lo = e0 - 75 * deg; s->tilt_hi = e0 - 4 * deg;
+        const float e = e0 - fminf(fmaxf(s->tilt, s->tilt_lo), s->tilt_hi);
+        const float dwall = d;   // 转平了镜头会往后退：不退过避墙算出的距离，只降高度 | levelling out moves the camera back: not past the wall-avoidance distance, only lower
+        d = fminf(R * cosf(e) - la, dwall); h = lh + R * sinf(e);
         eye[0] = px - fx * d; eye[1] = h; eye[2] = pz - fz * d;
         at[0] = px + fx * la; at[1] = lh; at[2] = pz + fz * la;
     }

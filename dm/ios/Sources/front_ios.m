@@ -523,7 +523,7 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         if(!_navigation && !_bindTouch && !dm_ui_bind_active()) { BOOL em=NO; CGPoint bp=[t locationInView:self]; uint64_t bk=[self skillKeyAt:bp empty:&em]; if(bk && em) { _bindTouch=t; _bindKey=bk; _bindP0=bp; _mapT0=CACurrentMediaTime(); continue; } }
         if(!_mapTouch && [self inMinimap:[t locationInView:self]]) { _mapTouch=t; _mapP0=[t locationInView:self]; _mapT0=CACurrentMediaTime(); continue; }
         for(int i=0;i<16;i++) if(!_slot[i]) {
-            _slot[i]=t; CGPoint p=[t locationInView:self]; { int ex=0; _controls.belt_rows=dm_belt_rows(&ex); _controls.belt_open=ex; } dm_tc_begin_at(&_controls,i,p.x,p.y,CACurrentMediaTime()); slot=i;
+            _slot[i]=t; CGPoint p=[t locationInView:self]; { int ex=0; _controls.belt_rows=dm_belt_rows(&ex); _controls.belt_open=ex; } { int dm_cam_mode(void); _controls.cam_on=dm_cam_mode(); } dm_tc_begin_at(&_controls,i,p.x,p.y,CACurrentMediaTime()); slot=i;
             if(!_navigation && _controls.finger[i].target==DM_TC_PORTAL) { void dm_tp_request(void); dm_tp_request(); LOG("前端：点回城钮 → 免费回城"); }   // 不要回城书 / 卷轴（宿主 dm_freetp.c） | No Tome of Town Portal / scroll needed (host dm_freetp.c)
             if(!_navigation && !_mapBackTouch && _controls.finger[i].target==DM_TC_NONE && dm_ui_map_is_full()) { _mapBackTouch=t; _mapP0=p; _mapT0=CACurrentMediaTime(); }   // 全屏地图开着、这根手指没落在任何键和摇杆区上：松手时若是点按就回小地图 | Fullscreen map open and this finger landed on no button and no stick area: if it turns out to be a tap on release, return to the minimap
             // 功能页里的指针手指：问宿主这点是不是物品区（游戏主线程下一帧作答，松手时取）
@@ -544,6 +544,7 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
     for(UITouch *t in ts) {
         int slot=-1;
         for(int i=0;i<16;i++) if(_slot[i]==t) { CGPoint p=[t locationInView:self]; dm_tc_move_at(&_controls,i,p.x,p.y,CACurrentMediaTime()); slot=i;
+            if(_controls.cam_pitch!=0 || _controls.cam_yaw!=0) { void dm_cam_tilt(float); void dm_cam_turn(float); if(_controls.cam_pitch!=0) dm_cam_tilt(_controls.cam_pitch); if(_controls.cam_yaw!=0) dm_cam_turn(_controls.cam_yaw); _controls.cam_pitch=_controls.cam_yaw=0; }   // 镜头实验：右半屏拖动看四周（dm_touch_controls.c） | camera experiment: drag on the right half to look around
             // 界面连续手势（上下拖 = 滚动、按住滑块横拖）：手势层定型后把起手点与当前点交给宿主；认滑块时上下放宽 44 点（约 7 毫米，手指粗细）
             // Continuous UI gestures (vertical drag = scroll, hold a slider and drag horizontally): once the gesture layer has settled the type, give the start point and current point to the host; when recognizing a slider allow 44 points of vertical slack (about 7 mm, a finger's width)
             if(_controls.navigation_mode && _controls.pointer_slot==i && _controls.finger[i].ui_drag && self.bounds.size.width>0) { CGSize z=self.bounds.size; dm_tc_finger *f=&_controls.finger[i];

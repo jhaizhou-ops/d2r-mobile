@@ -52,6 +52,8 @@ __attribute__((weak)) int dm_cam_want_dir(float *wx,float *wz);
 __attribute__((weak)) int dm_cam_clearance(float bx,float bz,float *dist,float *px,float *pz);
 __attribute__((weak)) float dm_cam_take_turn(void);
 __attribute__((weak)) double dm_cam_turn_age(void);
+__attribute__((weak)) float dm_cam_tilt_get(void);
+__attribute__((weak)) void dm_cam_tilt_clamp(float lo,float hi);
 __attribute__((weak)) void dm_cam_publish(const float vpo[16],const float ivpo[16],const float vpp[16],const float ivpp[16],float px,float pz);
 }
 #include <algorithm>
@@ -2454,7 +2456,10 @@ float clear=0,host_px=0,host_pz=0,turned=0;bool clear_ok=false;
 struct Copy{uint64_t address=0,bytes=0,epoch=0;Buffer buffer;};std::array<Copy,8> copies;unsigned next=0;
 float envf(const char *k,float d){const char *e=getenv(k);return e?float(atof(e)):d;}
 int mode(){
-    if(mode_<0){mode_=dm_cam_mode?dm_cam_mode():0;
+    // 档可在游戏中切换（自定义页）：变了就按新档重取参数、重置跟随状态
+    // The mode can switch in game (custom page): on a change, reload parameters and reset the follow state
+    const int m=dm_cam_mode?dm_cam_mode():0;
+    if(m!=mode_){mode_=m;
         if(mode_>0){params=xbg_cam_default_params(mode_);
             params.dist=envf("DM_CAM_DIST",params.dist);params.h=envf("DM_CAM_H",params.h);params.look=envf("DM_CAM_LOOK",params.look);params.lookh=envf("DM_CAM_LOOKH",params.lookh);
             params.eye=envf("DM_CAM_EYE",params.eye);params.fwd=envf("DM_CAM_FWD",params.fwd);params.pitch=envf("DM_CAM_PITCH",params.pitch);params.fov=envf("DM_CAM_FOV",params.fov);
@@ -2488,13 +2493,16 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         // and the turn is added after the follow
         const uint64_t frame=stats.presents.load();float turn=0;
         if(frame!=st.frame){turn=dm_cam_take_turn?dm_cam_take_turn():0;st.hold=dm_cam_turn_age && dm_cam_turn_age()<1.0;}
-        const double t0=st.t;const bool fresh=xbg_cam_follow(&st,px,pz,frame,timing_clock()*1e-9,want,wx,wz,params.tau);
+        const double t0=st.t;const bool fresh=xbg_cam_follow(&st,px,pz,frame,timing_clock()*1e-9,want,wx,wz,mode_==2?1e9f:params.tau);   // 第一人称不自动跟随，见 nvn_mtl.m cam_build | first person does not follow, see nvn_mtl.m cam_build
         if(fresh && turn!=0){xbg_cam_turn(&st,turn);turned+=turn;}
         // 避墙（越肩档）：宿主按碰撞格量的、镜头朝后那个方向上离墙多远，每帧拉一次
         // Wall avoidance (over-the-shoulder mode): how far the wall is in the camera's backward direction, as the host measured on the collision grid, pulled once per frame
         if(fresh && mode_==1){float c=0;clear_ok=dm_cam_clearance && dm_cam_clearance(-st.fx,-st.fz,&c,&host_px,&host_pz);clear=clear_ok?c:0;xbg_cam_pull(&st,params.dist,clear,t0?st.t-t0:0);}
-        float vp[16],ivp[16];xbg_cam_build(&st,p,d,mode_,&params,vp,ivp);
-        if(mode_==1 && dm_cam_publish)dm_cam_publish(reinterpret_cast<const float*>(p+336),reinterpret_cast<const float*>(p+400),vp,ivp,px,pz);
+        // 玩家上下拖的俯仰（宿主 dm_cam.c）；算完把宿主的累计值夹回本帧机位能取的范围
+        // The player's dragged pitch (host dm_cam.c); afterwards clamp the host's sum to this frame's range
+        st.tilt=dm_cam_tilt_get?dm_cam_tilt_get():0;
+        float vp[16],ivp[16];xbg_cam_build(&st,p,d,mode_,&params,vp,ivp);if(fresh && dm_cam_tilt_clamp)dm_cam_tilt_clamp(st.tilt_lo,st.tilt_hi);
+        if(dm_cam_publish)dm_cam_publish(reinterpret_cast<const float*>(p+336),reinterpret_cast<const float*>(p+400),vp,ivp,px,pz);
         if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d bytes=%zu player=%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f clear=%.1f(%d) dist=%.1f host=%.1f,%.1f turned=%.2f hold=%d",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,copy,px,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2],clear,int(clear_ok),st.dcur,host_px,host_pz,turned,st.hold);
         if(patches==1){
             // 原版正交画面的大小（世界单位）：宽 2/pr[0]、高 2/pr[5]；原版下俯 30°，所以画面的高在地面上沿视线方向盖住两倍长。

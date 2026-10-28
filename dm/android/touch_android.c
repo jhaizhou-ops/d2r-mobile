@@ -287,11 +287,13 @@ void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, i
         if (e.phase == 0) latched[e.slot] = 0;
         if (e.phase == 0) {
             if (dm_tc_belt_outside(&tc,e.x,e.y)) { dm_belt_expand(0); continue; }
+            { int dm_cam_mode(void); tc.cam_on = dm_cam_mode(); }   /* 镜头实验：右半屏拖动看四周要知道档 | camera experiment: looking around on the right half needs the mode */
             dm_tc_begin_at(&tc,e.slot,e.x,e.y,e.time);
             if (!tc.navigation_mode && f->target == DM_TC_PORTAL) { dm_tc_cancel_finger(&tc,e.slot); dm_tp_request(); }
             if (tc.navigation_mode && tc.pointer_slot == e.slot) dm_tc_pointer_item(&tc,dm_ui_item_at_now(e.x/width,e.y/height));
         } else if (e.phase == 1 || e.phase == 2) {
             dm_tc_move_at(&tc,e.slot,e.x,e.y,e.time);
+            if (tc.cam_pitch != 0 || tc.cam_yaw != 0) { void dm_cam_tilt(float); void dm_cam_turn(float); if (tc.cam_pitch != 0) dm_cam_tilt(tc.cam_pitch); if (tc.cam_yaw != 0) dm_cam_turn(tc.cam_yaw); tc.cam_pitch = tc.cam_yaw = 0; }   /* 镜头实验：右半屏拖动看四周（dm_touch_controls.c） | camera experiment: drag on the right half to look around */
             event_cancelled = f->aim_cancelled;
             if (tc.navigation_mode && tc.pointer_slot == e.slot && f->ui_drag) {
                 if (!ui_drag) {

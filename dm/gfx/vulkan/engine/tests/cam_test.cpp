@@ -151,6 +151,20 @@ int main(){
      xbg_cam_follow(&s,0,40,3,1.4,1,0,1,0.2f);CHECK(near(s.fx,-0.70711,1e-4) && near(s.fz,-0.70711,1e-4));
      s.hold=0;xbg_cam_follow(&s,0,40,4,1.6,1,0,1,0.2f);CHECK(heading_deg(s)>-135+1);}
 
+    // 玩家上下拖（tilt）：0 = 缺省机位不变；正 = 绕看点往平处转（水平距离不超过缺省、只降高度）；负 = 更俯视、绕看点往近处转；
+    // 夹在视线下俯 4°–75°，tilt_lo / tilt_hi 给出这个范围；第一人称直接加到俯仰上。期望值按圆弧手算，不调被测函数
+    // The player's vertical drag (tilt): 0 = the default rig unchanged; positive = orbit towards level (horizontal distance at most the default, only lower);
+    // negative = steeper, orbiting closer; clamped to a 4-75 degree look-down, with tilt_lo / tilt_hi giving that range; first person adds it to the pitch.
+    // Expected values are worked out on the arc by hand, not by calling the code under test
+    {const double deg=3.14159265358979/180;xbg_cam_state t0=st;t0.tilt=0;uint8_t d0[XBG_CAM_BLOCK];memcpy(d0,src,sizeof d0);float v0[16],i0[16];xbg_cam_build(&t0,src,d0,1,&par,v0,i0);
+     const double hd0=hypot(t0.eye[0]-100,t0.eye[2]-50),h0=t0.eye[1],run=hd0+par.look,rise=h0-par.lookh,R=hypot(run,rise),e0=atan2(rise,run);
+     CHECK(near(hd0,20,2e-2) && near(t0.tilt_hi,e0-4*deg,1e-3) && near(t0.tilt_lo,e0-75*deg,1e-3));
+     auto rig=[&](float tilt,double &hd,double &h){xbg_cam_state t=st;t.tilt=tilt;uint8_t d1[XBG_CAM_BLOCK];memcpy(d1,src,sizeof d1);float v1[16],i1[16];xbg_cam_build(&t,src,d1,1,&par,v1,i1);hd=hypot(t.eye[0]-100,t.eye[2]-50);h=t.eye[1];};
+     double hd,h;rig(float(10*deg),hd,h);CHECK(near(hd,20,2e-2) && near(h,par.lookh+R*sin(e0-10*deg),2e-2) && h<h0);
+     rig(1.4f,hd,h);CHECK(near(hd,20,2e-2) && near(h,par.lookh+R*sin(4*deg),2e-2));
+     rig(-0.3f,hd,h);CHECK(near(hd,R*cos(e0+0.3)-par.look,2e-2) && near(h,par.lookh+R*sin(e0+0.3),2e-2) && hd<20);
+     xbg_cam_params fp=xbg_cam_default_params(2);xbg_cam_state t2=st;t2.tilt=float(5*deg);uint8_t d2[XBG_CAM_BLOCK];memcpy(d2,src,sizeof d2);float v2[16],i2[16];xbg_cam_build(&t2,src,d2,2,&fp,v2,i2);
+     CHECK(near(atan2(-t2.fwd[1],hypot(t2.fwd[0],t2.fwd[2])),(fp.pitch-5)*deg,1e-3) && near(t2.tilt_hi,(fp.pitch+10)*deg,1e-4));}
     if(failures){printf("%d failure(s)\n",failures);return 1;}
     printf("cam_test: all checks passed\n");return 0;
 }

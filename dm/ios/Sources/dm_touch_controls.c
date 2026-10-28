@@ -554,6 +554,20 @@ void dm_tc_move_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
         else if (s->mouse_click_mode && s->pointer_item != 1 && s->pointer_item != 3 && s->pointer_item != 6 && !f->ui_drag && !f->pointer_dragged && distance > DM_TC_POINTER_MOVE_PT * scale_for(&s->layout))
             f->ui_drag = fabsf(f->x - f->aim_origin_x) > fabsf(f->y - f->aim_origin_y) ? 2 : 1;   /* 界面连续手势：过阈值那一刻按方向定型（纵 = 滚动，横 = 滑块） | Continuous UI gesture: the type is fixed by direction at the moment the threshold is crossed (vertical = scroll, horizontal = slider) */
         update_pointer(s);
+    } else if (!s->navigation_mode && f->target == DM_TC_NONE && s->cam_on > 0 && f->aim_origin_x >= s->layout.width * 0.5f) {
+        /* 镜头实验（cam_on = 前端给的档）：右半屏空白处（不在键上、不起摇杆）拖动看四周。越肩只认上下 = 俯仰；第一人称上下 = 俯仰、左右 = 转身。
+           手指往上 = 视线往上，往右 = 往右转。位移过点按阈值才定型，定型后松手不算点地。一屏高 = 90°、一屏宽 = 180°。
+           这里只累计弧度（cam_pitch / cam_yaw），前端取走交给宿主（dm_cam_tilt / dm_cam_turn）
+           Camera experiment (cam_on = the mode the front end gives): drag on the empty right half (not on a key, not starting the stick) to look around.
+           Over-the-shoulder takes vertical only = pitch; first person vertical = pitch, horizontal = turn. Finger up = look up, right = turn right. Fixed only
+           once the move crosses the tap threshold, and once fixed the release is not a ground tap. A screen height = 90 degrees, a screen width = 180 degrees.
+           Only radians are summed here (cam_pitch / cam_yaw); the front end takes them and hands them to the host (dm_cam_tilt / dm_cam_turn) */
+        float ax = fabsf(x - f->aim_origin_x), ay = fabsf(y - f->aim_origin_y), th = DM_TC_POINTER_MOVE_PT * scale_for(&s->layout);
+        if (!f->cam_drag && (ay > th || (s->cam_on == 2 && ax > th)) && (s->cam_on == 2 || ay > ax)) { f->cam_drag = 1; f->cam_x = f->aim_origin_x; f->cam_y = f->aim_origin_y; }
+        if (f->cam_drag && s->layout.height > 0 && s->layout.width > 0) {
+            s->cam_pitch += (f->cam_y - y) / s->layout.height * 1.5707963f; f->cam_y = y;
+            if (s->cam_on == 2) s->cam_yaw += (x - f->cam_x) / s->layout.width * 3.1415927f;
+            f->cam_x = x; }
     } else if (f->target==DM_TC_SWAP) {
         if (dm_tc_hit(&s->layout,x,y)!=DM_TC_SWAP) f->aim_cancelled=1;
     } else if (!s->navigation_mode && skill_target(f->target)) {
@@ -660,7 +674,7 @@ void dm_tc_end_at(dm_tc_state *s, int slot, double now_s) {
         else if (s->belt_rows > 1 && up < -th) s->belt_request = 2;
         else if (fabsf(dx) <= th && fabsf(up) <= th) belt_fire(s, 0x10 | (done.target - DM_TC_BELT1));
     }
-    if (done.active && !s->navigation_mode && (done.target == DM_TC_NONE || done.target == DM_TC_JOYSTICK) && now_s - done.start_time_s < DM_TC_POINTER_TAP_S &&   /* 起摇杆区里很快原地松开的那一下兼作点击 | a quick release in place inside the stick-start zone doubles as a tap */
+    if (done.active && !s->navigation_mode && !done.cam_drag && (done.target == DM_TC_NONE || done.target == DM_TC_JOYSTICK) && now_s - done.start_time_s < DM_TC_POINTER_TAP_S &&   /* 起摇杆区里很快原地松开的那一下兼作点击 | a quick release in place inside the stick-start zone doubles as a tap */
         hypotf(done.x - done.aim_origin_x, done.y - done.aim_origin_y) <= DM_TC_POINTER_MOVE_PT * scale_for(&s->layout)) {
         s->world_tap_x = done.aim_origin_x; s->world_tap_y = done.aim_origin_y; ++s->world_tap_seq;   /* 点游戏世界 | Tap the game world */
     }

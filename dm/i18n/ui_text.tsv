@@ -388,6 +388,13 @@ dmCustomTouchSwapNear	换组键：传送门左侧	Skill-set switch: left of port
 dmCustomTouchSwapNearHint	沿传送门外侧弧线排布，松手后切换	On the portal arc; release to switch	En el arco del portal; suelta y cambia		По дуге портала, отпустить — переключение	포탈 호를 따라 배치, 손을 떼면 전환	换组近位说明
 dmCustomTouchSwapFar	换组键：技能区上方	Skill-set switch: above skills	Cambio de grupo: sobre habilidades		Переключатель: над скиллами	전환: 스킬 위	分离位置，touch_swap_above=1
 dmCustomTouchSwapFarHint	位于技能区左上，松手后切换	Above-left of skills; release to switch	Arriba-izq. de habilidades; suelta y cambia		Слева над скиллами, отпустить — переключение	스킬 영역 왼쪽 위, 손을 떼면 전환	换组上位说明
+dmCustomCam	镜头视角	Camera view	Vista de cámara		Вид камеры	카메라 시점	自定义页镜头单选的标题（实验；dm_custom.c 键 cam）
+dmCustomCamOff	原版视角	Original view	Vista original		Исходный вид	원작 시점	镜头单选第一项（缺省，cam=0）
+dmCustomCamOffHint	斜俯视，与原版相同	Angled top-down, as in the original	Vista cenital inclinada, como el original		Наклонный вид сверху, как в оригинале	원작과 같은 비스듬한 위 시점	原版视角下面的说明小字
+dmCustomCamOts	越肩视角（实验）	Over-the-shoulder (experimental)	Sobre el hombro (experimental)		Из-за плеча (эксперимент)	숄더 뷰 (실험)	镜头单选第二项（cam=1）
+dmCustomCamOtsHint	右半屏上下拖动调整视角	Drag up or down on the right half to tilt	Arrastra arriba o abajo a la derecha para inclinar		Тяните вверх-вниз справа для наклона	오른쪽 절반을 위아래로 끌어 기울이기	越肩下面的说明小字
+dmCustomCamFp	第一人称（实验）	First person (experimental)	Primera persona (experimental)		От первого лица (эксперимент)	1인칭 (실험)	镜头单选第三项（cam=2）
+dmCustomCamFpHint	右半屏拖动转身和抬头	Drag on the right half to turn and look	Arrastra a la derecha para girar y mirar		Тяните справа для поворота и обзора	오른쪽 절반을 끌어 돌아보기	第一人称下面的说明小字
 dmDoorRift	大秘境	Greater Rift	Grieta superior	Grieta mayor	Великий рифт	그레이터 리프트	城里大秘境传送门头顶的名牌（dm_rift.c dm_door_label）
 dmDoorRiftTown	回城	Return to Town	Volver a la ciudad		Портал в город	마을로	秘境图里回城门头顶的名牌（dm_rift.c dm_door_label）
 dmDoorBossRush	Boss 连战	Boss Rush	Ronda de jefes		Босс-раш	보스 러시	城里 Boss 连战门头顶的名牌（dm_bossrush.c dm_door_label）

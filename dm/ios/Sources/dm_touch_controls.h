@@ -40,6 +40,7 @@ typedef struct {
               The gesture layer only fixes the type; on seeing it the front end forwards the start point and current point to the host (dm_ui_drag_*), and the scroll / slider is done by the host according to the game's own hit testing */
     int ui_drag;
     int shop_drag;   /* 从商人货架的货上起拖（不拿起）：松手按落点买 / 不买 | Drag starting from goods on the vendor shelf (not picked up): on release, buy / do not buy by the drop point */
+    int cam_drag; float cam_x, cam_y;   /* 镜头实验：右半屏空白处拖动看四周（已定型、上一次的点） | camera experiment: drag on the empty right half to look around (fixed, previous point) */
     int locked_drag; /* 单件任务槽占用时从别的物品上起拖：不拿起，松手不发任何键 | Drag starting from another item while the single-item quest slot is occupied: do not pick up, and send no key on release */
 } dm_tc_finger;
 typedef struct {
@@ -92,6 +93,10 @@ typedef struct {
        A tap in game state (no panel open) = tap the game world: the finger did not land on any widget target (including landing in the stick area without dragging), less than 0.35 seconds from press to lift, displacement within the tap threshold
               → world_tap_seq is incremented, and on seeing a change the front end calls the host's dm_world_tap (tap an item name to pick up / tap an NPC to talk / tap a chest; tapping empty ground sends nothing). */
     unsigned world_tap_seq; float world_tap_x, world_tap_y;
+    /* 镜头实验：cam_on = 前端每次按下前填的档（0 关、1 越肩、2 第一人称）；cam_pitch / cam_yaw = 右半屏拖出来还没交出去的弧度，前端取走后清零
+       Camera experiment: cam_on = the mode the front end fills in before each touch-down (0 off, 1 over-the-shoulder, 2 first person); cam_pitch / cam_yaw =
+       radians dragged on the right half not yet handed over, zeroed once the front end takes them */
+    int cam_on; float cam_pitch, cam_yaw;
     int close_left; double close_next_s;   /* 面板外点按后还要按几下 B、下一下最早什么时候（按到面板关掉为止） | After a tap outside the panel, how many more B presses remain and the earliest time of the next one (press until the panel is closed) */
     /* 商人页：这次按下落在货架的货上（前端按宿主命中结果 7 置位）。从货上起拖 = 想买：不发「拿起」、光标留在那件货上（宿主买的是光标选中的那件）；
        松手时 shop_drop_seq 加一，前端按落点决定——落在背包类物品区 = 买，拖回货架 / 面板外 / 别处 = 不买

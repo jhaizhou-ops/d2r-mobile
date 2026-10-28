@@ -3049,6 +3049,8 @@ int dm_cam_want_dir(float *wx, float *wz);
 void dm_cam_publish(const float vpo[16], const float ivpo[16], const float vpp[16], const float ivpp[16], float px, float pz);
 float dm_cam_take_turn(void);
 double dm_cam_turn_age(void);
+float dm_cam_tilt_get(void);
+void dm_cam_tilt_clamp(float lo, float hi);
 int dm_cam_clearance(float bx, float bz, float *dist, float *px, float *pz);
 // 算法在 xbg_cam.h（与安卓 / 鸿蒙 Vulkan 同一份）：跟随、体感 / 按钮转向、避墙（往里拉快、往外放慢）、贴墙时升高的吊臂、
 // 画面上沿不越过 DM_CAM_REACH、拉近时缩短前瞻。这里只管认块、拷贝、帧号与宿主（dm/host/dm_cam.c）的往来
@@ -3058,8 +3060,9 @@ int dm_cam_clearance(float bx, float bz, float *dist, float *px, float *pz);
 #include "../vulkan/engine/xbg_cam.h"
 static float cam_envf(const char *k, float d) { const char *e = getenv(k); return e ? (float)atof(e) : d; }
 static struct { xbg_cam_params p; xbg_cam_state st; int mode; uint64_t n, scenes; float clear; int clear_ok; } g_cam = { .mode = -1 };
-static int cam_mode(void) {
-    if (g_cam.mode < 0) { g_cam.mode = dm_cam_mode(); if (g_cam.mode > 0) { xbg_cam_params *q = &g_cam.p; *q = xbg_cam_default_params(g_cam.mode);
+static int cam_mode(void) {   // 档可在游戏中切换（自定义页）：变了就按新档重取参数、重置跟随状态 | the mode can switch in game (custom page): on a change, reload parameters and reset the follow state
+    const int m = dm_cam_mode();
+    if (m != g_cam.mode) { g_cam.mode = m; if (m > 0) { xbg_cam_params *q = &g_cam.p; *q = xbg_cam_default_params(m);
         q->dist = cam_envf("DM_CAM_DIST", q->dist); q->h = cam_envf("DM_CAM_H", q->h); q->look = cam_envf("DM_CAM_LOOK", q->look); q->lookh = cam_envf("DM_CAM_LOOKH", q->lookh);
         q->eye = cam_envf("DM_CAM_EYE", q->eye); q->fwd = cam_envf("DM_CAM_FWD", q->fwd); q->pitch = cam_envf("DM_CAM_PITCH", q->pitch); q->fov = cam_envf("DM_CAM_FOV", q->fov);
         q->tau = cam_envf("DM_CAM_TAU", q->tau); q->near_ = cam_envf("DM_CAM_NEAR", q->near_); q->reach = cam_envf("DM_CAM_REACH", q->reach); xbg_cam_init(&g_cam.st);
@@ -3070,14 +3073,18 @@ static void cam_build(const uint8_t *src, uint8_t *dst) {   // dst 已是 src �
     const uint64_t f = atomic_load(&g_cur_frame); float turn = 0;
     if (f != st->frame) { turn = dm_cam_take_turn(); st->hold = dm_cam_turn_age() < 1.0; }   // 体感 / 按钮转向：每帧取一次；一秒内转过就让跟随不动朝向 | turns: taken once per frame; a turn within a second holds the follow
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); const double t0 = st->t;
-    const int fresh = xbg_cam_follow(st, px, pz, f, ts.tv_sec + ts.tv_nsec * 1e-9, want, wx, wz, g_cam.p.tau);
+    // 第一人称不自动跟随：视线只由玩家转（右半屏左右拖、转向键、体感），摇杆相对视线前后走、左右平移；时间常数取极大 = 不转，换区域照样复位
+    // First person does not follow: only the player turns the view (horizontal drag on the right half, turn buttons, sensors), and the stick walks and strafes
+    // relative to the view; an enormous time constant = no turning, while area changes still reset the heading
+    const int fresh = xbg_cam_follow(st, px, pz, f, ts.tv_sec + ts.tv_nsec * 1e-9, want, wx, wz, g_cam.mode == 2 ? 1e9f : g_cam.p.tau);
     if (fresh && turn != 0) xbg_cam_turn(st, turn);
     if (fresh && g_cam.mode == 1) { float c = 0, hx, hz; g_cam.clear_ok = dm_cam_clearance(-st->fx, -st->fz, &c, &hx, &hz); g_cam.clear = g_cam.clear_ok ? c : 0;
         xbg_cam_pull(st, g_cam.p.dist, g_cam.clear, t0 ? st->t - t0 : 0); }
-    float vp[16], ivp[16]; xbg_cam_build(st, src, dst, g_cam.mode, &g_cam.p, vp, ivp);
-    if (g_cam.mode == 1) dm_cam_publish((const float *)(src + 336), (const float *)(src + 400), vp, ivp, px, pz);   // 给输入换算；第一人称不换算输入 | for input conversion; first person does not
-    if (g_cam.n++ % 600 == 0) MLOG("镜头实验：第 %llu 次改相机（场景块 %llu；档 %d，人物 %.1f,%.1f 朝向 %.2f,%.2f 离墙 %.1f(%d) 距离 %.1f 镜头 %.1f,%.1f,%.1f）", (unsigned long long)g_cam.n,
-        (unsigned long long)g_cam.scenes, g_cam.mode, px, pz, st->fx, st->fz, g_cam.clear, g_cam.clear_ok, st->dcur, st->eye[0], st->eye[1], st->eye[2]); }
+    st->tilt = dm_cam_tilt_get();   // 玩家上下拖的俯仰；算完把宿主的累计值夹回本帧机位能取的范围 | the player's dragged pitch; afterwards clamp the host's sum to this frame's range
+    float vp[16], ivp[16]; xbg_cam_build(st, src, dst, g_cam.mode, &g_cam.p, vp, ivp); if (fresh) dm_cam_tilt_clamp(st->tilt_lo, st->tilt_hi);
+    dm_cam_publish((const float *)(src + 336), (const float *)(src + 400), vp, ivp, px, pz);   // 给输入换算（两档都换：第一人称摇杆相对视线） | for input conversion (both modes: first person's stick is relative to the view)
+    if (g_cam.n++ % 600 == 0) MLOG("镜头实验：第 %llu 次改相机（场景块 %llu；档 %d，人物 %.1f,%.1f 朝向 %.2f,%.2f 离墙 %.1f(%d) 距离 %.1f 镜头 %.1f,%.1f,%.1f 视线 %.2f,%.2f,%.2f 俯仰偏移 %.2f）", (unsigned long long)g_cam.n,
+        (unsigned long long)g_cam.scenes, g_cam.mode, px, pz, st->fx, st->fz, g_cam.clear, g_cam.clear_ok, st->dcur, st->eye[0], st->eye[1], st->eye[2], st->fwd[0], st->fwd[1], st->fwd[2], st->tilt); }
 static uint64_t cam_patch(const p_bind_buf *u, void *mb, uint64_t mo) {   // 返回改过的拷贝的 GPU 地址；不是主相机或场景块返回 0 | GPU address of the modified copy; 0 when neither block
     // 两种块都按（地址, 帧号）缓存：一帧里同一块只拷一份。场景块以前每次绑定都拷，一帧上千次绑定会在 GPU 还读着上一帧时绕回 4 MB 环
     // Both blocks are cached by (address, frame): one copy per block per frame. The scene block used to be copied on every bind, and a thousand binds a frame

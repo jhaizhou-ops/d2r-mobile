@@ -5,7 +5,7 @@
 //   把这个画面方向按参照镜头的水平朝向转成世界方向（上 = 镜头正前），再投回原版画面方向、按 2:1 换回摇杆。推上 = 朝镜头前方走。
 // · 点单位（dm_world.c w_hit）：人有高度，点在身上的射线落地会落到人身后。按候选逐个换：射线交「过该单位脚底、正对射线的竖直面」，
 //   交点投回原版画面，再用原版那套身体框 / 菱形 / 选择框判命中（dm_cam_tap_for_unit）。
-// 开关：环境变量 DM_CAM=1 越肩、=2 第一人称（只做了画面，输入不换算）；不设 = 关。关着或后端没发布矩阵（安卓 / 鸿蒙的 Vulkan 后端）时这里全部原样返回。
+// 开关：环境变量 DM_CAM=1 越肩、=2 第一人称（摇杆相对视线前后走、左右平移，不自动跟随；视线由右半屏拖动 / 转向键 / 体感转）；不设 = 关。关着或后端没发布矩阵（安卓 / 鸿蒙的 Vulkan 后端）时这里全部原样返回。
 // Over-the-shoulder / first-person camera (experimental, off by default): input conversion and the state shared between the two threads. Design and derivation: docs/over-the-shoulder-camera.md.
 // The picture is drawn with a perspective camera (dm/gfx/nvn/nvn_mtl.m cam_build, Metal backend only), while the game only understands points and directions on the original orthographic picture. Approach: leave the game alone and convert input once before it reaches the game --
 //   a point on the perspective picture -> cast a ray and intersect it with a plane -> project back onto the original picture with the original orthographic view-projection. Both matrix sets are published every frame by the render thread (dm_cam_publish).
@@ -13,7 +13,7 @@
 //   That screen direction is rotated into a world direction by the reference camera's horizontal heading (up = straight ahead of the camera), projected back to an original-picture direction and turned back into a stick value via 2:1. Pushing up = walk towards where the camera looks.
 // - Tapping a unit (dm_world.c w_hit): units have height, so a ray through a body lands on the ground behind them. Each candidate is handled on its own: intersect the ray with the vertical plane through that unit's feet facing the ray,
 //   project the hit point back onto the original picture, then test it with the original body box / footprint diamond / selection box (dm_cam_tap_for_unit).
-// Switch: environment variable DM_CAM=1 over-the-shoulder, =2 first person (picture only, input is not converted); unset = off. When off, or when the backend publishes no matrices (the Vulkan backend on Android / HarmonyOS), everything here returns unchanged.
+// Switch: environment variable DM_CAM=1 over-the-shoulder, =2 first person (the stick walks and strafes relative to the view, no follow; the view turns by dragging on the right half / the turn buttons / sensors); unset = off. When off, or when the backend publishes no matrices (the Vulkan backend on Android / HarmonyOS), everything here returns unchanged.
 #include "dm.h"
 #include "dm_uiscreen.h"
 #include <math.h>
@@ -24,7 +24,15 @@
 #include <string.h>
 #include <time.h>
 
-int dm_cam_mode(void) { static int m = -1; if (m < 0) { const char *e = getenv("DM_CAM"); m = e ? atoi(e) : 0; if (m) LOG("DM_CAM=%d：镜头实验开（1 越肩 / 2 第一人称）", m); } return m; }
+// 档：自定义页「镜头视角」（dm_custom.c 键 cam，读盘与点「应用」时调 dm_cam_set_mode）随时可切；环境变量 DM_CAM 设了就以它为准、页上改不动（测试用）
+// Mode: the custom page's "Camera view" (dm_custom.c key cam, which calls dm_cam_set_mode on load and on Apply) can switch at any time; when the environment
+// variable DM_CAM is set it wins and the page cannot change it (for tests)
+static _Atomic int g_mode, g_mode_env = -1;
+int dm_cam_mode(void) {
+    int e = atomic_load(&g_mode_env);
+    if (e < 0) { const char *s = getenv("DM_CAM"); e = s ? atoi(s) : 0x100; atomic_store(&g_mode_env, e); if (e != 0x100) LOG("DM_CAM=%d：镜头档按环境变量定（1 越肩 / 2 第一人称），自定义页改不动", e); }
+    return e != 0x100 ? e : atomic_load(&g_mode); }
+void dm_cam_set_mode(int m) { if (m < 0 || m > 2) m = 0; if (atomic_exchange(&g_mode, m) != m) LOG("镜头视角 → %s（自定义页）%s", m == 1 ? "越肩" : m == 2 ? "第一人称" : "原版", atomic_load(&g_mode_env) >= 0 && atomic_load(&g_mode_env) != 0x100 ? "；环境变量 DM_CAM 设着，以它为准" : ""); }
 
 // 画面线程发布的矩阵（行向量约定：裁剪 = [x y z 1] × M）：原版正交视图投影与逆、透视视图投影与逆、人物落地点 x / z；超过 0.5 秒没更新就当镜头没开
 // Matrices published by the render thread (row-vector convention: clip = [x y z 1] * M): original orthographic view-projection and inverse, perspective view-projection and inverse, the character's ground point x / z; not refreshed for 0.5 s = camera treated as off
@@ -54,7 +62,7 @@ int dm_cam_clearance(float bx, float bz, float *dist, float *px, float *pz) {
         *dist = g_clear[i] < g_clear[j] ? g_clear[i] : g_clear[j]; *px = g_clear_p[0]; *pz = g_clear_p[1]; }
     pthread_mutex_unlock(&g_mu); return ok; }
 static int cam_get(cam_t *c) {
-    if (dm_cam_mode() != 1) return 0;
+    if (dm_cam_mode() <= 0) return 0;   // 两档都换算：第一人称以前只认越肩，摇杆一直按原版方向走，转过身就左右颠倒 | both modes: first person used to be left out, so its stick kept the original directions and swapped left and right once turned around
     pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5; if (ok) *c = g_pub; pthread_mutex_unlock(&g_mu); return ok; }
 
 static void xf(const float *M, const float v[4], float o[4]) { for (int j = 0; j < 4; j++) o[j] = v[0] * M[j] + v[1] * M[4 + j] + v[2] * M[8 + j] + v[3] * M[12 + j]; }
@@ -62,18 +70,18 @@ static void xf(const float *M, const float v[4], float o[4]) { for (int j = 0; j
 // 跟着世界走的界面字（名字牌、血条、地上物品名、飘字）也按透视画面放（dm_uiscreen.c 在游戏的「世界点 → 屏幕」main+0x1237c60 入口换镜头副本）。
 // 那个函数算 裁剪 = 投影（镜头 +0x80）× 视图 × 点，并且除以 w，所以透视矩阵也对。副本的投影换成 P' = P × 逆(原版视图投影) × 透视视图投影：
 // 按行向量写，视图 × P' = 视图 × 投影 × 逆(视图 × 投影) × 透视 = 透视视图投影。p = 镜头自己的投影（与常量块 +208 相同），排布与这里的矩阵一致。
-// 越肩镜头开着并且画面线程 0.5 秒内发布过矩阵才返回 1；点按与测试量具的单位位置也走这个函数，所以那边拿到的也是透视画面上的坐标
+// 镜头开着（越肩或第一人称）并且画面线程 0.5 秒内发布过矩阵才返回 1；点按与测试量具的单位位置也走这个函数，所以那边拿到的也是透视画面上的坐标
 // UI text that follows the world (nameplates, health bars, ground item names, floating text) is placed on the perspective picture too (dm_uiscreen.c swaps a
 // copy of the camera at the entry of the game's "world point -> screen" main+0x1237c60). That function computes clip = projection (camera +0x80) x view x point
 // and divides by w, so a perspective matrix works. The copy's projection becomes P' = P x inverse(original view-projection) x perspective view-projection:
 // in row-vector terms, view x P' = view x projection x inverse(view x projection) x perspective = perspective view-projection. p = the camera's own projection
-// (the same as the constant block's +208), laid out like the matrices here. Returns 1 only while the over-the-shoulder camera is on and the render thread
+// (the same as the constant block's +208), laid out like the matrices here. Returns 1 only while the camera is on (over-the-shoulder or first person) and the render thread
 // published matrices within 0.5 s; taps and the test tool's unit positions also go through that function, so they get perspective picture coordinates too
 static void m4mul(const float *a, const float *b, float *o) { for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { double s = 0; for (int k = 0; k < 4; k++) s += (double)a[i * 4 + k] * b[k * 4 + j]; o[i * 4 + j] = (float)s; } }
 // 跑在游戏线程自己的栈上（dm_uiscreen.c 的观测门），所以不拷整份 cam_t，锁里直接算
 // Runs on the game thread's own stack (dm_uiscreen.c's observation gate), so it does not copy a whole cam_t and computes under the lock instead
 int dm_cam_label_matrix(const float p[16], float out[16]) {
-    if (dm_cam_mode() != 1) return 0;
+    if (dm_cam_mode() <= 0) return 0;
     float t[16]; pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5;
     if (ok) { m4mul(p, g_pub.ivpo, t); m4mul(t, g_pub.vpp, out); }
     pthread_mutex_unlock(&g_mu); return ok; }
@@ -188,6 +196,13 @@ static int remap_one(const cam_t *c, int32_t *x, int32_t *y, float wdir[2]) {
 int dm_cam_sensor_mode(void) { static int m = -1; if (m < 0) { const char *e = getenv("DM_CAM_SENSOR"); m = dm_cam_mode() == 1 && e ? atoi(e) : 0; if (m) LOG("DM_CAM_SENSOR=%d：体感转向开（1 转手机看四周 / 2 侧倾转向）", m); } return m; }
 static float g_turn, g_turn_total; static double g_turn_t;
 void dm_cam_turn(float rad) { if (rad == 0) return; pthread_mutex_lock(&g_mu); g_turn += rad; g_turn_total += rad; g_turn_t = now_s(); pthread_mutex_unlock(&g_mu); }
+// 俯仰（右半屏空白处上下拖，dm_touch_controls.c）：正 = 视线往上。累计值整个保留（换区域也不复位），画面线程每帧读；夹在 ±1.4 弧度，镜头里再按机位夹实际角度
+// Pitch (vertical drag on the empty right half, dm_touch_controls.c): positive = look up. The sum is kept as is (not reset on area changes) and read by the
+// render thread every frame; clamped to +-1.4 rad here, and the camera clamps the actual angle for its rig
+static _Atomic int g_tilt_x10000;
+void dm_cam_tilt(float rad) { int v = atomic_load(&g_tilt_x10000) + (int)lroundf(rad * 10000); if (v > 14000) v = 14000; if (v < -14000) v = -14000; atomic_store(&g_tilt_x10000, v); }
+float dm_cam_tilt_get(void) { return atomic_load(&g_tilt_x10000) / 10000.0f; }
+void dm_cam_tilt_clamp(float lo, float hi) { int l = (int)lroundf(lo * 10000), h = (int)lroundf(hi * 10000), v = atomic_load(&g_tilt_x10000); if (l <= h && (v < l || v > h)) atomic_store(&g_tilt_x10000, v < l ? l : h); }
 float dm_cam_take_turn(void) { pthread_mutex_lock(&g_mu); float r = g_turn; g_turn = 0; pthread_mutex_unlock(&g_mu); return r; }
 double dm_cam_turn_age(void) { pthread_mutex_lock(&g_mu); double a = g_turn_t > 0 ? now_s() - g_turn_t : 1e9; pthread_mutex_unlock(&g_mu); return a; }
 static float turn_total(void) { pthread_mutex_lock(&g_mu); float t = g_turn_total; pthread_mutex_unlock(&g_mu); return t; }
