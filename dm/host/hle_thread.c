@@ -247,6 +247,10 @@ static void *thread_main(void *p) {
         dm_thread_enter(t->entry, t->arg, t->stack_top);
         die("客体线程入口返回");
     }
+    // 已跳回宿主栈：这里打日志是安全的（1 MiB 栈，不再在客体栈上）。前 20 次与之后每 50 次记一行，真机上看得到线程确实从这条路退出；t 可能已释放，不碰它
+    // Back on the host stack: logging is safe here (1 MiB stack, no longer the guest stack). The first 20 exits and every 50th after that log a line, so a
+    // device run shows threads really leaving through this path; t may already be freed, so it is not touched
+    { static int n; int k = __atomic_add_fetch(&n, 1, __ATOMIC_RELAXED); if (k <= 20 || k % 50 == 0) LOG("客体线程回到宿主栈退出（第 %d 次）| guest thread exits on the host stack (#%d)", k, k); }
     pthread_exit(NULL);
 }
 static void thr_free(thr_t *t) {   // 持 G；从全部线程链摘下并释放 | Holding G; unlink from the all-threads chain and free
