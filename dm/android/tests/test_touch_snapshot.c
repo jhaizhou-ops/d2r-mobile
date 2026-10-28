@@ -64,6 +64,7 @@ int dm_swapskill_slot(int slot,int *charges) { (void)slot; *charges=0; return 0;
 int dm_ui_minimap_rect(float r[4]) { (void)r; return 0; }
 int dm_ui_map_is_full(void) { return 0; }
 int dm_cam_mode(void) { return 0; }
+int dm_cam_style(void) { return 0; }
 void dm_cam_tilt(float rad) { (void)rad; }
 void dm_cam_turn(float rad) { (void)rad; }
 void dm_ui_map_full(int on) { (void)on; unexpected_host_call(__func__); }

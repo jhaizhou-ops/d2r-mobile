@@ -137,6 +137,45 @@ static inline int xbg_cam_follow(xbg_cam_state *s, float px, float pz, uint64_t 
     return 1;
 }
 
+// 拖着走的跟随（原神式，宿主 dm_cam.c dm_cam_style = 1）：镜头留在上一帧的水平位置、只转过来对着人物，离人物的水平距离保持 dist——
+// 往前走不转；横着走镜头被拖着转（转速 ≈ 横向速度 ÷ dist，摇杆一直往左就绕着镜头转圈）；往镜头这边走镜头往后退、不调头。
+// 不朝摇杆方向追（那是 xbg_cam_follow 的做法），朝向只由人物的位移和玩家自己转（拖动 / 转向键 / 体感，跟随之后加）来定。
+// 首帧、位移一帧超过 20（换区域 / 传送 / 过门）照旧把朝向重置为原版视线的水平方向
+// Dragged follow (Genshin style, host dm/host/dm_cam.c dm_cam_style = 1): the camera stays at last frame's horizontal position and only turns to face the
+// character, keeping the horizontal distance dist -- walking forward does not turn it; walking sideways drags it round (turn rate ~ sideways speed / dist,
+// so holding the stick left circles the character round the camera); walking towards the camera pushes it back without turning round. It does not chase
+// the stick direction (that is xbg_cam_follow); the heading comes only from the character's displacement and the player's own turns (drag / turn buttons /
+// sensors, added after the follow). The first frame, or a displacement above 20 in one frame (area change / teleport / door), still resets the heading to
+// the horizontal direction of the original sight line
+// k = 跟着转的份额（0..1）：1 = 镜头完全不挪、只转（横着走转得最快，摇杆一直往左绕着半径 dist 的圈转）；0.5 = 只转一半、其余由镜头跟着人物平移补上
+// （转速减半，圈的半径变成 dist / k）。人物跑得快（实测约 31 世界单位每秒），k = 1 时一直往左每秒转约 90°
+// k = the share of the turn taken (0..1): 1 = the camera never moves, it only turns (fastest when walking sideways; holding the stick left circles at radius
+// dist); 0.5 = half the turn, the rest made up by the camera sliding along with the character (half the turn rate, a circle of radius dist / k). Characters
+// run fast (about 31 world units a second measured), so with k = 1 holding left turns about 90 degrees a second
+static inline int xbg_cam_drag(xbg_cam_state *s, float px, float pz, uint64_t frame, double now, float dist, float k) {
+    if (frame == s->frame) return 0;
+    s->frame = frame;
+    s->t = now;
+    float dx = px - s->px, dz = pz - s->pz, l = sqrtf(dx * dx + dz * dz);
+    if (!s->have || l >= 20) s->fx = s->fz = -0.70711f;
+    else if (l > 1e-4f) {
+        float ex = px - (s->px - s->fx * dist), ez = pz - (s->pz - s->fz * dist), el = sqrtf(ex * ex + ez * ez);
+        if (el > 1e-3f) {
+            float a = atan2f(s->fz, s->fx), d = atan2f(ez, ex) - a;
+            while (d > 3.14159265f) d -= 6.2831853f;
+            while (d < -3.14159265f) d += 6.2831853f;
+            a += d * (k < 0 ? 0 : k > 1 ? 1 : k);
+            s->fx = cosf(a);
+            s->fz = sinf(a);
+        }
+    }
+    s->px = px;
+    s->pz = pz;
+    s->have = 1;
+    memcpy(s->vp_prev, s->vp_last, 64);
+    return 1;
+}
+
 // 体感转向：朝向转 rad 弧度，正 = 往画面右边转（朝向 f 转向 右 = (−f.z, f.x)，即世界 xz 平面里角度增大）
 // Sensor steering: turn the heading by rad radians, positive = towards the right of the picture (heading f turns towards right = (-f.z, f.x), i.e. the
 // angle in the world xz plane increases)

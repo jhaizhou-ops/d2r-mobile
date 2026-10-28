@@ -161,6 +161,27 @@ int main(){
      xbg_cam_follow(&s,0,40,3,1.4,1,0,1,0.2f);CHECK(near(s.fx,-0.70711,1e-4) && near(s.fz,-0.70711,1e-4));
      s.hold=0;xbg_cam_follow(&s,0,40,4,1.6,1,0,1,0.2f);CHECK(heading_deg(s)>-135+1);}
 
+    // 拖着走的跟随（原神式，dist 20）：首帧重置；往前走不转；横跨 5：镜头原在 (5 − 20, 0)，新朝向 = 指向 (5, 5) 的方向 = atan(5 / 20)；
+    // 往镜头走不调头；同一帧不算；一帧 ≥ 20 重置。一直往左（垂直于朝向）小步走：人物绕着几乎不动的镜头转圈，转过的角度 ≈ 路程 / dist
+    // Dragged follow (Genshin style, dist 20): the first frame resets; walking forward does not turn; a 5 sidestep from (5, 0): the camera was at (5 - 20, 0),
+    // so the new heading points at (5, 5) = atan(5 / 20); walking towards the camera does not turn round; the same frame does nothing; >= 20 in one frame
+    // resets. Small steps to the left (perpendicular to the heading): the character circles a nearly fixed camera, turning by about path / dist
+    {xbg_cam_state s;xbg_cam_init(&s);CHECK(xbg_cam_drag(&s,0,0,1,1.0,20,1)==1);CHECK(near(s.fx,-0.70711,1e-4) && near(s.fz,-0.70711,1e-4));
+     s.fx=1;s.fz=0;xbg_cam_drag(&s,5,0,2,1.1,20,1);CHECK(near(s.fx,1,1e-6) && near(s.fz,0,1e-6));
+     xbg_cam_drag(&s,5,5,3,1.2,20,1);CHECK(near(heading_deg(s),atan2(5.0,20.0)*180/3.14159265358979,1e-3));
+     CHECK(xbg_cam_drag(&s,9,9,3,1.25,20,1)==0 && s.px==5 && s.pz==5);
+     s.fx=1;s.fz=0;xbg_cam_drag(&s,0,5,4,1.3,20,1);CHECK(near(s.fx,1,1e-6) && near(s.fz,0,1e-6));
+     xbg_cam_drag(&s,0,30,5,1.4,20,1);CHECK(near(s.fx,-0.70711,1e-4) && near(s.fz,-0.70711,1e-4));
+     s.fx=1;s.fz=0;const double cx0=s.px-20*s.fx,cz0=s.pz-20*s.fz;double turned=0,x=s.px,z=s.pz;uint64_t fr=6;
+     for(int i=0;i<200;++i){const double a0=atan2(s.fz,s.fx);x+=0.5*s.fz;z+=-0.5*s.fx;xbg_cam_drag(&s,float(x),float(z),fr++,1.5+i/60.0,20,1);
+      double d=atan2(s.fz,s.fx)-a0;while(d>3.14159265358979)d-=2*3.14159265358979;while(d<-3.14159265358979)d+=2*3.14159265358979;turned+=d;}
+     CHECK(hypot(s.px-20*s.fx-cx0,s.pz-20*s.fz-cz0)<2 && near(fabs(turned),100.0/20,0.25));}
+    // k = 0.5：同样横跨 5 只转一半的角度；k = 0 不转
+    // k = 0.5: the same 5 sidestep turns half the angle; k = 0 does not turn
+    {xbg_cam_state s;xbg_cam_init(&s);xbg_cam_drag(&s,5,0,1,1.0,20,0.5f);s.fx=1;s.fz=0;xbg_cam_drag(&s,5,5,2,1.1,20,0.5f);
+     CHECK(near(heading_deg(s),0.5*atan2(5.0,20.0)*180/3.14159265358979,1e-3));
+     s.fx=1;s.fz=0;xbg_cam_drag(&s,5,10,3,1.2,20,0);CHECK(near(s.fx,1,1e-6) && near(s.fz,0,1e-6));}
+
     // 玩家上下拖（tilt）：0 = 缺省机位不变；正 = 绕看点往平处转（水平距离不超过缺省、只降高度）；负 = 更俯视、绕看点往近处转；
     // 夹在视线下俯 4°–75°，tilt_lo / tilt_hi 给出这个范围；第一人称直接加到俯仰上。期望值按圆弧手算，不调被测函数
     // The player's vertical drag (tilt): 0 = the default rig unchanged; positive = orbit towards level (horizontal distance at most the default, only lower);

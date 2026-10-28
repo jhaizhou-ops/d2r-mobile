@@ -97,6 +97,10 @@ typedef struct {
        Camera experiment: cam_on = the mode the front end fills in before each touch-down (0 off, 1 over-the-shoulder, 2 first person); cam_pitch / cam_yaw =
        radians dragged on the right half not yet handed over, zeroed once the front end takes them */
     int cam_on; float cam_pitch, cam_yaw;
+    /* cam_orbit = 前端填：越肩档右半屏左右拖也转镜头（原神式，宿主 dm_cam_style = 1；0 = 越肩只认上下，同原来）
+       cam_orbit = filled in by the front end: in over-the-shoulder a horizontal drag on the right half also turns the camera (Genshin style, host
+       dm_cam_style = 1; 0 = over-the-shoulder takes vertical only, as before) */
+    int cam_orbit;
     int close_left; double close_next_s;   /* 面板外点按后还要按几下 B、下一下最早什么时候（按到面板关掉为止） | After a tap outside the panel, how many more B presses remain and the earliest time of the next one (press until the panel is closed) */
     /* 商人页：这次按下落在货架的货上（前端按宿主命中结果 7 置位）。从货上起拖 = 想买：不发「拿起」、光标留在那件货上（宿主买的是光标选中的那件）；
        松手时 shop_drop_seq 加一，前端按落点决定——落在背包类物品区 = 买，拖回货架 / 面板外 / 别处 = 不买

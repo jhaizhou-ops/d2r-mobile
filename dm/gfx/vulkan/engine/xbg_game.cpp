@@ -48,6 +48,7 @@ __attribute__((weak)) float dm_bright_k(void);
 // The host side of the over-the-shoulder / first-person camera (dm/host/dm_cam.c): the switch, the heading the follow wants, the matrices published
 // for input conversion, how far the wall behind the character is; weak: graphics unit tests without the host keep the camera off
 __attribute__((weak)) int dm_cam_mode(void);
+__attribute__((weak)) int dm_cam_style(void);
 __attribute__((weak)) int dm_cam_want_dir(float *wx,float *wz);
 __attribute__((weak)) int dm_cam_clearance(float bx,float bz,float *dist,float *px,float *pz);
 __attribute__((weak)) float dm_cam_take_turn(void);
@@ -2452,7 +2453,7 @@ Buffer uniform_snapshot_cached(uint64_t address,size_t copy);
 namespace cam {
 const char *const cull_cs="1188eaedc8db3285";
 int mode_=-1;xbg_cam_params params;xbg_cam_state st;uint64_t patches=0,scenes=0,widened=0;
-float clear=0,host_px=0,host_pz=0,turned=0;bool clear_ok=false;
+float clear=0,host_px=0,host_pz=0,turned=0,drag_k=0.5f;bool clear_ok=false;
 struct Copy{uint64_t address=0,bytes=0,epoch=0;Buffer buffer;};std::array<Copy,8> copies;unsigned next=0;
 float envf(const char *k,float d){const char *e=getenv(k);return e?float(atof(e)):d;}
 int mode(){
@@ -2463,8 +2464,8 @@ int mode(){
         if(mode_>0){params=xbg_cam_default_params(mode_);
             params.dist=envf("DM_CAM_DIST",params.dist);params.h=envf("DM_CAM_H",params.h);params.look=envf("DM_CAM_LOOK",params.look);params.lookh=envf("DM_CAM_LOOKH",params.lookh);
             params.eye=envf("DM_CAM_EYE",params.eye);params.fwd=envf("DM_CAM_FWD",params.fwd);params.pitch=envf("DM_CAM_PITCH",params.pitch);params.fov=envf("DM_CAM_FOV",params.fov);
-            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);xbg_cam_init(&st);
-            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g reach=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_,params.reach);}}
+            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);drag_k=envf("DM_CAM_DRAG",0.5f);xbg_cam_init(&st);
+            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g reach=%g drag=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_,params.reach,drag_k);}}
     return mode_;
 }
 // 绑定长度：认出主相机或场景块（先读客体内存里签名那几行，便宜）就返回整块长度，否则原样返回 copy
@@ -2493,7 +2494,12 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         // and the turn is added after the follow
         const uint64_t frame=stats.presents.load();float turn=0;
         if(frame!=st.frame){turn=dm_cam_take_turn?dm_cam_take_turn():0;st.hold=dm_cam_turn_age && dm_cam_turn_age()<1.0;}
-        const double t0=st.t;const bool fresh=xbg_cam_follow(&st,px,pz,frame,timing_clock()*1e-9,want,wx,wz,mode_==2?1e9f:params.tau);   // 第一人称不自动跟随，见 nvn_mtl.m cam_build | first person does not follow, see nvn_mtl.m cam_build
+        // 原神式（宿主 dm_cam_style = 1，越肩档）：镜头被人物拖着走（xbg_cam_drag），不朝摇杆方向追；其余照旧
+        // Genshin style (host dm_cam_style = 1, over-the-shoulder): the camera is dragged along by the character (xbg_cam_drag) and does not chase the stick
+        // direction; everything else as before
+        const int style=mode_==1 && dm_cam_style?dm_cam_style():0;
+        // 第一人称不自动跟随，见 nvn_mtl.m cam_build | first person does not follow, see nvn_mtl.m cam_build
+        const double t0=st.t;const bool fresh=style==1?xbg_cam_drag(&st,px,pz,frame,timing_clock()*1e-9,params.dist,drag_k):xbg_cam_follow(&st,px,pz,frame,timing_clock()*1e-9,want,wx,wz,mode_==2?1e9f:params.tau);
         if(fresh && turn!=0){xbg_cam_turn(&st,turn);turned+=turn;}
         // 避墙（越肩档）：宿主按碰撞格量的、镜头朝后那个方向上离墙多远，每帧拉一次
         // Wall avoidance (over-the-shoulder mode): how far the wall is in the camera's backward direction, as the host measured on the collision grid, pulled once per frame
@@ -2503,7 +2509,7 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         st.tilt=dm_cam_tilt_get?dm_cam_tilt_get():0;
         float vp[16],ivp[16];xbg_cam_build(&st,p,d,mode_,&params,vp,ivp);if(fresh && dm_cam_tilt_clamp)dm_cam_tilt_clamp(st.tilt_lo,st.tilt_hi);
         if(dm_cam_publish)dm_cam_publish(reinterpret_cast<const float*>(p+336),reinterpret_cast<const float*>(p+400),vp,ivp,px,pz);
-        if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d bytes=%zu player=%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f clear=%.1f(%d) dist=%.1f host=%.1f,%.1f turned=%.2f hold=%d",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,copy,px,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2],clear,int(clear_ok),st.dcur,host_px,host_pz,turned,st.hold);
+        if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d style=%d bytes=%zu player=%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f clear=%.1f(%d) dist=%.1f host=%.1f,%.1f turned=%.2f hold=%d",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,style,copy,px,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2],clear,int(clear_ok),st.dcur,host_px,host_pz,turned,st.hold);
         if(patches==1){
             // 原版正交画面的大小（世界单位）：宽 2/pr[0]、高 2/pr[5]；原版下俯 30°，所以画面的高在地面上沿视线方向盖住两倍长。
             // 越肩镜头画得出来的东西不出这个范围：按正交视锥剔除的计算着色器和游戏自己挑单位都按它

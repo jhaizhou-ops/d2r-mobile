@@ -33,6 +33,13 @@ int dm_cam_mode(void) {
     int e = atomic_load(&g_mode_env);
     if (e < 0) { const char *s = getenv("DM_CAM"); e = s ? atoi(s) : 0x100; atomic_store(&g_mode_env, e); if (e != 0x100) LOG("DM_CAM=%d：镜头档按环境变量定（1 越肩 / 2 第一人称），自定义页改不动", e); }
     return e != 0x100 ? e : atomic_load(&g_mode); }
+// 越肩档的操作风格（试验中，环境变量 DM_CAM_STYLE，缺省 0）：0 = 镜头朝摇杆方向追（xbg_cam_follow），摇杆按一次推下时的镜头定方向；
+// 1 = 原神式：镜头被人物拖着走（xbg_cam_drag）、不追摇杆，摇杆始终按此刻的镜头定方向，右半屏左右拖转镜头（touch_android.c 给触屏层 cam_orbit）
+// Over-the-shoulder control style (on trial, environment variable DM_CAM_STYLE, default 0): 0 = the camera chases the stick direction (xbg_cam_follow), and
+// the stick takes its directions from the camera at the start of each push; 1 = Genshin style: the camera is dragged along by the character
+// (xbg_cam_drag) instead of chasing the stick, the stick always takes its directions from the camera of the moment, and a horizontal drag on the right
+// half turns the camera (touch_android.c gives the touch layer cam_orbit)
+int dm_cam_style(void) { static _Atomic int st = -1; int v = atomic_load(&st); if (v < 0) { const char *e = getenv("DM_CAM_STYLE"); v = e ? atoi(e) : 0; atomic_store(&st, v); if (v) LOG("DM_CAM_STYLE=%d：越肩档用原神式操作（镜头被拖着走、摇杆按此刻镜头、右半屏左右拖转镜头）", v); } return v; }
 void dm_cam_set_mode(int m) { if (m < 0 || m > 2) m = 0; if (atomic_exchange(&g_mode, m) != m) LOG("镜头视角 → %s（自定义页）%s", m == 1 ? "越肩" : m == 2 ? "第一人称" : "原版", atomic_load(&g_mode_env) >= 0 && atomic_load(&g_mode_env) != 0x100 ? "；环境变量 DM_CAM 设着，以它为准" : ""); }
 
 // 画面线程发布的矩阵（行向量约定：裁剪 = [x y z 1] × M）：原版正交视图投影与逆、透视视图投影与逆、人物落地点 x / z；超过 0.5 秒没更新就当镜头没开
@@ -259,8 +266,12 @@ static cam_t g_ref_l, g_ref_r; static int g_ref_l_on, g_ref_r_on; static float g
 void dm_cam_remap_stick(int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     cam_t c; if (!cam_get(&c)) { atomic_store(&g_want_on, 0); g_ref_l_on = g_ref_r_on = 0; return; }
     float tt = turn_total();
-    if (!*lx && !*ly) g_ref_l_on = 0; else if (!g_ref_l_on || fabsf(tt - g_ref_l_turn) > 0.035f) { g_ref_l = c; g_ref_l_on = 1; g_ref_l_turn = tt; }
-    if (!*rx && !*ry) g_ref_r_on = 0; else if (!g_ref_r_on || fabsf(tt - g_ref_r_turn) > 0.035f) { g_ref_r = c; g_ref_r_on = 1; g_ref_r_turn = tt; }
+    // 原神式（dm_cam_style = 1）：镜头不追摇杆，摇杆每次都按此刻的镜头定方向（不锁参照镜头）；一直往左推就绕着镜头转圈，同原神
+    // Genshin style (dm_cam_style = 1): the camera does not chase the stick, so the stick takes its directions from the camera of the moment every time (no
+    // reference lock); holding it left circles round the camera, as in Genshin
+    const int live = dm_cam_style() == 1 && dm_cam_mode() == 1;
+    if (!*lx && !*ly) g_ref_l_on = 0; else if (live || !g_ref_l_on || fabsf(tt - g_ref_l_turn) > 0.035f) { g_ref_l = c; g_ref_l_on = 1; g_ref_l_turn = tt; }
+    if (!*rx && !*ry) g_ref_r_on = 0; else if (live || !g_ref_r_on || fabsf(tt - g_ref_r_turn) > 0.035f) { g_ref_r = c; g_ref_r_on = 1; g_ref_r_turn = tt; }
     cam_t cl = c, cr = c; memcpy(cl.vpp, g_ref_l.vpp, 64); memcpy(cl.ivpp, g_ref_l.ivpp, 64); memcpy(cr.vpp, g_ref_r.vpp, 64); memcpy(cr.ivpp, g_ref_r.ivpp, 64);   // 只借参照镜头的朝向；原版正交与人物位置用当前的 | borrow only the reference camera's heading; the original orthographic matrices and character position are current
     float wl[2], wr[2]; int l = g_ref_l_on && remap_one(&cl, lx, ly, wl), r = g_ref_r_on && remap_one(&cr, rx, ry, wr);
     const float *w = r ? wr : l ? wl : NULL;   // 瞄准拖拽优先（朝攻击方向），其次移动方向 | aim drag first (face the attack), then the move direction
