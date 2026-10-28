@@ -310,24 +310,27 @@ void dm_cam_remap_stick(int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     atomic_store(&g_want_on, w != NULL);
 }
 
-// 瞄准箭头（原神式那样在 3D 画面里瞄）：拖技能键瞄准时，在人物脚下的地面上沿瞄准方向画一支箭头，透视投到画面上。out 依次 7 个点（各 x、y，0..1，y 向下）：
-// 杆尾左、杆头左、箭头左翼、尖、箭头右翼、杆头右、杆尾右；返回 7，瞄准没在进行（0.15 秒内没更新）、镜头没开或有点在镜头背后返回 0。
-// 长度按世界单位：杆从脚前 2 到 15、尖在 19，杆宽 1.4、箭头宽 4（原版画面宽约 98）；方向就是发给游戏的那个（dm_cam_remap_stick 换算后的右摇杆）
-// Aim arrow (aiming in the 3D picture, as in Genshin): while a skill button is dragged to aim, an arrow lies on the ground at the character's feet along the
-// aim direction, projected onto the perspective picture. out holds 7 points in order (x, y each, 0..1, y down): shaft back left, shaft front left, head
-// left wing, tip, head right wing, shaft front right, shaft back right; returns 7, or 0 when no aim is in progress (no update within 0.15 s), the camera is
-// off, or a point is behind the camera. Lengths in world units: the shaft from 2 to 15 ahead of the feet, the tip at 19, shaft width 1.4, head width 4
-// (the original picture is about 98 wide); the direction is the one sent to the game (the right stick after dm_cam_remap_stick)
-int dm_cam_aim(float out[14]) {
+// 瞄准环（原神式那样在 3D 画面里瞄）：拖技能键瞄准时，在瞄准方向上人物脚前 12 处的地面上平放一个环（前端用游戏自己的金环图 touchart/dm_native_circle.png），
+// 透视投到画面上。out = 5 × 5 个网格点（各 x、y，0..1，y 向下），按行排：第 0 行是环的远边（瞄准方向那头），每行从左到右——就是 Android drawBitmapMesh
+// 要的顺序，图贴上去在透视下也是平躺的；返回 25，瞄准没在进行（0.15 秒内没更新）、镜头没开或有点在镜头背后返回 0。
+// 环半径 2.4 世界单位（原版画面宽约 98）；方向就是发给游戏的那个（dm_cam_remap_stick 换算后的右摇杆）。原先画的是一支大白箭头，用户嫌它大而扎眼（OnePlus 13）
+// Aim ring (aiming in the 3D picture, as in Genshin): while a skill button is dragged to aim, a ring lies flat on the ground 12 ahead of the character's feet
+// along the aim direction (the front end uses the game's own gold ring art, touchart/dm_native_circle.png), projected onto the perspective picture. out =
+// 5 x 5 grid points (x, y each, 0..1, y down) row by row: row 0 is the ring's far edge (the aim direction's end), each row from left to right -- the order
+// Android's drawBitmapMesh wants, so the image lies flat in perspective too; returns 25, or 0 when no aim is in progress (no update within 0.15 s), the camera
+// is off, or a point is behind the camera. Ring radius 2.4 world units (the original picture is about 98 wide); the direction is the one sent to the game
+// (the right stick after dm_cam_remap_stick). It used to be a big white arrow, which the user found big and glaring (OnePlus 13)
+int dm_cam_aim(float out[50]) {
     cam_t c; if (!cam_get(&c)) return 0;
     pthread_mutex_lock(&g_mu); double t = g_aim_t; pthread_mutex_unlock(&g_mu);
     if (!(t > 0 && now_s() - t < 0.15)) return 0;
     float ax = atomic_load(&g_aim_x1000) / 1000.0f, az = atomic_load(&g_aim_z1000) / 1000.0f, l = hypotf(ax, az); if (l < 1e-3f) return 0; ax /= l; az /= l;
-    const float rx = -az, rz = ax, at[7][2] = { { 2, -0.7f }, { 15, -0.7f }, { 15, -2 }, { 19, 0 }, { 15, 2 }, { 15, 0.7f }, { 2, 0.7f } };
-    for (int i = 0; i < 7; i++) {
-        const float w[3] = { c.pl[0] + ax * at[i][0] + rx * at[i][1], c.py + 0.2f, c.pl[1] + az * at[i][0] + rz * at[i][1] };
-        if (!proj(c.vpp, w, &out[2 * i], &out[2 * i + 1])) return 0; }
-    return 7;
+    const float rx = -az, rz = ax, cx = c.pl[0] + ax * 12, cz = c.pl[1] + az * 12, r = 2.4f;
+    for (int i = 0; i < 5; i++) for (int j = 0; j < 5; j++) {
+        const float u = (j / 4.0f - 0.5f) * 2 * r, v = (0.5f - i / 4.0f) * 2 * r;
+        const float w[3] = { cx + rx * u + ax * v, c.py + 0.15f, cz + rz * u + az * v };
+        if (!proj(c.vpp, w, &out[2 * (i * 5 + j)], &out[2 * (i * 5 + j) + 1])) return 0; }
+    return 25;
 }
 
 // 点单位：tap = 触点（透视画面归一化），feet = 这个单位脚底在原版画面上的点（归一化）。out = 触点「搬到这个单位那一层深度」后在原版画面上的点。返回 0 = 镜头没开或这个单位在镜头背后
