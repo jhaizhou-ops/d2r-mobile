@@ -781,7 +781,7 @@ static int ui_inside_panel(module_t *m, uint64_t root, uint64_t xy) {   // 从�
 // Clickable widgets are recognized by type (vtable): buttons, toggle buttons, attribute "+", quest icons; tabs are handled separately (widened 90 units above and below).
 static dm_wref g_click;   // 最近一次命中的可点控件 | The most recently hit clickable widget
 static const char *g_click_name = ""; static int g_click_exact;   // g_click_exact：这次是判触点本身（不是吸附取样）——滑块只认直接点中，不吸附（点到滑槽值会直接跳过去） | g_click_exact: this time the touch point itself is being judged (not a snap sample) - sliders are direct hits only, no snapping (a tap on the track makes the value jump straight there)
-static int click_walk(uint64_t w, uint64_t xy, int dep, uint64_t base) {
+static int click_walk_mode(uint64_t w, uint64_t xy, int dep, uint64_t base, int close_only) {
     if (!w || dep > 14 || !*(uint8_t *)(w + 0x50)) return 0;
     uint64_t vt = *(uint64_t *)w - base, ch = *(uint64_t *)(w + 0x58), n = *(uint64_t *)(w + 0x60);
     // 0x20baff8 = 下拉（DropdownListWidget）：原先不算可点，编年史页的部位下拉紧挨页签条，页签条上下放宽的 90 单位把点它的那一下抢成切页签（真机上点不动，宿主复现点成切到第 3 页签）
@@ -792,11 +792,14 @@ static int click_walk(uint64_t w, uint64_t xy, int dep, uint64_t base) {
     // 0x20b91c0 / 0x20b8718 = number box / text box (the gold deposit/withdraw quantity box, the naming box): the drawn box (the quantity box's BackgroundBox, layout x 244–986) is one ring wider than the input widget itself (323–953);
     // it used not to count as a clickable widget and so was not snapped to: a tap on the left end of the box (where the number is shown) landed on the popup backing, the input box did not open, and tapping 「好」(OK) = deposit / withdraw everything at the default maximum.
     // Once counted as clickable, the existing 3.5 mm snap (90 units) covers the margins on all four sides of the box (left 79, top 19, bottom 24)
-    if (vt == 0x20b7b00 || vt == 0x208a5f8 || vt == 0x20bc110 || vt == 0x20c7d68 || vt == 0x20c80f0 || vt == 0x20c6fb8 || vt == 0x20b84d0 || vt == 0x20b8cd0 || vt == 0x20b97f8 || vt == 0x20b91c0 || vt == 0x20b8718 || vt == 0x20baff8 || (vt == 0x20bad70 && g_click_exact)) {   /* 按钮 / 技能树「综合技能」页的技能图标（普通技能、物品技能，0x208a5f8）/ 开关按钮 / 属性「+」/ 任务图标 / 职业人物 / 列表行（0x20b8cd0 = 键鼠版选角页的角色行）/ 滚动条箭头 / 滑块（含两端箭头，只认直接点中） | Buttons / skill icons on the skill tree's 「综合技能」(General Skills) page (normal skills, item skills, 0x208a5f8) / toggle buttons / attribute "+" / quest icons / class characters / list rows (0x20b8cd0 = character rows on the keyboard-mouse character select page) / scrollbar arrows / sliders (including the arrows at both ends, direct hits only) */ uint64_t fn = *(uint64_t *)(*(uint64_t *)w + 0x48); if (((int (*)(uint64_t, uint64_t))fn)(w, xy) & 1) { dm_wref_set(&g_click, w); g_click_name = *(uint64_t *)(w + 8) ? (const char *)*(uint64_t *)(w + 8) : "?"; return 1; } }
+    const char *name = (const char *)*(uint64_t *)(w + 8);
+    int close = name && (!strcmp(name, "TouchClose") || !strcmp(name, "close") || !strcmp(name, "CloseButton"));
+    if ((!close_only || close) && (vt == 0x20b7b00 || vt == 0x208a5f8 || vt == 0x20bc110 || vt == 0x20c7d68 || vt == 0x20c80f0 || vt == 0x20c6fb8 || vt == 0x20b84d0 || vt == 0x20b8cd0 || vt == 0x20b97f8 || vt == 0x20b91c0 || vt == 0x20b8718 || vt == 0x20baff8 || (vt == 0x20bad70 && g_click_exact))) {   /* 按钮 / 技能树「综合技能」页的技能图标（普通技能、物品技能，0x208a5f8）/ 开关按钮 / 属性「+」/ 任务图标 / 职业人物 / 列表行（0x20b8cd0 = 键鼠版选角页的角色行）/ 滚动条箭头 / 滑块（含两端箭头，只认直接点中） | Buttons / skill icons on the skill tree's 「综合技能」(General Skills) page (normal skills, item skills, 0x208a5f8) / toggle buttons / attribute "+" / quest icons / class characters / list rows (0x20b8cd0 = character rows on the keyboard-mouse character select page) / scrollbar arrows / sliders (including the arrows at both ends, direct hits only) */ uint64_t fn = *(uint64_t *)(*(uint64_t *)w + 0x48); if (((int (*)(uint64_t, uint64_t))fn)(w, xy) & 1) { dm_wref_set(&g_click, w); g_click_name = *(uint64_t *)(w + 8) ? (const char *)*(uint64_t *)(w + 8) : "?"; return 1; } }
     if (!ch || n > 256) return 0;
-    for (uint64_t i = 0; i < n; i++) if (click_walk(*(uint64_t *)(ch + 8 * i), xy, dep + 1, base)) return 1;
+    for (uint64_t i = 0; i < n; i++) if (click_walk_mode(*(uint64_t *)(ch + 8 * i), xy, dep + 1, base, close_only)) return 1;
     return 0;
 }
+static int click_walk(uint64_t w, uint64_t xy, int dep, uint64_t base) { return click_walk_mode(w, xy, dep, base, 0); }
 // 面板有上下层（根控件的子控件数组里越靠后越在上面：暂停菜单 → 设置页框 → 设置页内容，按打开顺序）。上层面板盖住的地方，下层的按钮虽然还「可见」，
 // 游戏照样会把没人接的点击交给它——Mac 的 iOS 包：设置页里点偏滑块箭头十来个像素，点击落到了被盖住的暂停菜单「消息记录」上，设置页被关。
 // 所以：先找盖住这一点的最上层面板 T；「在可点控件上 / 就近吸附」只认 T 及其以上的控件（被盖住的下层按钮不吸附过去）。
@@ -883,15 +886,18 @@ static int ui_snap(module_t *m, uint64_t root, int *x, int *y) {   // 0 周围�
             int lf = inside_walk(p, SNAP_XY(*x, *y), 1, base + 0x20c1328); if (!rh && !lf) continue;
             k += snprintf(b + k, sizeof b - k, " [%d]%s:根%d角%d叶=%s", i, nm ? nm : "?", rh, r0, lf ? g_inside_name : "-"); } LOG("盖层探查 (%d,%d)：%s", *x, *y, b); }
     int lo = top < 0 ? 0 : top;
-#define SNAP_AT(px, py, from, to) ({ int hit_ = 0; for (int i_ = (to); i_ >= (from) && !hit_; i_--) { uint64_t p_ = *(uint64_t *)(ch + 8 * i_); if (p_ && *(uint8_t *)(p_ + 0x50) && (top < 0 || panel_skip((const char *)*(uint64_t *)(p_ + 8)) != 1) && !panel_clipped(p_, SNAP_XY(px, py))) hit_ = click_walk(p_, SNAP_XY(px, py), 1, base); } hit_; })
+#define SNAP_AT_MODE(px, py, from, to, close_only) ({ int hit_ = 0; for (int i_ = (to); i_ >= (from) && !hit_; i_--) { uint64_t p_ = *(uint64_t *)(ch + 8 * i_); if (p_ && *(uint8_t *)(p_ + 0x50) && (top < 0 || panel_skip((const char *)*(uint64_t *)(p_ + 8)) != 1) && !panel_clipped(p_, SNAP_XY(px, py))) hit_ = click_walk_mode(p_, SNAP_XY(px, py), 1, base, close_only); } hit_; })
+#define SNAP_AT(px, py, from, to) SNAP_AT_MODE(px, py, from, to, 0)
     if (SNAP_AT(*x, *y, lo, (int)n - 1)) return 1;   // 正压在别的可点控件上：不让滑块箭头的放大区抢 | Directly on another clickable widget: do not let the slider arrow's enlarged area take it
     if (slider_arrow(m, root, x, y, w, h)) return 2;
     g_click_exact = 1; int on = SNAP_AT(*x, *y, lo, (int)n - 1); g_click_exact = 0; if (on) return 1;
     static const int dx[8] = { 0, 0, -1, 1, -1, 1, -1, 1 }, dy[8] = { -1, 1, 0, 0, -1, -1, 1, 1 };   // 先上下、再左右、再斜向：按钮多是横长条，上下偏的最多 | Up/down first, then left/right, then diagonals: buttons are mostly wide horizontal bars, so vertical misses are the most common
     float R = 90.0f * h / 2160.0f;
-    for (int ring = 1; ring <= 9; ring++) for (int d = 0; d < 8; d++) { float r = R * ring / 9 * (d < 4 ? 1.0f : 0.7071f);   // 九圈（每圈约 0.4 毫米）：两个按钮之间的缝里落点归更近的那个 | Nine rings (about 0.4 mm each): a point in the gap between two buttons goes to the nearer one
+    // 外圈只扩关闭 X：原有控件优先，保持原命中函数、层级和裁剪。
+    // Extend only close X buttons in the outer rings; existing controls retain priority, hit functions, layering and clipping.
+    for (int ring = 1; ring <= 16; ring++) for (int d = 0; d < 8; d++) { float r = R * ring / 9 * (d < 4 ? 1.0f : 0.7071f);   // 九圈（每圈约 0.4 毫米）：两个按钮之间的缝里落点归更近的那个 | Nine rings (about 0.4 mm each): a point in the gap between two buttons goes to the nearer one
         int px = *x + (int)(dx[d] * r), py = *y + (int)(dy[d] * r); if (px < 0 || py < 0 || px >= w || py >= h) continue;
-        if (SNAP_AT(px, py, lo, (int)n - 1)) {   // 吸附到的点在控件边上：点击发到控件中心（沿这一点向四个方向探边）；中心若落在别的控件上（套着的子按钮）就留在取样点 | The snapped point is on the widget's edge: send the click to the widget center (probe edges in four directions from this point); if the center falls on another widget (a nested child button) stay at the sample point
+        if (SNAP_AT_MODE(px, py, lo, (int)n - 1, ring > 9)) {   // 吸附到的点在控件边上：点击发到控件中心（沿这一点向四个方向探边）；中心若落在别的控件上（套着的子按钮）就留在取样点 | The snapped point is on the widget's edge: send the click to the widget center (probe edges in four directions from this point); if the center falls on another widget (a nested child button) stay at the sample point
             uint64_t cw = dm_wref_get(&g_click); int qx = px, qy = py; slot_center(cw, &qx, &qy, w, h, 0);
             if (SNAP_AT(qx, qy, lo, (int)n - 1) && dm_wref_get(&g_click) == cw) { px = qx; py = qy; } else { SNAP_AT(px, py, lo, (int)n - 1); }
             *x = px; *y = py; return 2; } }
