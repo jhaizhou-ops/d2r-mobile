@@ -2503,7 +2503,7 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         st.tilt=dm_cam_tilt_get?dm_cam_tilt_get():0;
         float vp[16],ivp[16];xbg_cam_build(&st,p,d,mode_,&params,vp,ivp);if(fresh && dm_cam_tilt_clamp)dm_cam_tilt_clamp(st.tilt_lo,st.tilt_hi);
         if(dm_cam_publish)dm_cam_publish(reinterpret_cast<const float*>(p+336),reinterpret_cast<const float*>(p+400),vp,ivp,px,pz);
-        if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d bytes=%zu player=%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f clear=%.1f(%d) dist=%.1f host=%.1f,%.1f turned=%.2f hold=%d",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,copy,px,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2],clear,int(clear_ok),st.dcur,host_px,host_pz,turned,st.hold);
+        if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d bytes=%zu player=%.1f,%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f clear=%.1f(%d) dist=%.1f host=%.1f,%.1f turned=%.2f hold=%d",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,copy,px,py,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2],clear,int(clear_ok),st.dcur,host_px,host_pz,turned,st.hold);
         if(patches==1){
             // 原版正交画面的大小（世界单位）：宽 2/pr[0]、高 2/pr[5]；原版下俯 30°，所以画面的高在地面上沿视线方向盖住两倍长。
             // 越肩镜头画得出来的东西不出这个范围：按正交视锥剔除的计算着色器和游戏自己挑单位都按它
@@ -2511,7 +2511,7 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
             // picture's height covers twice that length along the sight line. What the over-the-shoulder camera can draw stays inside this area: the compute
             // shader that culls against the orthographic frustum and the game's own choice of units both use it
             float pr[16];memcpy(pr,p+208,sizeof pr);
-            if(pr[0]!=0 && pr[5]!=0)xbg_logf("NVN cam original view=%.1fx%.1f ground=%.1fx%.1f (world units)",fabsf(2/pr[0]),fabsf(2/pr[5]),fabsf(2/pr[0]),fabsf(4/pr[5]));}
+            if(pr[0]!=0 && pr[5]!=0)xbg_logf("NVN cam original view=%.1fx%.1f ground=%.1fx%.1f (world units) axis offset=%.4f,%.4f",fabsf(2/pr[0]),fabsf(2/pr[5]),fabsf(2/pr[0]),fabsf(4/pr[5]),pr[12],pr[13]);}
     }else{xbg_cam_build10(&st,d);++scenes;}
     b.flush();Copy &c=copies[next++%copies.size()];c.address=address;c.bytes=copy;c.epoch=snapshot_epoch;c.buffer=b;return b;
 }

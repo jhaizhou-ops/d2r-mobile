@@ -104,13 +104,25 @@ int dm_cam_on(void) { cam_t c; return cam_get(&c); }
 // 镜头的水平朝向（世界 x / z，单位向量）：小地图上画人物朝向用（front_ios.m mapHeadingSync）。镜头关着或矩阵过期返回 0
 // The camera's horizontal heading (world x / z, unit vector): for the facing indicator on the minimap (front_ios.m mapHeadingSync). Returns 0 when the
 // camera is off or its matrices are stale
-// sx / sy = 人物脚底在原版正交画面上的位置（归一化，y 向下）：全屏地图是游戏按原版画面画的，人物十字在这里（不能用透视画面上的位置）
-// sx / sy = the character's feet on the original orthographic picture (normalized, y down): the game draws the fullscreen map by the original picture, so its
-// player cross is here (not at the position on the perspective picture)
+// sx / sy = 全屏地图上人物十字的位置（归一化，y 向下）：全屏地图是游戏按原版画面画的，原版镜头又总对准人物、离人物的距离固定（xbg_cam.h XBG_CAM_ORIG_DIST），
+// 所以人物在原版画面正中，地面高低都一样（不能用透视画面上的位置）。原先按 (x, 0, z) 投影：跟地面高度以后发布的 x / z 是人物的真位置，人物所在地面不在 y = 0 时
+// 投影差出一截（下坡 12 个单位约差四分之一屏高）。早先那份 x / z 是视线落在 y = 0 处，本来就在画面正中
+// sx / sy = the player cross on the fullscreen map (normalized, y down): the game draws the fullscreen map by the original picture, and the original camera
+// always aims at the character from a fixed distance (xbg_cam.h XBG_CAM_ORIG_DIST), so the character is at the centre of the original picture whatever the
+// ground height (not at the position on the perspective picture). This used to project (x, 0, z): since the camera follows the ground height the published
+// x / z is the character's true position, and with the ground not at y = 0 that projection is off (about a quarter of the screen height for a 12-unit drop).
+// The earlier x / z was where the sight line meets y = 0, which is at the centre anyway
 int dm_cam_heading(float *fx, float *fz, float *sx, float *sy) {
     cam_t c; float o[3], d[3]; if (!cam_get(&c) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
     float l = hypotf(d[0], d[2]); if (l < 1e-6f) return 0; *fx = d[0] / l; *fz = d[2] / l;
-    float P[3] = { c.pl[0], 0, c.pl[1] }; return proj(c.vpo, P, sx, sy); }
+    *sx = 0.5f; *sy = 0.5f;
+    // 诊断：旧算法的点偏开画面中心时记几行（偏多少 = 人物所在地面离 y = 0 多高），看得出哪儿的地面有高低
+    // Diagnostic: a few lines when the old computation's point moves off the centre (how far = how high the character's ground is off y = 0), showing
+    // where the ground has heights
+    static _Atomic int said; float P[3] = { c.pl[0], 0, c.pl[1] }, ox, oy;
+    if (proj(c.vpo, P, &ox, &oy) && fabsf(oy - 0.5f) > 0.02f && atomic_load(&said) < 8) {
+        static float last = 0; if (fabsf(oy - last) > 0.02f) { last = oy; atomic_fetch_add(&said, 1); LOG("地图朝向：人物在画面中心；旧算法 (x, 0, z) 会在 %.3f,%.3f（地面不在 y = 0）", ox, oy); } }
+    return 1; }
 
 // 怪物指示：游戏线程每拍交来玩家附近活着的怪（子格坐标与档位，diag.c cam_threats_tick），前端每帧问哪些不在画面里、该画在屏幕边上哪儿（dm_cam_threats）。
 // 方向按镜头水平朝向算：正前方（画面外更远处）→ 上沿，左右 → 两侧，身后 → 下面两角（下沿中间是人和底栏，不放）。out 每条 5 个数：
@@ -156,34 +168,26 @@ int dm_cam_threats(float *out, int max) {
 
 // 地图上的朝向箭头：透视画面转过之后，地图（原版等距、不转）上看不出镜头朝哪边，这里给出玩家点上那支箭头该画在哪、朝哪。地图开着才给（dm_ui_map_geom）：
 // · 角上的小地图（1）：玩家点在小地图框中心（dm_cursor.c ui_map_geom_pump），箭头按框高定大小；
-// · 全屏地图（2）：游戏把地图的玩家点放在「人物脚底在原版画面上的位置」（不开镜头时地图线叠在世界上，同 dm_map_goals 的 sx / sy）。
-//   这里不能像 dm_map_goals 那样调游戏的世界点 → 屏幕：镜头开着时那条路给的是透视画面上的位置（dm_uiscreen.c 的投影门），所以用画面线程发布的原版正交矩阵投脚底。
-// 方向 = 镜头水平朝向（越肩档推摇杆上 = 往这边走）按原版地图的等距换算：世界方向 (x, z) 在地图上 = ((x − z)×1.6, (x + z)×0.8) 像素（同 dm_map_goals 的换算）。
+// · 全屏地图（2）：游戏把地图的玩家点放在人物在原版画面上的位置，也就是画面正中（dm_cam_heading 的 sx / sy，那里有缘由）。
+// 方向 = 镜头水平朝向（dm_cam_heading；越肩档推摇杆上 = 往这边走）按原版地图的等距换算：世界方向 (x, z) 在地图上 = ((x − z)×1.6, (x + z)×0.8) 像素（同 dm_map_goals 的换算）。
 // out：中心 x、y（0..1，y 向下）、箭头方向（弧度，0 = 朝上、顺时针为正，同 dm_cam_threats）、尺度（屏高的比例：小地图 = 框高，全屏地图 0.5——那里地图放大一倍）
 // Heading arrow on the map: once the perspective picture has turned, the map (the original isometric one, which does not turn) no longer shows which way
 // the camera looks, so this gives where to draw an arrow on the player point and which way it points. Given only while a map is open (dm_ui_map_geom):
 // - the corner minimap (1): the player point is at the centre of the minimap frame (dm_cursor.c ui_map_geom_pump), and the arrow is sized by the frame height;
-// - the full-screen map (2): the game puts the map's player point at "the character's feet on the original picture" (with the camera off the map lines lie
-//   over the world, as dm_map_goals' sx / sy). This cannot call the game's world point -> screen as dm_map_goals does: with the camera on that path gives
-//   the position on the perspective picture (dm_uiscreen.c's projection gate), so the feet are projected with the original orthographic matrix the render
-//   thread publishes.
-// Direction = the camera's horizontal heading (in over-the-shoulder, stick up = walk this way) through the original map's isometric mapping: world
+// - the full-screen map (2): the game puts the map's player point where the character is on the original picture, which is its centre (dm_cam_heading's
+//   sx / sy, which says why).
+// Direction = the camera's horizontal heading (dm_cam_heading; in over-the-shoulder, stick up = walk this way) through the original map's isometric mapping: world
 // direction (x, z) is ((x - z) * 1.6, (x + z) * 0.8) pixels on the map (the same mapping as dm_map_goals).
 // out: centre x, y (0..1, y down), arrow direction (radians, 0 = up, clockwise positive, as in dm_cam_threats), scale (fraction of the screen height:
 // minimap = the frame height, full-screen map 0.5 -- the map is drawn twice as large there)
 int dm_cam_map_heading(float out[4]) {
-    cam_t c; float cell, mm[4], o[3], d[3]; int map;
-    if (!cam_get(&c) || !(map = dm_ui_map_geom(&cell)) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
-    float mx = (d[0] - d[2]) * 1.6f, my = (d[0] + d[2]) * 0.8f;
-    if (hypotf(mx, my) < 1e-6f) return 0;
+    float fx, fz, sx, sy, cell, mm[4]; int map = dm_ui_map_geom(&cell);
+    if (!map || !dm_cam_heading(&fx, &fz, &sx, &sy)) return 0;
+    float mx = (fx - fz) * 1.6f, my = (fx + fz) * 0.8f;
     if (map == 1) {
         if (!dm_ui_minimap_rect(mm) || !(mm[3] > mm[1])) return 0;
         out[0] = (mm[0] + mm[2]) / 2; out[1] = (mm[1] + mm[3]) / 2; out[3] = mm[3] - mm[1];
-    } else {
-        const float feet[3] = { c.pl[0], 0, c.pl[1] };
-        if (!proj(c.vpo, feet, &out[0], &out[1])) return 0;
-        out[3] = 0.5f;
-    }
+    } else { out[0] = sx; out[1] = sy; out[3] = 0.5f; }
     out[2] = atan2f(mx, -my);
     return 1;
 }
