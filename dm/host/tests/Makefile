@@ -10,6 +10,7 @@ MOVIE_TEST_FLAGS ?= -O1
 # 依赖一行一个、按字母序（同 ../Makefile 的 SRC：免得加一个测试就整行冲突）；下面各条命令的先后不变
 # Dependencies one per line in alphabetical order (same as SRC in ../Makefile: so that adding one test does not conflict on the whole line); the order of the commands below is unchanged
 run: \
+	$(B)/t_entry_diag \
 	$(B)/main.orig.bin \
 	$(B)/subsdk0.orig.bin \
 	$(B)/t_altstack \
@@ -57,6 +58,7 @@ run: \
 	python3 mode_scan.py ../..
 	python3 ../../ios/tools/dm_i18n.py --check
 	python3 ../../i18n/scan_literals.py
+	$(B)/t_entry_diag
 	$(B)/t_thread_leak
 	$(B)/t_loader_weak
 	$(B)/t_mac_overlay
@@ -202,3 +204,6 @@ $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+
+$(B)/t_entry_diag: t_entry_diag.c ../dm_entry_diag.h | $(B)
+	clang -Wall -Wextra -Werror -o $@ t_entry_diag.c
