@@ -39,7 +39,18 @@ int dm_cam_mode(void) {
 // the stick takes its directions from the camera at the start of each push; 1 = Genshin style: the camera is dragged along by the character
 // (xbg_cam_drag) instead of chasing the stick, the stick always takes its directions from the camera of the moment, and a horizontal drag on the right
 // half turns the camera (touch_android.c gives the touch layer cam_orbit)
-int dm_cam_style(void) { static _Atomic int st = -1; int v = atomic_load(&st); if (v < 0) { const char *e = getenv("DM_CAM_STYLE"); v = e ? atoi(e) : 0; atomic_store(&st, v); if (v) LOG("DM_CAM_STYLE=%d：越肩档用原神式操作（镜头被拖着走、摇杆按此刻镜头、右半屏左右拖转镜头）", v); } return v; }
+// 缺省：Android / 鸿蒙（Vulkan 后端，xbg_game.cpp 已接原神式）= 1，越肩档就是原神式（用户的决定，2026-10-29）；其余（iOS / Mac 的 Metal 后端还是
+// xbg_cam_follow）= 0——那边要是开了 1，宿主的摇杆不再锁参照镜头而镜头还在追摇杆，人会原地打转。DM_CAM_STYLE 写了就以它为准（0 = 原来的越肩，对比用）
+// Default: Android / HarmonyOS (the Vulkan backend, xbg_game.cpp already does the Genshin style) = 1, so over-the-shoulder is the Genshin style (the user's
+// decision, 2026-10-29); everywhere else (iOS / Mac, whose Metal backend still uses xbg_cam_follow) = 0 -- turning 1 on there would make the host's stick stop
+// locking the reference camera while the camera still chases the stick, and the character would spin on the spot. DM_CAM_STYLE, when set, wins (0 = the
+// old over-the-shoulder, for comparison)
+#if defined(__ANDROID__) || defined(__OHOS__)
+#define DM_CAM_STYLE_DEFAULT 1
+#else
+#define DM_CAM_STYLE_DEFAULT 0
+#endif
+int dm_cam_style(void) { static _Atomic int st = -1; int v = atomic_load(&st); if (v < 0) { const char *e = getenv("DM_CAM_STYLE"); v = e ? atoi(e) : DM_CAM_STYLE_DEFAULT; atomic_store(&st, v); if (v) LOG("DM_CAM_STYLE=%d：越肩档用原神式操作（镜头被拖着走、摇杆按此刻镜头、右半屏左右拖转镜头）", v); } return v; }
 void dm_cam_set_mode(int m) { if (m < 0 || m > 2) m = 0; if (atomic_exchange(&g_mode, m) != m) LOG("镜头视角 → %s（自定义页）%s", m == 1 ? "越肩" : m == 2 ? "第一人称" : "原版", atomic_load(&g_mode_env) >= 0 && atomic_load(&g_mode_env) != 0x100 ? "；环境变量 DM_CAM 设着，以它为准" : ""); }
 
 // 画面线程发布的矩阵（行向量约定：裁剪 = [x y z 1] × M）：原版正交视图投影与逆、透视视图投影与逆、人物落地点 x / z；超过 0.5 秒没更新就当镜头没开
