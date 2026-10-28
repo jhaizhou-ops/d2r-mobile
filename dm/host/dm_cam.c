@@ -104,7 +104,7 @@ static _Atomic int g_want_x1000, g_want_z1000, g_want_on;
 // camera (measured on a OnePlus 13)
 static _Atomic int g_atk_x1000, g_atk_z1000; static double g_atk_t;
 void dm_cam_attack(float dx, float dz) {
-    float l = hypotf(dx, dz); if (dm_cam_mode() != 1 || !(l >= 1)) return;
+    float l = hypotf(dx, dz); if (dm_cam_mode() != 1 || !(l >= 0.05f)) return;
     atomic_store(&g_atk_x1000, (int)lroundf(dx / l * 1000)); atomic_store(&g_atk_z1000, (int)lroundf(dz / l * 1000));
     pthread_mutex_lock(&g_mu); g_atk_t = now_s(); pthread_mutex_unlock(&g_mu);
     static _Atomic int said; if (atomic_fetch_add(&said, 1) < 8) LOG("镜头：放技能，朝目标转 %.2f,%.2f（距 %.1f 子格）", dx / l, dz / l, l); }

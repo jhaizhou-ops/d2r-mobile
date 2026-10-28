@@ -1169,7 +1169,7 @@ static FILE *g_c2sfp;
 static struct c2s_ent { uint32_t tick, unit, len; int has_unit, sys; uint8_t *pkt; } *g_rp; static size_t g_nrp, g_irp;
 static uint64_t g_lastG; static uint32_t g_sysclient; static int g_sysclient_set; static unsigned g_sysdrop;   // 最近一次拍入口的 G；系统类消息的客户端号（取宿主自己的加入消息） | G of the most recent tick entry; client number for system-class messages (taken from the host's own join message)
 static int64_t g_rplast = -1; static unsigned g_rpdrop;
-// 越肩镜头（dm_cam.c dm_cam_attack）：放技能的命令包带着目标——对地点（0x05 / 0x08 / 0x0c / 0x0f：x、y 各 2 字节，子格）或对单位
+// 越肩镜头（dm_cam.c dm_cam_attack）：放技能的命令包带着目标——对地点（0x05 / 0x08 / 0x0c / 0x0f：x、y 各 2 字节，子格；落点附近的活怪见下）或对单位
 // （0x06 / 0x07 / 0x09 / 0x0a / 0x0d / 0x0e / 0x10 / 0x11：类型、单位号各 4 字节；只认玩家 0 与怪 1，它们的路径 +0x38 → +0 / +4 是 16.16 定点子格坐标）。
 // 把玩家到目标的方向交给镜头，原地放远程技能时镜头也转去看目标。只读服务端单位表，镜头没开时什么都不做
 // Over-the-shoulder camera (dm_cam.c dm_cam_attack): skill cast commands carry their target -- a location (0x05 / 0x08 / 0x0c / 0x0f: x, y, 2 bytes each,
@@ -1180,7 +1180,21 @@ static void cam_c2s(uint64_t G, uint64_t pl, const uint8_t *b, uint32_t n) {
     int dm_cam_mode(void); void dm_cam_attack(float dx, float dz);
     if (!n || !pl || dm_cam_mode() != 1) return;
     uint8_t op = b[0]; float tx, ty;
-    if ((op == 0x05 || op == 0x08 || op == 0x0c || op == 0x0f) && n >= 5) { tx = (float)(b[1] | b[2] << 8); ty = (float)(b[3] | b[4] << 8); }
+    if ((op == 0x05 || op == 0x08 || op == 0x0c || op == 0x0f) && n >= 5) {
+        // 对地点：触屏点按的自动选怪在这一版发的是「对目标所在格放」（Redmi 实测：贴着僵尸时 0x05 落在僵尸那格，离人 0.7 格；没有怪时落在脚下，同样 0.7 格），
+        // 光看距离分不出来。所以在那一格 2 格内找一只活着的怪，朝它的真实位置转；找不到 = 空放 / 对自己放，不转
+        // A location: touch auto-targeting in this build casts "at the target's cell" (measured on the Redmi: next to a zombie, 0x05 landed on the zombie's
+        // cell, 0.7 cells from the player; with no monster it landed at the feet, also 0.7 cells away), so distance alone cannot tell them apart. Look for a
+        // living monster within 2 cells of that cell and turn towards its real position; none = an empty cast or a cast on oneself, no turn
+        float lx = (float)(b[1] | b[2] << 8), ly = (float)(b[3] | b[4] << 8), best = 4; uint64_t u = 0; int found = 0;
+        for (int bk = 0; bk < 128; bk++) if (tk_rd(G + 0x2230 + 1 * 0x400 + 8 * bk, &u, 8)) for (int k = 0; u && k < 4096; k++) {
+            uint32_t mode = 0; uint64_t tp = 0; uint32_t xy[2];
+            if (tk_rd(u + 0xC, &mode, 4) && mode != 0 && mode != 12 && tk_rd(u + 0x38, &tp, 8) && tp && tk_rd(tp, xy, 8)) {
+                float mx = xy[0] / 65536.0f, my = xy[1] / 65536.0f, d2 = (mx - lx) * (mx - lx) + (my - ly) * (my - ly);
+                if (d2 < best) { best = d2; tx = mx; ty = my; found = 1; } }
+            if (!tk_rd(u + 0x158, &u, 8)) break; }
+        if (!found) return;
+    }
     else if ((op == 0x06 || op == 0x07 || op == 0x09 || op == 0x0a || op == 0x0d || op == 0x0e || op == 0x10 || op == 0x11) && n >= 9) {
         uint32_t type = b[1] | b[2] << 8 | b[3] << 16 | (uint32_t)b[4] << 24, id = b[5] | b[6] << 8 | b[7] << 16 | (uint32_t)b[8] << 24; if (type > 1) return;
         uint64_t u = 0, hit = 0;
