@@ -2455,7 +2455,7 @@ Buffer uniform_snapshot_cached(uint64_t address,size_t copy);
 namespace cam {
 const char *const cull_cs="1188eaedc8db3285";
 int mode_=-1;xbg_cam_params params;xbg_cam_state st;uint64_t patches=0,scenes=0,widened=0;
-float clear=0,host_px=0,host_pz=0,turned=0,drag_k=0.5f,pull_pitch=40,pull_min=5;bool clear_ok=false;
+float clear=0,host_px=0,host_pz=0,turned=0,drag_k=0.5f,pull_pitch=40,pull_min=5,cull_widen=1;bool clear_ok=false;
 struct Copy{uint64_t address=0,bytes=0,epoch=0;Buffer buffer;};std::array<Copy,8> copies;unsigned next=0;
 float envf(const char *k,float d){const char *e=getenv(k);return e?float(atof(e)):d;}
 int mode(){
@@ -2472,8 +2472,8 @@ int mode(){
             if(mode_==1 && dm_cam_style && dm_cam_style()==1){params.look=7;params.fov=70;params.reach=0;}
             params.dist=envf("DM_CAM_DIST",params.dist);params.h=envf("DM_CAM_H",params.h);params.look=envf("DM_CAM_LOOK",params.look);params.lookh=envf("DM_CAM_LOOKH",params.lookh);
             params.eye=envf("DM_CAM_EYE",params.eye);params.fwd=envf("DM_CAM_FWD",params.fwd);params.pitch=envf("DM_CAM_PITCH",params.pitch);params.fov=envf("DM_CAM_FOV",params.fov);
-            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);drag_k=envf("DM_CAM_DRAG",0.5f);pull_pitch=envf("DM_CAM_PULL_PITCH",40);pull_min=envf("DM_CAM_PULL_MIN",5);xbg_cam_init(&st);
-            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g reach=%g drag=%g pull=%g/%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_,params.reach,drag_k,pull_pitch,pull_min);}}
+            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);drag_k=envf("DM_CAM_DRAG",0.5f);pull_pitch=envf("DM_CAM_PULL_PITCH",40);pull_min=envf("DM_CAM_PULL_MIN",5);cull_widen=envf("DM_CAM_CULL_WIDEN",1);xbg_cam_init(&st);
+            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g reach=%g drag=%g pull=%g/%g cull_widen=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_,params.reach,drag_k,pull_pitch,pull_min,cull_widen);}}
     return mode_;
 }
 // 绑定长度：认出主相机或场景块（先读客体内存里签名那几行，便宜）就返回整块长度，否则原样返回 copy
@@ -2485,6 +2485,29 @@ size_t bound(uint64_t address,size_t copy,size_t full,bool ok){
     if(copy<XBG_CAM_BLOCK && full>=XBG_CAM_BLOCK && full<=4096 && xbg_cam_sig(g,272,full)){++widened;return XBG_CAM_BLOCK;}
     if(copy<XBG_CAM_SCENE && full==XBG_CAM_SCENE && xbg_cam_sig10(g,44,full)){++widened;return XBG_CAM_SCENE;}
     return copy;
+}
+// 剔除用的原版正交视锥放宽 cull_widen 倍（DM_CAM_CULL_WIDEN，缺省 1 = 不动；试验）：抬高的透视视野看得比原版画面远，远处是黑块。黑块可能来自那条按原版
+// 正交视锥剔除的计算着色器（cull_cs）——给它一份投影的 x、y 都缩小 cull_widen 倍的拷贝，视锥就宽了这么多倍，远处的东西留下来交给透视画面去画。
+// 只改投影类的几块：+208 投影、+336 视图投影、+464 上一帧视图投影（列 0、1 除以 k），+272 / +400 两个逆矩阵（行 0、1 乘以 k）；只改落在本次绑定长度里的。
+// 签名看客体内存里的整块（剔除这条的绑定长度可能被裁短），拷贝放自己的小缓存，不和透视拷贝（copies）混
+// The original orthographic frustum used for culling, widened cull_widen times (DM_CAM_CULL_WIDEN, default 1 = unchanged; an experiment): the raised
+// perspective view sees further than the original picture, and the far ground shows black patches. They may come from the compute shader that culls against
+// the original orthographic frustum (cull_cs) -- give it a copy whose projection x and y are scaled down cull_widen times, and the frustum is that many times
+// wider, so far things survive culling for the perspective picture to draw. Only the projection-like parts change: +208 projection, +336 view-projection,
+// +464 previous view-projection (columns 0 and 1 divided by k), and the two inverses +272 / +400 (rows 0 and 1 multiplied by k); only what falls inside this
+// binding's length. The signature is checked on the whole block in guest memory (the culling binding may be trimmed short), and the copy goes into its own
+// small cache, never mixed with the perspective copies (copies)
+std::array<Copy,4> cull_copies;unsigned cull_next=0;uint64_t cull_widened=0;
+Buffer widen(uint64_t address,size_t copy,const Buffer &src){
+    if(!(cull_widen>1.001f) || copy<64 || copy>4096 || !xbg_cam_sig(reinterpret_cast<const uint8_t*>(address),272,XBG_CAM_BLOCK))return src;
+    for(auto &c:cull_copies)if(c.epoch==snapshot_epoch && c.address==address && c.bytes==copy)return c.buffer;
+    const uint8_t *p=static_cast<const uint8_t*>(src.mapped);if(!p)return src;
+    Buffer b=stream_buffer(uniform_range(copy),p,copy);uint8_t *d=static_cast<uint8_t*>(b.mapped);
+    const float k=cull_widen;
+    for(size_t off:{size_t(208),size_t(336),size_t(464)})if(off+64<=copy){float m[16];memcpy(m,d+off,64);for(int r=0;r<4;r++){m[r*4]/=k;m[r*4+1]/=k;}memcpy(d+off,m,64);}
+    for(size_t off:{size_t(272),size_t(400)})if(off+64<=copy){float m[16];memcpy(m,d+off,64);for(int c=0;c<4;c++){m[c]*=k;m[4+c]*=k;}memcpy(d+off,m,64);}
+    if(cull_widened++==0)xbg_logf("NVN cam cull frustum widened x%g (binding %zu bytes)",k,copy);
+    b.flush();Copy &c=cull_copies[cull_next++%cull_copies.size()];c.address=address;c.bytes=copy;c.epoch=snapshot_epoch;c.buffer=b;return b;
 }
 Buffer patch(uint64_t address,size_t copy,const Buffer &src){
     if(copy<XBG_CAM_BLOCK || copy>4096)return src;
@@ -2548,7 +2571,10 @@ Buffer uniform_snapshot(uint64_t address,size_t copy,bool cam_ok=true){
         Buffer src=uniform_snapshot_cached(address,copy);Buffer b=stream_buffer(uniform_range(copy),src.mapped,copy);
         float m[16],o=float(g_ui_moff);memcpy(m,b.mapped,64);m[1]+=o*m[3];m[5]+=o*m[7];m[9]+=o*m[11];m[13]+=o*m[15];memcpy(b.mapped,m,64);b.flush();return b;}
     Buffer b=uniform_snapshot_cached(address,copy);
-    return cam_ok && cam::mode()>0?cam::patch(address,copy,b):b;
+    // 剔除那条计算着色器：放宽视锥（cam::widen，cull_widen > 1 时）；其余：透视拷贝
+    // The culling compute shader: the widened frustum (cam::widen, when cull_widen > 1); everything else: the perspective copy
+    if(!cam_ok)return cam::mode()>0?cam::widen(address,copy,b):b;
+    return cam::mode()>0?cam::patch(address,copy,b):b;
 }
 Buffer uniform_snapshot_cached(uint64_t address,size_t copy){CPU_SCOPE(Snapshot);
     SnapFront &f=snap_front_for(1,address,copy);if(f.epoch==snapshot_epoch && f.address==address && f.bytes==copy){++perf.snapshot_hits;++snap_front_hits;return f.buffer;}
