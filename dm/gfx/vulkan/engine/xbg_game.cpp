@@ -2506,6 +2506,11 @@ Buffer widen(uint64_t address,size_t copy,const Buffer &src){
     const float k=cull_widen;
     for(size_t off:{size_t(208),size_t(336),size_t(464)})if(off+64<=copy){float m[16];memcpy(m,d+off,64);for(int r=0;r<4;r++){m[r*4]/=k;m[r*4+1]/=k;}memcpy(d+off,m,64);}
     for(size_t off:{size_t(272),size_t(400)})if(off+64<=copy){float m[16];memcpy(m,d+off,64);for(int c=0;c<4;c++){m[c]*=k;m[4+c]*=k;}memcpy(d+off,m,64);}
+    // 诊断：剔除那条只绑了这块的前 copy 字节（OnePlus 13：144 字节，投影类几块都在 208 之后、够不着）——头一次把这段按浮点打出来，看它拿什么当视锥
+    // Diagnostic: the culling shader binds only the first copy bytes of this block (OnePlus 13: 144 bytes, so the projection-like parts after 208 are out of
+    // reach) -- the first time, print that range as floats to see what it uses as the frustum
+    if(cull_widened==0){char line[1024];int n=0;for(size_t i=0;i+4<=copy && i<160 && n<(int)sizeof line-24;i+=4){float v;memcpy(&v,p+i,4);n+=snprintf(line+n,sizeof line-n,"%s%.4g",i?" ":"",v);}
+        xbg_logf("NVN cam cull binding floats: %s",line);}
     if(cull_widened++==0)xbg_logf("NVN cam cull frustum widened x%g (binding %zu bytes)",k,copy);
     b.flush();Copy &c=cull_copies[cull_next++%cull_copies.size()];c.address=address;c.bytes=copy;c.epoch=snapshot_epoch;c.buffer=b;return b;
 }
