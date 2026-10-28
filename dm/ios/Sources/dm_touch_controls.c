@@ -567,7 +567,11 @@ void dm_tc_move_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
         const int yaw = s->cam_on == 2 || (s->cam_on == 1 && s->cam_orbit);
         if (!f->cam_drag && (ay > th || (yaw && ax > th)) && (yaw || ay > ax)) { f->cam_drag = 1; f->cam_x = f->aim_origin_x; f->cam_y = f->aim_origin_y; }
         if (f->cam_drag && s->layout.height > 0 && s->layout.width > 0) {
-            s->cam_pitch += (f->cam_y - y) / s->layout.height * 1.5707963f; f->cam_y = y;
+            /* 原神式（cam_orbit）只左右转、不调俯仰：上下的分量不算，打架时斜着划不会把镜头压低（用户在 OnePlus 13 上的意见）
+               Genshin style (cam_orbit) only turns, no pitch: the vertical part is ignored, so a slanted swipe in a fight does not tilt the camera (the
+               user's call on the OnePlus 13) */
+            if (!(s->cam_on == 1 && s->cam_orbit)) s->cam_pitch += (f->cam_y - y) / s->layout.height * 1.5707963f;
+            f->cam_y = y;
             if (yaw) s->cam_yaw += (x - f->cam_x) / s->layout.width * 3.1415927f;
             f->cam_x = x; }
     } else if (f->target==DM_TC_SWAP) {

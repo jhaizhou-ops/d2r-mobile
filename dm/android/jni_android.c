@@ -327,6 +327,12 @@ JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamActive(JNIEnv 
 // buttons
 int dm_cam_style(void);
 JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamStyle(JNIEnv *env, jclass cls) { (void)env; (void)cls; return dm_cam_style(); }
+// 瞄准箭头（dm_cam.c dm_cam_aim）：7 个点（x、y，0..1），返回 7 = 正在瞄；CamThreats 每帧取一次
+// Aim arrow (dm_cam.c dm_cam_aim): 7 points (x, y, 0..1), returns 7 = aiming; CamThreats takes it once per frame
+int dm_cam_aim(float out[14]);
+JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamAim(JNIEnv *env, jclass cls, jfloatArray out) {
+    (void)cls; float buf[14]; if ((*env)->GetArrayLength(env, out) < 14) return 0; int n = dm_cam_aim(buf);
+    if (n == 7) (*env)->SetFloatArrayRegion(env, out, 0, 14, buf); return n; }
 // 画面外的怪（dm_cam.c dm_cam_threats）：每条 5 个数（屏幕 x、y、箭头方向、紧迫度、档位），返回条数；CamThreats 每帧取一次
 // Monsters off the picture (dm_cam.c dm_cam_threats): 5 numbers each (screen x, y, arrow direction, urgency, tier), returns the count; CamThreats takes them
 // once per frame

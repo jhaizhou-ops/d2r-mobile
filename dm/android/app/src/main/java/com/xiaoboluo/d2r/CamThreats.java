@@ -20,11 +20,11 @@ import android.view.View;
 // does not, and this lines the two up. Asked once per frame (nativeCamThreats / nativeCamHeading); it only draws and never takes touches; drawn directly on the canvas, without game art
 final class CamThreats extends View implements Choreographer.FrameCallback {
     private static final int[] TIER_COLOUR = { 0xFFE1E1E1, 0xFF6E6EFF, 0xFFC7B377, 0xFFFF5040 };
-    private final float[] data = new float[16 * 5], head = new float[4], drawn = new float[4];
+    private final float[] data = new float[16 * 5], head = new float[4], drawn = new float[4], aim = new float[14];
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path arrow = new Path();
     private int count;
-    private boolean running, headOn;
+    private boolean running, headOn, aimOn;
 
     CamThreats(Context context) {
         super(context);
@@ -34,7 +34,7 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
     }
 
     void start() { if (!running) { running = true; Choreographer.getInstance().postFrameCallback(this); } }
-    void stop() { running = false; count = 0; headOn = false; invalidate(); }
+    void stop() { running = false; count = 0; headOn = false; aimOn = false; invalidate(); }
 
     @Override public void doFrame(long ns) {
         if (!running) return;
@@ -45,7 +45,10 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
         // frame when there are no monsters
         boolean headMoved = h != headOn || h && (Math.abs(head[2] - drawn[2]) > 0.009f || Math.abs(head[0] - drawn[0]) > 0.002f
             || Math.abs(head[1] - drawn[1]) > 0.002f || Math.abs(head[3] - drawn[3]) > 0.002f);
-        if (n != count || n > 0 || headMoved) { count = n; headOn = h; System.arraycopy(head, 0, drawn, 0, 4); invalidate(); }
+        // 瞄准箭头（拖技能键时，宿主 dm_cam_aim 投好的 7 个点）：瞄着就每帧重画
+        // Aim arrow (while a skill button is dragged; 7 points projected by the host's dm_cam_aim): redrawn every frame while aiming
+        boolean a = DmActivity.nativeCamAim(aim) == 7;
+        if (n != count || n > 0 || headMoved || a || a != aimOn) { count = n; headOn = h; aimOn = a; System.arraycopy(head, 0, drawn, 0, 4); invalidate(); }
         Choreographer.getInstance().postFrameCallback(this);
     }
 
@@ -53,6 +56,19 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
 
     @Override protected void onDraw(Canvas canvas) {
         float w = getWidth(), h = getHeight(), blink = (System.nanoTime() / 1_000_000L % 400) < 200 ? 1f : 0.55f;
+        if (aimOn) {
+            // 瞄准箭头：地上一支半透明的白箭头（透视投好的多边形），描深色边，在怪的箭头下面
+            // Aim arrow: a translucent white arrow on the ground (the polygon already projected in perspective), with a dark edge, under the monster arrows
+            arrow.reset();
+            arrow.moveTo(aim[0] * w, aim[1] * h);
+            for (int i = 1; i < 7; i++) arrow.lineTo(aim[2 * i] * w, aim[2 * i + 1] * h);
+            arrow.close();
+            fill.setColor(0x80FFFFFF);
+            edge.setStrokeWidth(Math.max(1f, h * 0.003f));
+            edge.setAlpha(150);
+            canvas.drawPath(arrow, fill);
+            canvas.drawPath(arrow, edge);
+        }
         for (int i = 0; i < count; i++) {
             float x = data[i * 5] * w, y = data[i * 5 + 1] * h, dir = data[i * 5 + 2], urgency = data[i * 5 + 3];
             int tier = Math.max(0, Math.min(3, (int) data[i * 5 + 4]));

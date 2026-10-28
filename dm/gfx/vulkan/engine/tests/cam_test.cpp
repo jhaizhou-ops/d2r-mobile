@@ -143,6 +143,14 @@ int main(){
      // 人还在画面中间一带：脚在中线以下、不到下半屏的 3/4（不沉到底栏底下）
      // The character stays around the middle of the picture: the feet below the centre line but within three quarters of the lower half (not sunk under the bottom bar)
      const float feet[4]={100,0,50,1};float c[4];xf(vp,feet,c);CHECK(c[3]>0 && c[1]/c[3]<0 && c[1]/c[3]>-0.75);}
+    // 原神式 pull_pitch = 40：拉到 2 时镜头到看点的视线下俯不超过 40°（缺省吊臂这时约 84°）；pull_pitch = 0 照旧
+    // Genshin style pull_pitch = 40: pulled to 2, the sight line from the camera to the look point looks down at most 40 degrees (the default boom gives about
+    // 84 there); pull_pitch = 0 unchanged
+    {xbg_cam_params p=xbg_cam_default_params(1);CHECK(p.pull_pitch==0);original(src,100,50);
+     auto down=[&](float pitch){xbg_cam_state s;xbg_cam_init(&s);xbg_cam_follow(&s,100,50,1,1.0,0,0,0,p.tau);xbg_cam_pull(&s,p.dist,2,0);xbg_cam_params q=p;q.pull_pitch=pitch;
+      memcpy(dst,src,sizeof dst);xbg_cam_build(&s,src,dst,1,&q,vp,ivp);const double la=p.look*2/p.dist,ax=100+s.fx*la,az=50+s.fz*la;
+      return atan2(s.eye[1]-p.lookh,hypot(s.eye[0]-ax,s.eye[2]-az))*180/3.14159265358979;};
+     CHECK(down(0)>80);CHECK(down(40)<=40+0.3 && down(40)>30);}
     // 不拉近时也受 reach 限制：上沿视线落地在人前方 reach 以内（原来只要求 3°，会看到游戏还没画的远处）
     // Not pulled in, reach still applies: the top-edge sight line meets the ground within reach ahead of the character (only 3 degrees used to be required,
     // which showed far ground the game had not drawn yet)
@@ -176,6 +184,12 @@ int main(){
      for(int i=0;i<200;++i){const double a0=atan2(s.fz,s.fx);x+=0.5*s.fz;z+=-0.5*s.fx;xbg_cam_drag(&s,float(x),float(z),fr++,1.5+i/60.0,20,1);
       double d=atan2(s.fz,s.fx)-a0;while(d>3.14159265358979)d-=2*3.14159265358979;while(d<-3.14159265358979)d+=2*3.14159265358979;turned+=d;}
      CHECK(hypot(s.px-20*s.fx-cx0,s.pz-20*s.fz-cz0)<2 && near(fabs(turned),100.0/20,0.25));}
+    // 缓转（原神式放技能时镜头跟着人转）：dt = tau 转过 1 − 1/e；走短的那边；dt = 0 或方向为零不动
+    // Easing (the Genshin style's camera turning with the character on a skill): dt = tau turns 1 - 1/e of the gap; the shorter way round; dt = 0 or a zero
+    // direction does nothing
+    {xbg_cam_state s;xbg_cam_init(&s);s.fx=1;s.fz=0;xbg_cam_ease(&s,0,1,0.35,0.35f);CHECK(near(heading_deg(s),90*(1-exp(-1.0)),0.2));
+     s.fx=1;s.fz=0;xbg_cam_ease(&s,float(cos(-170*3.14159265358979/180)),float(sin(-170*3.14159265358979/180)),0.35,0.35f);CHECK(heading_deg(s)<0);
+     s.fx=1;s.fz=0;xbg_cam_ease(&s,0,1,0,0.35f);xbg_cam_ease(&s,0,0,1,0.35f);CHECK(s.fx==1 && s.fz==0);}
     // k = 0.5：同样横跨 5 只转一半的角度；k = 0 不转
     // k = 0.5: the same 5 sidestep turns half the angle; k = 0 does not turn
     {xbg_cam_state s;xbg_cam_init(&s);xbg_cam_drag(&s,5,0,1,1.0,20,0.5f);s.fx=1;s.fz=0;xbg_cam_drag(&s,5,5,2,1.1,20,0.5f);

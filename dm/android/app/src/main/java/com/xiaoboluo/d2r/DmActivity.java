@@ -59,6 +59,9 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     // 越肩档的操作风格（1 = 原神式：没有左右转按钮）
     // The over-the-shoulder control style (1 = Genshin style: no turn buttons)
     static native int nativeCamStyle();
+    // 拖技能键瞄准时地上那支箭头（CamThreats）：7 个点，返回 7 = 正在瞄
+    // The ground arrow while a skill button is dragged to aim (CamThreats): 7 points, returns 7 = aiming
+    static native int nativeCamAim(float[] out);
     // 画面外的怪（CamThreats）：每条 5 个数，返回条数
     // Monsters off the picture (CamThreats): 5 numbers each, returns the count
     static native int nativeCamThreats(float[] out);

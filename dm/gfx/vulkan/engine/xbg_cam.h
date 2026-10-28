@@ -19,9 +19,14 @@ enum { XBG_CAM_BLOCK = 608, XBG_CAM_SCENE = 1440 };
 // reach = 画面上沿那条视线最远落到人前方多远（世界单位；游戏只备好原版画面那一片，见 xbg_cam_build 的俯仰限制）
 // reach = how far ahead of the character the picture's top-edge sight line may meet the ground (world units; the game only prepares the original picture's
 // area, see the pitch limit in xbg_cam_build)
-typedef struct { float dist, h, look, lookh, eye, fwd, pitch, fov, tau, near_, reach; } xbg_cam_params;
+// pull_pitch = 避墙拉近时最多升到视线下俯多少度（0 = 照吊臂一直升，贴墙时接近头顶往下看；原神式给 40，xbg_game.cpp）。放在最后：
+// 用 xbg_cam_default_params 起的参数（含 Metal nvn_mtl.m）这一项是 0，行为不变
+// pull_pitch = how far the camera may rise when wall avoidance pulls it in, as the sight line's look-down in degrees (0 = rise along the boom all the way,
+// looking down from nearly overhead against a wall; the Genshin style gives 40, xbg_game.cpp). Kept last: parameters started from xbg_cam_default_params
+// (Metal's nvn_mtl.m included) have 0 here, so their behaviour is unchanged
+typedef struct { float dist, h, look, lookh, eye, fwd, pitch, fov, tau, near_, reach, pull_pitch; } xbg_cam_params;
 static inline xbg_cam_params xbg_cam_default_params(int mode) {
-    xbg_cam_params p = { 20.0f, 13.0f, 4.0f, 3.0f, 6.0f, 2.2f, 8.0f, mode == 2 ? 75.0f : 65.0f, 0.35f, 0.3f, 45.0f };
+    xbg_cam_params p = { 20.0f, 13.0f, 4.0f, 3.0f, 6.0f, 2.2f, 8.0f, mode == 2 ? 75.0f : 65.0f, 0.35f, 0.3f, 45.0f, 0.0f };
     return p;
 }
 
@@ -176,6 +181,19 @@ static inline int xbg_cam_drag(xbg_cam_state *s, float px, float pz, uint64_t fr
     return 1;
 }
 
+// 朝 (wx, wz) 按墙钟一阶阻尼转 dt 秒（tau 秒，走短的那边；同 xbg_cam_follow 的转法）：原神式放技能时镜头跟着人转（xbg_game.cpp）
+// Turn towards (wx, wz) for dt seconds with a wall-clock first-order lag (tau seconds, the shorter way round; the same turn as xbg_cam_follow): in the
+// Genshin style the camera turns with the character when a skill is cast (xbg_game.cpp)
+static inline void xbg_cam_ease(xbg_cam_state *s, float wx, float wz, double dt, float tau) {
+    if (!(dt > 0) || !(tau > 0) || (wx == 0 && wz == 0)) return;
+    float a = atan2f(s->fz, s->fx), d = atan2f(wz, wx) - a;
+    while (d > 3.14159265f) d -= 6.2831853f;
+    while (d < -3.14159265f) d += 6.2831853f;
+    a += d * (float)(1 - exp(-dt / tau));
+    s->fx = cosf(a);
+    s->fz = sinf(a);
+}
+
 // 体感转向：朝向转 rad 弧度，正 = 往画面右边转（朝向 f 转向 右 = (−f.z, f.x)，即世界 xz 平面里角度增大）
 // Sensor steering: turn the heading by rad radians, positive = towards the right of the picture (heading f turns towards right = (-f.z, f.x), i.e. the
 // angle in the world xz plane increases)
@@ -228,6 +246,10 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
         // the character sinks to the bottom of the picture under the bottom bar (measured on the Redmi: 8 out and 23.9 high put the character at 86% of the height)
         float la = pp->dist > 0 && d < pp->dist ? pp->look * d / pp->dist : pp->look;
         float h = d < pp->dist ? lh + sqrtf(fmaxf(boom - d * d, 0)) : pp->h;
+        // 原神式（pull_pitch > 0）：拉近时最多升到视线下俯 pull_pitch 度，不变成从头顶往下看（OnePlus 13：贴墙时下俯约 84°，打架时很烦）
+        // Genshin style (pull_pitch > 0): when pulled in, rise only until the sight line looks down pull_pitch degrees, never to a top-down view (OnePlus 13:
+        // about 84 degrees down against a wall, annoying in a fight)
+        if (pp->pull_pitch > 0 && d < pp->dist) h = fminf(h, lh + (d + la) * tanf(pp->pull_pitch * 3.14159265f / 180));
         // 俯仰限制：画面上沿在水平线下至少 3°，并且上沿那条视线落地不超过人前方 reach——原版俯视，没有天空；游戏也只备好原版正交画面那一片
         // （约 98 × 88 世界单位），更远处还没画，透视下就是黑的（OnePlus 13：走近了才画出来）。竖直半视角按本帧纵横比算；落地点随高度变，迭代几次就收敛
         // Pitch limit: the top edge of the picture is at least 3 degrees below the horizon, and the top edge's sight line meets the ground no further than reach

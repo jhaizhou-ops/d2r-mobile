@@ -44,13 +44,18 @@ void dm_cam_set_mode(int m) { if (m < 0 || m > 2) m = 0; if (atomic_exchange(&g_
 
 // 画面线程发布的矩阵（行向量约定：裁剪 = [x y z 1] × M）：原版正交视图投影与逆、透视视图投影与逆、人物落地点 x / z；超过 0.5 秒没更新就当镜头没开
 // Matrices published by the render thread (row-vector convention: clip = [x y z 1] * M): original orthographic view-projection and inverse, perspective view-projection and inverse, the character's ground point x / z; not refreshed for 0.5 s = camera treated as off
-typedef struct { float vpo[16], ivpo[16], vpp[16], ivpp[16], pl[2]; } cam_t;
+typedef struct { float vpo[16], ivpo[16], vpp[16], ivpp[16], pl[2], py; } cam_t;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static cam_t g_pub; static double g_pub_t;
 static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec * 1e-9; }
 void dm_cam_publish(const float vpo[16], const float ivpo[16], const float vpp[16], const float ivpp[16], float px, float pz) {
     pthread_mutex_lock(&g_mu); memcpy(g_pub.vpo, vpo, 64); memcpy(g_pub.ivpo, ivpo, 64); memcpy(g_pub.vpp, vpp, 64); memcpy(g_pub.ivpp, ivpp, 64);
     g_pub.pl[0] = px; g_pub.pl[1] = pz; g_pub_t = now_s(); pthread_mutex_unlock(&g_mu); }
+// 人物所在地面的高度（世界 y；画面线程每帧在 dm_cam_publish 之后给，xbg_cam.h xbg_cam_ground）。地面上画东西（瞄准箭头 dm_cam_aim）要它；
+// 没给的后端（Metal）就是 0，同原来
+// The height of the character's ground (world y; given by the render thread every frame after dm_cam_publish, xbg_cam.h xbg_cam_ground). Drawing on the
+// ground (the aim arrow, dm_cam_aim) needs it; backends that do not give it (Metal) leave 0, as before
+void dm_cam_publish_height(float py) { pthread_mutex_lock(&g_mu); g_pub.py = py; pthread_mutex_unlock(&g_mu); }
 
 // 镜头避墙：游戏主线程每帧在碰撞格上量出人物脚下往 32 个方向离第一面墙多远（世界单位，dm_world.c w_cam_clear；方向 k 的角度 = k × 360° / 32，
 // 从世界 +x 转向 +z），画面线程按镜头朝后的方向取相邻两个方向里近的那个（墙可能很薄，不插值）。超过 0.5 秒没更新（不在局里、镜头没开）= 不知道，返回 0。
@@ -108,6 +113,17 @@ static int ortho_ground(const cam_t *c, float nx, float ny, float w[3]) {
     for (int i = 0; i < 3; i++) w[i] = p[i] / p[3] + t * (q[i] / q[3] - p[i] / p[3]); return 1; }
 
 int dm_cam_on(void) { cam_t c; return cam_get(&c); }
+// 进局满 1.5 秒（dm_uiscreen_ingame 连续为 1）才给地图朝向指针与画面外怪物箭头：读取画面撤掉后头一会儿 3D 场景还在载入，指针先冒出来很怪（OnePlus 13）。
+// 每次读取画面（换区域、小站、传送门）都重新计时。前端主线程调（Android Choreographer、iOS 每帧）
+// The map heading pointer and the off-picture monster arrows are given only once the run has been in game for 1.5 s (dm_uiscreen_ingame continuously 1): just
+// after the loading screen goes away the 3D scene is still loading, and the pointer popping up first looks odd (OnePlus 13). Every loading screen (area
+// change, waypoint, portal) restarts the count. Called on the front end's main thread (Android Choreographer, iOS every frame)
+static int cam_settled(void) {
+    static _Atomic long long since_ms = -1;
+    if (!dm_uiscreen_ingame()) { atomic_store(&since_ms, -1); return 0; }
+    long long t = (long long)(now_s() * 1000), s0 = atomic_load(&since_ms);
+    if (s0 < 0) { atomic_store(&since_ms, t); return 0; }
+    return t - s0 >= 1500; }
 // 镜头的水平朝向（世界 x / z，单位向量）：小地图上画人物朝向用（front_ios.m mapHeadingSync）。镜头关着或矩阵过期返回 0
 // The camera's horizontal heading (world x / z, unit vector): for the facing indicator on the minimap (front_ios.m mapHeadingSync). Returns 0 when the
 // camera is off or its matrices are stale
@@ -115,7 +131,7 @@ int dm_cam_on(void) { cam_t c; return cam_get(&c); }
 // sx / sy = the character's feet on the original orthographic picture (normalized, y down): the game draws the fullscreen map by the original picture, so its
 // player cross is here (not at the position on the perspective picture)
 int dm_cam_heading(float *fx, float *fz, float *sx, float *sy) {
-    cam_t c; float o[3], d[3]; if (!cam_get(&c) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
+    cam_t c; float o[3], d[3]; if (!cam_settled() || !cam_get(&c) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
     float l = hypotf(d[0], d[2]); if (l < 1e-6f) return 0; *fx = d[0] / l; *fz = d[2] / l;
     float P[3] = { c.pl[0], 0, c.pl[1] }; return proj(c.vpo, P, sx, sy); }
 
@@ -133,7 +149,7 @@ void dm_cam_set_threats(const float *xy, const int *tier, int n) {
     if (n < 0) n = 0; if (n > 32) n = 32;
     pthread_mutex_lock(&g_mu); g_thr_n = n; if (n) { memcpy(g_thr_xy, xy, sizeof(float) * 2 * n); memcpy(g_thr_tier, tier, sizeof(int) * n); } g_thr_t = now_s(); pthread_mutex_unlock(&g_mu); }
 int dm_cam_threats(float *out, int max) {
-    cam_t c; if (max <= 0 || !cam_get(&c)) return 0;
+    cam_t c; if (max <= 0 || !cam_settled() || !cam_get(&c)) return 0;
     static float sub = -1, range = -1;
     if (sub < 0) { const char *e = getenv("DM_CAM_SUB"); sub = e ? (float)atof(e) : 2.0f; e = getenv("DM_CAM_THREAT_RANGE"); range = e ? (float)atof(e) : 30; }
     float xy[64]; int tier[32], n;
@@ -215,6 +231,16 @@ int dm_cam_want_dir(float *wx, float *wz) {
     pthread_mutex_lock(&g_mu); double t = g_atk_t; pthread_mutex_unlock(&g_mu);
     if (!(t > 0 && now_s() - t < 0.8)) return 0;
     *wx = atomic_load(&g_atk_x1000) / 1000.0f; *wz = atomic_load(&g_atk_z1000) / 1000.0f; return 1; }
+// 原神式（dm_cam_style = 1）：放技能时人转过去对着目标，镜头跟着人转（xbg_game.cpp 按 tau 缓转，xbg_cam_ease）。只给 0.8 秒内的技能方向，
+// 而且两根摇杆都没推时才给——推着摇杆时镜头一转，摇杆的方向也跟着转，人就走歪了
+// Genshin style (dm_cam_style = 1): casting a skill turns the character to face the target, and the camera turns with the character (xbg_game.cpp eases it
+// with tau, xbg_cam_ease). Only a skill direction from the last 0.8 s, and only while neither stick is pushed -- turning the camera under a pushed stick
+// would turn the stick's directions too and send the character off course
+int dm_cam_attack_dir(float *wx, float *wz) {
+    if (atomic_load(&g_want_on)) return 0;
+    pthread_mutex_lock(&g_mu); double t = g_atk_t; pthread_mutex_unlock(&g_mu);
+    if (!(t > 0 && now_s() - t < 0.8)) return 0;
+    *wx = atomic_load(&g_atk_x1000) / 1000.0f; *wz = atomic_load(&g_atk_z1000) / 1000.0f; return 1; }
 
 // 一根摇杆：(x, y) 是 Horizon 摇杆值（上为正）。返回 1 = 改过；wdir 给出这根摇杆在世界里的方向。
 // 角度直接按镜头水平朝向转（不走「透视画面上人物所在的点」：那样随人在画面里的位置会偏几度，实测推正上偏 6°）
@@ -248,7 +274,8 @@ static int remap_one(const cam_t *c, int32_t *x, int32_t *y, float wdir[2]) {
 // 体感档只看环境变量（测试开关）：镜头档可以在局中从自定义页切（dm_cam_set_mode），所以不再按启动那一刻的镜头档定；镜头关着时 dm_cam_turn 丢掉转动
 // The sensor mode only reads the environment variable (a test switch): the camera mode can be switched on the custom page mid-game (dm_cam_set_mode), so
 // this no longer depends on the camera mode at the moment of start; while the camera is off dm_cam_turn drops the turns
-int dm_cam_sensor_mode(void) { static int m = -1; if (m < 0) { const char *e = getenv("DM_CAM_SENSOR"); m = e ? atoi(e) : 0; if (m) LOG("DM_CAM_SENSOR=%d：体感转向开（1 转手机看四周 / 2 侧倾转向）", m); } return m; }
+// 原神式（dm_cam_style = 1）不用体感，返回 0（转镜头只靠右半屏左右拖） | The Genshin style (dm_cam_style = 1) has no sensor steering and returns 0 (the camera turns only by a horizontal drag on the right half)
+int dm_cam_sensor_mode(void) { static int m = -1; if (m < 0) { const char *e = getenv("DM_CAM_SENSOR"); m = e ? atoi(e) : 0; if (m) LOG("DM_CAM_SENSOR=%d：体感转向开（1 转手机看四周 / 2 侧倾转向）", m); } return dm_cam_style() == 1 ? 0 : m; }
 static float g_turn, g_turn_total; static double g_turn_t;
 void dm_cam_turn(float rad) { if (rad == 0 || dm_cam_mode() <= 0) return; pthread_mutex_lock(&g_mu); g_turn += rad; g_turn_total += rad; g_turn_t = now_s(); pthread_mutex_unlock(&g_mu); }
 // 俯仰（右半屏空白处上下拖，dm_touch_controls.c）：正 = 视线往上。累计值整个保留（换区域也不复位），画面线程每帧读；夹在 ±1.4 弧度，镜头里再按机位夹实际角度
@@ -262,6 +289,9 @@ float dm_cam_take_turn(void) { pthread_mutex_lock(&g_mu); float r = g_turn; g_tu
 double dm_cam_turn_age(void) { pthread_mutex_lock(&g_mu); double a = g_turn_t > 0 ? now_s() - g_turn_t : 1e9; pthread_mutex_unlock(&g_mu); return a; }
 static float turn_total(void) { pthread_mutex_lock(&g_mu); float t = g_turn_total; pthread_mutex_unlock(&g_mu); return t; }
 
+// 瞄准拖拽（右摇杆，拖技能键）此刻的世界方向与时刻：dm_cam_aim 在地上画箭头用
+// The aim drag's (right stick, dragging a skill button) current world direction and time: dm_cam_aim draws the ground arrow from it
+static _Atomic int g_aim_x1000, g_aim_z1000; static double g_aim_t;
 static cam_t g_ref_l, g_ref_r; static int g_ref_l_on, g_ref_r_on; static float g_ref_l_turn, g_ref_r_turn;
 void dm_cam_remap_stick(int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     cam_t c; if (!cam_get(&c)) { atomic_store(&g_want_on, 0); g_ref_l_on = g_ref_r_on = 0; return; }
@@ -274,9 +304,30 @@ void dm_cam_remap_stick(int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     if (!*rx && !*ry) g_ref_r_on = 0; else if (live || !g_ref_r_on || fabsf(tt - g_ref_r_turn) > 0.035f) { g_ref_r = c; g_ref_r_on = 1; g_ref_r_turn = tt; }
     cam_t cl = c, cr = c; memcpy(cl.vpp, g_ref_l.vpp, 64); memcpy(cl.ivpp, g_ref_l.ivpp, 64); memcpy(cr.vpp, g_ref_r.vpp, 64); memcpy(cr.ivpp, g_ref_r.ivpp, 64);   // 只借参照镜头的朝向；原版正交与人物位置用当前的 | borrow only the reference camera's heading; the original orthographic matrices and character position are current
     float wl[2], wr[2]; int l = g_ref_l_on && remap_one(&cl, lx, ly, wl), r = g_ref_r_on && remap_one(&cr, rx, ry, wr);
+    if (r) { atomic_store(&g_aim_x1000, (int)lroundf(wr[0] * 1000)); atomic_store(&g_aim_z1000, (int)lroundf(wr[1] * 1000)); pthread_mutex_lock(&g_mu); g_aim_t = now_s(); pthread_mutex_unlock(&g_mu); }
     const float *w = r ? wr : l ? wl : NULL;   // 瞄准拖拽优先（朝攻击方向），其次移动方向 | aim drag first (face the attack), then the move direction
     if (w) { atomic_store(&g_want_x1000, (int)lroundf(w[0] * 1000)); atomic_store(&g_want_z1000, (int)lroundf(w[1] * 1000)); }
     atomic_store(&g_want_on, w != NULL);
+}
+
+// 瞄准箭头（原神式那样在 3D 画面里瞄）：拖技能键瞄准时，在人物脚下的地面上沿瞄准方向画一支箭头，透视投到画面上。out 依次 7 个点（各 x、y，0..1，y 向下）：
+// 杆尾左、杆头左、箭头左翼、尖、箭头右翼、杆头右、杆尾右；返回 7，瞄准没在进行（0.15 秒内没更新）、镜头没开或有点在镜头背后返回 0。
+// 长度按世界单位：杆从脚前 2 到 15、尖在 19，杆宽 1.4、箭头宽 4（原版画面宽约 98）；方向就是发给游戏的那个（dm_cam_remap_stick 换算后的右摇杆）
+// Aim arrow (aiming in the 3D picture, as in Genshin): while a skill button is dragged to aim, an arrow lies on the ground at the character's feet along the
+// aim direction, projected onto the perspective picture. out holds 7 points in order (x, y each, 0..1, y down): shaft back left, shaft front left, head
+// left wing, tip, head right wing, shaft front right, shaft back right; returns 7, or 0 when no aim is in progress (no update within 0.15 s), the camera is
+// off, or a point is behind the camera. Lengths in world units: the shaft from 2 to 15 ahead of the feet, the tip at 19, shaft width 1.4, head width 4
+// (the original picture is about 98 wide); the direction is the one sent to the game (the right stick after dm_cam_remap_stick)
+int dm_cam_aim(float out[14]) {
+    cam_t c; if (!cam_get(&c)) return 0;
+    pthread_mutex_lock(&g_mu); double t = g_aim_t; pthread_mutex_unlock(&g_mu);
+    if (!(t > 0 && now_s() - t < 0.15)) return 0;
+    float ax = atomic_load(&g_aim_x1000) / 1000.0f, az = atomic_load(&g_aim_z1000) / 1000.0f, l = hypotf(ax, az); if (l < 1e-3f) return 0; ax /= l; az /= l;
+    const float rx = -az, rz = ax, at[7][2] = { { 2, -0.7f }, { 15, -0.7f }, { 15, -2 }, { 19, 0 }, { 15, 2 }, { 15, 0.7f }, { 2, 0.7f } };
+    for (int i = 0; i < 7; i++) {
+        const float w[3] = { c.pl[0] + ax * at[i][0] + rx * at[i][1], c.py + 0.2f, c.pl[1] + az * at[i][0] + rz * at[i][1] };
+        if (!proj(c.vpp, w, &out[2 * i], &out[2 * i + 1])) return 0; }
+    return 7;
 }
 
 // 点单位：tap = 触点（透视画面归一化），feet = 这个单位脚底在原版画面上的点（归一化）。out = 触点「搬到这个单位那一层深度」后在原版画面上的点。返回 0 = 镜头没开或这个单位在镜头背后
