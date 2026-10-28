@@ -27,6 +27,7 @@
 #include <mach/mach.h>
 #include <pthread/qos.h>
 #include <dlfcn.h>
+#include <setjmp.h>
 
 #define R_TIMEOUT     0xEA01u   // 内核模块 1，描述 117 | Kernel module 1, description 117
 #define R_CANCELLED   0xEC01u   // 118
@@ -65,6 +66,15 @@ static pthread_mutex_t G = PTHREAD_MUTEX_INITIALIZER;
 #define MAX_H 4096
 static struct { int type; void *obj; } g_h[MAX_H];
 static pthread_key_t g_keythr;
+// 客体线程的「回宿主栈」跳回点（thread_main 栈上的 sigjmp_buf）：thread_exit 收尾后跳回去，在宿主自己的 1 MiB 栈上 pthread_exit。
+// pthread_exit 要跑各 TLS 的析构，jemalloc 退还线程缓存时会整理空闲块、调用很深；在客体栈上（有的只有十几 KiB）跑会溢出——
+// OnePlus 13：SIGSEGV 地址 = sp，崩在 je_extent_tree_szsnad_remove（svc_thread → pthread_exit → je_tsd_cleanup …）。
+// 跳回点不放 thr_t 里：t 可能在 thread_exit 里就被释放（closed 时 thr_free）
+// The guest thread's jump point back to the host stack (a sigjmp_buf on thread_main's stack): after thread_exit's bookkeeping we jump back there and call
+// pthread_exit on the host's own 1 MiB stack. pthread_exit runs every TLS destructor, and jemalloc returning the thread cache tidies free blocks with a deep
+// call chain; on a guest stack (some only a dozen or so KiB) that overflows -- OnePlus 13: SIGSEGV at address = sp, in je_extent_tree_szsnad_remove
+// (svc_thread -> pthread_exit -> je_tsd_cleanup ...). The jump point is not kept in thr_t: t may already be freed inside thread_exit (thr_free when closed)
+static pthread_key_t g_keyhome;
 static uint64_t g_next_id = 0x51;
 static thr_t *g_wait;          // 全部在等的线程（锁 / 条件 / 地址 / 同步） | All waiting threads (lock / condition / address / synchronization)
 
@@ -227,8 +237,17 @@ static void *thread_main(void *p) {
     crash_thread_init();
     guest_thread_init();
     pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); pthread_mutex_unlock(&G);
-    dm_thread_enter(t->entry, t->arg, t->stack_top);   // 不返回：客体须经 ExitThread 退出 | Does not return: the guest must exit through ExitThread
-    die("客体线程入口返回");
+    // 记下回宿主栈的跳回点再进客体栈；ExitThread（thread_exit）收尾后 siglongjmp 回到这里，在本栈上退出线程（见 g_keyhome）
+    // Record the jump point back to the host stack before entering the guest stack; after ExitThread (thread_exit) finishes its bookkeeping it
+    // siglongjmps back here, and the thread exits on this stack (see g_keyhome)
+    sigjmp_buf home;
+    pthread_setspecific(g_keyhome, &home);
+    if (sigsetjmp(home, 0) == 0) {
+        // 不返回：客体须经 ExitThread 退出 | Does not return: the guest must exit through ExitThread
+        dm_thread_enter(t->entry, t->arg, t->stack_top);
+        die("客体线程入口返回");
+    }
+    pthread_exit(NULL);
 }
 static void thr_free(thr_t *t) {   // 持 G；从全部线程链摘下并释放 | Holding G; unlink from the all-threads chain and free
     for (thr_t **p = &g_all; *p; p = &(*p)->all) if (*p == t) { *p = t->all; break; }
@@ -245,6 +264,10 @@ static void thread_exit(thr_t *t) {
     pthread_setspecific(g_keythr, NULL);
     if (t->closed) thr_free(t);
     pthread_mutex_unlock(&G);
+    // 回宿主栈去退出（g_keyhome）；没有跳回点的（进程主线程）照旧就地退出
+    // Go back to the host stack to exit (g_keyhome); a thread without a jump point (the process main thread) exits in place as before
+    sigjmp_buf *home = pthread_getspecific(g_keyhome);
+    if (home) { pthread_setspecific(g_keyhome, NULL); siglongjmp(*home, 1); }
     pthread_exit(NULL);
 }
 void dm_thread_returned(void) { die("客体线程入口函数返回（Horizon 要求 ExitThread）"); }
@@ -253,6 +276,7 @@ void dm_thread_returned(void) { die("客体线程入口函数返回（Horizon �
 // Register the main thread and return its handle (passed to nnosInitialize as the main thread handle)
 uint32_t svc_thread_main_init(void) {
     pthread_key_create(&g_keythr, NULL);
+    pthread_key_create(&g_keyhome, NULL);
     thr_t *t = calloc(1, sizeof *t);
     pthread_cond_init(&t->cv, NULL);
     t->started = 1; t->prio = 44; t->core = 0; t->mask = 7; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt);

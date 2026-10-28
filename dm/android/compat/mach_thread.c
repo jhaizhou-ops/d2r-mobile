@@ -14,6 +14,8 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include <ucontext.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 enum { ST_IDLE, ST_REQ, ST_HELD, ST_RESUME };
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -100,13 +102,30 @@ kern_return_t thread_info(thread_act_t t, int flavor, thread_info_t out, mach_ms
         bi->system_time.seconds = (int)ru.ru_stime.tv_sec; bi->system_time.microseconds = (int)ru.ru_stime.tv_usec;
         return KERN_SUCCESS;
     }
-    char path[64], buf[1024]; snprintf(path, sizeof path, "/proc/self/task/%u/stat", t);
-    FILE *f = fopen(path, "r"); if (!f) return KERN_FAILURE;
-    size_t got = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[got] = 0;
+    // 读别的线程的 stat 只用 open / read 和栈上缓冲，不用 stdio：崩溃处理导现场时也会走到这里（svc_thread_dump），fopen / fread 要分配内存，
+    // 崩溃若正好在分配器持锁时发生就会在这里等死（OnePlus 13：fread → malloc 自锁，进程卡住报「无响应」）
+    // Another thread's stat is read with open / read and stack buffers only, no stdio: the crash handler's dump comes here too (svc_thread_dump), and
+    // fopen / fread allocate memory, so a crash that lands while the allocator holds its lock would wait here forever (OnePlus 13: fread -> malloc
+    // deadlocked on itself, the process hung and was reported "not responding")
+    char path[48] = "/proc/self/task/", digits[12], buf[1024]; int n = 16, nd = 0; unsigned v = (unsigned)t;
+    do { digits[nd++] = (char)('0' + v % 10); v /= 10; } while (v);
+    while (nd) path[n++] = digits[--nd];
+    memcpy(path + n, "/stat", 6);
+    int fd = open(path, O_RDONLY | O_CLOEXEC); if (fd < 0) return KERN_FAILURE;
+    ssize_t got = read(fd, buf, sizeof buf - 1); close(fd); if (got <= 0) return KERN_FAILURE; buf[got] = 0;
     char *p = strrchr(buf, ')'); if (!p) return KERN_FAILURE;   // 线程名可含空格：从最后一个 ')' 之后数字段 | The thread name may contain spaces: count fields after the last ')'
-    unsigned long ut = 0, st = 0;
-    // ')' 后第 1 个字段是 state（总第 3 字段）；utime / stime 是总第 14 / 15 字段 | The first field after ')' is state (field 3 overall); utime / stime are fields 14 / 15 overall
-    if (sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &ut, &st) != 2) return KERN_FAILURE;
+    // ')' 后第 1 个字段是 state（总第 3 字段）；utime / stime 是总第 14 / 15 字段，即 state 之后第 11、12 个
+    // The first field after ')' is state (field 3 overall); utime / stime are fields 14 / 15 overall, i.e. the 11th and 12th after state
+    unsigned long ut = 0, st = 0; int field = 0;
+    for (p++; *p && field < 13; ) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        field++;
+        unsigned long num = 0; while (*p >= '0' && *p <= '9') num = num * 10 + (unsigned long)(*p++ - '0');
+        if (field == 12) ut = num; else if (field == 13) st = num;
+        while (*p && *p != ' ') p++;
+    }
+    if (field < 13) return KERN_FAILURE;
     long hz = sysconf(_SC_CLK_TCK); if (hz <= 0) hz = 100;
     thread_basic_info_data_t *bi = (thread_basic_info_data_t *)out; memset(bi, 0, sizeof *bi);
     bi->user_time.seconds = (int)(ut / hz); bi->user_time.microseconds = (int)(ut % hz * 1000000 / hz);

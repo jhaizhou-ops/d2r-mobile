@@ -18,6 +18,7 @@ run: \
 	$(B)/t_cloudsync \
 	$(B)/t_condvar \
 	$(B)/t_condvar_old \
+	$(B)/t_crash_hang \
 	$(B)/t_doorspot \
 	$(B)/t_fs \
 	$(B)/t_fs_case \
@@ -83,6 +84,7 @@ run: \
 	$(B)/t_audio_spsc
 	$(B)/t_swkbd
 	$(B)/t_altstack
+	$(B)/t_crash_hang
 	$(B)/t_movie
 	$(B)/t_condvar
 	$(B)/t_condvar_old
@@ -148,6 +150,11 @@ movie-real: $(B)/t_movie_real
 	$(PY) movie_real.py $(B)/t_movie_real
 $(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_altstack.c t_altstack_stub.c ../crash.c
+# 崩溃处理不会把崩溃变成卡死（3 秒闹钟、第一段信号安全）；安卓同一份可用 NDK 静态编（-DDM_STATIC_TEST）在电脑上经 qemu 跑
+# The crash handler never turns a crash into a hang (3-second alarm, signal-safe first part); the same file builds for Android with the NDK statically
+# (-DDM_STATIC_TEST) and runs on a PC through qemu
+$(B)/t_crash_hang: t_crash_hang.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_crash_hang.c t_altstack_stub.c ../crash.c
 $(B)/%.orig.bin: $(EXEFS)/% | $(B)
 	$(PY) ../../tools/nso.py $< $@ > /dev/null
 $(B):
