@@ -40,7 +40,9 @@ final class CamButtons extends View implements Choreographer.FrameCallback {
 
     @Override public void doFrame(long ns) {
         if (!running) return;
-        boolean active = DmActivity.nativeCamActive() != 0;
+        // 原神式（nativeCamStyle = 1）不出按钮：转镜头靠右半屏左右拖
+        // Genshin style (nativeCamStyle = 1) shows no buttons: the camera turns by dragging the right half sideways
+        boolean active = DmActivity.nativeCamActive() != 0 && DmActivity.nativeCamStyle() != 1;
         if (active != shown) { shown = active; if (!active) leftId = rightId = -1; invalidate(); }
         int dir = (rightId >= 0 ? 1 : 0) - (leftId >= 0 ? 1 : 0);
         if (dir != 0 && lastNs != 0) DmActivity.nativeCamTurn(dir * RATE * Math.min(0.1f, (ns - lastNs) * 1e-9f));

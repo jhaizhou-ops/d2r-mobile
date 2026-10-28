@@ -56,6 +56,9 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     // The camera mode (valid only after nativeStart) and "in a game right now with the camera drawing" (CamButtons)
     static native int nativeCamMode();
     static native int nativeCamActive();
+    // 越肩档的操作风格（1 = 原神式：没有左右转按钮）
+    // The over-the-shoulder control style (1 = Genshin style: no turn buttons)
+    static native int nativeCamStyle();
     // 画面外的怪（CamThreats）：每条 5 个数，返回条数
     // Monsters off the picture (CamThreats): 5 numbers each, returns the count
     static native int nativeCamThreats(float[] out);

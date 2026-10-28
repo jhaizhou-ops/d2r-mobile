@@ -322,6 +322,11 @@ JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamSensor(JNIEnv 
 // turn buttons by it)
 JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamMode(JNIEnv *env, jclass cls) { (void)env; (void)cls; return dm_cam_mode(); }
 JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamActive(JNIEnv *env, jclass cls) { (void)env; (void)cls; return dm_cam_on(); }
+// 越肩档的操作风格（dm_cam.c dm_cam_style）：1 = 原神式，转镜头靠右半屏拖动，CamButtons 不出左右转按钮
+// The over-the-shoulder control style (dm_cam.c dm_cam_style): 1 = Genshin style, the camera turns by dragging the right half, so CamButtons shows no turn
+// buttons
+int dm_cam_style(void);
+JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamStyle(JNIEnv *env, jclass cls) { (void)env; (void)cls; return dm_cam_style(); }
 // 画面外的怪（dm_cam.c dm_cam_threats）：每条 5 个数（屏幕 x、y、箭头方向、紧迫度、档位），返回条数；CamThreats 每帧取一次
 // Monsters off the picture (dm_cam.c dm_cam_threats): 5 numbers each (screen x, y, arrow direction, urgency, tier), returns the count; CamThreats takes them
 // once per frame
