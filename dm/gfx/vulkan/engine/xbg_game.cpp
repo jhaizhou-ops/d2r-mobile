@@ -2504,6 +2504,12 @@ Buffer widen(uint64_t address,size_t copy,const Buffer &src){
     const uint8_t *p=static_cast<const uint8_t*>(src.mapped);if(!p)return src;
     Buffer b=stream_buffer(uniform_range(copy),p,copy);uint8_t *d=static_cast<uint8_t*>(b.mapped);
     const float k=cull_widen;
+    // 剔除那条只绑前 144 字节（OnePlus 13 实读）：+0 / +16 各是画面像素宽、高与其倒数（1686 765 1/1686 1/765），+80 视图矩阵，没有投影——
+    // 视锥由像素尺寸乘固定的「每像素多少世界单位」得出，所以把这两组宽高乘 k、倒数除以 k，视锥就宽 k 倍。下面投影类几块绑得长时也照改
+    // The culling binding is only the first 144 bytes (read on a OnePlus 13): +0 / +16 each hold the picture's pixel width, height and their reciprocals
+    // (1686 765 1/1686 1/765), +80 the view matrix, and no projection -- the frustum comes from the pixel size times a fixed world-units-per-pixel, so scaling
+    // both width / height pairs by k and their reciprocals by 1 / k makes it k times wider. The projection-like parts below are changed too when bound
+    for(size_t off:{size_t(0),size_t(16)})if(off+16<=copy){float v[4];memcpy(v,d+off,16);if(v[0]>0 && v[1]>0 && v[2]>0 && v[3]>0){v[0]*=k;v[1]*=k;v[2]/=k;v[3]/=k;memcpy(d+off,v,16);}}
     for(size_t off:{size_t(208),size_t(336),size_t(464)})if(off+64<=copy){float m[16];memcpy(m,d+off,64);for(int r=0;r<4;r++){m[r*4]/=k;m[r*4+1]/=k;}memcpy(d+off,m,64);}
     for(size_t off:{size_t(272),size_t(400)})if(off+64<=copy){float m[16];memcpy(m,d+off,64);for(int c=0;c<4;c++){m[c]*=k;m[4+c]*=k;}memcpy(d+off,m,64);}
     // 诊断：剔除那条只绑了这块的前 copy 字节（OnePlus 13：144 字节，投影类几块都在 208 之后、够不着）——头一次把这段按浮点打出来，看它拿什么当视锥
