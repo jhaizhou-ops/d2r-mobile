@@ -196,7 +196,9 @@ int dm_cam_threats(float *out, int max) {
 // minimap = the frame height, full-screen map 0.5 -- the map is drawn twice as large there)
 int dm_cam_map_heading(float out[4]) {
     cam_t c; float cell, mm[4], o[3], d[3]; int map;
-    if (!cam_get(&c) || !(map = dm_ui_map_geom(&cell)) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
+    // 同 dm_cam_heading：进局满 1.5 秒才给（cam_settled）。这里原先没走它，读取画面上照样出指针（OnePlus 13）
+    // As dm_cam_heading: only once in game for 1.5 s (cam_settled). This path used to skip it, so the pointer still showed on the loading screen (OnePlus 13)
+    if (!cam_settled() || !cam_get(&c) || !(map = dm_ui_map_geom(&cell)) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
     float mx = (d[0] - d[2]) * 1.6f, my = (d[0] + d[2]) * 0.8f;
     if (hypotf(mx, my) < 1e-6f) return 0;
     if (map == 1) {
