@@ -1208,25 +1208,32 @@ static void cam_c2s(uint64_t G, uint64_t pl, const uint8_t *b, uint32_t n) {
     dm_cam_attack(tx - pxy[0] / 65536.0f, ty - pxy[1] / 65536.0f);
 }
 // 越肩镜头的怪物指示（dm_cam.c dm_cam_threats）：透视画面只看得见前方，怪从画面外很快贴上脸（维护者试玩）。每拍从服务端怪物表取玩家
-// DM_CAM_THREAT_RANGE（缺省 30）格内活着的怪（模式不是 0 死亡中 / 12 已死），去掉佣兵（类号 271 / 338 / 359 / 560 / 561），带上档位交给镜头；城里不取。
-// 召唤物（骷髅、魔像等）目前也会算进去
+// DM_CAM_THREAT_RANGE（缺省 30）格内活着的怪（模式不是 0 死亡中 / 12 已死），去掉佣兵（类号 271 / 338 / 359 / 560 / 561），带上配色档（hle_target.c dm_threat_tier：普通 / 冠军 / 独特 / 首领）交给镜头；城里不取。
+// 玩家自己的召唤物（骷髅、魔像、狼、复活的怪等）不算：客户端宠物链表 main+0x2d33528（每项 +8 单位号、+0xc 属主号、+0x30 下一项，同 dm_actions.c
+// 喂佣兵处）里属主 = 玩家的单位号，扫怪时跳过；别人的召唤物照算
 // Monster indicators of the over-the-shoulder camera (dm_cam.c dm_cam_threats): the perspective picture only shows what is ahead, and monsters reach the
 // character's face from outside the picture fast (the maintainer's play test). Every tick, take the living monsters (mode neither 0 dying nor 12 dead)
 // within DM_CAM_THREAT_RANGE (default 30) cells of the player from the server monster table, drop mercenaries (classes 271 / 338 / 359 / 560 / 561), and
-// hand them with their tier to the camera; nothing in town. Summons (skeletons, golems and so on) currently count too
+// hand them with their tier to the camera; nothing in town. The player's own summons (skeletons, golems, wolves, revived
+// monsters and so on) do not count: the unit ids owned by the player in the client pet list main+0x2d33528 (each entry +8 unit id, +0xc owner id, +0x30
+// next, as at the mercenary feeding in dm_actions.c) are skipped while scanning; other players' summons still count
 static void cam_threats_tick(uint64_t G, uint64_t pl) {
-    int dm_cam_mode(void); void dm_cam_set_threats(const float *xy, const int *tier, int n); int dm_target_rank(uint64_t unit);
-    if (dm_cam_mode() <= 0 || !pl) return;
+    int dm_cam_mode(void); void dm_cam_set_threats(const float *xy, const int *tier, int n); int dm_threat_tier(uint64_t unit);
+    if (dm_cam_mode() <= 0 || !pl) return;   // 越肩与第一人称都收（原先只认越肩，第一人称下一个也没有） | both over-the-shoulder and first person (it used to take mode 1 only, so first person had none)
     static float range = -1; if (range < 0) { const char *e = getenv("DM_CAM_THREAT_RANGE"); range = e ? (float)atof(e) : 30; }
     dm_hud_info h; dm_hud_get(&h); if (h.valid && dm_hud_area_is_town(h.area)) { dm_cam_set_threats(NULL, NULL, 0); return; }
     uint64_t pp = 0; uint32_t pxy[2]; if (!tk_rd(pl + 0x38, &pp, 8) || !pp || !tk_rd(pp, pxy, 8)) return;
     float px = pxy[0] / 65536.0f, py = pxy[1] / 65536.0f, xy[64]; int tier[32], n = 0; uint64_t u = 0;
+    uint32_t me = 0, pet[64]; int np = 0; module_t *m = main_mod(); uint64_t e = 0;   // 玩家自己的召唤物 | the player's own summons
+    if (m && tk_rd(pl + 8, &me, 4) && tk_rd((uint64_t)m->base + 0x2d33528, &e, 8))
+        for (int k = 0; e && k < 256 && np < 64; k++) { uint32_t id = 0, owner = 0; if (tk_rd(e + 8, &id, 4) && tk_rd(e + 0xc, &owner, 4) && owner == me) pet[np++] = id; if (!tk_rd(e + 0x30, &e, 8)) break; }
     for (int bk = 0; bk < 128 && n < 32; bk++) if (tk_rd(G + 0x2230 + 1 * 0x400 + 8 * bk, &u, 8)) for (int k = 0; u && k < 4096 && n < 32; k++) {
         uint32_t cls = 0, mode = 0, mxy[2]; uint64_t tp = 0;
-        if (tk_rd(u + 4, &cls, 4) && tk_rd(u + 0xC, &mode, 4) && mode != 0 && mode != 12 && cls != 271 && cls != 338 && cls != 359 && cls != 560 && cls != 561
+        uint32_t uid = 0; int mine = 0; if (np && tk_rd(u + 8, &uid, 4)) for (int k = 0; k < np && !mine; k++) mine = pet[k] == uid;
+        if (!mine && tk_rd(u + 4, &cls, 4) && tk_rd(u + 0xC, &mode, 4) && mode != 0 && mode != 12 && cls != 271 && cls != 338 && cls != 359 && cls != 560 && cls != 561
             && tk_rd(u + 0x38, &tp, 8) && tp && tk_rd(tp, mxy, 8)) {
             float mx = mxy[0] / 65536.0f, my = mxy[1] / 65536.0f, dx = mx - px, dy = my - py;
-            if (dx * dx + dy * dy <= range * range) { int r = dm_target_rank(u); xy[2 * n] = mx; xy[2 * n + 1] = my; tier[n++] = r < 0 ? 0 : r; } }
+            if (dx * dx + dy * dy <= range * range) { int r = dm_threat_tier(u); xy[2 * n] = mx; xy[2 * n + 1] = my; tier[n++] = r < 0 ? 0 : r; } }
         if (!tk_rd(u + 0x158, &u, 8)) break; }
     dm_cam_set_threats(xy, tier, n);
 }

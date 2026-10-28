@@ -80,7 +80,19 @@ def main():
     # 原图是等边三角形，缩小到地图上看不出哪个是尖（jhz 真机反馈）：横向收到 0.5，成细长的箭头形，尖端一眼可辨，鎏金与宝石照旧
     # The original is an equilateral triangle, and shrunk onto the map it is unclear which corner is the tip (jhz, on the phone): narrowed to 0.5 across
     # into a slim arrowhead whose tip reads at a glance; the gilding and the jewel stay
-    up = ptr.crop((3 * ppitch, 0, 3 * ppitch + pfw, ptr.height)); up.resize((max(1, up.width // 2), up.height), Image.LANCZOS).save(os.path.join(OUT, 'heading.png'))
+    up = ptr.crop((3 * ppitch, 0, 3 * ppitch + pfw, ptr.height)).resize((max(1, pfw // 2), ptr.height), Image.LANCZOS); up.save(os.path.join(OUT, 'heading.png'))
+    # 画面外怪物的指针（front_ios.m threatsSync，宿主 dm_cam_threats）：同一个指针按档位套原版名字配色——普通怪银白（去色）、冠军蓝（原版蓝名精英）、
+    # 独特暗金（原版暗金名字的金，即指针本色）、幕首领红（原版红字）。去色后按亮度乘目标色，鎏金纹理与宝石的明暗都留着
+    # Pointers for monsters off the picture (front_ios.m threatsSync, host dm_cam_threats): the same pointer in the original name colours by tier -- normal
+    # silver-white (desaturated), elite blue (the original elite monster name blue), Boss gold (the original unique name gold, the pointer's own colour).
+    # Desaturated and multiplied by the target colour by brightness, so the gilding texture and the jewel keep their light and shade
+    def tint(im, rgb):
+        a = im.getchannel('A'); g = im.convert('L').point(lambda v: min(255, v * 2))
+        out = Image.merge('RGB', [g.point(lambda v, c=c: v * c // 255) for c in rgb]).convert('RGBA'); out.putalpha(a); return out
+    tint(up, (225, 225, 225)).save(os.path.join(OUT, 'threat_0.png'))
+    tint(up, (110, 110, 255)).save(os.path.join(OUT, 'threat_1.png'))   # 冠军（蓝名精英） | champion (blue-named elite)
+    up.save(os.path.join(OUT, 'threat_2.png'))   # 独特 / 超级独特（暗金名） | unique / super unique (gold name)
+    tint(up, (255, 80, 64)).save(os.path.join(OUT, 'threat_3.png'))   # 幕首领：原版红字 | act boss: the original red text
     font = ImageFont.truetype(romfs_art.font(ROMFS, 'BlizzardGlobal-V5_81.ttf'), TEXT_PX)
     oldp = os.path.join(HERE, 'annot', 'oldnames.tsv')   # 旧译名对照表可以没有（公开仓库不带）：没有就都用现行名 | the old-name table may be absent (the public repository does not carry it): without it the current names are used throughout
     old = {(r[0], r[1]): r[3] for r in csv.reader(open(oldp, encoding='utf-8'), delimiter='\t') if len(r) >= 4} if os.path.isfile(oldp) else {}

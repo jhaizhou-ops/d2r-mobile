@@ -132,7 +132,8 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     BOOL _padMode, _feMode;   // 手柄模式 / 前端页面：两者任一成立就藏触屏控件层 | Controller mode / front-end page: the touch controls layer is hidden if either holds
     UIView *_rsCover;   // 一键重开期间的黑屏（宿主 dm_cursor.c 经 g_dm_restart_cover_hook 开关）：盖在窗口最上层（整屏，含真全屏的留边），不露主菜单，吞掉这段时间的触点 | Black screen during one-tap restart (toggled by the host's dm_cursor.c via g_dm_restart_cover_hook): covers the top of the window (whole screen, including the true-fullscreen margins), does not reveal the main menu, and swallows touch points during this period
     int _navigation;
-    CALayer *_mhPtr;   // 镜头实验：小地图 / 全屏地图上人物朝向的指针（mapHeadingSync） | camera experiment: the facing pointer on the minimap / fullscreen map (mapHeadingSync)
+    CALayer *_mhPtr, *_thr[8];   // _thr：画面外怪物的指针（threatsSync） | _thr: pointers for monsters off the picture (threatsSync)
+      // 镜头实验：小地图 / 全屏地图上人物朝向的指针（mapHeadingSync） | camera experiment: the facing pointer on the minimap / fullscreen map (mapHeadingSync)
     CALayer *_mgLabel[12], *_mgMark[12];   // 小地图任务终点：每个终点一个名牌 / 符号层 + 一个灰十字层（mapGoalSync） | Minimap quest goals: one nameplate / symbol layer + one grey cross layer per goal (mapGoalSync)
     NSMutableDictionary<NSString *,UIImage *> *_mgImg;
     uint64_t _modifierPublishEndNS,_modifierPublishEpoch;
@@ -457,9 +458,32 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
         _mhPtr.hidden=NO; }
     [CATransaction commit];
 }
+// 镜头实验：画面外的怪物（宿主 dm_cam_threats：屏幕 x、y（0..1，已让开顶边与底栏）、方向（0 朝上、顺时针）、紧迫度、档位）在屏幕边上画指针。
+// 图同小地图朝向指针（原版表情轮盘指针），按档位套原版名字配色（mapgoal/threat_<档>.png：普通银白 / 冠军蓝 / 独特暗金 / 幕首领红）；越近越大，
+// 紧迫度过 0.75 轻微呼吸闪烁（同安卓 CamThreats.java 的规则）。开面板、地图全屏时不画
+// Camera experiment: monsters off the picture (host dm_cam_threats: screen x, y (0..1, clear of the top edge and the bottom bar), direction (0 up, clockwise),
+// urgency, tier) get a pointer on the screen edge. Same art as the minimap facing pointer (the original emote wheel pointer) in the original name colours by
+// tier (mapgoal/threat_<tier>.png: normal silver / champion blue / unique gold / act boss red); larger when closer, a gentle breathing blink above 0.75 urgency (the same rules
+// as Android's CamThreats.java). Not drawn with a panel open or the fullscreen map up
+- (void)threatsSync {
+    int dm_cam_threats(float *, int); float t[8 * 5]; float cell=0; int n=(_navigation || _info.hidden || dm_ui_map_geom(&cell)==2) ? 0 : dm_cam_threats(t, 8);
+    CGSize z=self.bounds.size; double now=CACurrentMediaTime();
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    for(int i=0;i<8;i++) {
+        if(!_thr[i]) { _thr[i]=[CALayer layer]; _thr[i].contentsGravity=kCAGravityResizeAspect; _thr[i].hidden=YES; _thr[i].shadowColor=UIColor.blackColor.CGColor; _thr[i].shadowOffset=CGSizeZero; _thr[i].shadowRadius=3; _thr[i].shadowOpacity=0.9; [_info.layer addSublayer:_thr[i]]; }
+        UIImage *im=i<n ? [self mgImage:[NSString stringWithFormat:@"threat_%d.png",(int)fminf(fmaxf(t[i*5+4],0),3)]] : nil;
+        if(!im) { _thr[i].hidden=YES; continue; }
+        float u=fminf(fmaxf(t[i*5+3],0),1); CGFloat h=z.height*(0.035+0.03*u), w=h*im.size.width/im.size.height;
+        _thr[i].contents=(id)im.CGImage; _thr[i].bounds=CGRectMake(0,0,w,h); _thr[i].position=CGPointMake(t[i*5]*z.width, t[i*5+1]*z.height);
+        _thr[i].affineTransform=CGAffineTransformMakeRotation(t[i*5+2]);
+        _thr[i].opacity=u>0.75f ? (float)(0.55+0.45*fabs(sin(now*5))) : 1; _thr[i].hidden=NO; }
+    [CATransaction commit];
+    { static int ln=-1, lc; if(n!=ln && lc<40) { ln=n; lc++; LOG("画面外怪物指针：%d 个", n); } }
+}
 - (void)tickTouchControls:(double)now {
     [self mapGoalSync];
     [self mapHeadingSync];
+    [self threatsSync];
     { int dm_padmode_busy(void); BOOL hide=_feMode || _padMode || dm_padmode_busy(); if(_overlay.hidden!=hide) _overlay.hidden=hide; }   // 手柄 → 触屏切换事务还没完成（界面还在重建）时触屏控件层先不露出来（dm_padmode.c） | While the controller → touch switch transaction is not yet complete (the UI is still rebuilding) the touch control layer is not revealed yet (dm_padmode.c)
     { void dm_rift_hud_draw(UIView *, CGRect, BOOL); dm_rift_hud_draw(_info, world_rect(self), _navigation || _info.hidden); }
     {   // 高价值掉落震动（宿主 dm_drophaptic.c 判档）：1 重 / 2 中 / 3 轻 | High-value drop haptics (the host's dm_drophaptic.c decides the level): 1 heavy / 2 medium / 3 light
