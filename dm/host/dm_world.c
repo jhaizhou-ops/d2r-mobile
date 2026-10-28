@@ -726,6 +726,14 @@ static void w_cam_zoom(uint8_t *b) {
     if (want < 0) { const char *e = getenv("DM_CAM_ZOOM"); want = e ? (float)atof(e) : 0.6f; if (!(want >= 0.5f)) want = 0.5f; if (want > 2.25f) want = 2.25f; }
     if (!(*(volatile uint8_t *)(b + 0x2d20948) & 1)) return;
     float *z = (float *)(b + 0x2d129d0 + 0x1348);
+    // 诊断：开面板时原版镜头横移（主程序 0x89c370：[0x2d47640] 为 1 / 2 时沿画面横向挪 0.0884 × 200 × u），画面线程的人物估计不知道这一挪；
+    // 镜头开着时这个状态一变就记一笔，好对照 NVN cam 那边的偏离记录
+    // Diagnostic: with a panel open the original camera moves sideways (main 0x89c370: [0x2d47640] 1 / 2 moves it 0.0884 * 200 * u across the picture),
+    // which the render thread's character estimate does not know about; with the camera on, log each change of that state to compare with the NVN cam
+    // drift lines
+    static int panel = -1;
+    const int pv = *(volatile int *)(b + 0x2d47640);
+    if (pv != panel) { if (dm_cam_mode() > 0) LOG("镜头缩放：面板横移状态 %d → %d", panel, pv); panel = pv; }
     if (dm_cam_mode() > 0) {
         if (orig < 0) { orig = *z >= 1.0f && *z <= 2.25f ? *z : 1.2f; LOG("镜头缩放：开镜头，cameraZoomSetting %.2f → %.2f（原版画面放大，载入范围跟着变大）", orig, want); }
         if (*z != want) *z = want;

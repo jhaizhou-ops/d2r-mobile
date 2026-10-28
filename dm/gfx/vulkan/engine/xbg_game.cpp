@@ -2455,7 +2455,7 @@ Buffer uniform_snapshot_cached(uint64_t address,size_t copy);
 namespace cam {
 const char *const cull_cs="1188eaedc8db3285";
 int mode_=-1;xbg_cam_params params;xbg_cam_state st;uint64_t patches=0,scenes=0,widened=0;
-float clear=0,host_px=0,host_pz=0,turned=0,drag_k=0.5f,pull_pitch=40,pull_min=5,cull_widen=1;bool clear_ok=false;
+float clear=0,host_px=0,host_pz=0,turned=0,drag_k=0.5f,pull_pitch=40,pull_min=5,cull_widen=1;bool clear_ok=false;uint64_t drift_frame=0;
 struct Copy{uint64_t address=0,bytes=0,epoch=0;Buffer buffer;};std::array<Copy,8> copies;unsigned next=0;
 float envf(const char *k,float d){const char *e=getenv(k);return e?float(atof(e)):d;}
 int mode(){
@@ -2550,6 +2550,10 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         // 避墙（越肩档）：宿主按碰撞格量的、镜头朝后那个方向上离墙多远，每帧拉一次
         // Wall avoidance (over-the-shoulder mode): how far the wall is in the camera's backward direction, as the host measured on the collision grid, pulled once per frame
         if(fresh && mode_==1){float c=0;clear_ok=dm_cam_clearance && dm_cam_clearance(-st.fx,-st.fz,&c,&host_px,&host_pz);clear=clear_ok?c:0;xbg_cam_pull(&st,params.dist,style==1 && clear>0 && clear<pull_min?pull_min:clear,t0?st.t-t0:0);}
+        // 诊断：人物估计（xbg_cam_ground）和宿主读到的人物位置差 3 个单位以上就记一笔（最多每秒一次）——缩放算式不对、开面板时原版镜头横移，都会在这里露出来
+        // Diagnostic: log when the character estimate (xbg_cam_ground) is more than 3 units from the position the host reads (at most once a second) -- a
+        // wrong zoom formula or the original camera moving sideways for an open panel shows up here
+        if(fresh && clear_ok && hypotf(px-host_px,pz-host_pz)>3 && frame-drift_frame>60){drift_frame=frame;xbg_logf("NVN cam drift player=%.1f,%.1f host=%.1f,%.1f off=%.1f",px,pz,host_px,host_pz,hypotf(px-host_px,pz-host_pz));}
         // 玩家上下拖的俯仰（宿主 dm_cam.c）；算完把宿主的累计值夹回本帧机位能取的范围
         // The player's dragged pitch (host dm_cam.c); afterwards clamp the host's sum to this frame's range
         // 原神式不调俯仰（触屏层也不再送）：以前拖过的俯仰也不用，固定在缺省机位

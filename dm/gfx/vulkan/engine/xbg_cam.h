@@ -92,22 +92,39 @@ static inline int xbg_cam_m4_inv(const float *m, float *o) {
     return 1;
 }
 
-// 人物位置：原版镜头总对准人物，而且离人物的距离固定（XBG_CAM_ORIG_DIST，沿视线）。逆视图（+144）第 3 行 = 视图 +z 的世界方向、第 4 行 = 镜头位置，
-// 人物 = 镜头位置 − 距离 × 视图 +z。地面有高低：人物走下坡、从高处传送下来时原版镜头跟着降（iPhone 实测：镜头 y 从 442.0 平滑降到 430.1），
-// 所以不能按「视线落到 y = 0」算——那样人物在低处时水平位置偏、透视镜头也停在原来的高度，像浮在空中
-// The character's position: the original camera always aims at the character from a fixed distance (XBG_CAM_ORIG_DIST, along the sight line). In the
-// inverse view (+144) row 3 = world direction of view +z and row 4 = camera position, so character = camera position - distance * view +z. The ground has
-// heights: walking down a slope or teleporting down from a height, the original camera goes down with the character (measured on an iPhone: camera y
-// eased from 442.0 to 430.1), so "where the sight line meets y = 0" is wrong -- with the character lower, the horizontal position is off and the
-// perspective camera stays at the old height, as if floating
-// 884.03 = 平地（y = 0）上视线到地面的距离，营地两次进局不同位置都是这个数 | 884.03 = the sight-line distance to the ground on flat ground (y = 0), the same at two different spots in camp
+// 人物位置：原版镜头总对准人物，摆在人物沿视线往后 d、再水平往后 s 处（主程序 0x89c370 每帧这样摆）。逆视图（+144）第 3 行 = 视图 +z（朝后）的世界方向、
+// 第 4 行 = 镜头位置，所以人物 = 镜头位置 − d × 视图 +z − s × 视图 +z 的水平单位方向。地面有高低：人物走下坡、从高处传送下来时原版镜头跟着降
+// （iPhone 实测：镜头 y 从 442.0 平滑降到 430.1），所以不能按「视线落到 y = 0」算——那样人物在低处时水平位置偏、透视镜头也停在原来的高度，像浮在空中
+// The character's position: the original camera aims at the character from d back along the sight line and then s further back horizontally (main
+// 0x89c370 places it so every frame). In the inverse view (+144) row 3 = world direction of view +z (backwards) and row 4 = camera position,
+// so character = camera position - d * view +z - s * the horizontal unit direction of view +z. The ground has heights: walking down a slope or teleporting
+// down from a height, the original camera goes down with the character (measured on an iPhone: camera y eased from 442.0 to 430.1), so "where the sight
+// line meets y = 0" is wrong -- with the character lower, the horizontal position is off and the perspective camera stays at the old height, as if floating
+// d 和 s 都随缩放（cameraZoomSetting，游戏夹在 0.5～2.25）变：视角 fov = 2·atan(0.03 / 缩放)，u = fov / fov(缩放 1)；正交画面高 H = 53.03·u（= 2 / pr[5]，
+// 所以 u 从投影 +208 就能反推），d = H / (2·tan(fov / 2))，s = 7.25·(u − 1) + 0.1768·8·u。玩家常用的缩放 1.2：d = 884.0、s ≈ 0，就是以前在营地量到的
+// 884.03；镜头打开时缩放调到 0.6（dm_world.c w_cam_zoom）：d = 883.4、s = 7.2，按固定距离算人物会偏出 6～7 个单位
+// d and s both change with the zoom (cameraZoomSetting, clamped by the game to 0.5..2.25): field of view fov = 2 * atan(0.03 / zoom), u = fov / fov(zoom 1);
+// the orthographic picture height H = 53.03 * u (= 2 / pr[5], so u follows from the projection at +208), d = H / (2 * tan(fov / 2)),
+// s = 7.25 * (u - 1) + 0.1768 * 8 * u. At the usual zoom 1.2: d = 884.0 and s about 0, the 884.03 measured in camp before; with the camera on the zoom
+// becomes 0.6 (dm_world.c w_cam_zoom): d = 883.4 and s = 7.2, and a fixed distance puts the character 6 to 7 units off
+// 投影不像原版（高为 0 或离谱）时退回固定距离 | With a projection unlike the original's (height 0 or absurd) fall back to the fixed distance
 #define XBG_CAM_ORIG_DIST 884.03f
 static inline void xbg_cam_ground(const uint8_t *src, float *px, float *py, float *pz) {
-    float iv[16];
+    float iv[16], pr[16];
     memcpy(iv, src + 144, sizeof iv);
-    *px = iv[12] - XBG_CAM_ORIG_DIST * iv[8];
-    *py = iv[13] - XBG_CAM_ORIG_DIST * iv[9];
-    *pz = iv[14] - XBG_CAM_ORIG_DIST * iv[10];
+    memcpy(pr, src + 208, sizeof pr);
+    float d = XBG_CAM_ORIG_DIST, s = 0;
+    const float h = pr[5] != 0 ? fabsf(2 / pr[5]) : 0;
+    if (h > 10 && h < 500) {
+        const float u = h / (0.75f * 70.7107f);
+        d = h / (2 * tanf(u * atanf(0.03f)));
+        s = 7.25f * (u - 1) + 0.176777f * 8 * u;
+    }
+    const float hl = sqrtf(iv[8] * iv[8] + iv[10] * iv[10]);
+    if (!(hl > 1e-4f)) s = 0;
+    *px = iv[12] - d * iv[8] - (s != 0 ? s * iv[8] / hl : 0);
+    *py = iv[13] - d * iv[9];
+    *pz = iv[14] - d * iv[10] - (s != 0 ? s * iv[10] / hl : 0);
 }
 
 // 镜头跟随，每帧一次（frame 变了才走，返回 1）。want = 宿主给的朝向（瞄准拖拽 > 移动摇杆，已是世界方向），没有就取人物位移方向，都没有就保持。
