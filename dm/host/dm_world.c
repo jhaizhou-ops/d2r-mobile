@@ -708,6 +708,29 @@ int dm_map_goals(dm_map_goal_view *v) {
     for (int t = 0; t < 4; t++) { uint32_t a = atomic_load(&g_mg_seq); if (a & 1) continue; *v = g_mg_pub; if (atomic_load(&g_mg_seq) == a) return v->n; }
     v->n = 0; return 0;
 }
+// 越肩 / 第一人称镜头开着时把手柄镜头的缩放写小，让游戏载入、画的范围变大：抬高的透视画面看得比原版画面远，远处是黑块（OnePlus 13）。
+// 黑块不是那条剔除计算着色器造成的（放宽它的视锥、每帧画的东西不增，xbg_game.cpp cam::widen 试过），是游戏按原版正交画面的大小决定载入 / 提交哪些房间。
+// 原版画面大小跟手柄镜头的缩放 cameraZoomSetting（controllersettings.json，缺省 1.2）走：设置单例在 main+0x2d129d0（取用器 0x2acecc，构造标志 0x2d20948），
+// 缩放在 +0x1348，镜头每帧更新（约 0x89c370）重读它，所以开着镜头时每帧写成 DM_CAM_ZOOM（缺省 0.6 = 画面宽一倍），关了写回原值。
+// 原版把它夹在 [1.0, 2.25]，下限由改写器放到 0.5（patch_nso.py 0x89c444 / 0x89c428）；旧包没这两处时最多到 1.0
+// While the over-the-shoulder / first-person camera is on, write the controller camera's zoom smaller so the game loads and draws a larger area: the raised
+// perspective picture sees further than the original picture, and the far ground shows black patches (OnePlus 13). The patches do not come from the culling
+// compute shader (widening its frustum did not add draws, xbg_game.cpp cam::widen); the game picks which rooms to load / submit by the size of the original
+// orthographic picture. That size follows the controller camera's zoom cameraZoomSetting (controllersettings.json, default 1.2): the settings singleton is at
+// main+0x2d129d0 (getter 0x2acecc, construction flag 0x2d20948), the zoom at +0x1348, and the camera's per-frame update (about 0x89c370) rereads it -- so with
+// the camera on it is written as DM_CAM_ZOOM every frame (default 0.6 = a picture twice as wide), and the original is written back when it goes off.
+// The game clamps it to [1.0, 2.25]; the rewriter moves the floor to 0.5 (patch_nso.py 0x89c444 / 0x89c428); an older pack without those stops at 1.0
+static void w_cam_zoom(uint8_t *b) {
+    int dm_cam_mode(void);
+    static float orig = -1, want = -1;
+    if (want < 0) { const char *e = getenv("DM_CAM_ZOOM"); want = e ? (float)atof(e) : 0.6f; if (!(want >= 0.5f)) want = 0.5f; if (want > 2.25f) want = 2.25f; }
+    if (!(*(volatile uint8_t *)(b + 0x2d20948) & 1)) return;
+    float *z = (float *)(b + 0x2d129d0 + 0x1348);
+    if (dm_cam_mode() > 0) {
+        if (orig < 0) { orig = *z >= 1.0f && *z <= 2.25f ? *z : 1.2f; LOG("镜头缩放：开镜头，cameraZoomSetting %.2f → %.2f（原版画面放大，载入范围跟着变大）", orig, want); }
+        if (*z != want) *z = want;
+    } else if (orig >= 0) { *z = orig; LOG("镜头缩放：关镜头，cameraZoomSetting 写回 %.2f", orig); orig = -1; }
+}
 void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at the controller poll
 #if TARGET_OS_OSX
     w_mouse_cancel_pending();
@@ -718,6 +741,7 @@ void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at th
     w_test_xy_step();
     uint8_t *b = wb(); if (!b) return;
     DM_PROF(0, "w.cam", w_cam_clear());
+    w_cam_zoom(b);
     if (g_it.active) w_interaction_poll(w_player(), dm_guest_frame());
     DM_PROF(0, "w.watch", w_watch_step(b));
     { void dm_potpick_step(uint8_t *); DM_PROF(0, "w.potpick", dm_potpick_step(b)); }   // 药水自动拾取（dm_potpick.c） | automatic potion pickup (dm_potpick.c)

@@ -212,6 +212,16 @@ if RULE_RUN:
     # the controller version's tooltip expands against the icon's lower right, which on a touchscreen covers exactly the few skills around the finger. The bfxil x1,x8,#0,#32 at 0xc35fb0 is a no-op that copies the low half of x1 back into x1 (x8 = x1),
     # and is replaced with movk x1,#3000: the x coordinate is put off screen, and the tooltip entry's own clamp-back (0xb0d560, by TooltipsPanel's screenEdgePadding) snaps it to the right safe-area edge; the y coordinate is untouched
     cuts.append((0xc35fb0, struct.pack('<I', 0xB3407D01).hex(), struct.pack('<I', 0xF2800000 | 3000 << 5 | 1).hex(), '技能说明框横坐标给到屏幕外，由原回夹贴右边（不盖技能树）', '仅宿主'))
+    # 镜头缩放下限 1.0 → 0.5：手柄镜头每帧更新（约 0x89c370）从设置单例（main+0x2d129d0，取用器 0x2acecc）+0x1348 读 cameraZoomSetting，夹在 [1.0, 2.25]
+    # （0x89c444 fcmp s0,s12 比 1.0、小于就用 0x89c428 存下的 1.0）。越肩 / 第一人称镜头开着时宿主把它写小（dm_world.c w_cam_zoom），原版正交画面放大、
+    # 游戏载入与画的范围跟着变大，透视画面远处不露黑块。改成和 0.5 比（s8 在 0x89c404 已是 0.5、到这里没改过）、小于就用 0.5；缺省 1.2 不受影响
+    # Camera zoom floor 1.0 -> 0.5: the controller camera's per-frame update (about 0x89c370) reads cameraZoomSetting from the settings singleton (main+0x2d129d0,
+    # getter 0x2acecc) +0x1348 and clamps it to [1.0, 2.25] (0x89c444 fcmp s0,s12 compares with 1.0, and below it uses the 1.0 stored at 0x89c428). With the
+    # over-the-shoulder / first-person camera on, the host writes a smaller value (dm_world.c w_cam_zoom): the original orthographic picture grows and the area
+    # the game loads and draws grows with it, so the far perspective picture shows no black patches. Compare with 0.5 instead (s8 is already 0.5 from 0x89c404
+    # and unchanged up to here) and use 0.5 below it; the default 1.2 is unaffected
+    cuts.append((0x89c444, struct.pack('<I', 0x1E2C2000).hex(), struct.pack('<I', 0x1E282000).hex(), '镜头缩放下限比较：fcmp s0,s12（1.0）→ fcmp s0,s8（0.5）', '仅宿主'))
+    cuts.append((0x89c428, struct.pack('<I', 0x52A7F008).hex(), struct.pack('<I', 0x52A7E008).hex(), '镜头缩放下限值：mov w8,#0x3f800000（1.0）→ #0x3f000000（0.5）', '仅宿主'))
 if RULE_RUN and PRIVATE_GATES:
     # 只登记精力资格/移动选择/走跑偏好；不改方向、真实幅度、合法mode与零轴分支。
     # 两个成本/选择器通用点的type0防护在下方原生小跳板，非player保原行为。
