@@ -93,6 +93,48 @@ static int ortho_ground(const cam_t *c, float nx, float ny, float w[3]) {
 
 int dm_cam_on(void) { cam_t c; return cam_get(&c); }
 
+// 怪物指示：游戏线程每拍交来玩家附近活着的怪（子格坐标与档位，diag.c cam_threats_tick），前端每帧问哪些不在画面里、该画在屏幕边上哪儿（dm_cam_threats）。
+// 方向按镜头水平朝向算：正前方（画面外更远处）→ 上沿，左右 → 两侧，身后 → 下面两角（下沿中间是人和底栏，不放）。out 每条 5 个数：
+// 屏幕 x、y（0..1，y 向下，已避开顶边与底栏）、箭头方向（弧度，0 = 朝上、顺时针为正）、紧迫度（0..1，越近越大）、档位（0 普通 / 1 精英 / 2 Boss）；按紧迫度取前 max 条
+// Monster indicators: every tick the game thread hands over the living monsters near the player (sub-cell coordinates and tier, diag.c cam_threats_tick),
+// and every frame the front end asks which are off the picture and where on the screen edge to draw them (dm_cam_threats). The direction follows the camera's
+// horizontal heading: straight ahead (beyond the picture) -> the top edge, left and right -> the sides, behind -> the two bottom corners (the middle of the
+// bottom edge holds the character and the bottom bar, so nothing goes there). Each entry of out has 5 numbers: screen x, y (0..1, y down, clear of the top
+// edge and the bottom bar), arrow direction (radians, 0 = up, clockwise positive), urgency (0..1, larger when closer), tier (0 normal / 1 elite / 2 Boss);
+// the max most urgent are returned
+static float g_thr_xy[64]; static int g_thr_tier[32], g_thr_n; static double g_thr_t;
+void dm_cam_set_threats(const float *xy, const int *tier, int n) {
+    if (n < 0) n = 0; if (n > 32) n = 32;
+    pthread_mutex_lock(&g_mu); g_thr_n = n; if (n) { memcpy(g_thr_xy, xy, sizeof(float) * 2 * n); memcpy(g_thr_tier, tier, sizeof(int) * n); } g_thr_t = now_s(); pthread_mutex_unlock(&g_mu); }
+int dm_cam_threats(float *out, int max) {
+    cam_t c; if (max <= 0 || !cam_get(&c)) return 0;
+    static float sub = -1, range = -1;
+    if (sub < 0) { const char *e = getenv("DM_CAM_SUB"); sub = e ? (float)atof(e) : 2.0f; e = getenv("DM_CAM_THREAT_RANGE"); range = e ? (float)atof(e) : 30; }
+    float xy[64]; int tier[32], n;
+    pthread_mutex_lock(&g_mu); n = g_thr_t > 0 && now_s() - g_thr_t < 0.5 ? g_thr_n : 0; memcpy(xy, g_thr_xy, sizeof xy); memcpy(tier, g_thr_tier, sizeof tier); pthread_mutex_unlock(&g_mu);
+    float o[3], d[3]; if (!n || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
+    float fx = d[0], fz = d[2], fl = hypotf(fx, fz); if (fl < 1e-6f) return 0; fx /= fl; fz /= fl; float rx = -fz, rz = fx;
+    // 允许的边框：左右 0.06–0.94，上 0.08，下 0.80（底栏之上）；身后超过下角的方向夹到下角
+    // Allowed border: left / right 0.06-0.94, top 0.08, bottom 0.80 (above the bottom bar); directions behind beyond the bottom corners clamp to the corners
+    const float L = 0.06f, R = 0.94f, T = 0.08f, B = 0.80f, corner = atan2f(R - 0.5f, B - 0.5f);
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        float wx = xy[2 * i] * sub, wz = xy[2 * i + 1] * sub, v[4] = { wx, 3, wz, 1 }, p[4]; xf(c.vpp, v, p);
+        if (p[3] > 0 && fabsf(p[0] / p[3]) < 0.92f && fabsf(p[1] / p[3]) < 0.92f) continue;
+        float ex = wx - c.pl[0], ez = wz - c.pl[1], dist = hypotf(ex, ez), th = atan2f(ex * rx + ez * rz, ex * fx + ez * fz), sx, sy;
+        if (fabsf(th) > 3.14159265f - corner) { sx = th > 0 ? R : L; sy = B; }
+        else { float dx = sinf(th), dy = -cosf(th), t = 1e9f;
+            if (dx > 1e-6f) t = fminf(t, (R - 0.5f) / dx); if (dx < -1e-6f) t = fminf(t, (L - 0.5f) / dx);
+            if (dy > 1e-6f) t = fminf(t, (B - 0.5f) / dy); if (dy < -1e-6f) t = fminf(t, (T - 0.5f) / dy);
+            sx = 0.5f + dx * t; sy = 0.5f + dy * t; }
+        float urg = 1 - dist / (range * sub); if (urg < 0) urg = 0; if (urg > 1) urg = 1;
+        int slot = m < max ? m++ : -1;
+        if (slot < 0) { int low = 0; for (int k = 1; k < max; k++) if (out[k * 5 + 3] < out[low * 5 + 3]) low = k; if (out[low * 5 + 3] >= urg) continue; slot = low; }
+        float *e = out + slot * 5; e[0] = sx; e[1] = sy; e[2] = th; e[3] = urg; e[4] = (float)tier[i];
+    }
+    return m;
+}
+
 // 镜头跟随要的朝向（世界 xz，单位向量 × 1000）：瞄准拖拽 > 移动摇杆；由 dm_cam_remap_stick 记下，nvn_mtl.m cam_build 每帧取
 // Heading the camera follow wants (world xz, unit vector * 1000): aim drag > move stick; recorded by dm_cam_remap_stick, read every frame by nvn_mtl.m cam_build
 static _Atomic int g_want_x1000, g_want_z1000, g_want_on;

@@ -42,6 +42,9 @@ static int unit_rank(uint64_t unit, uint32_t *cls, uint8_t *flags) {
     if (!read_live(unit + 0x10, &data, 8) || !read_live(data + 0x1a, flags, 1)) return -1;
     return (*flags & (TF_SUPERUNIQUE | TF_CHAMPION | TF_UNIQUE)) ? 1 : 0;
 }
+// 越肩镜头的怪物指示（diag.c cam_threats_tick）用同一套档位：0 普通 / 1 精英 / 2 Boss，不是怪 -1
+// The over-the-shoulder camera's monster indicators (diag.c cam_threats_tick) use the same tiers: 0 normal / 1 elite / 2 Boss, -1 when not a monster
+int dm_target_rank(uint64_t unit) { uint32_t cls = 0; uint8_t flags = 0; return unit_rank(unit, &cls, &flags); }
 
 static FILE *g_log; static unsigned g_nlog;
 static void target_rank_obs(const uint64_t *regs) {

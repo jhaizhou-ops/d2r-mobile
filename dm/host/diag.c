@@ -606,6 +606,7 @@ void inflate_bench_maybe(void) {
 // 5 unit tables (128 buckets, next=+0x158) + global seed G+0x1a8, merged in stable ascending (type, id) order into each cell's FNV-1a 64. Unreadable pointers follow the ground-truth Reader semantics (failed read = None).
 // One JSON line per tick (fields in the same order and with the same separators as swtick.py's json.dumps); each tick number is taken only once, a gap reports a failure; exits normally once DM_TICKS_N ticks are recorded. When off, no callback is attached to the observation gate.
 static int tk_rd(uint64_t a, void *buf, size_t n);
+static void cam_threats_tick(uint64_t G, uint64_t pl);
 static _Atomic uint64_t g_player_path;   // 本地玩家的路径头（状态泵每拍更新） | path head of the local player (updated by the state pump every tick)
 // 本地玩家的逻辑位置（16.16 定点，格）：给图形层的连拍逐帧记一份，好和画面位移对照。读不到返回 0
 // Logical position of the local player (16.16 fixed point, tiles): the graphics layer's burst capture records one per frame so it can be compared with on-screen displacement. Returns 0 when it cannot be read
@@ -1009,6 +1010,7 @@ static void hud_tick(uint64_t G) {        // 每拍：受控玩家等级 / 本�
     { void dm_cloudmerge_srv_tick(uint8_t *, uint64_t, uint64_t); if (main) DM_PROF(1, "s.cloudmerge", dm_cloudmerge_srv_tick((uint8_t *)main->base, G, player)); }   // iCloud 收件箱局内并回（dm_cloudmerge.c）；不在局内 player 为 0   // 百宝囊收 / 放、存放的系统提示（dm_pouch.c）；不在局内 player 为 0   // 编年史仓库存取（dm_vault.c）；同上 | iCloud inbox in-game merge (dm_cloudmerge.c); player is 0 when not in game   // System notices for pouch take / put and deposit (dm_pouch.c); player is 0 when not in game   // Chronicle stash take / store (dm_vault.c); same as above
     if (main && player) DM_PROF(1, "s.kills", dm_kills_tick(G, player, (uint8_t *)main->base)); dm_ipf_frame(1);   // 刷怪积分牌（dm_kills.c）：在首领连战之后，连战本关的首领它已记好 id | Kill board (dm_kills.c): runs after boss rush, which has already recorded the id of the boss of the current boss rush stage
     cube_diag_tick(G, player);   // 合成读数 | Transmute readout
+    cam_threats_tick(G, player);
     if (main && player) seek_tp_step(G, player, main);
     if (main && h.valid) h.quest_unread = *(volatile uint8_t *)(main->base + 0x2d5ff58) != 0;   // 任务提示：收到任务更新包时游戏置 1（0x306cfc），原版只在点 HUD 任务提示按钮时清（0xbbe6ec） | Quest hint: the game sets it to 1 when a quest update packet arrives (0x306cfc); the original game only clears it when the HUD quest hint button is tapped (0xbbe6ec)
     dm_hud_info ha = h, hb = g_hud; ha.x = ha.y = hb.x = hb.y = 0;   // 坐标每步都变，不算「变化」（否则走几步就把 200 行记满） | Coordinates change on every step and do not count as a "change" (otherwise a few steps would fill up the 200 lines)
@@ -1204,6 +1206,29 @@ static void cam_c2s(uint64_t G, uint64_t pl, const uint8_t *b, uint32_t n) {
     } else return;
     uint64_t pp = 0; uint32_t pxy[2]; if (!tk_rd(pl + 0x38, &pp, 8) || !pp || !tk_rd(pp, pxy, 8)) return;
     dm_cam_attack(tx - pxy[0] / 65536.0f, ty - pxy[1] / 65536.0f);
+}
+// 越肩镜头的怪物指示（dm_cam.c dm_cam_threats）：透视画面只看得见前方，怪从画面外很快贴上脸（维护者试玩）。每拍从服务端怪物表取玩家
+// DM_CAM_THREAT_RANGE（缺省 30）格内活着的怪（模式不是 0 死亡中 / 12 已死），去掉佣兵（类号 271 / 338 / 359 / 560 / 561），带上档位交给镜头；城里不取。
+// 召唤物（骷髅、魔像等）目前也会算进去
+// Monster indicators of the over-the-shoulder camera (dm_cam.c dm_cam_threats): the perspective picture only shows what is ahead, and monsters reach the
+// character's face from outside the picture fast (the maintainer's play test). Every tick, take the living monsters (mode neither 0 dying nor 12 dead)
+// within DM_CAM_THREAT_RANGE (default 30) cells of the player from the server monster table, drop mercenaries (classes 271 / 338 / 359 / 560 / 561), and
+// hand them with their tier to the camera; nothing in town. Summons (skeletons, golems and so on) currently count too
+static void cam_threats_tick(uint64_t G, uint64_t pl) {
+    int dm_cam_mode(void); void dm_cam_set_threats(const float *xy, const int *tier, int n); int dm_target_rank(uint64_t unit);
+    if (dm_cam_mode() != 1 || !pl) return;
+    static float range = -1; if (range < 0) { const char *e = getenv("DM_CAM_THREAT_RANGE"); range = e ? (float)atof(e) : 30; }
+    dm_hud_info h; dm_hud_get(&h); if (h.valid && dm_hud_area_is_town(h.area)) { dm_cam_set_threats(NULL, NULL, 0); return; }
+    uint64_t pp = 0; uint32_t pxy[2]; if (!tk_rd(pl + 0x38, &pp, 8) || !pp || !tk_rd(pp, pxy, 8)) return;
+    float px = pxy[0] / 65536.0f, py = pxy[1] / 65536.0f, xy[64]; int tier[32], n = 0; uint64_t u = 0;
+    for (int bk = 0; bk < 128 && n < 32; bk++) if (tk_rd(G + 0x2230 + 1 * 0x400 + 8 * bk, &u, 8)) for (int k = 0; u && k < 4096 && n < 32; k++) {
+        uint32_t cls = 0, mode = 0, mxy[2]; uint64_t tp = 0;
+        if (tk_rd(u + 4, &cls, 4) && tk_rd(u + 0xC, &mode, 4) && mode != 0 && mode != 12 && cls != 271 && cls != 338 && cls != 359 && cls != 560 && cls != 561
+            && tk_rd(u + 0x38, &tp, 8) && tp && tk_rd(tp, mxy, 8)) {
+            float mx = mxy[0] / 65536.0f, my = mxy[1] / 65536.0f, dx = mx - px, dy = my - py;
+            if (dx * dx + dy * dy <= range * range) { int r = dm_target_rank(u); xy[2 * n] = mx; xy[2 * n + 1] = my; tier[n++] = r < 0 ? 0 : r; } }
+        if (!tk_rd(u + 0x158, &u, 8)) break; }
+    dm_cam_set_threats(xy, tier, n);
 }
 static void c2s_obs(const uint64_t *regs) {
     uint32_t tick = 0, uid = 0, len = (uint32_t)regs[3]; int hu = 0;
