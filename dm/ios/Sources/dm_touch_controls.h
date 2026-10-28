@@ -165,10 +165,12 @@ void dm_tc_resize(dm_tc_state *state, float width, float height);
 void dm_tc_enable_targets(dm_tc_state *state, uint32_t mask);
 /* 导航模式（面板 / 对话 / 前端页开着）下可用的控件：右侧五个虚拟手柄圆钮（确认 / 返回 / 操作 / 绑定 / 下一页 = A B X Y R）。
    底栏十字位置的「关闭」不再给：面板的关闭入口只留一个（外框右上角的关闭按钮；圆钮还在时另有「返回」）。
-   pad = 0：五个圆钮也不给（局内手指直接点界面接上之后用，开关 DM_TOUCH_NAV_PAD=0，缺省 1）。两个前端共用这一处，不各写各的。
+   pad = 0：五个圆钮也不给。这是缺省——局内手指直接点界面已接上（点按 / 双击 / 拖放 / 点页签 / 面板外点按），各前端只在 DM_TOUCH_NAV_PAD=1 时（调试用）给 pad = 1。两个前端共用这一处，不各写各的。
    Widgets available in navigation mode (a panel / dialog / front-end page is open): the five virtual controller round buttons on the right (confirm / back / action / bind / next page = A B X Y R).
       The "close" at the bottom bar's cross position is no longer offered: only one close entry for panels remains (the close button at the top-right corner of the frame; while the round buttons are present there is also "back").
-      pad = 0: the five round buttons are not offered either (used once in-run fingers tapping the UI directly is hooked up; switch DM_TOUCH_NAV_PAD=0, default 1). Both front ends share this one place and do not each write their own. */
+      pad = 0: the five round buttons are not offered either. This is the default -- fingers tapping the UI directly are hooked up in a run (tap / double-tap /
+      drag / tab tap / tap outside the panel), and the front ends pass pad = 1 only with DM_TOUCH_NAV_PAD=1 (for debugging). Both front ends share this one place
+      and do not each write their own. */
 static inline uint32_t dm_tc_nav_mask(int pad) { return pad ? ((1u<<DM_TC_MAIN)|(1u<<DM_TC_SKILL1)|(1u<<DM_TC_SKILL2)|(1u<<DM_TC_SKILL3)|(1u<<DM_TC_SKILL4)) : 0; }
 /* 模式变化释放全部手势；导航模式只按键，不启用技能拖拽和地图取消区。 | A mode change releases all gestures; navigation mode only presses keys and does not enable skill dragging or the map cancel area. */
 void dm_tc_set_navigation_mode(dm_tc_state *state, int navigation_mode);

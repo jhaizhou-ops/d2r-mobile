@@ -697,9 +697,13 @@ static int bd_skill_walk(uint64_t w, uint64_t xy, int dep) {
     return 0;
 }
 // 属性页的四个「+」（CharacterStatsPanel > LevelUpInfo > Strength / Dex / Vitality / EnergyPointButton）：点一下游戏当场加 1 点、不可撤销。
-// 「先选中、再确认」：技能图标与这四个「+」的点按只移光标（选中、出说明），加点由手机层的确认按钮触发。第 62 位 = 命中的是属性「+」。
+// 「先选中、再确认」：技能图标与这四个「+」点一下只移光标（选中、出说明），再点同一个才加点（属性当场加 1，技能稍后由 dm_skill_add_selected 加）；
+// 按住「+」不放 = 连续加点。前端各自接（Android touch_android.c、iOS front_ios.m）；面板态的五个圆钮缺省不出（DM_TOUCH_NAV_PAD），没有单独的确认钮。第 62 位 = 命中的是属性「+」。
 // The four "+" on the attributes page (CharacterStatsPanel > LevelUpInfo > Strength / Dex / Vitality / EnergyPointButton): one tap and the game adds 1 point on the spot, irreversibly.
-// "Select first, then confirm": taps on skill icons and these four "+" only move the cursor (select, show the tooltip), and spending the point is triggered by the phone layer's confirm button. Bit 62 = the hit is an attribute "+".
+// "Select first, then confirm": one tap on a skill icon or one of these four "+" only moves the cursor (select, show the tooltip), and tapping the same one again
+// spends the point (attributes add 1 on the spot, skills shortly after through dm_skill_add_selected); holding a "+" spends continuously. Each front end wires
+// this (Android touch_android.c, iOS front_ios.m); the five round buttons of the panel state are off by default (DM_TOUCH_NAV_PAD), so there is no separate
+// confirm button. Bit 62 = the hit is an attribute "+".
 static _Atomic uint32_t g_bd_hit_id;   // 最近一次命中的加点类按钮是哪一个（g_bd_hit_ref = 它的控件，主线程写） | Which point-allocation button was hit most recently (g_bd_hit_ref = its widget, written by the main thread)
 uint32_t dm_ui_hit_id(void) { return atomic_load(&g_bd_hit_id); }
 static int bd_stat_walk(uint64_t w, uint64_t xy, int dep) {
@@ -1652,18 +1656,27 @@ static uint64_t ui_find(uint64_t w, const char *name, int dep);
 // ---------- 技能绑定的触摸流程 ----------
 // 原版手柄流程：技能树（SkillsTreePanel）里光标停在一个技能上按 Y → 弹「重新绑定技能」框（ButtonBindingModal，两排六格 A B Y X R ZR，第二排 = 按住 ZL 的那组）；
 // 在框里「直接按要绑的那个键」就绑上并关框（不是移光标选格：按方向键没反应，按 A 即绑到 A 位）。
-// 触摸流程把顺序反过来——先定位（点空技能位的十字 / 长按技能钮），再选技能：
-//   1 开技能树：按 +（功能页）后看 SkillsTreePanel 开没开，没开就按 R 翻页，直到它开（最多 8 次）；
-//   2 等玩家点技能：前端把这期间的点按改成「手柄光标走到触点 + 按 Y」；看到 ButtonBindingModal 开了进下一步；玩家自己关了技能树 = 取消；
-//   3 框开稳后按目标键（第二组带 ZL），等框关；再按 B 关功能页回到游戏。
+// 触摸有两个入口（Android touch_android.c、iOS front_ios.m 各自接，做法相同）：
+//   甲 先选位：点空技能位的十字（dm_ui_bind_begin），宿主替玩家走下面三步：
+//     1 开技能树：按 +（功能页）后看 SkillsTreePanel 开没开，没开就按 R 翻页，直到它开（最多 8 次）；
+//     2 等玩家点技能：前端把这期间的点按改成「手柄光标走到触点 + 按 Y」；看到 ButtonBindingModal 开了进下一步；玩家自己关了技能树 = 取消；
+//     3 框开稳后按目标键（第二组带 ZL），等框关；再按 B 关功能页回到游戏。
+//   乙 先选技能（已有技能的键只能这样换）：技能树里按住一个技能图标不动满 0.5 秒，前端把光标移到图标上按 Y，游戏弹自己的绑定框；
+//     玩家点框里的格子 = 替玩家按那一格的键（ui_bind_modal_tap），绑完不关功能页（g_bd_stay）。
+// 按住局内的技能钮不是换绑，是持续施放（早先的「长按技能钮换绑」已去掉）。
 // 面板开没开看控件树（名字 + 可见位），每 6 帧看一次；每步有帧数上限，超时放弃并打日志。
 // ---------- Touch flow for skill binding ----------
 // The original game's controller flow: in the skill tree (SkillsTreePanel), with the cursor on a skill, press Y → the 「重新绑定技能」(Press button to rebind skill) box pops up (ButtonBindingModal, two rows of six cells A B Y X R ZR, second row = the set with ZL held);
 // in the box, "directly pressing the key to bind" binds it and closes the box (it is not moving a cursor to pick a cell: the D-pad does nothing, and pressing A binds to the A slot).
-// The touch flow reverses the order - pick the slot first (tap the cross on an empty skill slot / long-press a skill button), then pick the skill:
-//   1 Open the skill tree: after pressing + (function page), check whether SkillsTreePanel is open; if not, press R to flip pages until it is (at most 8 times);
-//   2 Wait for the player to tap a skill: the front end turns taps during this time into "move the controller cursor to the touch point + press Y"; once ButtonBindingModal is seen open, go to the next step; the player closing the skill tree themselves = cancel;
-//   3 Once the box has opened and settled, press the target key (with ZL for the second set) and wait for the box to close; then press B to close the function page and return to the game.
+// Touch has two entry points (each front end wires them, the same way: Android touch_android.c, iOS front_ios.m):
+//   A, slot first: tap the cross on an empty skill slot (dm_ui_bind_begin), and the host walks these three steps for the player:
+//     1 Open the skill tree: after pressing + (function page), check whether SkillsTreePanel is open; if not, press R to flip pages until it is (at most 8 times);
+//     2 Wait for the player to tap a skill: the front end turns taps during this time into "move the controller cursor to the touch point + press Y"; once ButtonBindingModal is seen open, go to the next step; the player closing the skill tree themselves = cancel;
+//     3 Once the box has opened and settled, press the target key (with ZL for the second set) and wait for the box to close; then press B to close the function page and return to the game.
+//   B, skill first (the only way to rebind a key that already has a skill): in the skill tree, hold a skill icon still for 0.5 s; the front end moves the
+//     cursor onto the icon and presses Y, and the game pops its own binding box; tapping a cell in it presses that cell's key for the player
+//     (ui_bind_modal_tap), and the function page stays open afterwards (g_bd_stay).
+// Holding an in-game skill button does not rebind, it casts continuously (the earlier "long-press a skill button to rebind" was removed).
 // Whether a panel is open is read from the widget tree (name + visible flag), checked every 6 frames; each step has a frame limit, and on timeout it gives up and logs.
 static _Atomic uint64_t g_bd_key; static _Atomic int g_bd_state;   // 0 无 1 开技能树 5 找页 2 等点技能 3 框里按键 4 关面板 | 0 none 1 open skill tree 5 find page 2 wait for skill tap 3 press key in box 4 close panel
 static _Atomic int g_bd_stay;
