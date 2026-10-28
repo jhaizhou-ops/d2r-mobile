@@ -42,6 +42,36 @@ The 9 GB of game data does not fit in the app, so it goes into the app's Caches 
 启动时加环境变量 `DM_TV_SHOT_SECONDS=<秒>` 会把到点后的下一帧存成 `Library/Caches/D2R/frame.png`（诊断用）。
 Launching with `DM_TV_SHOT_SECONDS=<seconds>` saves the next presented frame after that time to `Library/Caches/D2R/frame.png` (diagnostics).
 
+## 内存优化 / Memory optimization
+
+两轮实测、回城/重开失败与脱敏日志见[观察记录](../../docs/qa-tvos-memory.zh-CN.md)。仍有场景切换退出，尚未完成稳定性验收。
+
+See the [observation report](../../docs/qa-tvos-memory.md) for both rounds, transition failures and sanitized log evidence. Scene-transition exits remain unresolved; stability acceptance is incomplete.
+
+游戏销毁纹理时同步撤下宿主描述符缓存中的所有别名，避免旧场景资源一直活到描述符槽再次注册。纹理与视图仍保留到已编码 GPU 工作的 fence 完成；一键重开与洞穴回城需要作为独立的场景切换用例验证。GPU 生命周期回归：`make -C dm/gfx/tests t_tex_finalize && MTL_DEBUG_LAYER=1 dm/gfx/tests/t_tex_finalize`。
+
+When the game finalizes a texture, retire all host descriptor-cache aliases instead of retaining old scene resources until those descriptor slots are registered again. Textures/views remain alive until the encoded GPU work's fence completes. Quick restart and cave-to-town transitions require separate device regression checks. GPU lifetime regression: `make -C dm/gfx/tests t_tex_finalize && MTL_DEBUG_LAYER=1 dm/gfx/tests/t_tex_finalize`.
+
+tvOS 默认保留从补充包拷入 BC3 纹理数组的 ASTC 压缩块，避免先展开为 RGBA8。只对首次写入、格式和块边界兼容的 2D/数组启用；后续若需要普通 BC/缓冲写入，会先逐级逐层保留已有像素，再退回 RGBA 路径。原始资源和补充包无需重新生成。`DM_TV_ASTC_ARRAYS=0` 可关闭此项作对照。
+
+tvOS preserves ASTC blocks copied from the Legacy Device Pack into BC3 texture arrays instead of expanding them to RGBA8. This applies only to the first write into a compatible 2D/array texture with valid block boundaries. A later incompatible/ordinary BC or buffer write preserves existing mip/slice contents before falling back to RGBA. Game archives and the pack need no regeneration. Use `DM_TV_ASTC_ARRAYS=0` for the baseline path.
+
+只读上传缓存采用均衡回收：正常最多每 3 秒扫描一次，至少 600 帧未使用才回收；进程余量低于 160 MiB 进入压力模式，恢复到 224 MiB 才退出。每批通常目标 16 MiB、最多 32 MiB，冷数据不足 4 MiB 时跳过，减少视图缓存失效和重新上传。余量低于 96 MiB 时保留紧急路径：最多每秒扫描、120 帧冷却、每批目标最多 64 MiB。软预算仍为 384 MiB；GPU 写过的贴图不回收，GPU fence 完成后才释放，单张贴图不可分割。活跃资源可能超过预算，因此这不是内存上限保证。`DM_TV_TEXTURE_CACHE_MB=0` 关闭回收，正整数调整软预算。
+
+The read-only upload cache uses balanced eviction: normal scans are at least 3 seconds apart and protect textures used within 600 frames. Pressure mode starts below 160 MiB of process headroom and ends at 224 MiB. Normal batches target 16 MiB, capped at 32 MiB; less than 4 MiB of cold data is left alone to avoid cache invalidation and re-upload churn. Below 96 MiB, the emergency path scans at most once per second, protects the last 120 frames and targets at most 64 MiB per batch. The soft cache budget remains 384 MiB. GPU-written textures are protected; releases wait for the GPU fence, and a texture is indivisible. Active resources may exceed the budget, so this is not a guaranteed cap. Set `DM_TV_TEXTURE_CACHE_MB=0` to disable eviction or a positive integer to adjust the budget.
+
+回归时启用 `DM_MEM_STAT_ALL=1 DM_RES_CENSUS=1 DM_RES_CHECK=1`，检查日志中的内存、数组分配/回退、缓存回收及驻留错误；至少覆盖选角、进局、切图和普通 BC 资源加载。CPU 边界测试：`make -C dm/host/tests build/t_pkg_cache && dm/host/tests/build/t_pkg_cache`。CPU 测试不能代替真机长期游玩与画面核对。
+
+For regression runs, enable `DM_MEM_STAT_ALL=1 DM_RES_CENSUS=1 DM_RES_CHECK=1` and inspect memory, array allocation/fallback, cache eviction and residency errors. Cover character selection, entering a game, area transitions and ordinary BC loads. CPU boundary tests: `make -C dm/host/tests build/t_pkg_cache && dm/host/tests/build/t_pkg_cache`. CPU tests do not replace device soak tests and visual comparison.
+
+性能测试与日常游玩请取消 `DM_RES_CHECK` 和 `DM_RES_CENSUS`：前者在纹理绑定热路径逐次加锁校验，不能把此时的帧率当成正常性能。需要详细内存记录时可单独用 `DM_MEM_STAT_ALL=1`，仍为每 300 帧一条。
+
+Unset `DM_RES_CHECK` and `DM_RES_CENSUS` for performance tests and normal play: residency checks lock on the texture-binding hot path, so those runs are not representative of normal frame rates. `DM_MEM_STAT_ALL=1` can be used alone for detailed memory logging, still once every 300 frames.
+
+排查瞬时峰值可临时设置 `DM_TV_MEM_TRACE=1`：每 100 ms 将进程占用、内核记录的峰值、进程余量和 GPU 分配写入 `Caches/D2R/memory-trace.tsv`，约记录 30 分钟（最多 18000 次采样），下次启用时覆盖。退出后应先取回此文件；100 ms 采样仍可能漏掉更短的峰值。与 `DM_RES_CENSUS=1` 一起用时，还会打印大纹理格式分组。本开关默认关闭，正常性能测试不要开启。
+
+For transient peaks, temporarily set `DM_TV_MEM_TRACE=1`: every 100 ms it writes footprint, the kernel-recorded peak, process headroom and GPU allocation to `Caches/D2R/memory-trace.tsv` for about 30 minutes (at most 18000 samples), overwriting on the next enabled launch. Retrieve it after an exit before relaunching; sampling can still miss shorter peaks. With `DM_RES_CENSUS=1`, large texture format groups are also logged. This diagnostic is off by default; leave it unset for normal performance tests.
+
 ## 还没做 / Not done yet
 
 - 已进入游戏并操作设置，但长时间稳定性、手柄全键位、切后台存盘、音频打断、手柄断线重连仍未完成验证。
