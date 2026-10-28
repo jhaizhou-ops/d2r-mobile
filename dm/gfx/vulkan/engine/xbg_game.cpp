@@ -2487,7 +2487,7 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         // 每帧一次跟随：宿主给的朝向（瞄准拖拽 > 移动摇杆）优先，其次人物位移方向；越肩档把两套矩阵发布给输入换算，第一人称不换算输入
         // Follow once per frame: the host's heading (aim drag > move stick) first, then the character's displacement; the over-the-shoulder mode
         // publishes both matrix sets for input conversion, first person does not convert input
-        float px,pz,wx=0,wz=0;xbg_cam_ground(p,&px,&pz);const int want=dm_cam_want_dir?dm_cam_want_dir(&wx,&wz):0;
+        float px,py,pz,wx=0,wz=0;xbg_cam_ground(p,&px,&py,&pz);const int want=dm_cam_want_dir?dm_cam_want_dir(&wx,&wz):0;
         // 体感转向（宿主 dm_cam.c）：每帧取走一次累计的转动；最近一秒内转过就让跟随不动朝向，转动在跟随之后加上
         // Sensor steering (host dm_cam.c): take the accumulated turn once per frame; with a turn within the last second the follow leaves the heading alone,
         // and the turn is added after the follow

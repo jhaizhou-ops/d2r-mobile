@@ -3069,7 +3069,7 @@ static int cam_mode(void) {   // 档可在游戏中切换（自定义页）：�
         MLOG("镜头实验：档 %d dist=%g h=%g look=%g lookh=%g fov=%g tau=%g reach=%g", g_cam.mode, q->dist, q->h, q->look, q->lookh, q->fov, q->tau, q->reach); } }
     return g_cam.mode; }
 static void cam_build(const uint8_t *src, uint8_t *dst) {   // dst 已是 src 的拷贝 | dst is already a copy of src
-    xbg_cam_state *st = &g_cam.st; float px, pz, wx = 0, wz = 0; xbg_cam_ground(src, &px, &pz); const int want = dm_cam_want_dir(&wx, &wz);
+    xbg_cam_state *st = &g_cam.st; float px, py, pz, wx = 0, wz = 0; xbg_cam_ground(src, &px, &py, &pz); const int want = dm_cam_want_dir(&wx, &wz);
     const uint64_t f = atomic_load(&g_cur_frame); float turn = 0;
     if (f != st->frame) { turn = dm_cam_take_turn(); st->hold = dm_cam_turn_age() < 1.0; }   // 体感 / 按钮转向：每帧取一次；一秒内转过就让跟随不动朝向 | turns: taken once per frame; a turn within a second holds the follow
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); const double t0 = st->t;

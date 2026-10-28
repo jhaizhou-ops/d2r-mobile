@@ -18,12 +18,13 @@ static void get(const uint8_t *block,size_t at,float *m,size_t n){memcpy(m,block
 static void xf(const float *M,const float v[4],float o[4]){for(int j=0;j<4;j++)o[j]=v[0]*M[j]+v[1]*M[4+j]+v[2]*M[8+j]+v[3]*M[12+j];}
 static bool identity(const float *a,const float *b,double eps){float m[16];xbg_cam_m4_mul(a,b,m);for(int i=0;i<16;i++)if(!near(m[i],i%5==0?1:0,eps))return false;return true;}
 
-// 原版主相机块：视图（右、上、后三列），镜头在人物 (px, pz) 沿「后」方向 550 处，正交投影 40 × 22.5（16:9）、反向 Z
-// The original main camera block: view (right, up, back columns), camera 550 along "back" from the character (px, pz), orthographic 40 x 22.5 (16:9), reversed Z
-static void original(uint8_t *block,float px,float pz){
+// 原版主相机块：视图（右、上、后三列），镜头在人物 (px, py, pz) 沿「后」方向 884.03 处（原版的固定距离），正交投影 40 × 22.5（16:9）、反向 Z
+// The original main camera block: view (right, up, back columns), camera 884.03 along "back" from the character (px, py, pz) (the original's fixed
+// distance), orthographic 40 x 22.5 (16:9), reversed Z
+static void original(uint8_t *block,float px,float pz,float py=0){
     memset(block,0,XBG_CAM_BLOCK);
     const float r[3]={0.70711f,0,-0.70711f},u[3]={-0.35355f,0.86603f,-0.35355f},b[3]={0.61237f,0.5f,0.61237f};
-    const float eye[3]={px+b[0]*550,b[1]*550,pz+b[2]*550};
+    const float eye[3]={px+b[0]*884.03f,py+b[1]*884.03f,pz+b[2]*884.03f};
     float V[16]={r[0],u[0],b[0],0, r[1],u[1],b[1],0, r[2],u[2],b[2],0,
         -(eye[0]*r[0]+eye[1]*r[1]+eye[2]*r[2]),-(eye[0]*u[0]+eye[1]*u[1]+eye[2]*u[2]),-(eye[0]*b[0]+eye[1]*b[1]+eye[2]*b[2]),1};
     float iV[16];xbg_cam_m4_inv(V,iV);
@@ -52,9 +53,11 @@ int main(){
     {uint8_t bad[XBG_CAM_BLOCK];memcpy(bad,src,sizeof bad);float x=0.69f;memcpy(bad+80,&x,4);CHECK(!xbg_cam_sig(bad,XBG_CAM_BLOCK,XBG_CAM_BLOCK));}
     {uint8_t persp[XBG_CAM_BLOCK];memcpy(persp,src,sizeof persp);float m1=-1;memcpy(persp+208+44,&m1,4);CHECK(!xbg_cam_sig(persp,XBG_CAM_BLOCK,XBG_CAM_BLOCK));}
 
-    // 人物落地点 = 原版视线与地面的交点
-    // The character's ground point = where the original sight line meets the ground
-    {float px,pz;xbg_cam_ground(src,&px,&pz);CHECK(near(px,100,1e-2) && near(pz,50,1e-2));}
+    // 人物位置 = 原版镜头沿视线往前固定距离；人物在低处（y = -12）时高度跟着降、水平位置不偏
+    // The character's position = the fixed distance ahead of the original camera along the sight line; with the character lower (y = -12) the height
+    // follows and the horizontal position does not drift
+    {float px,py,pz;xbg_cam_ground(src,&px,&py,&pz);CHECK(near(px,100,1e-2) && near(py,0,1e-2) && near(pz,50,1e-2));
+     uint8_t low[XBG_CAM_BLOCK];original(low,100,50,-12);xbg_cam_ground(low,&px,&py,&pz);CHECK(near(px,100,1e-2) && near(py,-12,1e-2) && near(pz,50,1e-2));}
 
     // 首帧：朝向重置为原版视线的水平方向；同一帧再调不再更新
     // First frame: the heading resets to the horizontal direction of the original sight line; another call in the same frame does not update
@@ -101,8 +104,15 @@ int main(){
     // First person: the eye is fwd ahead of the character at height eye, looking down by pitch
     {xbg_cam_state s;xbg_cam_init(&s);xbg_cam_params p2=xbg_cam_default_params(2);original(src,100,50);xbg_cam_follow(&s,100,50,1,1.0,0,0,0,p2.tau);
      memcpy(dst,src,sizeof dst);xbg_cam_build(&s,src,dst,2,&p2,vp,ivp);
-     CHECK(near(s.eye[0],100-0.70711*2.2,2e-2) && near(s.eye[1],6,1e-5) && near(s.eye[2],50-0.70711*2.2,2e-2));
-     CHECK(near(asin(-s.fwd[1])*180/3.14159265358979,8,1e-3) && p2.fov==75);}
+     CHECK(near(s.eye[0],100-0.70711*2.2,2e-2) && near(s.eye[1],6,1e-2) && near(s.eye[2],50-0.70711*2.2,2e-2));
+     CHECK(near(asin(-s.fwd[1])*180/3.14159265358979,8,1e-3) && p2.fov==75);
+     // 人物在低处 12：眼睛跟着低 12（以前停在 y = 6，人像浮在空中）；越肩档镜头同样整体低 12
+     // The character 12 lower: the eye is 12 lower too (it used to stay at y = 6, as if floating); the over-the-shoulder camera is 12 lower as a whole too
+     uint8_t low[XBG_CAM_BLOCK],d2[XBG_CAM_BLOCK];original(low,100,50,-12);xbg_cam_state s2=s;memcpy(d2,low,sizeof d2);xbg_cam_build(&s2,low,d2,2,&p2,vp,ivp);
+     CHECK(near(s2.eye[1],-6,1e-2) && near(s2.eye[0],s.eye[0],2e-2) && near(s2.eye[2],s.eye[2],2e-2) && near(s2.fwd[1],s.fwd[1],1e-5));
+     xbg_cam_params p1=xbg_cam_default_params(1);xbg_cam_state a=s,b=s;a.dcur=b.dcur=0;
+     memcpy(d2,src,sizeof d2);xbg_cam_build(&a,src,d2,1,&p1,vp,ivp);memcpy(d2,low,sizeof d2);xbg_cam_build(&b,low,d2,1,&p1,vp,ivp);
+     CHECK(near(b.eye[1],a.eye[1]-12,1e-2) && near(b.eye[0],a.eye[0],2e-2) && near(b.fwd[1],a.fwd[1],1e-5));}
 
     // 片元槽 10 的场景常量：认签名，写镜头位置、视线与线性深度起点；镜头还没建过就不动
     // Scene constants of fragment slot 10: the signature is recognised; camera position, sight line and linear depth origin are written; untouched before any camera was built

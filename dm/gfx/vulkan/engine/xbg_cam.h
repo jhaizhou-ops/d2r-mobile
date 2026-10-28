@@ -87,15 +87,22 @@ static inline int xbg_cam_m4_inv(const float *m, float *o) {
     return 1;
 }
 
-// 人物落地点：原版镜头总对准人物，逆视图（+144）第 3 行 = 视图 +z 的世界方向、第 4 行 = 镜头位置，视线落到地面 y = 0 处就是人物
-// The character's ground point: the original camera always aims at the character; in the inverse view (+144) row 3 = world direction of view +z
-// and row 4 = camera position, and where the sight line meets the ground y = 0 is the character
-static inline void xbg_cam_ground(const uint8_t *src, float *px, float *pz) {
+// 人物位置：原版镜头总对准人物，而且离人物的距离固定（XBG_CAM_ORIG_DIST，沿视线）。逆视图（+144）第 3 行 = 视图 +z 的世界方向、第 4 行 = 镜头位置，
+// 人物 = 镜头位置 − 距离 × 视图 +z。地面有高低：人物走下坡、从高处传送下来时原版镜头跟着降（iPhone 实测：镜头 y 从 442.0 平滑降到 430.1），
+// 所以不能按「视线落到 y = 0」算——那样人物在低处时水平位置偏、透视镜头也停在原来的高度，像浮在空中
+// The character's position: the original camera always aims at the character from a fixed distance (XBG_CAM_ORIG_DIST, along the sight line). In the
+// inverse view (+144) row 3 = world direction of view +z and row 4 = camera position, so character = camera position - distance * view +z. The ground has
+// heights: walking down a slope or teleporting down from a height, the original camera goes down with the character (measured on an iPhone: camera y
+// eased from 442.0 to 430.1), so "where the sight line meets y = 0" is wrong -- with the character lower, the horizontal position is off and the
+// perspective camera stays at the old height, as if floating
+// 884.03 = 平地（y = 0）上视线到地面的距离，营地两次进局不同位置都是这个数 | 884.03 = the sight-line distance to the ground on flat ground (y = 0), the same at two different spots in camp
+#define XBG_CAM_ORIG_DIST 884.03f
+static inline void xbg_cam_ground(const uint8_t *src, float *px, float *py, float *pz) {
     float iv[16];
     memcpy(iv, src + 144, sizeof iv);
-    float bx = iv[8], by = iv[9], bz = iv[10], cx = iv[12], cy = iv[13], cz = iv[14], t = by != 0 ? cy / by : 0;
-    *px = cx - t * bx;
-    *pz = cz - t * bz;
+    *px = iv[12] - XBG_CAM_ORIG_DIST * iv[8];
+    *py = iv[13] - XBG_CAM_ORIG_DIST * iv[9];
+    *pz = iv[14] - XBG_CAM_ORIG_DIST * iv[10];
 }
 
 // 镜头跟随，每帧一次（frame 变了才走，返回 1）。want = 宿主给的朝向（瞄准拖拽 > 移动摇杆，已是世界方向），没有就取人物位移方向，都没有就保持。
@@ -158,9 +165,9 @@ static inline float xbg_cam_pull(xbg_cam_state *s, float dist, float clear, doub
 // +400 inverse view-projection and +464 the previous frame's (modified) view-projection for this frame's character position and heading, and switch +592
 // depth reconstruction to the perspective branch. vp / ivp receive the new view-projection and its inverse, to publish for input conversion
 static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *dst, int mode, const xbg_cam_params *pp, float vp[16], float ivp[16]) {
-    float pr[16], px, pz;
+    float pr[16], px, py, pz;
     memcpy(pr, src + 208, sizeof pr);
-    xbg_cam_ground(src, &px, &pz);
+    xbg_cam_ground(src, &px, &py, &pz);
     float fx = s->fx, fz = s->fz, eye[3], at[3], fov = pp->fov;
     if (mode == 2) {
         // 俯仰 = 缺省下俯减去玩家拖的偏移，夹在下俯 60° 到上仰 10° 之间
@@ -168,8 +175,8 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
         const float deg = 3.14159265f / 180, p0 = pp->pitch * deg;
         s->tilt_lo = p0 - 60 * deg; s->tilt_hi = p0 + 10 * deg;
         float h = pp->eye, ah = pp->fwd, pitch = p0 - fminf(fmaxf(s->tilt, s->tilt_lo), s->tilt_hi);
-        eye[0] = px + fx * ah; eye[1] = h; eye[2] = pz + fz * ah;
-        at[0] = eye[0] + fx * cosf(pitch); at[1] = h - sinf(pitch); at[2] = eye[2] + fz * cosf(pitch);
+        eye[0] = px + fx * ah; eye[1] = py + h; eye[2] = pz + fz * ah;
+        at[0] = eye[0] + fx * cosf(pitch); at[1] = eye[1] - sinf(pitch); at[2] = eye[2] + fz * cosf(pitch);
     } else {
         // 避墙拉近时镜头往上升（「吊臂」）：镜头到看点高度的距离不变，水平距离变短高度就变高；贴着墙时差不多从头顶往下看，近似原版视角，
         // 不再贴在人背后（OnePlus 13 实测：背后一格就是墙时镜头落到离人 2、肩高，看着像贴在背上）
@@ -204,8 +211,8 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
         const float e = e0 - fminf(fmaxf(s->tilt, s->tilt_lo), s->tilt_hi);
         const float dwall = d;   // 转平了镜头会往后退：不退过避墙算出的距离，只降高度 | levelling out moves the camera back: not past the wall-avoidance distance, only lower
         d = fminf(R * cosf(e) - la, dwall); h = lh + R * sinf(e);
-        eye[0] = px - fx * d; eye[1] = h; eye[2] = pz - fz * d;
-        at[0] = px + fx * la; at[1] = lh; at[2] = pz + fz * la;
+        eye[0] = px - fx * d; eye[1] = py + h; eye[2] = pz - fz * d;
+        at[0] = px + fx * la; at[1] = py + lh; at[2] = pz + fz * la;
     }
     // 视图 +z = 朝后；右 = 上(0,1,0) × 后；上 = 后 × 右
     // View +z = backwards; right = up(0,1,0) x back; up = back x right
