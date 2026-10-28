@@ -1272,10 +1272,30 @@ static int merc_lock_hit(const char *hit) {   // 返回 1 = 这次命中的是�
     if ((l_ == 2 || (l_ >= 6 && l_ <= 10)) && !dm_rift_merc_unlocked()) { dm_rift_merc_locked_hint(); return 1; }
     return 0;
 }
+// 展开的腰带上排与装备位重叠；只在可入腰带物品的拖放中优先腰带。
+// Expanded belt rows overlap body slots. Prefer the belt only for a beltable item's drop.
+// 不改空手点击、装备拖放或原版收纳规则；只查已经命中的顶层面板内的可见子树。
+// Leave empty-hand taps, equipment drops and native storage rules alone; search only the selected panel's visible subtree.
+static uint64_t drop_belt_walk(uint64_t w, uint64_t xy, int dep) {
+    if (!w || dep > 14 || !*(uint8_t *)(w + 0x50)) return 0;
+    const char *name = *(const char **)(w + 8);
+    if (name && !strcmp(name, "Belt")) {
+        uint64_t fn = *(uint64_t *)(*(uint64_t *)w + 0x48);
+        return (((int (*)(uint64_t, uint64_t))fn)(w, xy) & 1) ? w : 0;
+    }
+    uint64_t ch = *(uint64_t *)(w + 0x58), n = *(uint64_t *)(w + 0x60);
+    if (!ch || n > 256) return 0;
+    for (uint64_t i = 0; i < n; i++) { uint64_t b = drop_belt_walk(*(uint64_t *)(ch + 8 * i), xy, dep + 1); if (b) return b; }
+    return 0;
+}
+static uint64_t drop_belt_overlap(uint64_t panel, int x, int y, int beltable, const char *hit) {
+    if (!beltable || !hit || strncmp(hit, "slot_", 5)) return 0;
+    return drop_belt_walk(panel, (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32), 0);
+}
 static int ui_drop_kind(module_t *m, uint64_t root, int x, int yl, int yf) {
     // 松手时落点一律按物品图的位置（手指上方那个抬起点 yl）判，不看手指点——背包格、装备位、腰带格、箱子、货架、黑网格、面板外都同一口径
     // On release the drop point is always judged by the item image position (the lifted point yl above the finger), not the finger point - inventory cells, equipment slots, belt cells, stash, shelf, black grid and outside the panel all use the same convention
-    (void)yf; atomic_store(&g_drop_bag, 0); int32_t vw = *(int32_t *)(m->base + 0x211da38), vh = *(int32_t *)(m->base + 0x211da3c);
+    atomic_store(&g_drop_bag, 0); int32_t vw = *(int32_t *)(m->base + 0x211da38), vh = *(int32_t *)(m->base + 0x211da3c);
     char hit[40]; int px = x, py = yl;
     int c = ui_classify(m, root, x, yl, hit, sizeof hit);
     if (c == 9) return 0;   // 模态框开着：落点一律算放回原处 | Modal open: every drop point counts as put back
@@ -1316,6 +1336,13 @@ static int ui_drop_kind(module_t *m, uint64_t root, int x, int yl, int yf) {
     if (c != 1) return c == 3 || (c == 0 && g_inside_owner[0] && !in_item_panel_rect(m, root, (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)yl << 32))) ? 3 : 0;
     if (belt_row_block(m, x, yl)) return 0;   // 进不了腰带的物品松手在腰带格上：放回原处 | An item that cannot go into the belt released on a belt cell: put back
     if (g_slot_panel && !strcmp(g_slot_panel, "VendorPanelLayout") && dm_shop_open()) return 7;   // 7 = 落在商人的货架上：松手时卖掉手上那件（前端调 dm_shop_sell_cursor；卖不掉的放回原处） | 7 = landed on the vendor's shelf: on release sell the held item (the front end calls dm_shop_sell_cursor; what cannot be sold is put back)
+    // 装备位先被遍历到时，不能把药水吸到装备槽心（日志里随后以栏位 7 尝试穿药水）。
+    // If traversal found a body slot first, do not snap the potion to its center (the log then attempts to equip the potion in body slot 7).
+    uint64_t belt = drop_belt_overlap(g_slot_panel ? ui_panel(root, g_slot_panel) : 0, x, yl, g_pick_beltable, hit);
+    if (belt) {
+        static uint64_t logged; uint64_t now = now_ns();
+        if (!logged || now - logged >= 1000000000ull) { logged = now; LOG("腰带拖放：%s 重叠 → Belt，图 (%d,%d)，手指 y=%d", hit, x, yl, yf); }
+        strlcpy(hit, "Belt", sizeof hit); dm_wref_set(&g_slot, belt); }
     if (merc_lock_hit(hit)) { atomic_store(&g_drop_loc, 0); return 0; }   // 松手在锁着的格上：放回原处（同上面腰带那行），不记栏位——不让松手收尾的兜底去给佣兵穿（服务端那道门本来也会拒，这里省掉那一趟） | Released on a locked cell: put back where it was (same as the belt line above), without recording a slot -- so that the release-finish fallback does not go and equip the mercenary (the server-side gate would reject it anyway; this saves that round trip)
     atomic_store(&g_drop_loc, dm_wref_get(&g_slot) && !strncmp(hit, "slot_", 5) ? (*(int32_t *)(dm_wref_get(&g_slot) + 0x5d8) | (*(uint32_t *)(dm_wref_get(&g_slot) + 0x5c8) == 1 ? 0x100 : 0)) : 0);   // 佣兵面板里的同名格（属主 +0x5c8 == 1）带上 0x100：兜底时走「给佣兵穿」，不能按玩家的栏位放（那会把东西穿到玩家身上） | A same-named cell in the mercenary panel (owner +0x5c8 == 1) carries 0x100: the fallback then goes through "equip the mercenary" and must not place by the player's slot (that would put the item on the player)
     if (dm_wref_get(&g_slot)) slot_center(dm_wref_get(&g_slot), &px, &py, vw, vh, strncmp(hit, "slot_", 5) != 0);   // 装备槽取槽心；背包类用图的位置（收进边界内） | Equipment slots take the slot center; inventory-type areas use the image position (pulled inside the bounds)

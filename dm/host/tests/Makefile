@@ -15,6 +15,7 @@ run: \
 	$(B)/t_altstack \
 	$(B)/t_audio \
 	$(B)/t_audio_spsc \
+	$(B)/t_belt_drop \
 	$(B)/t_cloudsync \
 	$(B)/t_condvar \
 	$(B)/t_condvar_old \
@@ -79,6 +80,7 @@ run: \
 	$(B)/t_fs 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	DM_ROMFS="$(DM_ROOT)/data/switch/3.3.94012/Update/RomFS" $(B)/t_romfs_validate
+	$(B)/t_belt_drop
 	$(B)/t_audio
 	$(B)/t_audio_spsc
 	$(B)/t_swkbd
@@ -202,3 +204,6 @@ $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+
+$(B)/t_belt_drop: t_belt_drop.c ../dm_cursor.c ../dm_cursor.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -Wl,-dead_strip -I.. -o $@ t_belt_drop.c
