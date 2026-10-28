@@ -132,6 +132,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     BOOL _padMode, _feMode;   // 手柄模式 / 前端页面：两者任一成立就藏触屏控件层 | Controller mode / front-end page: the touch controls layer is hidden if either holds
     UIView *_rsCover;   // 一键重开期间的黑屏（宿主 dm_cursor.c 经 g_dm_restart_cover_hook 开关）：盖在窗口最上层（整屏，含真全屏的留边），不露主菜单，吞掉这段时间的触点 | Black screen during one-tap restart (toggled by the host's dm_cursor.c via g_dm_restart_cover_hook): covers the top of the window (whole screen, including the true-fullscreen margins), does not reveal the main menu, and swallows touch points during this period
     int _navigation;
+    CALayer *_mhPtr;   // 镜头实验：小地图 / 全屏地图上人物朝向的指针（mapHeadingSync） | camera experiment: the facing pointer on the minimap / fullscreen map (mapHeadingSync)
     CALayer *_mgLabel[12], *_mgMark[12];   // 小地图任务终点：每个终点一个名牌 / 符号层 + 一个灰十字层（mapGoalSync） | Minimap quest goals: one nameplate / symbol layer + one grey cross layer per goal (mapGoalSync)
     NSMutableDictionary<NSString *,UIImage *> *_mgImg;
     uint64_t _modifierPublishEndNS,_modifierPublishEpoch;
@@ -424,8 +425,41 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     [CATransaction commit];
     static int lm=-1, ln=-1, lc; int m2=show ? mode : 0; if((m2!=lm || n!=ln) && lc<40) { lm=m2; ln=n; lc++; LOG("小地图终点：%s %d 个（地图 %d，每格 %.2f 像素 = %.2f 点）", show ? "画" : "不画", n, mode, cell, c); }
 }
+// 镜头实验（越肩 / 第一人称）：小地图与全屏地图上，人物十字外侧放一个指针，尖端朝镜头看的方向。指针取原版手柄表情轮盘的指针
+// （mapgoal/heading.png，tools/gen_map_goal_art.py 从游戏文件取：鎏金三角嵌宝石，本来就是从中心指向一个方向），不自己画形状。
+// 方向按原版斜视角换到地图上：世界 x 一格 = 地图 (1.6, 0.8)、世界 z 一格 = (−1.6, 0.8)（同 mapGoalSync）。圆心：小地图 = 小地图框正中（原版小地图
+// 跟着人物居中）；全屏地图 = 人物在原版画面上的位置（地图按原版画面画，dm_cam_heading 给）
+// Camera experiment (over-the-shoulder / first person): on the minimap and the fullscreen map, a pointer just outside the player cross, its tip towards where
+// the camera looks. The pointer is the original controller emote wheel's (mapgoal/heading.png, taken from the game files by tools/gen_map_goal_art.py: a
+// gilded, jewelled triangle that already points outward from a centre); no shape of our own. The direction maps onto the map by the original isometric
+// view: one world x step = map (1.6, 0.8), one world z step = (-1.6, 0.8) (same as mapGoalSync). Centre: minimap = the middle of the minimap frame (the
+// original minimap keeps the character centred); fullscreen map = the character on the original picture (the map is drawn by the original picture;
+// dm_cam_heading gives it)
+- (void)mapHeadingSync {
+    int dm_cam_heading(float *, float *, float *, float *); float fx=0, fz=0, sx=0, sy=0, cell=0, mm[4];
+    int mode=dm_ui_map_geom(&cell); UIImage *im=[self mgImage:@"heading.png"];
+    BOOL on=im && mode && !_navigation && !_info.hidden && dm_cam_heading(&fx,&fz,&sx,&sy) && (mode==2 || dm_ui_minimap_rect(mm));
+    if(!_mhPtr) { _mhPtr=[CALayer layer]; _mhPtr.contentsGravity=kCAGravityResizeAspect; _mhPtr.hidden=YES;
+        // 光晕：原版浅金（地图名牌人名色 212,196,145），在花地图上也跳得出来（jhz：箭头不够明显、容易忽略） | glow: the original pale gold (map nameplate colour 212,196,145), so it stands out on a busy map (jhz: the arrow was too easy to miss)
+        _mhPtr.shadowColor=[UIColor colorWithRed:212/255.0 green:196/255.0 blue:145/255.0 alpha:1].CGColor; _mhPtr.shadowOffset=CGSizeZero; _mhPtr.shadowRadius=4; _mhPtr.shadowOpacity=0.95;
+        [_info.layer addSublayer:_mhPtr]; }
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if(!on) _mhPtr.hidden=YES;
+    else { CGSize z=self.bounds.size; CGRect wr=world_rect(self); CGPoint o; CGFloat size;
+        if(mode==2) { o=CGPointMake(wr.origin.x+sx*wr.size.width, wr.origin.y+sy*wr.size.height); size=wr.size.height*0.05; }
+        else { CGRect a=CGRectMake(mm[0]*z.width, mm[1]*z.height, (mm[2]-mm[0])*z.width, (mm[3]-mm[1])*z.height); o=CGPointMake(CGRectGetMidX(a),CGRectGetMidY(a)); size=a.size.height*0.14; }
+        CGFloat dx=(fx-fz)*1.6, dy=(fx+fz)*0.8, dl=hypot(dx,dy); if(dl<1e-6) { dx=0; dy=-1; } else { dx/=dl; dy/=dl; }
+        CGFloat r=size*0.75;   // 指针中心离人物十字的距离：让开十字、贴着它 | distance of the pointer's centre from the player cross: clear of the cross, close to it
+        CGFloat iw=size*im.size.width/im.size.height, ang=atan2(dx,-dy);   // 图朝上 → 顺时针转 ang 到 (dx, dy) | the image points up -> turn clockwise by ang to (dx, dy)
+        _mhPtr.contents=(id)im.CGImage; _mhPtr.bounds=CGRectMake(0,0,iw,size); _mhPtr.position=CGPointMake(o.x+dx*r, o.y+dy*r);
+        _mhPtr.affineTransform=CGAffineTransformMakeRotation(ang);
+        { static double lt; double t=CACurrentMediaTime(); if(t-lt>=2) { lt=t; LOG("小地图朝向指针：镜头 %.2f,%.2f → 地图方向 %.2f,%.2f 转角 %.0f° 圆心 %.0f,%.0f 指针 %.0f,%.0f 大小 %.0fx%.0f（地图 %d）", fx, fz, dx, dy, ang*180/M_PI, o.x, o.y, o.x+dx*r, o.y+dy*r, iw, size, mode); } }
+        _mhPtr.hidden=NO; }
+    [CATransaction commit];
+}
 - (void)tickTouchControls:(double)now {
     [self mapGoalSync];
+    [self mapHeadingSync];
     { int dm_padmode_busy(void); BOOL hide=_feMode || _padMode || dm_padmode_busy(); if(_overlay.hidden!=hide) _overlay.hidden=hide; }   // 手柄 → 触屏切换事务还没完成（界面还在重建）时触屏控件层先不露出来（dm_padmode.c） | While the controller → touch switch transaction is not yet complete (the UI is still rebuilding) the touch control layer is not revealed yet (dm_padmode.c)
     { void dm_rift_hud_draw(UIView *, CGRect, BOOL); dm_rift_hud_draw(_info, world_rect(self), _navigation || _info.hidden); }
     {   // 高价值掉落震动（宿主 dm_drophaptic.c 判档）：1 重 / 2 中 / 3 轻 | High-value drop haptics (the host's dm_drophaptic.c decides the level): 1 heavy / 2 medium / 3 light

@@ -5,7 +5,7 @@
   · 名牌下的灰十字 = 自动地图单位十字 hd/global/ui/AUTOMAP/Units.sprite 第 6 帧（白）按 50% 透明画（原版地图上 NPC 名字下就是这个灰十字）
   · 名牌 = 原版地图给 NPC / 物件标名的样式：深色半透明底 + 名字；人名浅金 (212,196,145)、物件白字（取自原版小地图截图）；字体 hd/ui/fonts/BlizzardGlobal-V5_81.ttf
   · 名字 = 原版字符串（data/local/lng/strings/*.json 的 zhCN；英文 label_<序号>_en.png 取 enUS，西语 label_<序号>_es.png / _mx.png 取 esES / esMX，俄语 label_<序号>_ru.png 取 ruRU，韩语 label_<序号>_ko.png 取 koKR）；旧译名（自定义页「物品注释与旧译名」开着时游戏显示的名字）取 annot/oldnames.tsv
-产物（构建时生成，不进仓库）：Gen/assets/NativeHUD/mapgoal/{sym_0..6.png, cross.png, label_<序号>.png, 旧译名不同的 label_<序号>_old.png, mapgoal.json}。
+产物（构建时生成，不进仓库）：Gen/assets/NativeHUD/mapgoal/{sym_0..6.png, cross.png, heading.png（镜头实验的朝向指针，原版表情轮盘指针）, label_<序号>.png, 旧译名不同的 label_<序号>_old.png, mapgoal.json}。
 用法：python3 dm/ios/tools/gen_map_goal_art.py <原版 RomFS（Update）>   （读包与解贴图走 romfs_art.py）"""
 import csv, json, os, struct, sys
 from PIL import Image, ImageDraw, ImageFont
@@ -71,6 +71,16 @@ def main():
     for i in range(7): sym.crop((i * pitch, 0, i * pitch + fw, sym.height)).save(os.path.join(OUT, 'sym_%d.png' % i))
     units, ufw, un, upitch = sprite_png('hd/global/ui/AUTOMAP/Units.sprite'); assert un == 8
     cross = units.crop((6 * upitch, 0, 6 * upitch + ufw, units.height)); a = cross.split()[3].point(lambda v: v // 2); cross.putalpha(a); cross.save(os.path.join(OUT, 'cross.png'))
+    # 镜头实验的人物朝向指针（front_ios.m mapHeadingSync）：原版手柄表情轮盘的指针（鎏金三角嵌宝石，本来就是从中心指向一个方向）。
+    # 12 帧 = 左 / 下 / 右 / 上 四个方向 × 三种状态，取第 3 帧（常态、朝上），前端按朝向旋转
+    # Facing pointer for the camera experiment (front_ios.m mapHeadingSync): the pointer of the original controller emote wheel (a gilded, jewelled
+    # triangle that already points outward from a centre). 12 frames = left / down / right / up x three states; frame 3 (normal, pointing up) is taken
+    # and the front end rotates it to the heading
+    ptr, pfw, pn, ppitch = sprite_png('hd/global/ui/Controller/Panel/EmoteWheel/Emote_Arrow.sprite'); assert pn == 12
+    # 原图是等边三角形，缩小到地图上看不出哪个是尖（jhz 真机反馈）：横向收到 0.5，成细长的箭头形，尖端一眼可辨，鎏金与宝石照旧
+    # The original is an equilateral triangle, and shrunk onto the map it is unclear which corner is the tip (jhz, on the phone): narrowed to 0.5 across
+    # into a slim arrowhead whose tip reads at a glance; the gilding and the jewel stay
+    up = ptr.crop((3 * ppitch, 0, 3 * ppitch + pfw, ptr.height)); up.resize((max(1, up.width // 2), up.height), Image.LANCZOS).save(os.path.join(OUT, 'heading.png'))
     font = ImageFont.truetype(romfs_art.font(ROMFS, 'BlizzardGlobal-V5_81.ttf'), TEXT_PX)
     oldp = os.path.join(HERE, 'annot', 'oldnames.tsv')   # 旧译名对照表可以没有（公开仓库不带）：没有就都用现行名 | the old-name table may be absent (the public repository does not carry it): without it the current names are used throughout
     old = {(r[0], r[1]): r[3] for r in csv.reader(open(oldp, encoding='utf-8'), delimiter='\t') if len(r) >= 4} if os.path.isfile(oldp) else {}
@@ -87,6 +97,6 @@ def main():
         ko = cache[f][key]['koKR']; label(ko, col, font).save(os.path.join(OUT, 'label_%d_ko.png' % i))   # 韩语：原版 koKR 名字（BlizzardGlobal 带韩文字形）
         man.append({'id': i, 'file': f, 'key': key, 'zhCN': zh, 'old': zo, 'enUS': en, 'esES': es, 'esMX': mx, 'ruRU': ru, 'koKR': ko, 'color': list(col)})
     json.dump({'text_px': TEXT_PX, 'symbol_frames': 7, 'labels': man}, open(os.path.join(OUT, 'mapgoal.json'), 'w'), ensure_ascii=False, indent=1)
-    print('mapgoal：符号 7 帧、十字 1、名牌 %d（旧译名不同的 %d）→ %s' % (len(man), sum(m['old'] != m['zhCN'] for m in man), OUT))
+    print('mapgoal：符号 7 帧、十字 1、朝向指针 1、名牌 %d（旧译名不同的 %d）→ %s' % (len(man), sum(m['old'] != m['zhCN'] for m in man), OUT))
 
 if __name__ == '__main__': ROMFS = sys.argv[1]; main()

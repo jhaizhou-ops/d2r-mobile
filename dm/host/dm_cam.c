@@ -100,6 +100,16 @@ static int ortho_ground(const cam_t *c, float nx, float ny, float w[3]) {
     for (int i = 0; i < 3; i++) w[i] = p[i] / p[3] + t * (q[i] / q[3] - p[i] / p[3]); return 1; }
 
 int dm_cam_on(void) { cam_t c; return cam_get(&c); }
+// 镜头的水平朝向（世界 x / z，单位向量）：小地图上画人物朝向用（front_ios.m mapHeadingSync）。镜头关着或矩阵过期返回 0
+// The camera's horizontal heading (world x / z, unit vector): for the facing indicator on the minimap (front_ios.m mapHeadingSync). Returns 0 when the
+// camera is off or its matrices are stale
+// sx / sy = 人物脚底在原版正交画面上的位置（归一化，y 向下）：全屏地图是游戏按原版画面画的，人物十字在这里（不能用透视画面上的位置）
+// sx / sy = the character's feet on the original orthographic picture (normalized, y down): the game draws the fullscreen map by the original picture, so its
+// player cross is here (not at the position on the perspective picture)
+int dm_cam_heading(float *fx, float *fz, float *sx, float *sy) {
+    cam_t c; float o[3], d[3]; if (!cam_get(&c) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
+    float l = hypotf(d[0], d[2]); if (l < 1e-6f) return 0; *fx = d[0] / l; *fz = d[2] / l;
+    float P[3] = { c.pl[0], 0, c.pl[1] }; return proj(c.vpo, P, sx, sy); }
 
 // 怪物指示：游戏线程每拍交来玩家附近活着的怪（子格坐标与档位，diag.c cam_threats_tick），前端每帧问哪些不在画面里、该画在屏幕边上哪儿（dm_cam_threats）。
 // 方向按镜头水平朝向算：正前方（画面外更远处）→ 上沿，左右 → 两侧，身后 → 下面两角（下沿中间是人和底栏，不放）。out 每条 5 个数：
