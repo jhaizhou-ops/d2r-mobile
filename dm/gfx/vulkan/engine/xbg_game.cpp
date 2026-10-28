@@ -2464,6 +2464,12 @@ int mode(){
     const int m=dm_cam_mode?dm_cam_mode():0;
     if(m!=mode_){mode_=m;
         if(mode_>0){params=xbg_cam_default_params(mode_);
+            // 原神式（宿主 dm_cam_style = 1）的越肩缺省机位：没有上下拖调俯仰，视野靠机位给——前看 7、水平视角 70°、上沿不设远处限制
+            // （画面上沿只保留水平线下 3°）。远处游戏还没画的地方会露黑块，用户在 OnePlus 13 上看过：视野更要紧，可以接受。下面的环境变量照样能改
+            // Over-the-shoulder defaults of the Genshin style (host dm_cam_style = 1): with no dragged pitch, the view has to come from the rig -- look-ahead 7,
+            // horizontal field of view 70 degrees, no far limit for the top edge (only the 3 degrees below the horizon stays). Far ground the game has not drawn
+            // yet shows black patches; the user saw them on a OnePlus 13 and judged the view more important. The environment variables below still override
+            if(mode_==1 && dm_cam_style && dm_cam_style()==1){params.look=7;params.fov=70;params.reach=0;}
             params.dist=envf("DM_CAM_DIST",params.dist);params.h=envf("DM_CAM_H",params.h);params.look=envf("DM_CAM_LOOK",params.look);params.lookh=envf("DM_CAM_LOOKH",params.lookh);
             params.eye=envf("DM_CAM_EYE",params.eye);params.fwd=envf("DM_CAM_FWD",params.fwd);params.pitch=envf("DM_CAM_PITCH",params.pitch);params.fov=envf("DM_CAM_FOV",params.fov);
             params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);drag_k=envf("DM_CAM_DRAG",0.5f);pull_pitch=envf("DM_CAM_PULL_PITCH",40);pull_min=envf("DM_CAM_PULL_MIN",5);xbg_cam_init(&st);
