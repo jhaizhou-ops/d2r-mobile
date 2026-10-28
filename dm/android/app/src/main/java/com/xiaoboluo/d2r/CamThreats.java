@@ -15,11 +15,11 @@ import android.view.View;
 // Off-picture monster indicators of the over-the-shoulder camera (experimental; always added, nothing drawn while the camera is off; host dm/host/dm_cam.c dm_cam_threats): the
 // perspective picture only shows what is ahead, and monsters reach the character's face from outside it fast (the maintainer's play test), so each monster
 // off the picture gets an arrow on the screen edge pointing at it -- further ahead on the top edge, left and right on the sides, behind in the two bottom
-// corners. Colour by tier (normal amber, elite blue, Boss red), larger and brighter when closer, blinking when very close. Also a white arrow on the player
+// corners. Colour by tier, after the original name colours (normal silver, champion blue, unique / super unique gold, act boss red; hle_target.c dm_threat_tier), larger and brighter when closer, blinking when very close. Also a white arrow on the player
 // point of the map (the corner minimap or the full-screen map) pointing where the camera looks (dm_cam_map_heading): once the picture has turned the map
 // does not, and this lines the two up. Asked once per frame (nativeCamThreats / nativeCamHeading); it only draws and never takes touches; drawn directly on the canvas, without game art
 final class CamThreats extends View implements Choreographer.FrameCallback {
-    private static final int[] TIER_COLOUR = { 0xFFFFC040, 0xFF50A8FF, 0xFFFF4848 };
+    private static final int[] TIER_COLOUR = { 0xFFE1E1E1, 0xFF6E6EFF, 0xFFC7B377, 0xFFFF5040 };
     private final float[] data = new float[16 * 5], head = new float[4], drawn = new float[4];
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path arrow = new Path();
@@ -55,7 +55,7 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
         float w = getWidth(), h = getHeight(), blink = (System.nanoTime() / 1_000_000L % 400) < 200 ? 1f : 0.55f;
         for (int i = 0; i < count; i++) {
             float x = data[i * 5] * w, y = data[i * 5 + 1] * h, dir = data[i * 5 + 2], urgency = data[i * 5 + 3];
-            int tier = Math.max(0, Math.min(2, (int) data[i * 5 + 4]));
+            int tier = Math.max(0, Math.min(3, (int) data[i * 5 + 4]));
             // 箭头：尖朝怪那一边，长度随紧迫度 0.035–0.065 屏高
             // Arrow: tip towards the monster, length from 0.035 to 0.065 of the screen height with urgency
             float len = h * (0.035f + 0.03f * urgency), half = len * 0.6f;
