@@ -1216,7 +1216,7 @@ static void cam_c2s(uint64_t G, uint64_t pl, const uint8_t *b, uint32_t n) {
 // hand them with their tier to the camera; nothing in town. Summons (skeletons, golems and so on) currently count too
 static void cam_threats_tick(uint64_t G, uint64_t pl) {
     int dm_cam_mode(void); void dm_cam_set_threats(const float *xy, const int *tier, int n); int dm_target_rank(uint64_t unit);
-    if (dm_cam_mode() != 1 || !pl) return;
+    if (dm_cam_mode() <= 0 || !pl) return;
     static float range = -1; if (range < 0) { const char *e = getenv("DM_CAM_THREAT_RANGE"); range = e ? (float)atof(e) : 30; }
     dm_hud_info h; dm_hud_get(&h); if (h.valid && dm_hud_area_is_town(h.area)) { dm_cam_set_threats(NULL, NULL, 0); return; }
     uint64_t pp = 0; uint32_t pxy[2]; if (!tk_rd(pl + 0x38, &pp, 8) || !pp || !tk_rd(pp, pxy, 8)) return;

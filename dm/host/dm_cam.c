@@ -154,23 +154,37 @@ int dm_cam_threats(float *out, int max) {
     return m;
 }
 
-// 小地图上的朝向箭头：透视画面转过之后，小地图（原版等距、不转）上看不出镜头朝哪边，这里给出玩家点上那支箭头该画在哪、朝哪。
-// 只在角上的小地图开着时给（dm_ui_map_geom = 1；全屏地图 / 地图收起 = 0）；玩家点在小地图框中心（dm_cursor.c ui_map_geom_pump）。
-// 方向 = 镜头水平朝向（推摇杆上 = 往这边走）按原版地图的等距换算：世界方向 (x, z) 在地图上 = ((x − z)×1.6, (x + z)×0.8) 像素（同 dm_map_goals 的换算）。
-// out：中心 x、y（0..1，y 向下）、箭头方向（弧度，0 = 朝上、顺时针为正，同 dm_cam_threats）、小地图框高（屏高的比例，箭头按它定大小）
-// Heading arrow on the minimap: once the perspective picture has turned, the minimap (the original isometric one, which does not turn) no longer shows
-// which way the camera looks, so this gives where to draw an arrow on the player point and which way it points. Given only while the corner minimap is
-// open (dm_ui_map_geom = 1; full-screen map / map closed = 0); the player point is at the centre of the minimap frame (dm_cursor.c ui_map_geom_pump).
-// Direction = the camera's horizontal heading (stick up = walk this way) through the original map's isometric mapping: world direction (x, z) is
-// ((x - z) * 1.6, (x + z) * 0.8) pixels on the map (the same mapping as dm_map_goals).
-// out: centre x, y (0..1, y down), arrow direction (radians, 0 = up, clockwise positive, as in dm_cam_threats), minimap frame height (fraction of the
-// screen height, the arrow is sized by it)
+// 地图上的朝向箭头：透视画面转过之后，地图（原版等距、不转）上看不出镜头朝哪边，这里给出玩家点上那支箭头该画在哪、朝哪。地图开着才给（dm_ui_map_geom）：
+// · 角上的小地图（1）：玩家点在小地图框中心（dm_cursor.c ui_map_geom_pump），箭头按框高定大小；
+// · 全屏地图（2）：游戏把地图的玩家点放在「人物脚底在原版画面上的位置」（不开镜头时地图线叠在世界上，同 dm_map_goals 的 sx / sy）。
+//   这里不能像 dm_map_goals 那样调游戏的世界点 → 屏幕：镜头开着时那条路给的是透视画面上的位置（dm_uiscreen.c 的投影门），所以用画面线程发布的原版正交矩阵投脚底。
+// 方向 = 镜头水平朝向（越肩档推摇杆上 = 往这边走）按原版地图的等距换算：世界方向 (x, z) 在地图上 = ((x − z)×1.6, (x + z)×0.8) 像素（同 dm_map_goals 的换算）。
+// out：中心 x、y（0..1，y 向下）、箭头方向（弧度，0 = 朝上、顺时针为正，同 dm_cam_threats）、尺度（屏高的比例：小地图 = 框高，全屏地图 0.5——那里地图放大一倍）
+// Heading arrow on the map: once the perspective picture has turned, the map (the original isometric one, which does not turn) no longer shows which way
+// the camera looks, so this gives where to draw an arrow on the player point and which way it points. Given only while a map is open (dm_ui_map_geom):
+// - the corner minimap (1): the player point is at the centre of the minimap frame (dm_cursor.c ui_map_geom_pump), and the arrow is sized by the frame height;
+// - the full-screen map (2): the game puts the map's player point at "the character's feet on the original picture" (with the camera off the map lines lie
+//   over the world, as dm_map_goals' sx / sy). This cannot call the game's world point -> screen as dm_map_goals does: with the camera on that path gives
+//   the position on the perspective picture (dm_uiscreen.c's projection gate), so the feet are projected with the original orthographic matrix the render
+//   thread publishes.
+// Direction = the camera's horizontal heading (in over-the-shoulder, stick up = walk this way) through the original map's isometric mapping: world
+// direction (x, z) is ((x - z) * 1.6, (x + z) * 0.8) pixels on the map (the same mapping as dm_map_goals).
+// out: centre x, y (0..1, y down), arrow direction (radians, 0 = up, clockwise positive, as in dm_cam_threats), scale (fraction of the screen height:
+// minimap = the frame height, full-screen map 0.5 -- the map is drawn twice as large there)
 int dm_cam_map_heading(float out[4]) {
-    cam_t c; float cell, mm[4], o[3], d[3];
-    if (!cam_get(&c) || dm_ui_map_geom(&cell) != 1 || !dm_ui_minimap_rect(mm) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
+    cam_t c; float cell, mm[4], o[3], d[3]; int map;
+    if (!cam_get(&c) || !(map = dm_ui_map_geom(&cell)) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
     float mx = (d[0] - d[2]) * 1.6f, my = (d[0] + d[2]) * 0.8f;
-    if (hypotf(mx, my) < 1e-6f || !(mm[3] > mm[1])) return 0;
-    out[0] = (mm[0] + mm[2]) / 2; out[1] = (mm[1] + mm[3]) / 2; out[2] = atan2f(mx, -my); out[3] = mm[3] - mm[1];
+    if (hypotf(mx, my) < 1e-6f) return 0;
+    if (map == 1) {
+        if (!dm_ui_minimap_rect(mm) || !(mm[3] > mm[1])) return 0;
+        out[0] = (mm[0] + mm[2]) / 2; out[1] = (mm[1] + mm[3]) / 2; out[3] = mm[3] - mm[1];
+    } else {
+        const float feet[3] = { c.pl[0], 0, c.pl[1] };
+        if (!proj(c.vpo, feet, &out[0], &out[1])) return 0;
+        out[3] = 0.5f;
+    }
+    out[2] = atan2f(mx, -my);
     return 1;
 }
 
@@ -224,9 +238,12 @@ static int remap_one(const cam_t *c, int32_t *x, int32_t *y, float wdir[2]) {
 // takes the sum once per frame (xbg_game.cpp); a turn within the last second = sensor steering in progress, and the camera follow stands aside.
 // After a sensor turn the reference camera is re-locked: turning the phone means a new "ahead", so pushing up walks where the player now looks (turns caused
 // by the follow are not re-locked, that is the running-in-circles problem described above)
-int dm_cam_sensor_mode(void) { static int m = -1; if (m < 0) { const char *e = getenv("DM_CAM_SENSOR"); m = dm_cam_mode() == 1 && e ? atoi(e) : 0; if (m) LOG("DM_CAM_SENSOR=%d：体感转向开（1 转手机看四周 / 2 侧倾转向）", m); } return m; }
+// 体感档只看环境变量（测试开关）：镜头档可以在局中从自定义页切（dm_cam_set_mode），所以不再按启动那一刻的镜头档定；镜头关着时 dm_cam_turn 丢掉转动
+// The sensor mode only reads the environment variable (a test switch): the camera mode can be switched on the custom page mid-game (dm_cam_set_mode), so
+// this no longer depends on the camera mode at the moment of start; while the camera is off dm_cam_turn drops the turns
+int dm_cam_sensor_mode(void) { static int m = -1; if (m < 0) { const char *e = getenv("DM_CAM_SENSOR"); m = e ? atoi(e) : 0; if (m) LOG("DM_CAM_SENSOR=%d：体感转向开（1 转手机看四周 / 2 侧倾转向）", m); } return m; }
 static float g_turn, g_turn_total; static double g_turn_t;
-void dm_cam_turn(float rad) { if (rad == 0) return; pthread_mutex_lock(&g_mu); g_turn += rad; g_turn_total += rad; g_turn_t = now_s(); pthread_mutex_unlock(&g_mu); }
+void dm_cam_turn(float rad) { if (rad == 0 || dm_cam_mode() <= 0) return; pthread_mutex_lock(&g_mu); g_turn += rad; g_turn_total += rad; g_turn_t = now_s(); pthread_mutex_unlock(&g_mu); }
 // 俯仰（右半屏空白处上下拖，dm_touch_controls.c）：正 = 视线往上。累计值整个保留（换区域也不复位），画面线程每帧读；夹在 ±1.4 弧度，镜头里再按机位夹实际角度
 // Pitch (vertical drag on the empty right half, dm_touch_controls.c): positive = look up. The sum is kept as is (not reset on area changes) and read by the
 // render thread every frame; clamped to +-1.4 rad here, and the camera clamps the actual angle for its rig

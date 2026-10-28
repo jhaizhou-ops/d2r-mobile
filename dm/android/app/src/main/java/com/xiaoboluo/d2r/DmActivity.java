@@ -287,12 +287,14 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         started = true;
         touchOverlay.setInputEnabled(true);
         if (camSensor != null) camSensor.start(nativeCamSensor());
-        // 越肩镜头的左右转按钮：DM_CAM 在 nativeStart 里才读进环境（读一次就记住），所以放在这之后；盖在触屏层上面，只收按钮上的触摸
-        // Turn buttons of the over-the-shoulder camera: DM_CAM reaches the environment only inside nativeStart (and is remembered once read), hence after it;
-        // above the touch layer, taking only touches on the buttons
-        // 画面外的怪的箭头放在按钮下面一层：只画不收触摸
-        // The off-picture monster arrows go one layer below the buttons: drawing only, no touches
-        if (camButtons == null && nativeCamMode() == 1) {
+        // 越肩镜头的左右转按钮：盖在触屏层上面，只收按钮上的触摸。镜头可以在局中从「自定义」页打开（dm_cam.c dm_cam_mode），所以总是加上：
+        // 镜头没在出图时按钮不画、触摸全部漏给下面的触屏层（nativeCamActive，每帧问一次）
+        // Turn buttons of the over-the-shoulder camera: above the touch layer, taking only touches on the buttons. The camera can be turned on mid-game from
+        // the Custom page (dm_cam.c dm_cam_mode), so they are always added: while the camera is not drawing the buttons are not drawn and every touch falls
+        // through to the touch layer below (nativeCamActive, asked every frame)
+        // 画面外的怪的箭头与地图上的朝向箭头放在按钮下面一层：只画不收触摸，镜头关着时什么都不画
+        // The off-picture monster arrows and the map heading arrow go one layer below the buttons: drawing only, no touches, nothing drawn while the camera is off
+        if (camButtons == null) {
             camThreats = new CamThreats(this); gameFrame.addView(camThreats, new FrameLayout.LayoutParams(-1, -1));
             camButtons = new CamButtons(this); gameFrame.addView(camButtons, new FrameLayout.LayoutParams(-1, -1)); }
         if (camButtons != null) camButtons.start();

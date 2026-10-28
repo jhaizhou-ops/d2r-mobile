@@ -8,16 +8,16 @@ import android.view.Choreographer;
 import android.view.MotionEvent;
 import android.view.View;
 
-// 越肩镜头的画面外怪物指示（实验，DM_CAM=1 时才加进来；宿主 dm/host/dm_cam.c dm_cam_threats）：透视画面只看得见前方，怪从画面外很快贴上脸（维护者试玩），
+// 越肩镜头的画面外怪物指示（实验；总是加上，镜头关着时什么都不画；宿主 dm/host/dm_cam.c dm_cam_threats）：透视画面只看得见前方，怪从画面外很快贴上脸（维护者试玩），
 // 这里在屏幕边上给每只画面外的怪画一个朝它的箭头——前方更远处在上沿、左右在两侧、身后在下面两角。颜色按档位（普通琥珀、精英蓝、Boss 红），
-// 越近越大越亮，很近时闪。另在角上小地图的玩家点上画一支白箭头，指镜头朝向（dm_cam_map_heading）：画面转过之后，小地图不转，靠它对上方向。
+// 越近越大越亮，很近时闪。另在地图（角上小地图或全屏地图）的玩家点上画一支白箭头，指镜头朝向（dm_cam_map_heading）：画面转过之后，地图不转，靠它对上方向。
 // 每帧问一次（nativeCamThreats / nativeCamHeading），只画，不收触摸；图形用画布直接画，不用游戏的图
-// Off-picture monster indicators of the over-the-shoulder camera (experimental, added only with DM_CAM=1; host dm/host/dm_cam.c dm_cam_threats): the
+// Off-picture monster indicators of the over-the-shoulder camera (experimental; always added, nothing drawn while the camera is off; host dm/host/dm_cam.c dm_cam_threats): the
 // perspective picture only shows what is ahead, and monsters reach the character's face from outside it fast (the maintainer's play test), so each monster
 // off the picture gets an arrow on the screen edge pointing at it -- further ahead on the top edge, left and right on the sides, behind in the two bottom
 // corners. Colour by tier (normal amber, elite blue, Boss red), larger and brighter when closer, blinking when very close. Also a white arrow on the player
-// point of the corner minimap pointing where the camera looks (dm_cam_map_heading): once the picture has turned the minimap does not, and this lines the
-// two up. Asked once per frame (nativeCamThreats / nativeCamHeading); it only draws and never takes touches; drawn directly on the canvas, without game art
+// point of the map (the corner minimap or the full-screen map) pointing where the camera looks (dm_cam_map_heading): once the picture has turned the map
+// does not, and this lines the two up. Asked once per frame (nativeCamThreats / nativeCamHeading); it only draws and never takes touches; drawn directly on the canvas, without game art
 final class CamThreats extends View implements Choreographer.FrameCallback {
     private static final int[] TIER_COLOUR = { 0xFFFFC040, 0xFF50A8FF, 0xFFFF4848 };
     private final float[] data = new float[16 * 5], head = new float[4], drawn = new float[4];
@@ -78,9 +78,9 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
             canvas.restore();
         }
         if (headOn) {
-            // 朝向箭头：白色，离开玩家点一小段（不盖住游戏自己的玩家标记），尖在 0.115 个小地图框高处
-            // Heading arrow: white, starting a little away from the player point (so the game's own player marker stays visible), tip at 0.115 of the minimap
-            // frame height
+            // 朝向箭头：白色，离开玩家点一小段（不盖住游戏自己的玩家标记），尖在 0.115 个尺度处（小地图 = 框高，全屏地图更大）
+            // Heading arrow: white, starting a little away from the player point (so the game's own player marker stays visible), tip at 0.115 of the scale
+            // (minimap = the frame height, larger on the full-screen map)
             float s = drawn[3] * h, tip = s * 0.115f, base = s * 0.045f, half = s * 0.042f;
             fill.setColor(0xFFFFFFFF);
             fill.setAlpha(235);
