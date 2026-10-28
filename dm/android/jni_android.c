@@ -329,6 +329,13 @@ int dm_cam_threats(float *out, int max);
 JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamThreats(JNIEnv *env, jclass cls, jfloatArray out) {
     (void)cls; jsize len = (*env)->GetArrayLength(env, out); float buf[16 * 5]; int max = len / 5 < 16 ? len / 5 : 16;
     int n = dm_cam_threats(buf, max); if (n > 0) (*env)->SetFloatArrayRegion(env, out, 0, n * 5, buf); return n; }
+// 小地图上的朝向箭头（dm_cam.c dm_cam_map_heading）：4 个数（中心 x、y、箭头方向、小地图框高），返回 1 = 该画；CamThreats 每帧取一次
+// Heading arrow on the minimap (dm_cam.c dm_cam_map_heading): 4 numbers (centre x, y, arrow direction, minimap frame height), returns 1 = draw it;
+// CamThreats takes it once per frame
+int dm_cam_map_heading(float out[4]);
+JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamHeading(JNIEnv *env, jclass cls, jfloatArray out) {
+    (void)cls; float buf[4]; if ((*env)->GetArrayLength(env, out) < 4 || !dm_cam_map_heading(buf)) return 0;
+    (*env)->SetFloatArrayRegion(env, out, 0, 4, buf); return 1; }
 JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeCamTurn(JNIEnv *env, jclass cls, jfloat rad) { (void)env; (void)cls; dm_cam_turn(rad); }
 JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeRefresh(JNIEnv *env, jclass cls, jfloat hz) {
     (void)env; (void)cls;

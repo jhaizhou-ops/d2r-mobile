@@ -59,6 +59,9 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     // 画面外的怪（CamThreats）：每条 5 个数，返回条数
     // Monsters off the picture (CamThreats): 5 numbers each, returns the count
     static native int nativeCamThreats(float[] out);
+    // 小地图上的朝向箭头（CamThreats）：4 个数，返回 1 = 该画
+    // Heading arrow on the minimap (CamThreats): 4 numbers, returns 1 = draw it
+    static native int nativeCamHeading(float[] out);
 
     private static WeakReference<DmActivity> current = new WeakReference<>(null);
     private static volatile int bootFailure;

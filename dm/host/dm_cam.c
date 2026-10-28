@@ -15,6 +15,7 @@
 //   project the hit point back onto the original picture, then test it with the original body box / footprint diamond / selection box (dm_cam_tap_for_unit).
 // Switch: environment variable DM_CAM=1 over-the-shoulder, =2 first person (the stick walks and strafes relative to the view, no follow; the view turns by dragging on the right half / the turn buttons / sensors); unset = off. When off, or when the backend publishes no matrices (the Vulkan backend on Android / HarmonyOS), everything here returns unchanged.
 #include "dm.h"
+#include "dm_cursor.h"
 #include "dm_uiscreen.h"
 #include <math.h>
 #include <pthread.h>
@@ -151,6 +152,26 @@ int dm_cam_threats(float *out, int max) {
         float *e = out + slot * 5; e[0] = sx; e[1] = sy; e[2] = th; e[3] = urg; e[4] = (float)tier[i];
     }
     return m;
+}
+
+// 小地图上的朝向箭头：透视画面转过之后，小地图（原版等距、不转）上看不出镜头朝哪边，这里给出玩家点上那支箭头该画在哪、朝哪。
+// 只在角上的小地图开着时给（dm_ui_map_geom = 1；全屏地图 / 地图收起 = 0）；玩家点在小地图框中心（dm_cursor.c ui_map_geom_pump）。
+// 方向 = 镜头水平朝向（推摇杆上 = 往这边走）按原版地图的等距换算：世界方向 (x, z) 在地图上 = ((x − z)×1.6, (x + z)×0.8) 像素（同 dm_map_goals 的换算）。
+// out：中心 x、y（0..1，y 向下）、箭头方向（弧度，0 = 朝上、顺时针为正，同 dm_cam_threats）、小地图框高（屏高的比例，箭头按它定大小）
+// Heading arrow on the minimap: once the perspective picture has turned, the minimap (the original isometric one, which does not turn) no longer shows
+// which way the camera looks, so this gives where to draw an arrow on the player point and which way it points. Given only while the corner minimap is
+// open (dm_ui_map_geom = 1; full-screen map / map closed = 0); the player point is at the centre of the minimap frame (dm_cursor.c ui_map_geom_pump).
+// Direction = the camera's horizontal heading (stick up = walk this way) through the original map's isometric mapping: world direction (x, z) is
+// ((x - z) * 1.6, (x + z) * 0.8) pixels on the map (the same mapping as dm_map_goals).
+// out: centre x, y (0..1, y down), arrow direction (radians, 0 = up, clockwise positive, as in dm_cam_threats), minimap frame height (fraction of the
+// screen height, the arrow is sized by it)
+int dm_cam_map_heading(float out[4]) {
+    cam_t c; float cell, mm[4], o[3], d[3];
+    if (!cam_get(&c) || dm_ui_map_geom(&cell) != 1 || !dm_ui_minimap_rect(mm) || !ray(&c, 0.5f, 0.5f, o, d)) return 0;
+    float mx = (d[0] - d[2]) * 1.6f, my = (d[0] + d[2]) * 0.8f;
+    if (hypotf(mx, my) < 1e-6f || !(mm[3] > mm[1])) return 0;
+    out[0] = (mm[0] + mm[2]) / 2; out[1] = (mm[1] + mm[3]) / 2; out[2] = atan2f(mx, -my); out[3] = mm[3] - mm[1];
+    return 1;
 }
 
 // 镜头跟随要的朝向（世界 xz，单位向量 × 1000）：瞄准拖拽 > 移动摇杆；由 dm_cam_remap_stick 记下，nvn_mtl.m cam_build 每帧取
