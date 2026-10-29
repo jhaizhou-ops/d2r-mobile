@@ -158,6 +158,15 @@ static void w_cam_clear(void) {
     if (sub < 0) { const char *e = getenv("DM_CAM_SUB"); sub = e ? (float)atof(e) : 2.0f; e = getenv("DM_CAM_WALL"); mask = e ? (uint32_t)strtoul(e, NULL, 0) : 0x801; }
     float x0 = *(uint32_t *)pp / 65536.0f, y0 = *(uint32_t *)(pp + 4) / 65536.0f, d[32];
     wp_rooms(*(uint64_t *)(pp + 0x20));
+    // 诊断（透视画面里成块的黑）：人换了房间就记下所在房间和它的相邻房间（子格矩形；没有碰撞格 = 没载入），截图里哪块黑就能对出是游戏没载入还是载入了没画
+    // Diagnostic (whole black blocks in the perspective picture): when the character changes room, log its room and the adjacent rooms (sub-cell rectangles;
+    // no collision grid = not loaded), so a black block in a screenshot can be matched to "the game did not load it" or "loaded but not drawn"
+    { static uint64_t last; uint64_t r0 = *(uint64_t *)(pp + 0x20);
+        if (r0 && r0 != last) { last = r0; char line[1400]; int n = 0; uint64_t *adj = *(uint64_t **)r0; uint32_t na = *(uint32_t *)(r0 + 0x40);
+            n += snprintf(line + n, sizeof line - n, "镜头诊断：人在 %.0f,%.0f，房间 %d,%d %dx%d；相邻 %u 间：", x0, y0, *(int *)(r0 + 0x80), *(int *)(r0 + 0x84), *(int *)(r0 + 0x88), *(int *)(r0 + 0x8c), na);
+            for (uint32_t k = 0; adj && k < na && k < 24 && n < (int)sizeof line - 48; k++) { uint64_t a = adj[k]; if (!a) continue;
+                n += snprintf(line + n, sizeof line - n, " %d,%d %dx%d%s", *(int *)(a + 0x80), *(int *)(a + 0x84), *(int *)(a + 0x88), *(int *)(a + 0x8c), *(uint64_t *)(a + 0x38) ? "" : "(未载)"); }
+            LOG("%s", line); } }
     for (int k = 0; k < 32; k++) {
         float ux = cosf(k * 6.2831853f / 32), uy = sinf(k * 6.2831853f / 32), t = 0.5f;
         for (; t <= 12; t += 0.25f) if ((uint32_t)wp_cell((int)floorf(x0 + ux * t), (int)floorf(y0 + uy * t)) & mask) break;
