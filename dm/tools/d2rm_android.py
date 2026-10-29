@@ -104,8 +104,7 @@ def main():
     run([PY, os.path.join(IOS, 'tools', 'gen_romfs_overlay.py'), romfs, os.path.join(stage, 'overlay')], cwd=IOS, env={'DM_ROMFS_SRC': romfs}, log=os.path.join(stage, 'gen_overlay.log'), what='生成覆盖层')
     sys.path.insert(0, os.path.join(DM, 'android', 'tools')); import stage_touch_assets
     hud = os.path.join(IOS, 'Gen', 'assets', 'NativeHUD', 'v4', 'hud_v4_ui')
-    # 镜头指针一并放进 touchart（gen_assets.py 出的 mapgoal/） | the camera pointers go into touchart too (mapgoal/ from gen_assets.py)
-    stage_touch_assets.stage(os.path.join(gen, 'TouchArt'), hud, os.path.join(stage, 'overlay'), os.path.join(IOS, 'Gen', 'assets', 'NativeHUD', 'mapgoal'))
+    stage_touch_assets.stage(os.path.join(gen, 'TouchArt'), hud, os.path.join(stage, 'overlay'))
     if T == 'ohos':   # 鸿蒙前端从 ui-art/ 取技能键标签与技能剪影（剪影是彩色原图，银灰在绘制时做，同 iOS） | the HarmonyOS front end takes the skill-button labels and skill silhouettes from ui-art/ (the silhouettes are the colour originals; the silver is applied when drawing, as on iOS)
         os.makedirs(os.path.join(stage, 'ui-art'))
         for n in ['lbl_main.png'] + ['lbl_f%d.png' % i for i in range(1, 9)] + ['sil_dm_native_skill_%d.png' % i for i in range(9)]:

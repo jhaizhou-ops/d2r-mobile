@@ -114,12 +114,13 @@ enum { AHEAD_N = 24 };
 static _Atomic int g_ahead_k = -1, g_ahead_cm = -1;
 static _Atomic long long g_ahead_seen_ms;
 // 挪多远（世界单位）= 比例 × 原版画面半深。半深 = 正交画面高 H = 53.03·u，u = atan(0.03 / 缩放) / atan(0.03)（xbg_cam.h xbg_cam_ground），缩放 0.6 时 88；
-// 非 0 时至少 30，相邻方向才分得开
+// 非 0 时至少 30，相邻方向才分得开；不缩放（dm_world.c dm_cam_zoom_on）就不挪
 // How far (world units) = fraction x the original picture's half depth. The half depth = the orthographic height H = 53.03 * u,
-// u = atan(0.03 / zoom) / atan(0.03) (xbg_cam.h xbg_cam_ground), 88 at zoom 0.6; at least 30 when not 0, so neighbouring directions stay apart
+// u = atan(0.03 / zoom) / atan(0.03) (xbg_cam.h xbg_cam_ground), 88 at zoom 0.6; at least 30 when not 0, so neighbouring directions stay apart;
+// no shift without the zoom (dm_world.c dm_cam_zoom_on)
 static float ahead_len(void) {
     int v = atomic_load(&g_ahead_cm);
-    if (v < 0) { float dm_cam_zoom_want(void); const char *e = getenv("DM_CAM_AHEAD"); float f = e ? (float)atof(e) : 0.5f; if (!(f > 0)) f = 0; else if (f > 0.9f) f = 0.9f;
+    if (v < 0) { float dm_cam_zoom_want(void); int dm_cam_zoom_on(void); const char *e = getenv("DM_CAM_AHEAD"); float f = e ? (float)atof(e) : 0.5f; if (!(f > 0) || !dm_cam_zoom_on()) f = 0; else if (f > 0.9f) f = 0.9f;
         float s = f * 0.75f * 70.7107f * atanf(0.03f / dm_cam_zoom_want()) / atanf(0.03f); if (s > 0 && s < 30) s = 30;
         v = (int)lroundf(s * 100); atomic_store(&g_ahead_cm, v); LOG("原版画面前移：比例 %.2f，挪 %.0f 个单位（%d 个方向）", f, s, AHEAD_N); }
     return v / 100.0f; }

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'ios/tools'))
 import overlay_contract
 
 
-def stage(native_art, hud, overlay, mapgoal=None):
+def stage(native_art, hud, overlay):
     """只接收生成器的固定PNG及HUD引用，不接收源码、存档或签名文件。
     Accept generator PNGs and HUD references only, never source code, saves or signing files.
     """
@@ -55,24 +55,10 @@ def stage(native_art, hud, overlay, mapgoal=None):
     if not socket.is_file() or socket.is_symlink():
         raise ValueError('missing or unsafe socket art: dm_mobile_socket.png')
     shutil.copyfile(socket, overlay / 'touchart' / 'dm_mobile_socket.png')
-    # 镜头的指针（游戏自己的手柄表情轮盘指针，iOS 的 gen_map_goal_art.py 出、gen_assets.py 一并跑过）：heading.png 画地图上的朝向与瞄准箭头头，
-    # threat_0..3.png 是画面外怪物的四档颜色；CamThreats 读 touchart/ 下这几张，缺了就画三角形
-    # The camera's pointers (the game's own controller emote-wheel pointer, made by the iOS gen_map_goal_art.py, which gen_assets.py already runs): heading.png
-    # draws the map heading and the aim arrow's head, threat_0..3.png are the off-picture monster colours by tier; CamThreats reads these from touchart/ and
-    # draws triangles when they are missing
-    pointers = ('heading.png', 'threat_0.png', 'threat_1.png', 'threat_2.png', 'threat_3.png')
-    if mapgoal is not None:
-        mapgoal = Path(mapgoal)
-        for name in pointers:
-            path = mapgoal / name
-            if not path.is_file() or path.is_symlink():
-                raise ValueError(f'missing or unsafe pointer art: {name}')
-        for name in pointers:
-            shutil.copyfile(mapgoal / name, overlay / 'touchart' / name)
     source_sha = overlay_contract.source_fingerprint(Path(__file__).resolve().parents[3])
     overlay_contract.write_manifest(overlay, source_sha)
     entries = overlay_contract.verify_manifest(overlay, source_sha)
-    print(json.dumps({'source_sha256': source_sha, 'overlay_files': len(entries), 'native_art': len(required), 'hud': len(files), 'pointers': len(pointers) if mapgoal is not None else 0}, sort_keys=True))
+    print(json.dumps({'source_sha256': source_sha, 'overlay_files': len(entries), 'native_art': len(required), 'hud': len(files)}, sort_keys=True))
 
 
 if __name__ == '__main__':
@@ -80,6 +66,5 @@ if __name__ == '__main__':
     parser.add_argument('--native-art', required=True, type=Path, help='Generated TouchArt directory')
     parser.add_argument('--hud', required=True, type=Path, help='Generated hud_v4_ui directory')
     parser.add_argument('--overlay', required=True, type=Path, help='New candidate overlay, never a live imported directory')
-    parser.add_argument('--mapgoal', type=Path, help='Generated NativeHUD/mapgoal directory (camera pointer art)')
     args = parser.parse_args()
-    stage(args.native_art, args.hud, args.overlay, args.mapgoal)
+    stage(args.native_art, args.hud, args.overlay)

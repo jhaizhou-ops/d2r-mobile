@@ -158,15 +158,6 @@ static void w_cam_clear(void) {
     if (sub < 0) { const char *e = getenv("DM_CAM_SUB"); sub = e ? (float)atof(e) : 2.0f; e = getenv("DM_CAM_WALL"); mask = e ? (uint32_t)strtoul(e, NULL, 0) : 0x801; }
     float x0 = *(uint32_t *)pp / 65536.0f, y0 = *(uint32_t *)(pp + 4) / 65536.0f, d[32];
     wp_rooms(*(uint64_t *)(pp + 0x20));
-    // 诊断（透视画面里成块的黑）：人换了房间就记下所在房间和它的相邻房间（子格矩形；没有碰撞格 = 没载入），截图里哪块黑就能对出是游戏没载入还是载入了没画
-    // Diagnostic (whole black blocks in the perspective picture): when the character changes room, log its room and the adjacent rooms (sub-cell rectangles;
-    // no collision grid = not loaded), so a black block in a screenshot can be matched to "the game did not load it" or "loaded but not drawn"
-    { static uint64_t last; uint64_t r0 = *(uint64_t *)(pp + 0x20);
-        if (r0 && r0 != last) { last = r0; char line[1400]; int n = 0; uint64_t *adj = *(uint64_t **)r0; uint32_t na = *(uint32_t *)(r0 + 0x40);
-            n += snprintf(line + n, sizeof line - n, "镜头诊断：人在 %.0f,%.0f，房间 %d,%d %dx%d；相邻 %u 间：", x0, y0, *(int *)(r0 + 0x80), *(int *)(r0 + 0x84), *(int *)(r0 + 0x88), *(int *)(r0 + 0x8c), na);
-            for (uint32_t k = 0; adj && k < na && k < 24 && n < (int)sizeof line - 48; k++) { uint64_t a = adj[k]; if (!a) continue;
-                n += snprintf(line + n, sizeof line - n, " %d,%d %dx%d%s", *(int *)(a + 0x80), *(int *)(a + 0x84), *(int *)(a + 0x88), *(int *)(a + 0x8c), *(uint64_t *)(a + 0x38) ? "" : "(未载)"); }
-            LOG("%s", line); } }
     for (int k = 0; k < 32; k++) {
         float ux = cosf(k * 6.2831853f / 32), uy = sinf(k * 6.2831853f / 32), t = 0.5f;
         for (; t <= 12; t += 0.25f) if ((uint32_t)wp_cell((int)floorf(x0 + ux * t), (int)floorf(y0 + uy * t)) & mask) break;
@@ -718,17 +709,23 @@ int dm_map_goals(dm_map_goal_view *v) {
     v->n = 0; return 0;
 }
 // 越肩 / 第一人称镜头开着时把手柄镜头的缩放写小，让游戏载入、画的范围变大：抬高的透视画面看得比原版画面远，远处是黑块（OnePlus 13）。
-// 黑块不是那条剔除计算着色器造成的（放宽它的视锥、每帧画的东西不增，xbg_game.cpp cam::widen 试过），是游戏按原版正交画面的大小决定载入 / 提交哪些房间。
+// 黑块不是那条剔除计算着色器造成的（试过放宽它的视锥，每帧画的东西不增），是游戏按原版正交画面的大小决定提交哪些东西（载入的是人物所在房间和相邻 8 间，
+// 跟画面无关：再远的地方没载入，只能接受）。
 // 原版画面大小跟手柄镜头的缩放 cameraZoomSetting（controllersettings.json，缺省 1.2）走：设置单例在 main+0x2d129d0（取用器 0x2acecc，构造标志 0x2d20948），
 // 缩放在 +0x1348，镜头每帧更新（约 0x89c370）重读它，所以开着镜头时每帧写成 DM_CAM_ZOOM（缺省 0.6 = 画面宽一倍），关了写回原值。
 // 原版把它夹在 [1.0, 2.25]，下限由改写器放到 0.5（patch_nso.py 0x89c444 / 0x89c428）；旧包没这两处时最多到 1.0
 // While the over-the-shoulder / first-person camera is on, write the controller camera's zoom smaller so the game loads and draws a larger area: the raised
 // perspective picture sees further than the original picture, and the far ground shows black patches (OnePlus 13). The patches do not come from the culling
-// compute shader (widening its frustum did not add draws, xbg_game.cpp cam::widen); the game picks which rooms to load / submit by the size of the original
-// orthographic picture. That size follows the controller camera's zoom cameraZoomSetting (controllersettings.json, default 1.2): the settings singleton is at
+// compute shader (an experiment widening its frustum added no draws); the game picks what to submit by the size of the original orthographic picture (what
+// is loaded is the character's room and its 8 neighbours, regardless of the picture: farther away nothing is loaded, which we accept). That size follows the controller camera's zoom cameraZoomSetting (controllersettings.json, default 1.2): the settings singleton is at
 // main+0x2d129d0 (getter 0x2acecc, construction flag 0x2d20948), the zoom at +0x1348, and the camera's per-frame update (about 0x89c370) rereads it -- so with
 // the camera on it is written as DM_CAM_ZOOM every frame (default 0.6 = a picture twice as wide), and the original is written back when it goes off.
 // The game clamps it to [1.0, 2.25]; the rewriter moves the floor to 0.5 (patch_nso.py 0x89c444 / 0x89c428); an older pack without those stops at 1.0
+// 只在原神式（安卓 / 鸿蒙的越肩缺省，dm_cam_style = 1）或设了 DM_CAM_ZOOM 时缩放：Metal 后端没在 iOS 上试过，不动它。镜头没在缩放时见到低于原版下限 1.0 的值
+// （比如开着镜头时游戏把设置存进了 controllersettings.json，下次关着镜头启动），写回 1.2，原版画面不跟着变小
+// Only zoom with the Genshin style (the over-the-shoulder default on Android / HarmonyOS, dm_cam_style = 1) or with DM_CAM_ZOOM set: the Metal backend has
+// not been tried on iOS, so it is left alone. When not zooming, a value below the original floor 1.0 (say the game saved the settings into
+// controllersettings.json while the camera was on, and the next start has the camera off) is written back as 1.2, so the original picture does not shrink
 // 镜头开着时写进去的缩放（DM_CAM_ZOOM，缺省 0.6，夹在 [0.5, 2.25]）；dm_cam.c 按它算原版画面多大、往前挪多少
 // The zoom written while the camera is on (DM_CAM_ZOOM, default 0.6, clamped to [0.5, 2.25]); dm_cam.c works out from it how big the original picture
 // is and how far to move it ahead
@@ -737,6 +734,12 @@ float dm_cam_zoom_want(void) {
     int v = atomic_load(&cz);
     if (v < 0) { const char *e = getenv("DM_CAM_ZOOM"); float w = e ? (float)atof(e) : 0.6f; if (!(w >= 0.5f)) w = 0.5f; if (w > 2.25f) w = 2.25f; v = (int)lroundf(w * 100); atomic_store(&cz, v); }
     return v / 100.0f;
+}
+// 缩放开不开（见上）；dm_cam.c 的原版画面前移也看它，没缩放就不挪 | Whether the zoom is used (see above); dm_cam.c's ahead shift follows it and stays off without the zoom
+int dm_cam_zoom_on(void) {
+    int dm_cam_style(void); static _Atomic int env = -1;
+    int e = atomic_load(&env); if (e < 0) { e = getenv("DM_CAM_ZOOM") != NULL; atomic_store(&env, e); }
+    return e || dm_cam_style() == 1;
 }
 static void w_cam_zoom(uint8_t *b) {
     int dm_cam_mode(void);
@@ -752,10 +755,11 @@ static void w_cam_zoom(uint8_t *b) {
     static int panel = -1;
     const int pv = *(volatile int *)(b + 0x2d47640);
     if (pv != panel) { if (dm_cam_mode() > 0) LOG("镜头缩放：面板横移状态 %d → %d", panel, pv); panel = pv; }
-    if (dm_cam_mode() > 0) {
-        if (orig < 0) { orig = *z >= 1.0f && *z <= 2.25f ? *z : 1.2f; LOG("镜头缩放：开镜头，cameraZoomSetting %.2f → %.2f（原版画面放大，载入范围跟着变大）", orig, want); }
+    if (dm_cam_mode() > 0 && dm_cam_zoom_on()) {
+        if (orig < 0) { orig = *z >= 1.0f && *z <= 2.25f ? *z : 1.2f; LOG("镜头缩放：开镜头，cameraZoomSetting %.2f → %.2f（原版画面放大，画的范围跟着变大）", orig, want); }
         if (*z != want) *z = want;
     } else if (orig >= 0) { *z = orig; LOG("镜头缩放：关镜头，cameraZoomSetting 写回 %.2f", orig); orig = -1; }
+    else if (*z < 1.0f) { LOG("镜头缩放：cameraZoomSetting %.2f 低于原版下限，写回 1.20", *z); *z = 1.2f; }
 }
 void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at the controller poll
 #if TARGET_OS_OSX
