@@ -720,10 +720,19 @@ int dm_map_goals(dm_map_goal_view *v) {
 // main+0x2d129d0 (getter 0x2acecc, construction flag 0x2d20948), the zoom at +0x1348, and the camera's per-frame update (about 0x89c370) rereads it -- so with
 // the camera on it is written as DM_CAM_ZOOM every frame (default 0.6 = a picture twice as wide), and the original is written back when it goes off.
 // The game clamps it to [1.0, 2.25]; the rewriter moves the floor to 0.5 (patch_nso.py 0x89c444 / 0x89c428); an older pack without those stops at 1.0
+// 镜头开着时写进去的缩放（DM_CAM_ZOOM，缺省 0.6，夹在 [0.5, 2.25]）；dm_cam.c 按它算原版画面多大、往前挪多少
+// The zoom written while the camera is on (DM_CAM_ZOOM, default 0.6, clamped to [0.5, 2.25]); dm_cam.c works out from it how big the original picture
+// is and how far to move it ahead
+float dm_cam_zoom_want(void) {
+    static _Atomic int cz = -1;
+    int v = atomic_load(&cz);
+    if (v < 0) { const char *e = getenv("DM_CAM_ZOOM"); float w = e ? (float)atof(e) : 0.6f; if (!(w >= 0.5f)) w = 0.5f; if (w > 2.25f) w = 2.25f; v = (int)lroundf(w * 100); atomic_store(&cz, v); }
+    return v / 100.0f;
+}
 static void w_cam_zoom(uint8_t *b) {
     int dm_cam_mode(void);
-    static float orig = -1, want = -1;
-    if (want < 0) { const char *e = getenv("DM_CAM_ZOOM"); want = e ? (float)atof(e) : 0.6f; if (!(want >= 0.5f)) want = 0.5f; if (want > 2.25f) want = 2.25f; }
+    static float orig = -1;
+    const float want = dm_cam_zoom_want();
     if (!(*(volatile uint8_t *)(b + 0x2d20948) & 1)) return;
     float *z = (float *)(b + 0x2d129d0 + 0x1348);
     // 诊断：开面板时原版镜头横移（主程序 0x89c370：[0x2d47640] 为 1 / 2 时沿画面横向挪 0.0884 × 200 × u），画面线程的人物估计不知道这一挪；
