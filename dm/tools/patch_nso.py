@@ -222,6 +222,14 @@ if RULE_RUN:
     # and unchanged up to here) and use 0.5 below it; the default 1.2 is unaffected
     cuts.append((0x89c444, struct.pack('<I', 0x1E2C2000).hex(), struct.pack('<I', 0x1E282000).hex(), '镜头缩放下限比较：fcmp s0,s12（1.0）→ fcmp s0,s8（0.5）', '仅宿主'))
     cuts.append((0x89c428, struct.pack('<I', 0x52A7F008).hex(), struct.pack('<I', 0x52A7E008).hex(), '镜头缩放下限值：mov w8,#0x3f800000（1.0）→ #0x3f000000（0.5）', '仅宿主'))
+    # 原版画面往 3D 镜头前方挪：同一个镜头更新里，镜头位置（x20 +0x100..+0x108 = 人物 + 偏移 x19 +0xc..+0x14）写好之后紧接着调 0x1628978 取第二个镜头
+    # （0x89ccc8），这个调用点换成 svc #0x8f：宿主原样代调，镜头开着时再把位置和偏移加上挪动量（dm_cam.c svc_cam_ahead，hle.h SVC_HOST_CAM_AHEAD）。
+    # 调用点上调用方本来就不指望临时寄存器留着，宿主的 C 代码保住 x19–x28 / d8–d15
+    # Move the original picture ahead of the 3D camera: in the same camera update, right after the camera position is written (x20 +0x100..+0x108 =
+    # character + offset x19 +0xc..+0x14), 0x1628978 is called to get the second camera (0x89ccc8); this call site becomes svc #0x8f: the host forwards the
+    # call as is and, with the camera on, adds the shift to the position and the offset (dm_cam.c svc_cam_ahead, hle.h SVC_HOST_CAM_AHEAD). At a call site
+    # the caller does not expect scratch registers to survive anyway, and the host's C code keeps x19-x28 / d8-d15
+    cuts.append((0x89ccc8, struct.pack('<I', 0x94362F2C).hex(), struct.pack('<I', 0xD40011E1).hex(), '镜头更新取第二个镜头调用点 bl 0x1628978 → svc #0x8f：宿主原样代调，镜头开着时把原版画面往 3D 镜头前方挪（hle.h SVC_HOST_CAM_AHEAD）', '仅宿主'))
 if RULE_RUN and PRIVATE_GATES:
     # 只登记精力资格/移动选择/走跑偏好；不改方向、真实幅度、合法mode与零轴分支。
     # 两个成本/选择器通用点的type0防护在下方原生小跳板，非player保原行为。

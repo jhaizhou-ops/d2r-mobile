@@ -41,7 +41,10 @@ static inline xbg_cam_params xbg_cam_default_params(int mode) {
 // tilt = the pitch offset the player dragged (radians, positive = look up; the host's dm_cam_tilt_get, filled in by the caller every frame); tilt_lo /
 // tilt_hi = the range it can take for this frame's rig, computed by xbg_cam_build, which the caller uses to clamp the host's sum (so dragging back after
 // overshooting does not start with a dead stretch)
-typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3], dcur, tilt, tilt_lo, tilt_hi; int have, have_eye, hold; uint64_t frame; double t; } xbg_cam_state;
+// ahead = 宿主这一帧给原版镜头加的挪动量（世界 x / z，dm_cam.c dm_cam_ahead_pick，调用方每帧填）：矩阵反推的人物点要先扣掉它；不挪的后端（Metal）恒 0
+// ahead = the shift the host added to the original camera this frame (world x / z, dm_cam.c dm_cam_ahead_pick, filled in by the caller every frame): the
+// character point derived from the matrices has it removed first; backends that do not shift (Metal) keep 0
+typedef struct { float vp_prev[16], vp_last[16], fx, fz, px, pz, eye[3], fwd[3], dcur, tilt, tilt_lo, tilt_hi, ahead[2]; int have, have_eye, hold; uint64_t frame; double t; } xbg_cam_state;
 static inline void xbg_cam_init(xbg_cam_state *s) {
     memset(s, 0, sizeof *s);
     // 朝向缺省取原版视线的水平方向（原版镜头看向 −x −z），画面一进来和原版同一个朝向
@@ -242,6 +245,8 @@ static inline void xbg_cam_build(xbg_cam_state *s, const uint8_t *src, uint8_t *
     float pr[16], px, py, pz;
     memcpy(pr, src + 208, sizeof pr);
     xbg_cam_ground(src, &px, &py, &pz);
+    px -= s->ahead[0];
+    pz -= s->ahead[1];
     float fx = s->fx, fz = s->fz, eye[3], at[3], fov = pp->fov;
     if (mode == 2) {
         // 俯仰 = 缺省下俯减去玩家拖的偏移，夹在下俯 60° 到上仰 10° 之间

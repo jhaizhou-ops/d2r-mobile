@@ -85,6 +85,62 @@ int dm_cam_clearance(float bx, float bz, float *dist, float *px, float *pz) {
     if (ok) { float a = atan2f(bz, bx) / 6.2831853f * CAM_DIRS; if (a < 0) a += CAM_DIRS; int i = (int)a % CAM_DIRS, j = (i + 1) % CAM_DIRS;
         *dist = g_clear[i] < g_clear[j] ? g_clear[i] : g_clear[j]; *px = g_clear_p[0]; *pz = g_clear_p[1]; }
     pthread_mutex_unlock(&g_mu); return ok; }
+// 原版画面往 3D 镜头前方挪（DM_CAM_AHEAD，缺省 50 世界单位，0 = 关）：游戏按自己的正交画面决定载入、提交哪些东西，那个画面以人物为中心，
+// 一半在 3D 镜头身后用不上，前方远处就是黑块。镜头每帧更新（main 0x89c370）把「镜头位置 = 人物 + 偏移」写进镜头对象（x20 +0x100..+0x108）之后紧接着
+// 调 0x1628978（0x89ccc8），那个调用点换成 svc #0x8f（patch_nso.py，hle.h SVC_HOST_CAM_AHEAD）：宿主原样代调，再把镜头位置和偏移（x19 +0xc / +0x14，
+// 第二个镜头随后按它摆）加上挪动量。挪动量只取 24 个方向（AHEAD_N）之一、带回差：画面线程每帧拿矩阵反推的人物点减去各个候选，和宿主读到的人物位置比，
+// 认出这一帧带的是哪个（相邻两个方向差 2·S·sin(7.5°)，S = 50 时 13 个单位；宿主位置的滞后不到 2 个），扣掉它（dm_cam_ahead_pick）。
+// 连续变化的挪动量认不出来：画面线程不知道某一帧原版用的是哪一个。画面线程 0.5 秒没来认（Metal 后端不认、镜头关了）就不挪
+// Move the original picture ahead of the 3D camera (DM_CAM_AHEAD, default 50 world units, 0 = off): the game decides what to load and submit by its own
+// orthographic picture, which is centred on the character, so half of it is behind the 3D camera and unused while the far ground ahead shows black patches.
+// The per-frame camera update (main 0x89c370) writes "camera position = character + offset" into the camera object (x20 +0x100..+0x108) and right after
+// calls 0x1628978 (0x89ccc8); that call site becomes svc #0x8f (patch_nso.py, hle.h SVC_HOST_CAM_AHEAD): the host forwards the call as is, then adds the
+// shift to the camera position and to the offset (x19 +0xc / +0x14, which the second camera is placed by next). The shift is one of 24 directions
+// (AHEAD_N), with hysteresis: every frame the render thread subtracts each candidate from the character point derived from the matrices, compares with the
+// position the host reads, and so recognises which one the frame carries (two neighbouring directions are 2 * S * sin(7.5 degrees) apart, 13 units at
+// S = 50; the host position lags by less than 2), and removes it (dm_cam_ahead_pick). A continuously varying shift could not be recognised: the render
+// thread would not know which one the game used for a given frame. Without a pick from the render thread for 0.5 s (the Metal backend does not pick, the
+// camera is off) nothing is moved
+enum { AHEAD_N = 24 };
+static _Atomic int g_ahead_k = -1, g_ahead_cm = -1;
+static _Atomic long long g_ahead_seen_ms;
+// 挪多远（世界单位）：非 0 时至少 30，相邻方向才分得开 | How far (world units): at least 30 when not 0, so neighbouring directions stay apart
+static float ahead_len(void) {
+    int v = atomic_load(&g_ahead_cm);
+    if (v < 0) { const char *e = getenv("DM_CAM_AHEAD"); float f = e ? (float)atof(e) : 50.0f; if (!(f > 0)) f = 0; else if (f < 30) f = 30; else if (f > 150) f = 150;
+        v = (int)lroundf(f * 100); atomic_store(&g_ahead_cm, v); }
+    return v / 100.0f; }
+static void ahead_vec(int k, float *x, float *z) { float s = ahead_len(), a = (float)k * (6.2831853f / AHEAD_N); *x = k < 0 ? 0 : s * cosf(a); *z = k < 0 ? 0 : s * sinf(a); }
+// svc #0x8f：跑在游戏线程自己的栈上，只做几次读写，不记日志 | svc #0x8f: runs on the game thread's own stack, only a few loads and stores, no logging
+void svc_cam_ahead(uint64_t *regs) {
+    static uint8_t *B;
+    if (!B) for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) B = (uint8_t *)g_mod[i].base;
+    regs[0] = ((uint64_t (*)(uint64_t))(B + 0x1628978))(regs[0]);
+    int k = atomic_load(&g_ahead_k);
+    if (k < 0 || dm_cam_mode() <= 0 || (long long)(now_s() * 1000) - atomic_load(&g_ahead_seen_ms) > 500) return;
+    uint8_t *ctl = (uint8_t *)(uintptr_t)regs[19], *cam = (uint8_t *)(uintptr_t)regs[20]; if (!ctl || !cam) return;
+    float x, z; ahead_vec(k, &x, &z);
+    *(float *)(cam + 0x100) += x; *(float *)(cam + 0x108) += z; *(float *)(ctl + 0xc) += x; *(float *)(ctl + 0x14) += z; }
+// 画面线程每帧调：(rx, rz) = 矩阵反推的人物点（含挪动），(hx, hz) = 宿主读到的人物位置（host_ok = 0 时没有，改和上一帧扣完的点比），(fx, fz) = 3D 镜头水平朝向。
+// 返回这一帧带的挪动量（ox, oz；认不出就沿用上一次认出的），顺带按朝向定下以后各帧要挪的方向
+// Called by the render thread every frame: (rx, rz) = the character point derived from the matrices (shift included), (hx, hz) = the position the host
+// reads (absent when host_ok = 0; then compare with last frame's corrected point), (fx, fz) = the 3D camera's horizontal heading. Returns the shift this
+// frame carries (ox, oz; when nothing matches, the last one recognised), and sets the direction to shift by in later frames from the heading
+int dm_cam_ahead_pick(float rx, float rz, int host_ok, float hx, float hz, float fx, float fz, float *ox, float *oz) {
+    static int found = -1, have_last, misses, matched; static float lx, lz;
+    const float s = ahead_len(), step = 6.2831853f / AHEAD_N, tol = 0.45f * 2 * s * sinf(step / 2);
+    if (s <= 0) found = -1;
+    else if (host_ok || have_last) {
+        const float tx = host_ok ? hx : lx, tz = host_ok ? hz : lz; int best = found; float bd = 1e30f;
+        for (int c = -1; c < AHEAD_N; c++) { float vx, vz; ahead_vec(c, &vx, &vz); float d = hypotf(rx - vx - tx, rz - vz - tz); if (d < bd) { bd = d; best = c; } }
+        if (bd < tol) { found = best; misses = 0; if (best >= 0 && !matched++) LOG("原版画面前移：认出第一帧挪动（方向 %d / %d，%.0f 个单位）", best, AHEAD_N, s); }
+        else if (++misses == 30) LOG("【黄】原版画面前移：连续 30 帧认不出挪动（最近 %.1f 个单位，宿主位置 %s），沿用方向 %d", bd, host_ok ? "有" : "没有", found); }
+    float vx, vz; ahead_vec(found, &vx, &vz); *ox = vx; *oz = vz; lx = rx - vx; lz = rz - vz; have_last = 1;
+    if (s > 0 && fx * fx + fz * fz > 0.25f) {
+        const float a = atan2f(fz, fx); int k = atomic_load(&g_ahead_k); const int kn = (((int)lroundf(a / step)) % AHEAD_N + AHEAD_N) % AHEAD_N;
+        if (k < 0 || fabsf(remainderf(a - (float)k * step, 6.2831853f)) > 0.65f * step) atomic_store(&g_ahead_k, kn); }
+    atomic_store(&g_ahead_seen_ms, (long long)(now_s() * 1000));
+    return found >= 0; }
 static int cam_get(cam_t *c) {
     if (dm_cam_mode() <= 0) return 0;   // 两档都换算：第一人称以前只认越肩，摇杆一直按原版方向走，转过身就左右颠倒 | both modes: first person used to be left out, so its stick kept the original directions and swapped left and right once turned around
     pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5; if (ok) *c = g_pub; pthread_mutex_unlock(&g_mu); return ok; }

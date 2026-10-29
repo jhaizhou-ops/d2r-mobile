@@ -51,6 +51,7 @@ __attribute__((weak)) int dm_cam_mode(void);
 __attribute__((weak)) int dm_cam_style(void);
 __attribute__((weak)) int dm_cam_attack_dir(float *wx,float *wz);
 __attribute__((weak)) void dm_cam_publish_height(float py);
+__attribute__((weak)) int dm_cam_ahead_pick(float rx,float rz,int host_ok,float hx,float hz,float fx,float fz,float *ox,float *oz);
 __attribute__((weak)) int dm_cam_want_dir(float *wx,float *wz);
 __attribute__((weak)) int dm_cam_clearance(float bx,float bz,float *dist,float *px,float *pz);
 __attribute__((weak)) float dm_cam_take_turn(void);
@@ -2531,6 +2532,11 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         // Follow once per frame: the host's heading (aim drag > move stick) first, then the character's displacement; the over-the-shoulder mode
         // publishes both matrix sets for input conversion, first person does not convert input
         float px,py,pz,wx=0,wz=0;xbg_cam_ground(p,&px,&py,&pz);const int want=dm_cam_want_dir?dm_cam_want_dir(&wx,&wz):0;
+        // 原版画面往前挪（宿主 dm_cam.c DM_CAM_AHEAD）：认出这一帧原版镜头带的挪动量，从人物点里扣掉；xbg_cam_build 里同样扣（st.ahead）
+        // The original picture moved ahead (host dm_cam.c DM_CAM_AHEAD): recognise the shift this frame's original camera carries and remove it from the
+        // character point; xbg_cam_build removes it the same way (st.ahead)
+        st.ahead[0]=st.ahead[1]=0;
+        if(dm_cam_ahead_pick){float c=0,hx=0,hz=0;const int hok=dm_cam_clearance && dm_cam_clearance(-st.fx,-st.fz,&c,&hx,&hz);dm_cam_ahead_pick(px,pz,hok,hx,hz,st.fx,st.fz,&st.ahead[0],&st.ahead[1]);px-=st.ahead[0];pz-=st.ahead[1];}
         // 体感转向（宿主 dm_cam.c）：每帧取走一次累计的转动；最近一秒内转过就让跟随不动朝向，转动在跟随之后加上
         // Sensor steering (host dm_cam.c): take the accumulated turn once per frame; with a turn within the last second the follow leaves the heading alone,
         // and the turn is added after the follow
@@ -2566,7 +2572,7 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         float vp[16],ivp[16];xbg_cam_build(&st,p,d,mode_,&rig,vp,ivp);if(fresh && dm_cam_tilt_clamp)dm_cam_tilt_clamp(st.tilt_lo,st.tilt_hi);
         if(dm_cam_publish)dm_cam_publish(reinterpret_cast<const float*>(p+336),reinterpret_cast<const float*>(p+400),vp,ivp,px,pz);
         if(dm_cam_publish_height)dm_cam_publish_height(py);
-        if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d style=%d bytes=%zu player=%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f clear=%.1f(%d) dist=%.1f host=%.1f,%.1f turned=%.2f hold=%d",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,style,copy,px,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2],clear,int(clear_ok),st.dcur,host_px,host_pz,turned,st.hold);
+        if(patches++%600==0)xbg_logf("NVN cam patch=%llu scene=%llu widened=%llu mode=%d style=%d bytes=%zu player=%.1f,%.1f heading=%.2f,%.2f eye=%.1f,%.1f,%.1f clear=%.1f(%d) dist=%.1f host=%.1f,%.1f turned=%.2f hold=%d ahead=%.0f,%.0f",(unsigned long long)patches,(unsigned long long)scenes,(unsigned long long)widened,mode_,style,copy,px,pz,st.fx,st.fz,st.eye[0],st.eye[1],st.eye[2],clear,int(clear_ok),st.dcur,host_px,host_pz,turned,st.hold,st.ahead[0],st.ahead[1]);
         if(patches==1){
             // 原版正交画面的大小（世界单位）：宽 2/pr[0]、高 2/pr[5]；原版下俯 30°，所以画面的高在地面上沿视线方向盖住两倍长。
             // 越肩镜头画得出来的东西不出这个范围：按正交视锥剔除的计算着色器和游戏自己挑单位都按它
