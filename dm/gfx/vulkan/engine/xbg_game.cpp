@@ -2456,7 +2456,7 @@ Buffer uniform_snapshot_cached(uint64_t address,size_t copy);
 namespace cam {
 const char *const cull_cs="1188eaedc8db3285";
 int mode_=-1;xbg_cam_params params;xbg_cam_state st;uint64_t patches=0,scenes=0,widened=0;
-float clear=0,host_px=0,host_pz=0,turned=0,drag_k=0.5f,pull_pitch=40,pull_min=5,cull_widen=1;bool clear_ok=false;uint64_t drift_frame=0;
+float clear=0,host_px=0,host_pz=0,turned=0,drag_k=0.5f,pull_pitch=40,pull_min=5,pull_near=10,pull_blend=4,cull_widen=1;bool clear_ok=false;uint64_t drift_frame=0;
 struct Copy{uint64_t address=0,bytes=0,epoch=0;Buffer buffer;};std::array<Copy,8> copies;unsigned next=0;
 float envf(const char *k,float d){const char *e=getenv(k);return e?float(atof(e)):d;}
 int mode(){
@@ -2473,8 +2473,8 @@ int mode(){
             if(mode_==1 && dm_cam_style && dm_cam_style()==1){params.look=7;params.fov=70;params.reach=0;}
             params.dist=envf("DM_CAM_DIST",params.dist);params.h=envf("DM_CAM_H",params.h);params.look=envf("DM_CAM_LOOK",params.look);params.lookh=envf("DM_CAM_LOOKH",params.lookh);
             params.eye=envf("DM_CAM_EYE",params.eye);params.fwd=envf("DM_CAM_FWD",params.fwd);params.pitch=envf("DM_CAM_PITCH",params.pitch);params.fov=envf("DM_CAM_FOV",params.fov);
-            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);drag_k=envf("DM_CAM_DRAG",0.5f);pull_pitch=envf("DM_CAM_PULL_PITCH",40);pull_min=envf("DM_CAM_PULL_MIN",5);cull_widen=envf("DM_CAM_CULL_WIDEN",1);xbg_cam_init(&st);
-            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g reach=%g drag=%g pull=%g/%g cull_widen=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_,params.reach,drag_k,pull_pitch,pull_min,cull_widen);}}
+            params.tau=envf("DM_CAM_TAU",params.tau);params.near_=envf("DM_CAM_NEAR",params.near_);params.reach=envf("DM_CAM_REACH",params.reach);drag_k=envf("DM_CAM_DRAG",0.5f);pull_pitch=envf("DM_CAM_PULL_PITCH",40);pull_min=envf("DM_CAM_PULL_MIN",5);pull_near=envf("DM_CAM_PULL_NEAR",10);pull_blend=envf("DM_CAM_PULL_BLEND",4);cull_widen=envf("DM_CAM_CULL_WIDEN",1);xbg_cam_init(&st);
+            xbg_logf("NVN cam mode=%d dist=%g h=%g look=%g lookh=%g eye=%g fwd=%g pitch=%g fov=%g tau=%g near=%g reach=%g drag=%g pull=%g/%g near=%g+%g cull_widen=%g",mode_,params.dist,params.h,params.look,params.lookh,params.eye,params.fwd,params.pitch,params.fov,params.tau,params.near_,params.reach,drag_k,pull_pitch,pull_min,pull_near,pull_blend,cull_widen);}}
     return mode_;
 }
 // 绑定长度：认出主相机或场景块（先读客体内存里签名那几行，便宜）就返回整块长度，否则原样返回 copy
@@ -2555,7 +2555,15 @@ Buffer patch(uint64_t address,size_t copy,const Buffer &src){
         if(fresh && style==1 && !st.hold && dm_cam_attack_dir){float ax=0,az=0;if(dm_cam_attack_dir(&ax,&az))xbg_cam_ease(&st,ax,az,t0?st.t-t0:0,params.tau);}
         // 避墙（越肩档）：宿主按碰撞格量的、镜头朝后那个方向上离墙多远，每帧拉一次
         // Wall avoidance (over-the-shoulder mode): how far the wall is in the camera's backward direction, as the host measured on the collision grid, pulled once per frame
-        if(fresh && mode_==1){float c=0;clear_ok=dm_cam_clearance && dm_cam_clearance(-st.fx,-st.fz,&c,&host_px,&host_pz);clear=clear_ok?c:0;xbg_cam_pull(&st,params.dist,style==1 && clear>0 && clear<pull_min?pull_min:clear,t0?st.t-t0:0);}
+        // 原神式只理会离人近的墙（DM_CAM_PULL_NEAR，缺省 10）：镜头在人后 20、高 13，视线在人后 d 处离地约 3 + d / 2，再远的墙一般在视线下面、挡不住人。
+        // near 到 near + blend 之间从 near 渐变到满距离，越过门槛时不一下跳 10 个单位（用户 2026-10-29：避墙太敏感）
+        // The Genshin style only minds walls close to the character (DM_CAM_PULL_NEAR, default 10): with the camera 20 behind and 13 up, the sight line d
+        // behind the character is about 3 + d / 2 above the ground, so farther walls are usually below it and do not hide the character. Between near and
+        // near + blend the distance goes from near to the full distance, so crossing the threshold does not jump 10 units (the user, 2026-10-29: the wall
+        // avoidance reacts too easily)
+        if(fresh && mode_==1){float c=0;clear_ok=dm_cam_clearance && dm_cam_clearance(-st.fx,-st.fz,&c,&host_px,&host_pz);clear=clear_ok?c:0;
+            float want=clear;if(style==1 && want>0){if(want>=pull_near+pull_blend)want=0;else if(want>pull_near)want=pull_near+(params.dist-pull_near)*(want-pull_near)/pull_blend;if(want>0 && want<pull_min)want=pull_min;}
+            xbg_cam_pull(&st,params.dist,want,t0?st.t-t0:0);}
         // 诊断：人物估计（xbg_cam_ground）和宿主读到的人物位置差 3 个单位以上就记一笔（最多每秒一次）——缩放算式不对、开面板时原版镜头横移，都会在这里露出来
         // Diagnostic: log when the character estimate (xbg_cam_ground) is more than 3 units from the position the host reads (at most once a second) -- a
         // wrong zoom formula or the original camera moving sideways for an open panel shows up here

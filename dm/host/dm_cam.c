@@ -87,7 +87,11 @@ void dm_cam_set_clear(const float d[32], float px, float pz) {
 int dm_cam_clearance(float bx, float bz, float *dist, float *px, float *pz) {
     pthread_mutex_lock(&g_mu); int ok = g_clear_t > 0 && now_s() - g_clear_t < 0.5;
     if (ok) { float a = atan2f(bz, bx) / 6.2831853f * CAM_DIRS; if (a < 0) a += CAM_DIRS; int i = (int)a % CAM_DIRS, j = (i + 1) % CAM_DIRS;
-        *dist = g_clear[i] < g_clear[j] ? g_clear[i] : g_clear[j]; *px = g_clear_p[0]; *pz = g_clear_p[1]; }
+        // 原神式取两个方向里远的那个：细东西（树干、柱子、栅栏桩）一般只挡住一个方向，不该把镜头拉进来；真墙两个方向都挡（用户 2026-10-29：避墙太敏感）
+        // The Genshin style takes the farther of the two directions: thin things (tree trunks, pillars, fence posts) usually block only one direction and
+        // should not pull the camera in; a real wall blocks both (the user, 2026-10-29: the wall avoidance reacts too easily)
+        const int far = dm_cam_style() == 1;
+        *dist = (g_clear[i] < g_clear[j]) != far ? g_clear[i] : g_clear[j]; *px = g_clear_p[0]; *pz = g_clear_p[1]; }
     pthread_mutex_unlock(&g_mu); return ok; }
 // 原版画面往 3D 镜头前方挪（DM_CAM_AHEAD = 挪动量占原版画面半深的比例，缺省 0.5：人物前方占画面 3/4、身后留 1/4，转身时身后也还有东西；0 = 关）：游戏按自己的正交画面决定载入、提交哪些东西，那个画面以人物为中心，
 // 一半在 3D 镜头身后用不上，前方远处就是黑块。镜头每帧更新（main 0x89c370）把「镜头位置 = 人物 + 偏移」写进镜头对象（x20 +0x100..+0x108）之后紧接着
