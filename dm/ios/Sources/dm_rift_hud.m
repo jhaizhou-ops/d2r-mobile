@@ -1,16 +1,26 @@
 // 秘境爬塔左侧任务栏：放在左边并缩小，布局参考暗黑 3 右侧任务栏，倒计时条和整体风格按暗黑 2。
 // 尺寸数字照设计稿：设计稿按 Mac 窗口 2 倍像素画（游戏区 1334×614），
-// 这里以 u = 游戏区高 / 614 为单位换算。数据由 dm/host/dm_rift.c 出（dm_rift_hud），前端每帧调（front_ios.m tickTouchControls）。
+// 这里以 u = 游戏区高 / 614 为单位换算。数据由 dm/host/dm_rift.c 出（dm_rift_hud），两端前端刷新时调用。
 // 字：原版 BlizzardGlobal——运行时从资源包读出来注册（不进仓库、不进 App 包）；读不到就用系统粗体。
 //   资源包读法同 dm/ios/tools/touch_layout.py read_layout：data/build_manifest.psv 按路径后缀找行 → 第 7 列编码键（第 10、11 字节 = 数据档号，12–16 = 偏移）、
 //   第 8 列原始长度、第 9 列编码（n 原样 / z 整块 zlib / 其余 BLTE 分块：每块首字节 N 原样、Z = zlib）。
 // Left-side quest bar for the rift tower climb: placed on the left and shrunk; the layout follows Diablo 3's right-side quest bar, the countdown bar and overall style follow Diablo 2.
 // Size numbers follow the design mock: the mock is drawn at 2x pixels of the Mac window (game area 1334×614),
-// and here everything is converted with u = game area height / 614 as the unit. Data comes from dm/host/dm_rift.c (dm_rift_hud); the front end calls it every frame (front_ios.m tickTouchControls).
+// and here everything is converted with u = game area height / 614 as the unit. Data comes from dm/host/dm_rift.c (dm_rift_hud); both Apple front ends call it while refreshing their overlays.
 // Font: the original game's BlizzardGlobal -- read from the asset pack at runtime and registered (not in the repository, not in the App bundle); if it cannot be read, use the system bold font.
 //   The asset pack is read the same way as dm/ios/tools/touch_layout.py read_layout: find the row in data/build_manifest.psv by path suffix → column 7 is the encoding key (bytes 10 and 11 = data archive number, 12–16 = offset),
 //   column 8 the raw length, column 9 the encoding (n as-is / z whole-block zlib / otherwise BLTE chunks: first byte of each chunk N as-is, Z = zlib).
-#import <UIKit/UIKit.h>
+#import "dm_rift_hud.h"
+#import <QuartzCore/QuartzCore.h>
+#if TARGET_OS_OSX
+#define DmRiftView NSView
+#define DmRiftFont NSFont
+#define DmRiftColor NSColor
+#else
+#define DmRiftView UIView
+#define DmRiftFont UIFont
+#define DmRiftColor UIColor
+#endif
 #include "dm_i18n.h"
 #import <CoreText/CoreText.h>
 #include "../../host/dm_rift.h"
@@ -36,27 +46,37 @@ static NSData *romfs_file(NSString *suffix) {
         return o; }
     return nil;
 }
-static UIFont *d2font(CGFloat size) {   // 原版 BlizzardGlobal（中文、数字都是它） | The original game's BlizzardGlobal (used for both Chinese text and digits)
+static DmRiftFont *d2font(CGFloat size) {   // 原版 BlizzardGlobal（中文、数字都是它） | The original game's BlizzardGlobal (used for both Chinese text and digits)
     static NSString *name; static int tried;
     if (!tried) { tried = 1; NSData *d = romfs_file(@"/hd/ui/fonts/blizzardglobal-v5_81.ttf");
         CGDataProviderRef p = d ? CGDataProviderCreateWithCFData((__bridge CFDataRef)d) : NULL; CGFontRef f = p ? CGFontCreateWithDataProvider(p) : NULL;
         if (f && CTFontManagerRegisterGraphicsFont(f, NULL)) name = (__bridge_transfer NSString *)CGFontCopyPostScriptName(f);
         if (f) CGFontRelease(f); if (p) CGDataProviderRelease(p);
         NSLog(@"[秘境] 任务栏字体：%@", name ?: @"读不到原版 BlizzardGlobal，用系统粗体"); }
-    return (name ? [UIFont fontWithName:name size:size] : nil) ?: [UIFont boldSystemFontOfSize:size];
+    return (name ? [DmRiftFont fontWithName:name size:size] : nil) ?: [DmRiftFont boldSystemFontOfSize:size];
 }
-static UIColor *rgb(int r, int g, int b, CGFloat a) { return [UIColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:a]; }
-static CATextLayer *text_layer(void) { CATextLayer *t = [CATextLayer layer]; t.contentsScale = UIScreen.mainScreen.scale; t.shadowOpacity = 0.86; t.shadowOffset = CGSizeMake(1, 1); t.shadowRadius = 0; t.shadowColor = UIColor.blackColor.CGColor; return t; }
-static void set_text(CATextLayer *t, NSString *s, UIFont *f, UIColor *c, CGRect fr, NSString *align) {
+static DmRiftColor *rgb(int r, int g, int b, CGFloat a) { return [DmRiftColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:a]; }
+static CATextLayer *text_layer(void) { CATextLayer *t = [CATextLayer layer];
+#if TARGET_OS_OSX
+    t.contentsScale = NSScreen.mainScreen.backingScaleFactor ?: 1;
+#else
+    t.contentsScale = UIScreen.mainScreen.scale;
+#endif
+     t.shadowOpacity = 0.86; t.shadowOffset = CGSizeMake(1, 1); t.shadowRadius = 0; t.shadowColor = DmRiftColor.blackColor.CGColor; return t; }
+static void set_text(CATextLayer *t, NSString *s, DmRiftFont *f, DmRiftColor *c, CGRect fr, NSString *align) {
     t.frame = fr; t.alignmentMode = align; t.foregroundColor = c.CGColor; t.font = (__bridge CFTypeRef)f; t.fontSize = f.pointSize;
     if (![t.string isEqual:s]) t.string = s;
 }
 
-void dm_rift_hud_draw(UIView *host, CGRect wr, BOOL hide) {
+void dm_rift_hud_draw(DmRiftView *host, CGRect wr, BOOL hide) {
     static CALayer *box, *lineT, *lineB, *lineL, *track, *ticks[9]; static CAGradientLayer *fill; static CAShapeLayer *pin[2]; static CATextLayer *title, *sub, *timer, *goal;
     dm_rift_hud_t h; int on = !hide && dm_rift_hud(&h);
     if (!box) { if (!on) return;
-        box = [CALayer layer]; box.backgroundColor = rgb(0, 0, 0, 170 / 255.0).CGColor;
+        box = [CALayer layer];
+#if TARGET_OS_OSX
+        box.geometryFlipped = YES; // AppKit 宿主左下原点，子层保留 iOS 左上布局 | Children keep the iOS top-left layout in AppKit's bottom-left host.
+#endif
+        box.backgroundColor = rgb(0, 0, 0, 170 / 255.0).CGColor;
         lineT = [CALayer layer]; lineB = [CALayer layer]; lineL = [CALayer layer]; track = [CALayer layer]; fill = [CAGradientLayer layer];
         title = text_layer(); sub = text_layer(); timer = text_layer(); goal = text_layer();
         for (CALayer *l in @[lineT, lineB, lineL, title, sub, timer, goal, track]) [box addSublayer:l];
@@ -67,10 +87,17 @@ void dm_rift_hud_draw(UIView *host, CGRect wr, BOOL hide) {
     box.hidden = !on;
     if (on) {
         CGFloat u = wr.size.height / 614, W = 250 * u, H = 78 * u;
+
+#if TARGET_OS_OSX
+        box.frame = CGRectMake(wr.origin.x + 28 * u, CGRectGetMaxY(wr) - 150 * u - H, W, H);
+        CGFloat scale = host.window.backingScaleFactor ?: NSScreen.mainScreen.backingScaleFactor ?: 1;
+        for (CATextLayer *text in @[title, sub, timer, goal]) text.contentsScale = scale;
+#else
         box.frame = CGRectMake(wr.origin.x + 28 * u, wr.origin.y + 150 * u, W, H);
+#endif
         lineT.frame = CGRectMake(0, 0, W, MAX(1, u)); lineB.frame = CGRectMake(0, H - MAX(1, u), W, MAX(1, u)); lineL.frame = CGRectMake(0, 0, 2 * u, H);
         lineT.backgroundColor = lineB.backgroundColor = rgb(120, 100, 60, 0.9).CGColor; lineL.backgroundColor = rgb(150, 125, 75, 1).CGColor;
-        int g = h.guardian, s = h.secs_left < 0 ? 0 : h.secs_left; UIColor *gold = rgb(199, 179, 119, 1), *red = rgb(200, 50, 40, 1), *white = rgb(215, 210, 200, 1), *grey = rgb(150, 145, 135, 1);
+        int g = h.guardian, s = h.secs_left < 0 ? 0 : h.secs_left; DmRiftColor *gold = rgb(199, 179, 119, 1), *red = rgb(200, 50, 40, 1), *white = rgb(215, 210, 200, 1), *grey = rgb(150, 145, 135, 1);
         set_text(title, @(dm_ui("dmRiftHudTitle")), d2font(17 * u), g ? red : gold, CGRectMake(10 * u, 6 * u, 40 * u, 22 * u), kCAAlignmentLeft);
         NSString *st = h.done ? (h.inc ? [NSString stringWithFormat:@(dm_ui("dmRiftHudDone")), h.tier] : [NSString stringWithFormat:@(dm_ui("dmRiftHudLate")), h.tier]) : g ? @(dm_ui("dmRiftHudGuard")) : [NSString stringWithFormat:@(dm_ui("dmRiftTierN")), h.tier];
         set_text(sub, st, d2font(14 * u), white, CGRectMake(48 * u, 9 * u, 130 * u, 19 * u), kCAAlignmentLeft);
@@ -83,8 +110,8 @@ void dm_rift_hud_draw(UIView *host, CGRect wr, BOOL hide) {
         CGFloat bw = MAX(1, u); fill.frame = CGRectMake(bw, bw, (tr.size.width - 2 * bw) * (h.done ? 1 : h.progress), tr.size.height - 2 * bw);
         fill.colors = g ? @[(id)rgb(190, 50, 40, 1).CGColor, (id)rgb(110, 20, 15, 1).CGColor] : @[(id)rgb(205, 160, 80, 1).CGColor, (id)rgb(140, 100, 40, 1).CGColor];
         for (int i = 0; i < 9; i++) ticks[i].frame = CGRectMake(bw + (tr.size.width - 2 * bw) * (i + 1) / 10, bw, MAX(1, u), tr.size.height - 2 * bw);
-        for (int i = 0; i < 2; i++) { CGFloat cx = i ? tr.origin.x + tr.size.width + 4 * u : tr.origin.x - 4 * u, cy = CGRectGetMidY(tr), r = 4 * u; UIBezierPath *p = [UIBezierPath bezierPath];
-            [p moveToPoint:CGPointMake(cx, cy - r)]; [p addLineToPoint:CGPointMake(cx + r, cy)]; [p addLineToPoint:CGPointMake(cx, cy + r)]; [p addLineToPoint:CGPointMake(cx - r, cy)]; [p closePath]; pin[i].path = p.CGPath; pin[i].lineWidth = MAX(1, u * 0.8); }
+        for (int i = 0; i < 2; i++) { CGFloat cx = i ? tr.origin.x + tr.size.width + 4 * u : tr.origin.x - 4 * u, cy = CGRectGetMidY(tr), r = 4 * u; CGMutablePathRef p = CGPathCreateMutable();
+            CGPathMoveToPoint(p, NULL, cx, cy - r); CGPathAddLineToPoint(p, NULL, cx + r, cy); CGPathAddLineToPoint(p, NULL, cx, cy + r); CGPathAddLineToPoint(p, NULL, cx - r, cy); CGPathCloseSubpath(p); pin[i].path = p; CGPathRelease(p); pin[i].lineWidth = MAX(1, u * 0.8); }
     }
     [CATransaction commit];
 }

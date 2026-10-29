@@ -12,6 +12,8 @@
 #include "dm.h"
 #include "dm_input.h"
 #include "dm_uiscreen.h"
+#include "touch_mac.h"
+#import "../ios/Sources/dm_rift_hud.h"
 void mtl_set_ui_rect_fn(void (*fn)(double *y, double *h));
 static void ui_rect_frac(double *fy, double *fh) { int x, y, w, h, rw = 0, rh = 0; dm_ui_rect(&x, &y, &w, &h); if (dm_screen_real(&rw, &rh) && rh > 0) { *fy = (double)y / rh; *fh = (double)h / rh; } }   // 同 front_ios.m：界面矩形的纵向位置与高（占画面高的比例） | Same as front_ios.m: vertical position and height of the UI rectangle (as fractions of the frame height)
 __attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn(ui_rect_frac); }   // 不开窗口的跑法（截图 / 闸门）也要生效，所以不放在建图层那里 | Must also take effect when running without a window (screenshots / gate checks), so it is not placed where the layer is created
@@ -205,6 +207,16 @@ void front_run(void (*guest)(void)) {
         g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         g_layer.contentsScale = win.backingScaleFactor;
         [v.layer addSublayer:g_layer]; layout_game();
+        // 复用 iOS 的只读任务栏，绘制在 Metal 之上，位置随游戏视口变化。
+        // The same read-only HUD as iOS, above Metal and in the current game viewport.
+        // 公共运行模式让拖动窗口、切换全屏时也能更新几何。
+        // Common modes keep its geometry current during window dragging/fullscreen transitions.
+        NSTimer *riftHUDTimer = [NSTimer timerWithTimeInterval:1.0 / 30 repeats:YES block:^(NSTimer *timer) {
+            (void)timer;
+            BOOL hide = !dm_uiscreen_ingame() || (g_live && !dm_touch_host_world_active());
+            dm_rift_hud_draw(v, NSRectToCGRect(game_rect()), hide);
+        }];
+        [NSRunLoop.mainRunLoop addTimer:riftHUDTimer forMode:NSRunLoopCommonModes];
         [win center];
         g_live = getenv("DM_APP") || getenv("DM_TOUCH_LIVE"); if (g_live) dm_touch_host_live_enable();
         if (g_live) {

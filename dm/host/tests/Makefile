@@ -34,6 +34,7 @@ run: \
 	$(B)/t_oe \
 	$(B)/t_padmap \
 	$(B)/t_rift_clock \
+	$(B)/t_rift_hud \
 	$(B)/t_rift_next \
 	$(B)/t_rift_oldrun \
 	$(B)/t_rift_wave \
@@ -62,6 +63,7 @@ run: \
 	$(B)/t_mac_overlay
 	$(PY) test_mac_features.py
 	$(B)/t_rift_clock
+	$(B)/t_rift_hud
 	$(B)/t_rift_next
 	$(B)/t_rift_oldrun
 	$(B)/t_interaction_diag
@@ -202,3 +204,6 @@ $(B)/t_warp_diag: t_warp_diag.c ../dm_rift.c ../dm_unit.h | $(B)
 
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+
+$(B)/t_rift_hud: t_rift_hud.m ../../ios/Sources/dm_rift_hud.m ../../ios/Sources/dm_rift_hud.h ../dm_rift.h | $(B)
+	clang -O1 -Wall -Werror -Wno-deprecated-declarations -fobjc-arc -I.. -framework Cocoa -framework QuartzCore -framework CoreText -o $@ t_rift_hud.m ../../ios/Sources/dm_rift_hud.m
