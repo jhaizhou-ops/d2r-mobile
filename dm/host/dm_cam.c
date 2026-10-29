@@ -55,13 +55,17 @@ void dm_cam_set_mode(int m) { if (m < 0 || m > 2) m = 0; if (atomic_exchange(&g_
 
 // 画面线程发布的矩阵（行向量约定：裁剪 = [x y z 1] × M）：原版正交视图投影与逆、透视视图投影与逆、人物落地点 x / z；超过 0.5 秒没更新就当镜头没开
 // Matrices published by the render thread (row-vector convention: clip = [x y z 1] * M): original orthographic view-projection and inverse, perspective view-projection and inverse, the character's ground point x / z; not refreshed for 0.5 s = camera treated as off
-typedef struct { float vpo[16], ivpo[16], vpp[16], ivpp[16], pl[2], py; } cam_t;
+// ak = 这份矩阵那一帧原版镜头带的前移方向（dm_cam_ahead_pick 认出的，-1 = 没挪），见下面「原版画面往 3D 镜头前方挪」
+// ak = the ahead direction the original camera carried in the frame of these matrices (as dm_cam_ahead_pick recognised it, -1 = none), see "Move the
+// original picture ahead of the 3D camera" below
+typedef struct { float vpo[16], ivpo[16], vpp[16], ivpp[16], pl[2], py; int ak; } cam_t;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static cam_t g_pub; static double g_pub_t;
 static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec * 1e-9; }
+static _Atomic int g_ahead_found = -1, g_ahead_applied = -1;
 void dm_cam_publish(const float vpo[16], const float ivpo[16], const float vpp[16], const float ivpp[16], float px, float pz) {
     pthread_mutex_lock(&g_mu); memcpy(g_pub.vpo, vpo, 64); memcpy(g_pub.ivpo, ivpo, 64); memcpy(g_pub.vpp, vpp, 64); memcpy(g_pub.ivpp, ivpp, 64);
-    g_pub.pl[0] = px; g_pub.pl[1] = pz; g_pub_t = now_s(); pthread_mutex_unlock(&g_mu); }
+    g_pub.pl[0] = px; g_pub.pl[1] = pz; g_pub.ak = atomic_load(&g_ahead_found); g_pub_t = now_s(); pthread_mutex_unlock(&g_mu); }
 // 人物所在地面的高度（世界 y；画面线程每帧在 dm_cam_publish 之后给，xbg_cam.h xbg_cam_ground）。地面上画东西（瞄准箭头 dm_cam_aim）要它；
 // 没给的后端（Metal）就是 0，同原来
 // The height of the character's ground (world y; given by the render thread every frame after dm_cam_publish, xbg_cam.h xbg_cam_ground). Drawing on the
@@ -122,8 +126,9 @@ void svc_cam_ahead(uint64_t *regs) {
     if (!B) for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) B = (uint8_t *)g_mod[i].base;
     regs[0] = ((uint64_t (*)(uint64_t))(B + 0x1628978))(regs[0]);
     int k = atomic_load(&g_ahead_k);
-    if (k < 0 || dm_cam_mode() <= 0 || (long long)(now_s() * 1000) - atomic_load(&g_ahead_seen_ms) > 500) return;
-    uint8_t *ctl = (uint8_t *)(uintptr_t)regs[19], *cam = (uint8_t *)(uintptr_t)regs[20]; if (!ctl || !cam) return;
+    uint8_t *ctl = (uint8_t *)(uintptr_t)regs[19], *cam = (uint8_t *)(uintptr_t)regs[20];
+    if (k < 0 || !ctl || !cam || dm_cam_mode() <= 0 || (long long)(now_s() * 1000) - atomic_load(&g_ahead_seen_ms) > 500) { atomic_store(&g_ahead_applied, -1); return; }
+    atomic_store(&g_ahead_applied, k);
     float x, z; ahead_vec(k, &x, &z);
     *(float *)(cam + 0x100) += x; *(float *)(cam + 0x108) += z; *(float *)(ctl + 0xc) += x; *(float *)(ctl + 0x14) += z; }
 // 画面线程每帧调：(rx, rz) = 矩阵反推的人物点（含挪动），(hx, hz) = 宿主读到的人物位置（host_ok = 0 时没有，改和上一帧扣完的点比），(fx, fz) = 3D 镜头水平朝向。
@@ -140,15 +145,30 @@ int dm_cam_ahead_pick(float rx, float rz, int host_ok, float hx, float hz, float
         for (int c = -1; c < AHEAD_N; c++) { float vx, vz; ahead_vec(c, &vx, &vz); float d = hypotf(rx - vx - tx, rz - vz - tz); if (d < bd) { bd = d; best = c; } }
         if (bd < tol) { found = best; misses = 0; if (best >= 0 && !matched++) LOG("原版画面前移：认出第一帧挪动（方向 %d / %d）", best, AHEAD_N); }
         else if (++misses == 30) LOG("【黄】原版画面前移：连续 30 帧认不出挪动（最近 %.1f 个单位，宿主位置 %s），沿用方向 %d", bd, host_ok ? "有" : "没有", found); }
-    float vx, vz; ahead_vec(found, &vx, &vz); *ox = vx; *oz = vz; lx = rx - vx; lz = rz - vz; have_last = 1;
+    float vx, vz; ahead_vec(found, &vx, &vz); *ox = vx; *oz = vz; lx = rx - vx; lz = rz - vz; have_last = 1; atomic_store(&g_ahead_found, found);
     if (s > 0 && fx * fx + fz * fz > 0.25f) {
         const float a = atan2f(fz, fx); int k = atomic_load(&g_ahead_k); const int kn = (((int)lroundf(a / step)) % AHEAD_N + AHEAD_N) % AHEAD_N;
         if (k < 0 || fabsf(remainderf(a - (float)k * step, 6.2831853f)) > 0.65f * step) atomic_store(&g_ahead_k, kn); }
     atomic_store(&g_ahead_seen_ms, (long long)(now_s() * 1000));
     return found >= 0; }
+// 发布的原版矩阵是画面线程上一帧的，游戏这会儿的镜头可能已经换了前移方向（转镜头时每转 15° 换一档）：差 Δ = 现在的挪动 − 那一帧的挪动，
+// 原版画面整体跟着挪了 Δ，于是 现在的视图投影 = T(−Δ) × 那一帧的，逆 = 那一帧的逆 × T(Δ)（行向量，T(v) = 末行为 (vx, 0, vz, 1) 的平移）。
+// 点按换算、名字牌、全屏地图的人物十字都按游戏这会儿的镜头来，换档那一帧也不偏
+// The published original matrices are from the render thread's last frame, and the game's camera may already carry another ahead direction (turning the
+// camera steps it every 15 degrees): with delta = the shift now - the shift of that frame, the whole original picture has moved by delta, so the current
+// view-projection = T(-delta) x that frame's, and its inverse = that frame's inverse x T(delta) (row vectors, T(v) = translation with last row (vx, 0, vz, 1)).
+// Tap conversion, nameplates and the fullscreen map's player cross then follow the game's camera of the moment, even in the frame where the step changes
+static int ahead_delta(int ak, float *dx, float *dz) {
+    const int k = atomic_load(&g_ahead_applied); if (k == ak) return 0;
+    float ax, az, bx, bz; ahead_vec(k, &ax, &az); ahead_vec(ak, &bx, &bz); *dx = ax - bx; *dz = az - bz; return 1; }
+static void ahead_fix(float vpo[16], float ivpo[16], float dx, float dz) {
+    for (int j = 0; j < 4; j++) vpo[12 + j] -= dx * vpo[j] + dz * vpo[8 + j];
+    if (ivpo) for (int i = 0; i < 4; i++) { ivpo[i * 4] += ivpo[i * 4 + 3] * dx; ivpo[i * 4 + 2] += ivpo[i * 4 + 3] * dz; } }
 static int cam_get(cam_t *c) {
     if (dm_cam_mode() <= 0) return 0;   // 两档都换算：第一人称以前只认越肩，摇杆一直按原版方向走，转过身就左右颠倒 | both modes: first person used to be left out, so its stick kept the original directions and swapped left and right once turned around
-    pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5; if (ok) *c = g_pub; pthread_mutex_unlock(&g_mu); return ok; }
+    pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5; if (ok) *c = g_pub; pthread_mutex_unlock(&g_mu);
+    float dx, dz; if (ok && ahead_delta(c->ak, &dx, &dz)) ahead_fix(c->vpo, c->ivpo, dx, dz);
+    return ok; }
 
 static void xf(const float *M, const float v[4], float o[4]) { for (int j = 0; j < 4; j++) o[j] = v[0] * M[j] + v[1] * M[4 + j] + v[2] * M[8 + j] + v[3] * M[12 + j]; }
 
@@ -168,7 +188,7 @@ static void m4mul(const float *a, const float *b, float *o) { for (int i = 0; i 
 int dm_cam_label_matrix(const float p[16], float out[16]) {
     if (dm_cam_mode() <= 0) return 0;
     float t[16]; pthread_mutex_lock(&g_mu); int ok = g_pub_t > 0 && now_s() - g_pub_t < 0.5;
-    if (ok) { m4mul(p, g_pub.ivpo, t); m4mul(t, g_pub.vpp, out); }
+    if (ok) { m4mul(p, g_pub.ivpo, t); float dx, dz; if (ahead_delta(g_pub.ak, &dx, &dz)) for (int i = 0; i < 4; i++) { t[i * 4] += t[i * 4 + 3] * dx; t[i * 4 + 2] += t[i * 4 + 3] * dz; } m4mul(t, g_pub.vpp, out); }
     pthread_mutex_unlock(&g_mu); return ok; }
 // 归一化画面坐标（0..1，y 向下）↔ 裁剪空间（-1..1，y 向上） | normalized picture coordinates (0..1, y down) <-> clip space (-1..1, y up)
 static void n2c(float nx, float ny, float *x, float *y) { *x = nx * 2 - 1; *y = 1 - ny * 2; }
