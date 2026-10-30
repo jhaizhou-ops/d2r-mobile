@@ -721,9 +721,9 @@ int dm_map_goals(dm_map_goal_view *v) {
 // main+0x2d129d0 (getter 0x2acecc, construction flag 0x2d20948), the zoom at +0x1348, and the camera's per-frame update (about 0x89c370) rereads it -- so with
 // the camera on it is written as DM_CAM_ZOOM every frame (default 0.6 = a picture twice as wide), and the original is written back when it goes off.
 // The game clamps it to [1.0, 2.25]; the rewriter moves the floor to 0.5 (patch_nso.py 0x89c444 / 0x89c428); an older pack without those stops at 1.0
-// 只在原神式（安卓 / 鸿蒙的越肩缺省，dm_cam_style = 1）或设了 DM_CAM_ZOOM 时缩放：Metal 后端没在 iOS 上试过，不动它。镜头没在缩放时见到低于原版下限 1.0 的值
+// 只在原神式（安卓的越肩缺省，dm_cam_style = 1）或设了 DM_CAM_ZOOM 时缩放：Metal 后端没在 iOS 上试过，不动它。镜头没在缩放时见到低于原版下限 1.0 的值
 // （比如开着镜头时游戏把设置存进了 controllersettings.json，下次关着镜头启动），写回 1.2，原版画面不跟着变小
-// Only zoom with the Genshin style (the over-the-shoulder default on Android / HarmonyOS, dm_cam_style = 1) or with DM_CAM_ZOOM set: the Metal backend has
+// Only zoom with the Genshin style (the over-the-shoulder default on Android, dm_cam_style = 1) or with DM_CAM_ZOOM set: the Metal backend has
 // not been tried on iOS, so it is left alone. When not zooming, a value below the original floor 1.0 (say the game saved the settings into
 // controllersettings.json while the camera was on, and the next start has the camera off) is written back as 1.2, so the original picture does not shrink
 // 镜头开着时写进去的缩放（DM_CAM_ZOOM，缺省 0.6，夹在 [0.5, 2.25]）；dm_cam.c 按它算原版画面多大、往前挪多少

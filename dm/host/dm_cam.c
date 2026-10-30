@@ -39,13 +39,17 @@ int dm_cam_mode(void) {
 // the stick takes its directions from the camera at the start of each push; 1 = Genshin style: the camera is dragged along by the character
 // (xbg_cam_drag) instead of chasing the stick, the stick always takes its directions from the camera of the moment, and a horizontal drag on the right
 // half turns the camera (touch_android.c gives the touch layer cam_orbit)
-// 缺省：Android / 鸿蒙（Vulkan 后端，xbg_game.cpp 已接原神式）= 1，越肩档就是原神式（用户的决定，2026-10-29）；其余（iOS / Mac 的 Metal 后端还是
-// xbg_cam_follow）= 0——那边要是开了 1，宿主的摇杆不再锁参照镜头而镜头还在追摇杆，人会原地打转。DM_CAM_STYLE 写了就以它为准（0 = 原来的越肩，对比用）
-// Default: Android / HarmonyOS (the Vulkan backend, xbg_game.cpp already does the Genshin style) = 1, so over-the-shoulder is the Genshin style (the user's
-// decision, 2026-10-29); everywhere else (iOS / Mac, whose Metal backend still uses xbg_cam_follow) = 0 -- turning 1 on there would make the host's stick stop
-// locking the reference camera while the camera still chases the stick, and the character would spin on the spot. DM_CAM_STYLE, when set, wins (0 = the
-// old over-the-shoulder, for comparison)
-#if defined(__ANDROID__) || defined(__OHOS__)
+// 缺省：Android（Vulkan 后端，xbg_game.cpp 已接原神式）= 1，越肩档就是原神式（用户的决定，2026-10-29）；其余（iOS / Mac 的 Metal 后端还是
+// xbg_cam_follow）= 0——那边要是开了 1，宿主的摇杆不再锁参照镜头而镜头还在追摇杆，人会原地打转。鸿蒙也先是 0：它的触屏层（touch_ohos.c）不填 cam_on /
+// cam_orbit，原神式又拿掉了转镜头钮和体感，开了就没法转镜头；瞄准环、地图指针也是安卓的 Java 视图画的（维护者 #185 审阅）。DM_CAM_STYLE 写了就以它为准
+// （0 = 原来的越肩，对比用）
+// Default: Android (the Vulkan backend, xbg_game.cpp already does the Genshin style) = 1, so over-the-shoulder is the Genshin style (the user's decision,
+// 2026-10-29); everywhere else (iOS / Mac, whose Metal backend still uses xbg_cam_follow) = 0 -- turning 1 on there would make the host's stick stop locking
+// the reference camera while the camera still chases the stick, and the character would spin on the spot. HarmonyOS is 0 for now too: its touch layer
+// (touch_ohos.c) does not fill cam_on / cam_orbit, and with the turn buttons and the sensor gone in this style there would be no way to turn the camera; the
+// aim ring and the map pointer are drawn by Android's Java views as well (the maintainer's review of #185). DM_CAM_STYLE, when set, wins (0 = the old
+// over-the-shoulder, for comparison)
+#if defined(__ANDROID__)
 #define DM_CAM_STYLE_DEFAULT 1
 #else
 #define DM_CAM_STYLE_DEFAULT 0
