@@ -1395,6 +1395,18 @@ def _widget_block(s, name):
 # button_blank). The controller layout does not carry over "Repair All" (hold the left stick on the original controller scheme) or the gamble
 # page refresh (the original controller scheme has its own key)
 PAD_VENDOR = {'controller/vendorpanellayouthd.json': ('vendorpanellayouthd.json', [INGAME['controller/vendorpanellayouthd.json'][1][0], INGAME['controller/vendorpanellayouthd.json'][1][1]])}
+def _skill_reset_buttons():
+    # 技能树底栏：先请求，再明确确认或取消；宿主只切换我们自己的控件。
+    # Skill tree footer: request first, then explicitly confirm or cancel; the host toggles only our widgets.
+    buttons = _btn('TouchSkillReset', 1460, '@dmSkillReset', 'PanelManager:ClosePanel:TouchSkillReset', x=650, anchor=False)
+    buttons += _btn('TouchSkillResetYes', 1460, '@dmSkillResetYes', 'PanelManager:ClosePanel:TouchSkillResetYes', x=420, anchor=False)
+    buttons += _btn('TouchSkillResetNo', 1460, '@dmSkillResetNo', 'PanelManager:ClosePanel:TouchSkillResetNo', x=1020, anchor=False)
+    buttons += ('        { "type": "TextBoxWidget", "name": "TouchSkillResetHint", "fields": { '
+                '"rect": { "x": 220, "y": 1265, "width": 1450, "height": 70 }, "text": "@dmSkillResetHint", '
+                '"style": { "fontColor": "$FontColorWhite", "pointSize": "$MediumFontSize", '
+                '"alignment": { "h": "center", "v": "center" } } } },\n')
+    return buttons
+
 def build_ingame(romfs, outdir, spec=None, present=True):   # present=False：不套触屏的摆放变换（给手柄版布局插按钮用） | present=False: do not apply the touch placement transform (used for inserting buttons into the controller layout)
     """局内面板插回原生按钮。返回 ({包内逻辑路径(小写): 本地文件}, 插了几个)。 | Insert native buttons back into the in-game panels. Returns ({logical path in package (lowercase): local file}, number inserted)."""
     repl = {}; total = 0
@@ -1409,6 +1421,7 @@ def build_ingame(romfs, outdir, spec=None, present=True):   # present=False：�
                 for k in re.findall(r'"([A-Za-z/]+)"\s*:', override): b = re.sub(r'\n\s*"%s"\s*:\s*(\{[^{}]*\}|"[^"]*"|[^,\n]+),?' % re.escape(k), '', b, count=1)
                 f = re.search(r'"fields"\s*:\s*\{', b); b = b[:f.end()] + '\n                ' + override.rstrip(',') + ',' + b[f.end():]
             add += '        ' + b + ',\n'; total += 1
+        if rel == 'controller/skillstreepanelhd.json': add += _skill_reset_buttons(); total += 4
         end = text.rstrip().rstrip('}').rstrip(); assert end.endswith(']'), rel        # 根对象的 children 数组必须是最后一项 | The root object's children array must be the last item
         at = len(end) - 1; head = text[:at].rstrip(); new = head + ('' if head.endswith((',', '[')) else ',') + '\n' + add + '    ' + text[at:]
         import json as _json

@@ -10,6 +10,7 @@ MOVIE_TEST_FLAGS ?= -O1
 # 依赖一行一个、按字母序（同 ../Makefile 的 SRC：免得加一个测试就整行冲突）；下面各条命令的先后不变
 # Dependencies one per line in alphabetical order (same as SRC in ../Makefile: so that adding one test does not conflict on the whole line); the order of the commands below is unchanged
 run: \
+	$(B)/t_skill_reset \
 	$(B)/main.orig.bin \
 	$(B)/subsdk0.orig.bin \
 	$(B)/t_altstack \
@@ -85,6 +86,7 @@ run: \
 	$(B)/t_audio
 	$(B)/t_audio_spsc
 	$(B)/t_swkbd
+	$(B)/t_skill_reset
 	$(B)/t_altstack
 	$(B)/t_crash_hang
 	$(B)/t_movie
@@ -214,3 +216,6 @@ $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 
 $(B)/t_rift_hud: t_rift_hud.m ../../ios/Sources/dm_rift_hud.m ../../ios/Sources/dm_rift_hud.h ../dm_rift.h | $(B)
 	clang -O1 -Wall -Werror -Wno-deprecated-declarations -fobjc-arc -I.. -framework Cocoa -framework QuartzCore -framework CoreText -o $@ t_rift_hud.m ../../ios/Sources/dm_rift_hud.m
+
+$(B)/t_skill_reset: t_skill_reset.c ../dm_skill_reset.h | $(B)
+	clang -std=c11 -Wall -Wextra -Werror -o $@ t_skill_reset.c

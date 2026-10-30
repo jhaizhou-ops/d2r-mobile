@@ -161,6 +161,97 @@ static int a_skill_base(uint64_t pl, int skill) {
     for (int k = 0; n && k < 512; k++, n = *(uint64_t *)(n + 8)) { uint64_t r = *(uint64_t *)n; if (r && *(int16_t *)r == skill && *(int32_t *)(n + 0x44) == -1) { int v = *(int32_t *)(n + 0x38); return v < 0 ? 0 : v; } }
     return 0;
 }
+// 原版技能单独洗点 main+0x7c0f90(game, player)：遍历职业技能、返还硬点、发客户端技能包，清理召唤与被动。
+// 已核对 3.3.94012 的调用链：7c0f90 → 7c11b0 → 5af180；不走属性洗点，不耗道具或任务次数。
+// Native skill-only reset main+0x7c0f90(game, player): iterates class skills, refunds hard points, sends client packets and refreshes summons/passives.
+// Verified 3.3.94012 call chain: 7c0f90 -> 7c11b0 -> 5af180; no attribute reset, item cost or quest use.
+#include "dm_skill_reset.h"
+static _Atomic int g_reset_event, g_reset_result;
+static _Atomic uint64_t g_reset_session, g_reset_request;
+static dm_skill_reset_flow g_reset_flow;
+void dm_skill_reset_on_uimsg(const char *cat, const char *act, const char *arg) {
+    if (strcmp(cat, "PanelManager")) return;
+    // 关闭 / 读档立即撤销确认，避免两个渲染帧之间关页再开页沿用旧确认。
+    // Revoke confirmation on close/load, even if the page closes and reopens between rendered frames.
+    if ((!strcmp(act, "ClosePanel") && (!strcmp(arg, "UISwitcher") || !strcmp(arg, "SkillsTreePanel"))) ||
+        (!strcmp(act, "OpenPanel") && !strcmp(arg, "LoadScreenPanel"))) {
+        g_reset_flow = (dm_skill_reset_flow){0}; atomic_store(&g_reset_event, 0);
+        if (!strcmp(arg, "LoadScreenPanel")) { atomic_store(&g_reset_request, 0); atomic_store(&g_reset_session, 0); }
+        return;
+    }
+    if (strcmp(act, "ClosePanel")) return;
+    int e = !strcmp(arg, "TouchSkillReset") ? 1 : !strcmp(arg, "TouchSkillResetYes") ? 2 : !strcmp(arg, "TouchSkillResetNo") ? 3 : 0;
+    if (e) atomic_store(&g_reset_event, e);
+}
+static int reset_total(uint8_t *b, uint64_t pl) {
+    unsigned cls = *(uint32_t *)(pl + 4), ver = *(uint8_t *)(pl + 0x1bd);
+    if (cls > 7 || ver < 1 || ver > 3) return -1;
+    uint64_t t = *(uint64_t *)(b + 0x2d64a18 + ver * 16);
+    if (!t) return -1;
+    uint64_t counts = *(uint64_t *)(t + 0x1208), ids = *(uint64_t *)(t + 0x1228), limits = *(uint64_t *)(t + 0x1500);
+    int stride = *(int32_t *)(t + 0x1220);
+    if (!counts || !ids || !limits) return -1;
+    int n = ((int32_t *)counts)[cls], cap = *(int32_t *)limits, levels[64];
+    if (n < 1 || n > 64 || stride < n || stride > 64 || cap < 1) return -1;
+    for (int i = 0; i < n; i++) {
+        int skill = ((int16_t *)ids)[cls * stride + i];
+        if (skill < 0 || (uint64_t)skill >= *(uint64_t *)(t + 0x11f0)) return -1;
+        levels[i] = a_skill_base(pl, skill);
+        if (levels[i] > cap) return -1;
+    }
+    int points = ((int (*)(uint64_t, int, int))(b + 0x5b9110))(pl, 5, 0);
+    return dm_skill_reset_total(points, levels, (size_t)n);
+}
+void dm_skill_reset_srv_tick(uint8_t *b, uint64_t game, uint64_t player) {
+    static uint64_t old_game, old_player; static uint32_t epoch;
+    if (game != old_game || player != old_player) { old_game = game; old_player = player; if (!++epoch) ++epoch; }
+    uint64_t token = player && game ? ((uint64_t)(epoch ? epoch : 1) << 32) | *(uint32_t *)(player + 8) : 0;
+    atomic_store(&g_reset_session, token);
+    uint64_t req = atomic_exchange(&g_reset_request, 0);
+    if (!req) return;
+    if (!token || req != token || *(uint32_t *)(b + 0x2d20b8c) != 0 || *(uint32_t *)(player + 0xc) == 0 || *(uint32_t *)(player + 0xc) == 17) {
+        atomic_store(&g_reset_result, 3); return;
+    }
+    int total = reset_total(b, player);
+    if (total < 0) { atomic_store(&g_reset_result, 2); return; }
+    int before = ((int (*)(uint64_t, int, int))(b + 0x5b9110))(player, 5, 0);
+    if (total == before) { atomic_store(&g_reset_result, 4); return; }
+    ((void (*)(uint64_t, uint64_t))(b + 0x7c0f90))(game, player);
+    int after = ((int (*)(uint64_t, int, int))(b + 0x5b9110))(player, 5, 0);
+    LOG("Skill reset: unspent %d -> %d (expected %d)", before, after, total);
+    atomic_store(&g_reset_result, after == total ? 1 : 3);
+}
+static void ui_show_ours(uint64_t w, int on) {
+    const char *nm = w ? *(const char **)(w + 8) : NULL;
+    if (!nm || strncmp(nm, "TouchSkillReset", 15)) return;
+    *(uint8_t *)(w + 0x50) = (uint8_t)on; *(uint8_t *)(w + 0x51) = (uint8_t)on;
+}
+static void skill_reset_ui(uint8_t *b, uint64_t root, uint64_t pl) {
+    uint64_t tree = a_panel(root, "SkillsTreePanel");
+    int open = tree && *(uint8_t *)(tree + 0x50), allowed = pl && *(uint32_t *)(b + 0x2d20b8c) == 0;
+    uint64_t token = atomic_load(&g_reset_session);
+    allowed = allowed && token && (uint32_t)token == *(uint32_t *)(pl + 8);
+    int event = atomic_exchange(&g_reset_event, 0);
+    if (dm_skill_reset_event(&g_reset_flow, event, allowed ? token : 0, open, allowed)) {
+        atomic_store(&g_reset_request, token);
+        // 关技能树后原版才恢复服务端拍；请求绑定当前游戏 / 玩家，不带到下一局。
+        // Closing the tree resumes server ticks; the request is bound to this game/player, never the next run.
+        void dm_ui_send(const char *, const char *, const char *);
+        dm_ui_send("PanelManager", "ClosePanel", "UISwitcher");
+        return;
+    }
+    ui_show_ours(a_find(tree, "TouchSkillReset", 0), open && allowed && !g_reset_flow.armed);
+    ui_show_ours(a_find(tree, "TouchSkillResetYes", 0), open && g_reset_flow.armed);
+    ui_show_ours(a_find(tree, "TouchSkillResetNo", 0), open && g_reset_flow.armed);
+    ui_show_ours(a_find(tree, "TouchSkillResetHint", 0), open && g_reset_flow.armed);
+    int result = atomic_exchange(&g_reset_result, 0);
+    if (result) {
+        void dm_game_notice(uint8_t *, const char *);
+        const char *key = result == 1 ? "dmSkillResetDone" : result == 2 ? "dmSkillResetFull" : result == 4 ? "dmSkillResetEmpty" : "dmSkillResetUnavailable";
+        dm_game_notice(b, dm_str(b, key));
+    }
+}
+
 // 还能不能给技能加点、不能的原因。游戏的 main+0xc368b0 只查「有技能点、公式、没到上限」，不查等级和前置技能（等级不够时它返回 1，点了由服务端拒，实测）；
 // 这两项按技能表补：记录（步长 0x2ec，表在 [版本表+0x11e8]）+0x214 = 等级要求、+0x21e / +0x220 / +0x222 = 前置技能号（-1 无）（运行时对 Vigor 读出 18 / 109 / 104，与 skills.txt 一致）；
 // 加第 N 点要求角色等级 ≥ 等级要求 + 已有基础等级（暗黑 2 规则；界面「需要等级」显示的就是它）。返回 0 可加，1 没有技能点，2 等级不够，3 前置技能没学，4 其它（已到上限等）
@@ -537,6 +628,7 @@ void dm_actions_pump(void) {
             LOG("起名：随机名 → 名字框「%.*s」%s", tx && ln < 64 ? (int)ln : 0, tx ? tx : "", !dup ? "" : left > 0 ? "（已有同名角色，再取一个）" : "【红】（已有同名角色，试满 12 次仍重名）");
             if (dup && left > 0) atomic_store(&g_rname, left); }
         else LOG("起名：名字面板没开，随机名没发"); }
+    skill_reset_ui(b, root, pl);
     dm_shop_info s = {0}; dm_points_info p = { .sel_skill = -1 }; uint64_t sel = 0, held = 0;
     if (pl) {
         int (*stat)(uint64_t, int, int) = (void *)(b + 0x5b9290);

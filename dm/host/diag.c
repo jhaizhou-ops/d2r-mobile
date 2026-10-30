@@ -1002,6 +1002,7 @@ static void hud_tick(uint64_t G) {        // 每拍：受控玩家等级 / 本�
     { int dm_cloud_char_conflict_take(char *, size_t); char nm[256], msg[400];   // iCloud 首次同步遇到同名角色、用了云端那份（dm_cloudsync.c）：进局后提示一次 | iCloud first sync met a character with the same name and used the cloud copy (dm_cloudsync.c): one notice after entering a run
       if (main && player && dm_cloud_char_conflict_take(nm, sizeof nm)) { snprintf(msg, sizeof msg, dm_str((uint8_t *)main->base, "dmCloudCharConflict"), nm); dm_game_notice((uint8_t *)main->base, msg); LOG("iCloud 同步：弹了同名角色用云端那份的提示（%s）", nm); } }
     if (main && player) DM_PROF(1, "s.bossrush", dm_bossrush_tick(G, player, (uint8_t *)main->base));   // 首领连战（dm_bossrush.c） | Boss rush (dm_bossrush.c)
+    if (main) { void dm_skill_reset_srv_tick(uint8_t *, uint64_t, uint64_t); dm_skill_reset_srv_tick((uint8_t *)main->base, G, player); }
     if (main && player) { void dm_rift_tick(uint64_t, uint64_t, uint8_t *); DM_PROF(1, "s.rift", dm_rift_tick(G, player, (uint8_t *)main->base)); }   // 秘境爬塔（dm_rift.c） | Rift tower climb (dm_rift.c)
     { void dm_pages_tick(uint64_t, uint64_t, uint8_t *); if (main) DM_PROF(1, "s.pages", dm_pages_tick(G, player, (uint8_t *)main->base)); }   // 个人仓库 2–5 页（dm_pages.c）；不在局内 player 为 0，模块自己清状态 | Personal stash pages 2–5 (dm_pages.c); player is 0 when not in a run, and the module clears its own state
     { void dm_vault_tick(uint64_t, uint64_t, uint8_t *); if (main) DM_PROF(1, "s.vault", dm_vault_tick(G, player, (uint8_t *)main->base)); }
@@ -1897,6 +1898,7 @@ static void loadscreen_on_uimsg(const char *cat, const char *act, const char *ar
     // Whether the character creation naming panel is open (hle_swkbd.c / the front-end input box use it to block characters according to the game's character name rules: the game itself accepts only 2–15 English letters, see the header comment of hle_swkbd.c)
     // Our bottom bar opens the quest panel directly, without going through the original game's quest hint button, so nobody clears the hint byte: it is cleared as soon as the quest panel opens (= read). This callback is on the client main thread, the same thread on which the game itself reads and writes this byte
     if (!strcmp(cat, "PanelManager") && !strcmp(arg, "QuestLogPanelExpansion") && (!strcmp(act, "OpenPanel") || !strcmp(act, "OpenExclusivePanel"))) { module_t *qm = main_mod(); if (qm) *(volatile uint8_t *)(qm->base + 0x2d5ff58) = 0; }
+    { void dm_skill_reset_on_uimsg(const char *, const char *, const char *); dm_skill_reset_on_uimsg(cat, act, arg); }
     { void dm_textinput_on_uimsg(const char *, const char *, const char *); dm_textinput_on_uimsg(cat, act, arg); }
     { void dm_update_on_uimsg(const char *, const char *, const char *); dm_update_on_uimsg(cat, act, arg); }
     { void dm_kills_on_uimsg(const char *, const char *, const char *); dm_kills_on_uimsg(cat, act, arg); } { void dm_rift_ui_on_uimsg(const char *, const char *, const char *); dm_rift_ui_on_uimsg(cat, act, arg); }   // 编年史「首领」页签（dm_kills.c） | The chronicle's 「首领」(Bosses) tab (dm_kills.c)
