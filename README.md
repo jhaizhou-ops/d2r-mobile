@@ -400,6 +400,7 @@ The cleaner arrangement is to move these defaults into per-game configuration an
 | [dm/android/README.md](dm/android/README.md) | Android: source layout, building, the files to put on the phone, the acceptance checklist |
 | [dm/gfx/vulkan/INTEGRATION.md](dm/gfx/vulkan/INTEGRATION.md) | How the Vulkan graphics layer plugs into the shared graphics API |
 | [docs/ANDROID_COLLABORATION.md](docs/ANDROID_COLLABORATION.md) | Android / HarmonyOS collaboration: who works where, how to take part, measured status and remaining work; the notes from every round are in [docs/android-notes/](docs/android-notes/) |
+| [docs/WEB_IPA_PACKAGER.md](docs/WEB_IPA_PACKAGER.md) | Browser IPA packaging and installation |
 
 ## Legal
 

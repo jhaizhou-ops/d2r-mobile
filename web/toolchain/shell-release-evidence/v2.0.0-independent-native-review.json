@@ -1,0 +1,152 @@
+[
+  {
+    "asset": {
+      "name": "D2RMobile-shell-build-input.zip",
+      "id": 667608752,
+      "bytes": 4856775,
+      "sha256": "bc1152694d9a00eef680dd07f8ea31419be5ff4d0437d8298d3772e57cc92c94",
+      "url": "https://github.com/jhaizhou-ops/d2r-mobile/releases/download/v2.0.0/D2RMobile-shell-build-input.zip"
+    },
+    "executableSha256": "ee65b6c36bfb362af4fcf5661429e34b6097f14af5b73d8cd7e72016f12c68ce",
+    "minimumVersion": "26.0.0",
+    "aocDataSymbol": {
+      "address": 4296700392,
+      "fileOffset": 1733096,
+      "section": {
+        "name": "__data",
+        "segment": "__DATA",
+        "address": 4296680120,
+        "size": 22216,
+        "fileOffset": 1712824,
+        "flags": 0
+      }
+    },
+    "aocDerivedSha256": "f25e60982514ce34d0603ba8d1e7e6412947baf27ef553f11bcb08f2ae4f615a",
+    "functionBindings": [
+      {
+        "name": "_ta_load",
+        "fileOffset": 114692,
+        "functionSha256": "b4163b3e4f5ce3058cde820da9515f9ce2e9c2dd515ac7bd76480b61e6f8dec5"
+      },
+      {
+        "name": "_k_exp_load",
+        "fileOffset": 457568,
+        "functionSha256": "7b5b6d9496579258e8925cf3ac8040c2fa88db71864f1e09e0e012c896423c9a"
+      },
+      {
+        "name": "_vt_load",
+        "fileOffset": 887464,
+        "functionSha256": "f0d3b936827e99591bfec6d2dd1b354a2012ed4fcd7b1f9339c6d9c858e5e605"
+      },
+      {
+        "name": "_vt_part_cb",
+        "fileOffset": 903148,
+        "functionSha256": "7e2fe38005cc1adf3f79298c70565d72e9bc97c1a42240bfa08a0da0463e968a"
+      },
+      {
+        "name": "_vt_row_cb",
+        "fileOffset": 903224,
+        "functionSha256": "82bc89410271dbdad72d939623edd16219f970d3e3c70ea845e1d8120367c4e4"
+      },
+      {
+        "name": "_vt_set_cb",
+        "fileOffset": 903456,
+        "functionSha256": "77cd18a244debf9e36ff025f4b79d4a15b09e1692aaa0da7d818080a0cacf0bc"
+      }
+    ],
+    "rawInstructionWindowBytesVerified": true,
+    "vaultTagCallbackContextBindings": [
+      {
+        "tag": "VTPART",
+        "callback": "_vt_part_cb",
+        "contextFrameOffset": -20
+      },
+      {
+        "tag": "VTROW",
+        "callback": "_vt_row_cb",
+        "contextFrameOffset": -24
+      },
+      {
+        "tag": "VTSET",
+        "callback": "_vt_set_cb",
+        "contextFrameOffset": -28
+      }
+    ],
+    "claims": "Static byte/field review with an authored stdlib-only parser; no inspected image, external disassembler or game execution."
+  },
+  {
+    "asset": {
+      "name": "D2RMobile-shell-ios18-build-input.zip",
+      "id": 667608762,
+      "bytes": 4852823,
+      "sha256": "b2d1e3b48c0b15f773b4ea94290fde08039fd123c21be98c55b00da8df55ada5",
+      "url": "https://github.com/jhaizhou-ops/d2r-mobile/releases/download/v2.0.0/D2RMobile-shell-ios18-build-input.zip"
+    },
+    "executableSha256": "1ab0bcacc8cde2a691ec17d70f7ca6da7e45bee563c10cf0c7ee50c67fac32c4",
+    "minimumVersion": "18.0.0",
+    "aocDataSymbol": {
+      "address": 4296683608,
+      "fileOffset": 1716312,
+      "section": {
+        "name": "__data",
+        "segment": "__DATA",
+        "address": 4296663456,
+        "size": 22096,
+        "fileOffset": 1696160,
+        "flags": 0
+      }
+    },
+    "aocDerivedSha256": "6056f821d90b2553a00bb0148220aabede4f082891a17a53deaebb86b5ae38f4",
+    "functionBindings": [
+      {
+        "name": "_ta_load",
+        "fileOffset": 114692,
+        "functionSha256": "31e7c80a950d553051410f2d789aaf2217f8b51365265a13eec8c0572ecb10eb"
+      },
+      {
+        "name": "_k_exp_load",
+        "fileOffset": 454000,
+        "functionSha256": "0acf141a4a6716cb9dffc86d3f323d1ea59279f92f8d5f3dbb74fb3cbc3d172d"
+      },
+      {
+        "name": "_vt_load",
+        "fileOffset": 883952,
+        "functionSha256": "401f0e9988f9b8e74b564144f60d5f14551cc4d62c3a65ca614c89d32246cb17"
+      },
+      {
+        "name": "_vt_part_cb",
+        "fileOffset": 899636,
+        "functionSha256": "9e67d1c8233ef5e6ab356e5568a9d06a1173e2968b96a879ee3fb7a3b7d0a53e"
+      },
+      {
+        "name": "_vt_row_cb",
+        "fileOffset": 899712,
+        "functionSha256": "d7a644ea289d0631f368054e04275297127b47aab66086c0269544a8dc21cf5b"
+      },
+      {
+        "name": "_vt_set_cb",
+        "fileOffset": 899944,
+        "functionSha256": "ccc3d39325c06dbb29b0ddc0b4ef3a09dffd8456f4a08708de0dc2abfcfbeffd"
+      }
+    ],
+    "rawInstructionWindowBytesVerified": true,
+    "vaultTagCallbackContextBindings": [
+      {
+        "tag": "VTPART",
+        "callback": "_vt_part_cb",
+        "contextFrameOffset": -20
+      },
+      {
+        "tag": "VTROW",
+        "callback": "_vt_row_cb",
+        "contextFrameOffset": -24
+      },
+      {
+        "tag": "VTSET",
+        "callback": "_vt_set_cb",
+        "contextFrameOffset": -28
+      }
+    ],
+    "claims": "Static byte/field review with an authored stdlib-only parser; no inspected image, external disassembler or game execution."
+  }
+]

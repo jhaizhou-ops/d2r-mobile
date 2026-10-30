@@ -1,0 +1,7 @@
+{
+  "dm/ios/tools/native_art/generate.py": "d70f88aecd049e9286ea88ff9cdce6b353b282a9b98f2eaeadc229dcbfb80f19",
+  "dm/ios/tools/native_art/implementation.c.inc": "3bf1a58f9189d7857c4fc666e7044a958eff27cf1b594fd9d1b6c47d381db4b1",
+  "dm/ios/Sources/TouchArt/native_art_manifest.json": "334ed8adfa6d21feea33946692a1d5088b5ed39edb36545241ee543414382a5e",
+  "dm/ios/docs/native_art_v1_geometry.json": "7332bf327af662259cde973d5ed6ba80af472e4f0c232ea4dfe3fcf0a17a4799",
+  "dm/ios/docs/touch_layout_spec_native_binding_v5.json": "e0e649d9c0a6cb6861f166db0e705be196f69a20c40993116f591b13cdcfec1f"
+}

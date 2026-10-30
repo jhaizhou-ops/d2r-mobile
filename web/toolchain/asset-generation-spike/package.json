@@ -1,0 +1,16 @@
+{
+  "name": "d2r-browser-asset-generation-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "prepare:runtime": "node scripts/vendor-runtime.mjs",
+    "prepare:core": "python3 scripts/package-assets.py all && python3 ../art-kernels/migrate.py"
+  },
+  "devDependencies": {
+    "pyodide": "0.27.7"
+  }
+}

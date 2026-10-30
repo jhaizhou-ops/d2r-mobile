@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Read-only publisher-pinned shell evidence; staged profile, not production activation",
+  "release": "v2.0.0",
+  "repository": "jhaizhou-ops/d2r-mobile",
+  "releaseTarget": "b811b90172f4eb40ec1bc89d903308e0c5ab88d0",
+  "assetId": 667608762,
+  "sourceUrl": "https://github.com/jhaizhou-ops/d2r-mobile/releases/download/v2.0.0/D2RMobile-shell-ios18-build-input.zip",
+  "sha256": "b2d1e3b48c0b15f773b4ea94290fde08039fd123c21be98c55b00da8df55ada5",
+  "archiveBytes": 4852823,
+  "publisherDigestMatched": true,
+  "publisherChecksumAssetMatched": true,
+  "independentPublisherSignatureVerified": false,
+  "publisherBinaryBuildAttestationVerified": false,
+  "productionCompatibilityEstablished": false,
+  "shellInfo": {
+    "PRODUCT": "3.3.94012-r44",
+    "CHAIN": "420aeb7c8bc6",
+    "KIND": "ios",
+    "SHADER_SRC": "be59c864f087b377",
+    "SPIRV_CROSS": "1.4.363.0"
+  },
+  "plistMinimumOSVersion": "18.0",
+  "machOBuildVersions": [
+    {
+      "platformId": 2,
+      "minimumVersion": "18.0.0",
+      "sdkVersion": "27.1.0"
+    }
+  ],
+  "requiredPaths": [
+    "msl/b-420aeb7c8bc6/",
+    "romfs_overlay/",
+    "romfs_overlay_variants/",
+    "hud_v4_ui/",
+    "mapgoal/",
+    "dm/main.fixups.tsv",
+    "dm/sdk.fixups.tsv",
+    "dm/main.gates.tsv",
+    "dm/sdk.gates.tsv",
+    "dm/main.cuts.tsv",
+    "dm/c1_full.tsv",
+    "dm_native_circle.png",
+    "dm_native_map.png",
+    "dm_native_menu.png",
+    "dm_native_skill_0.png",
+    "dm_native_skill_1.png",
+    "dm_native_skill_2.png",
+    "dm_native_skill_3.png",
+    "dm_native_skill_4.png",
+    "dm_native_skill_5.png",
+    "dm_native_skill_6.png",
+    "dm_native_skill_7.png",
+    "dm_native_skill_8.png",
+    "native_art_manifest.json",
+    "dm/derived.tsv",
+    "Frameworks/Guest.framework/"
+  ],
+  "entries": [
+    {
+      "path": "Payload/",
+      "size": 0,
+      "mode": 16877,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Payload/DmIOS.app/",
+      "size": 0,
+      "mode": 16877,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Payload/DmIOS.app/AppIcon60x60@2x.png",
+      "size": 26659,
+      "mode": 33188,
+      "sha256": "62ef686e5569caa081374545767f46f5ff1eb9c65f2c5e08693a36be072a6a50"
+    },
+    {
+      "path": "Payload/DmIOS.app/DmIOS",
+      "size": 2100168,
+      "mode": 33261,
+      "sha256": "1ab0bcacc8cde2a691ec17d70f7ca6da7e45bee563c10cf0c7ee50c67fac32c4"
+    },
+    {
+      "path": "Payload/DmIOS.app/dm_mobile_socket.png",
+      "size": 354442,
+      "mode": 33188,
+      "sha256": "761616f4554d566487274590b5ef53b9ac5fa026e04ed2a7b2eb9e923a78e2cf"
+    },
+    {
+      "path": "Payload/DmIOS.app/Assets.car",
+      "size": 3279512,
+      "mode": 33188,
+      "sha256": "259a20dd89abbe6c651b42927f24354f0b9f3f897cb01f47a95aa585e8360a32"
+    },
+    {
+      "path": "Payload/DmIOS.app/AppIcon76x76@2x~ipad.png",
+      "size": 41393,
+      "mode": 33188,
+      "sha256": "78e4b74b6fcf841dc34b4e84bb463feee47877034976772eeaeea9ac2b1bdaa2"
+    },
+    {
+      "path": "Payload/DmIOS.app/dm/",
+      "size": 0,
+      "mode": 16877,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Payload/DmIOS.app/dm/shell_info.txt",
+      "size": 100,
+      "mode": 33188,
+      "sha256": "950aebceb9e278f82a5565255476fe824697a238e1dc4b0594918539c5b68ed9"
+    },
+    {
+      "path": "Payload/DmIOS.app/dm/shader_map.tsv",
+      "size": 1332925,
+      "mode": 33188,
+      "sha256": "419dae7adddbaba455045b1d121a01671fcb3bc82fc5d7d193593255df23c628"
+    },
+    {
+      "path": "Payload/DmIOS.app/dm/asset_pointers.txt",
+      "size": 453,
+      "mode": 33188,
+      "sha256": "8e0abbc34e23e8f3efb00ef373f35802e0e5014ebddd187d2b919e7912190437"
+    },
+    {
+      "path": "Payload/DmIOS.app/dm/shell_manifest.txt",
+      "size": 507,
+      "mode": 33188,
+      "sha256": "b118895bf0468fe6a71924c01c4b05aecdc05e918d2d96635b3ef5ba8b4369af"
+    },
+    {
+      "path": "Payload/DmIOS.app/dm/pso_manifest.tsv",
+      "size": 177099,
+      "mode": 33188,
+      "sha256": "3e170043ab5e82dd4b619a4681f0897681f50c202882dd678c9a3674b9ed4044"
+    },
+    {
+      "path": "Payload/DmIOS.app/Info.plist",
+      "size": 3193,
+      "mode": 33188,
+      "sha256": "abcbf290621f94d3354901f62f8dbb48ef1df1072771e06c2eaf8a087cbb87ac"
+    },
+    {
+      "path": "Payload/DmIOS.app/PkgInfo",
+      "size": 8,
+      "mode": 33188,
+      "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0"
+    }
+  ],
+  "inspection": {
+    "staticOnly": true,
+    "executed": false,
+    "plist": {
+      "CFBundleDisplayName": "D2R Mobile",
+      "CFBundleName": "DmIOS",
+      "CFBundleIdentifier": "org.d2rmobile.app",
+      "CFBundleExecutable": "DmIOS",
+      "CFBundleShortVersionString": "1.0",
+      "CFBundleVersion": "1",
+      "MinimumOSVersion": "18.0",
+      "DTPlatformVersion": "27.1",
+      "DTSDKName": "iphoneos27.1",
+      "DTXcode": "2710",
+      "DTXcodeBuild": "27A9275"
+    },
+    "metal4SymbolNames": [],
+    "vp8OrFfmpegSymbolNames": [],
+    "contentMode": {
+      "symbol": "_aoc_owned.v",
+      "address": "0x1001a3058",
+      "fileOffset": 1716312,
+      "originalFourBytes": "ffffffff",
+      "replacementFourBytes": "00000000",
+      "derivedSha256": "6056f821d90b2553a00bb0148220aabede4f082891a17a53deaebb86b5ae38f4",
+      "mutationOnlyInMemory": true,
+      "sourcePath": "dm/host/hle_misc.c",
+      "sourceCommit": "b811b90172f4eb40ec1bc89d903308e0c5ab88d0",
+      "sourceSha256": "f7e8b1663e67fbc0e80653c9b82727b824d948ec9df245cca70378ccd8cc26b7"
+    }
+  }
+}
