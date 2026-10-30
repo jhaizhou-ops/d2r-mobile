@@ -139,7 +139,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     uint64_t _modifierPublishEndNS,_modifierPublishEpoch;
     uint64_t _touchEventSeq,_touchReceiptSeq,_touchPublishedEventSeq; // 仅 DM_TOUCH_CONTROL_LOG 开启时推进 | Advanced only when DM_TOUCH_CONTROL_LOG is on
     UITouch *_pendEnd; double _pendEndTime,_pendWall; BOOL _pendFire,_finalAsked;   // 松手了但宿主的答案还没回：这根手指的「抬起」先挂着（见 finishTouches） | Released but the host's answer is not back yet: this finger's "lift" is held pending (see finishTouches)
-    int32_t _minLeft,_maxLeft; uint64_t _lastButtons; unsigned _touchAPresses,_touchShots; UITouch *_uiFinger; CGPoint _uiFeO; BOOL _uiFeDrag; BOOL _uiDragOn; UITouch *_mapTouch, *_mapBackTouch, *_bindTouch; UIView *_ghostDim; BOOL _ghostOn; uint64_t _bindKey; uint32_t _selId; double _statNext; double _tipUntil, _addAt; unsigned _mapWorldSeq; BOOL _mapWorldAsked; CGPoint _mapWorldPt; CGPoint _mapP0, _bindP0; double _mapT0; BOOL _pulseTicking; uint64_t _pulseEpoch,_pulseS0; double _pulseT0,_pulseSeen,_pulseFree; unsigned _itemSeq,_relSeq; BOOL _relAsked,_itemAsked; int _itemKind;
+    int32_t _minLeft,_maxLeft; uint64_t _lastButtons; unsigned _touchAPresses,_touchShots; UITouch *_uiFinger; CGPoint _uiFeO; BOOL _uiFeDrag; BOOL _uiDragOn; UITouch *_mapTouch, *_bindTouch; UIView *_ghostDim; BOOL _ghostOn; uint64_t _bindKey; uint32_t _selId; double _statNext; double _tipUntil, _addAt; unsigned _mapWorldSeq; BOOL _mapWorldAsked; CGPoint _mapWorldPt; CGPoint _mapP0, _bindP0; double _mapT0; BOOL _pulseTicking; uint64_t _pulseEpoch,_pulseS0; double _pulseT0,_pulseSeen,_pulseFree; unsigned _itemSeq,_relSeq; BOOL _relAsked,_itemAsked; int _itemKind;
 }
 + (Class)layerClass { return CAMetalLayer.class; }
 - (instancetype)initWithFrame:(CGRect)f {
@@ -269,7 +269,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     _pendEnd=nil; _finalAsked=NO;
     for(int i_=0;i_<16;i_++) _slot[i_]=nil; dm_tc_cancel_all(&_controls); [self pushFrom:source phase:"none"];
     if(_uiDragOn) { _uiDragOn=NO; dm_ui_drag_end(); }
-    _mapTouch=_mapBackTouch=_bindTouch=nil;
+    _mapTouch=_bindTouch=nil;
 }
 // 技能绑定入口（技能为空时一个单色十字，点击进入绑定技能）：游戏态下触点落在技能钮（主攻击大钮 A 与 F1–F4，含当前组）上——
 //   空位：这根手指不进手势层，点一下 = 给这个位选技能（dm_ui_bind_begin，宿主开技能树）；
@@ -554,7 +554,6 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         if(_uiDragOn && _controls.pointer_slot==i) { _uiDragOn=NO; dm_ui_drag_end(); }
         dm_tc_cancel_finger(&_controls,i); _slot[i]=nil; }
     if(_mapTouch && touch_done(_mapTouch)) { LOG("前端：【红】清理残留触摸（小地图那根）"); _mapTouch=nil; }
-    if(_mapBackTouch && touch_done(_mapBackTouch)) { LOG("前端：【红】清理残留触摸（全屏地图那根）"); _mapBackTouch=nil; }
     if(_bindTouch && touch_done(_bindTouch)) { LOG("前端：【红】清理残留触摸（空技能位那根）"); _bindTouch=nil; }
     if(_uiFinger && touch_done(_uiFinger)) { LOG("前端：【红】清理残留触摸（界面手指）"); _uiFinger=nil;   // 宿主那头一并收：在拖就结束滚动拖，否则作废这次界面点击（相 3 清 g_ut_phase / 删除长按） | Clean up on the host side too: if dragging, end the scroll drag; otherwise void this UI click (phase 3 clears g_ut_phase / removes the long press)
         if(_uiFeDrag||_uiDragOn) { _uiFeDrag=NO; _uiDragOn=NO; dm_ui_drag_end(); } else dm_ui_touch(3,0,0); }
@@ -583,7 +582,6 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         for(int i=0;i<16;i++) if(!_slot[i]) {
             _slot[i]=t; CGPoint p=[t locationInView:self]; { int ex=0; _controls.belt_rows=dm_belt_rows(&ex); _controls.belt_open=ex; } { int dm_cam_mode(void); _controls.cam_on=dm_cam_mode(); } dm_tc_begin_at(&_controls,i,p.x,p.y,CACurrentMediaTime()); slot=i;
             if(!_navigation && _controls.finger[i].target==DM_TC_PORTAL) { void dm_tp_request(void); dm_tp_request(); LOG("前端：点回城钮 → 免费回城"); }   // 不要回城书 / 卷轴（宿主 dm_freetp.c） | No Tome of Town Portal / scroll needed (host dm_freetp.c)
-            if(!_navigation && !_mapBackTouch && _controls.finger[i].target==DM_TC_NONE && dm_ui_map_is_full()) { _mapBackTouch=t; _mapP0=p; _mapT0=CACurrentMediaTime(); }   // 全屏地图开着、这根手指没落在任何键和摇杆区上：松手时若是点按就回小地图 | Fullscreen map open and this finger landed on no button and no stick area: if it turns out to be a tap on release, return to the minimap
             // 功能页里的指针手指：问宿主这点是不是物品区（游戏主线程下一帧作答，松手时取）
             // Pointer finger in a function page: ask the host whether this point is an item area (the game main thread answers on the next frame; fetched on release)
             if(_controls.navigation_mode && _controls.pointer_slot==i && self.bounds.size.width>0) _itemSeq=dm_ui_item_query((float)(p.x/self.bounds.size.width),(float)(p.y/self.bounds.size.height)); _itemAsked=YES; _itemKind=-1;
@@ -658,8 +656,6 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         if(t==_bindTouch) { CGPoint p=[t locationInView:self]; _bindTouch=nil;
             if(!strcmp(phase,"ended") && !_navigation && hypot(p.x-_bindP0.x,p.y-_bindP0.y)<=14) { dm_ui_bind_begin(_bindKey); LOG("前端：点空技能位 (%.0f,%.0f) → 给键 %#llx 选技能",p.x,p.y,(unsigned long long)_bindKey); }
             continue; }
-        if(t==_mapBackTouch) { CGPoint p=[t locationInView:self]; _mapBackTouch=nil;
-            if(!strcmp(phase,"ended") && !_navigation && dm_ui_map_is_full() && hypot(p.x-_mapP0.x,p.y-_mapP0.y)<=14 && CACurrentMediaTime()-_mapT0<0.6) { dm_ui_map_full(0); LOG("前端：全屏地图开着，点空处 (%.0f,%.0f) → 回小地图",p.x,p.y); } }
         // 松手时宿主的答案还没回就先不结束这根手指（外部 PR 指出，自己实现）：
         //   · 判类没回：原先按「别处」当鼠标点击处理，落在货架上会走到原版的价格确认；
         //   · 拖放：原先用最后一次「移动」时问的落点，快松手时那是上一个位置（一步拖过去马上松手，丢成了放回）——按松手这一刻的位置再问一次并等答案。

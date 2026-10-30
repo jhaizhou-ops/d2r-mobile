@@ -211,7 +211,6 @@ static int direct_begin(const touch_event *e) {
         if (band<30) band=fminf(30,h*.4f);
         if (e->x>=r[0]*width && e->x<=r[2]*width && e->y>=r[1]*height && e->y<=r[1]*height+band) kind=2;
     }
-    if (!kind && target<0 && dm_ui_map_is_full() && !(e->x<tc.layout.joy_zone_r && e->y>=tc.layout.joy_zone_t)) kind=3;
     if (!kind) return 0;
     direct[e->slot]=(direct_gesture){kind,e->x,e->y,e->time,key}; return 1;
 }

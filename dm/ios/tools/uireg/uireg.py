@@ -423,7 +423,8 @@ def groups():
     g.tap(P(615,17),1.2); g.sect("hud")
     g.item("进局","玩家状态可读、在营地",r"pos 区域 1 \(\d+,\d+\) 生命 \d+/\d+"); g.at("pos",.3); g.shot()
     g.item("点右上角区域名那一条","切全屏地图",r"点小地图那一块.*→ 全屏地图"); g.tap("@mmname"); g.shot()   # 点击区只是小地图矩形顶部区域名那一条（线上「小地图消失」）；@mmname = 点击区中心，各档位置由前端算。「点主体不切地图」在专项固定用例里验（营地里主体中心附近有储藏箱，放进整表会点开它）   # 真全屏下小地图在屏幕真顶部 = 游戏视图上方 256 点，脚本 y 是负数 | the tap area is only the area-name strip at the top of the minimap rectangle (the "minimap disappears" issue in released builds); @mmname = tap area center, with the position in each profile computed by the front end. "Tapping the body does not switch the map" is verified in a dedicated fixed case (in the camp there is a stash near the body center, and putting it in the full table would tap it open)   # in true fullscreen the minimap is at the true top of the screen = 256 points above the game view, so the script y is negative
-    g.item("全屏地图点空处","回小地图",r"→ 回小地图"); g.tap(P(300,150)); g.shot()
+    g.item("全屏地图点空处","仍是全屏地图（点地面走路不再切回小地图，#186）",r"pos 区域 \d+",r"→ 回小地图|记住小地图"); g.tap(P(300,150)); g.at("pos",.3); g.shot()
+    g.item("再点区域名那一条","回小地图",r"点小地图那一块.*→ 回小地图"); g.tap("@mmname"); g.shot()
     g.item("点底栏十字","开物品栏",r"OpenPanel PlayerInventoryExpansionLayout"); g.tap("@menu"); g.shot()
     for nm,x,pat in [("任务日志",114,"OpenPanel QuestLogPanelExpansion"),("角色",223,"OpenPanel CharacterStatsPanel"),("技能树",442,"OpenPanel SkillsTreePanel"),("选项",551,"OpenPanel PauseLayout"),("物品栏",333,"OpenPanel PlayerInventoryExpansionLayout")]:
         g.item(f"点顶部页签「{nm}」",f"切到{nm}",pat); g.tap(P(x,17)); g.shot()
@@ -742,7 +743,7 @@ def groups():
     g.item("走到出生点旁的箱子再出营地（换区域）","到了野外，仍是全屏地图（看截图）",r"pos 区域 2 "); g.at("walk_to 5808 4443 6 15 skip",15.5)
     for x,y,r,to in [(5788,4475,4,12),(5812,4503,4,9),(5826,4522,4,8),(5840,4560,5,8)]: g.at(f"walk_to {x} {y} {r} {to} skip",to+.5)
     g.wait(2.0); g.at("pos",.3); g.shot()
-    g.item("全屏地图点空处","回小地图，记住小地图",r"地图：玩家点了 → 记住小地图"); g.tap(P(300,150),1.5); g.shot()
+    g.item("全屏地图再点区域名那一条","回小地图，记住小地图",r"地图：玩家点了 → 记住小地图"); g.tap("@mmname",1.5); g.shot()
     g.item("开、关一次物品栏","关掉后仍是小地图",r"ClosePanel PlayerInventoryExpansionLayout",r"地图：→ 全屏"); g.tap("@menu",1.5); g.tap(P(615,17),1.5); g.shot()
     gs.append(g)
     # mapf 局：选项页把「透视地图尺寸」选成全屏（测试开关 DM_TEST_AUTOMAP 到帧改配置并调原版回调，同选项页那条路）→ 触屏下直接全屏地图，配置值不被改写
@@ -751,7 +752,8 @@ def groups():
     g.item("选项里选了全屏","直接全屏地图，不改回小地图档",r"地图：「透视地图尺寸」读到 0 → 触屏下缺省全屏地图",r"改回微缩地图放右"); g.at("pos",.3); g.wait(12.0); g.shot()   # 测试开关在帧 2400（约脚本第 46 秒）改档，这一项要把它框进来
     g.item("点底栏十字开物品栏","全屏地图先让成小地图",r"地图：→ 微缩放右（面板开着先让开"); g.tap("@menu",1.5); g.shot()
     g.item("点右上角 X 关物品栏","回到全屏地图",r"地图：→ 全屏（玩家要全屏"); g.tap(P(615,17),1.5); g.shot()
-    g.item("全屏地图点空处","回小地图（小地图还在，点得回来）",r"地图：玩家点了 → 记住小地图"); g.tap(P(300,150),1.5); g.shot()
+    g.item("全屏地图点空处","仍是全屏地图（点地面走路不再切回小地图，#186）",r"pos 区域 \d+",r"→ 回小地图|记住小地图"); g.tap(P(300,150)); g.at("pos",.3); g.shot()
+    g.item("全屏地图再点区域名那一条","回小地图（小地图还在，点得回来）",r"地图：玩家点了 → 记住小地图"); g.tap("@mmname",1.5); g.shot()
     g.item("点区域名那一条","又切回全屏",r"地图：玩家点了 → 记住全屏地图"); g.tap("@mmname",1.5); g.shot()
     gs.append(g)
     # ms 局：佣兵加装备位（秘境最高通关 ≥ 10 层解锁，DM_TEST_MERC_SLOTS=1 当作已解锁）。带活佣兵的老角色（第 4 行 88 级法师：旧数据版本，走 base/ 那份物品栏表）。
@@ -938,7 +940,7 @@ def groups():
         g=G("top","DM_TEST_GOLD=1300 DM_TEST_WORLD_GO=near2:1:c148@700 DM_TEST_WORLD_GO2=near2:2:c267@1900"); g.sect("top",0); g.enter()
         g.item("局内截图","小地图与地名在屏幕真顶部右上角、没被裁（看截图）",None); g.shot()
         g.item("点真顶部的区域名那一条","切全屏地图",r"点小地图那一块.*→ 全屏地图"); g.tap("@mmname"); g.shot()
-        g.item("全屏地图点空处","回小地图",r"→ 回小地图"); g.tap(P(300,150)); g.shot()
+        g.item("全屏地图再点区域名那一条","回小地图",r"点小地图那一块.*→ 回小地图"); g.tap("@mmname"); g.shot()
         g.item("开物品栏","标题栏连在面板上（看截图）",r"OpenPanel PlayerInventoryExpansionLayout"); g.tap("@menu"); g.shot()
         g.item("开设置页","标题栏连在面板上（看截图）",r"OpenPanel SettingsPanel"); g.tap(P(551,17)); g.at("tap_ui Settings@PauseLayoutGarden 3",1.8); g.shot()
         g.tap(P(420,345),1.8); g.tap(P(615,17),1.5)
@@ -957,7 +959,7 @@ def groups():
         for x,y,r,to in [(5788,4475,4,12),(5812,4503,4,9),(5826,4522,4,8),(5840,4560,5,8)]: g.at(f"walk_to {x} {y} {r} {to} skip",to+.5)
         g.item("野外","在区域 2",r"pos 区域 2 "); g.at("pos",.3); g.shot()
         g.item("野外点真顶部区域名那一条","切全屏地图；玩家标记压在玩家身上（看截图）",r"点小地图那一块.*→ 全屏地图"); g.tap("@mmname"); g.shot()
-        g.item("野外全屏地图点空处","回小地图",r"→ 回小地图"); g.tap(P(300,150)); g.shot()
+        g.item("野外全屏地图再点区域名那一条","回小地图",r"点小地图那一块.*→ 回小地图"); g.tap("@mmname"); g.shot()
         # 真全屏下功能页只占屏幕下方那一块，上方那一截是世界画面：面板开着时点上方 = 点面板外，面板关掉；不能被当成点了顶部页签
         # In true fullscreen the function page takes only the lower part of the screen, and the strip above it is the world view: with a panel open, tapping above = tapping outside the panel, and the panel closes; it must not be treated as a tap on the top tabs
         g.item("物品栏开着，点面板上方那一截","面板关掉、不切页签",r"ClosePanel PlayerInventoryExpansionLayout",r"界面页签：切"); g.tap("@menu",1.4); g.shot(); g.tap(f"683,{-TOP//2}",1.5); g.shot()

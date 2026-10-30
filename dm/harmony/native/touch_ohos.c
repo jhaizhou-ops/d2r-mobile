@@ -55,7 +55,7 @@ static int _padMode, _feMode = 1, _navigation = -1;
 static int _swallow[16], _nswallow;
 static int _pendEnd = NOT; static double _pendEndTime, _pendWall; static int _pendFire, _finalAsked;
 static int _uiFinger = NOT; static float _uiFeOx, _uiFeOy; static int _uiFeDrag, _uiDragOn;
-static int _mapTouch = NOT, _mapBackTouch = NOT, _bindTouch = NOT;
+static int _mapTouch = NOT, _bindTouch = NOT;
 static uint64_t _bindKey; static uint32_t _selId; static double _statNext, _tipUntil, _addAt;
 static unsigned _mapWorldSeq; static int _mapWorldAsked; static float _mapWorldPx, _mapWorldPy;
 static float _mapP0x, _mapP0y, _bindP0x, _bindP0y; static double _mapT0;
@@ -104,7 +104,7 @@ static void cancel_controls(void) {
     _pendEnd = NOT; _finalAsked = 0;
     for (int i = 0; i < 16; i++) _slot[i] = NOT; dm_tc_cancel_all(&_controls); push_from();
     if (_uiDragOn) { _uiDragOn = 0; dm_ui_drag_end(); }
-    _mapTouch = _mapBackTouch = _bindTouch = NOT;
+    _mapTouch = _bindTouch = NOT;
 }
 static void restart_cover_hook(int mode) { atomic_store(&g_cover, mode); }
 
@@ -258,7 +258,6 @@ static void sweep_ended_slots(void) {
         if (_uiDragOn && _controls.pointer_slot == i) { _uiDragOn = 0; dm_ui_drag_end(); }
         dm_tc_cancel_finger(&_controls, i); _slot[i] = NOT; }
     if (_mapTouch != NOT && touch_done(_mapTouch)) _mapTouch = NOT;
-    if (_mapBackTouch != NOT && touch_done(_mapBackTouch)) _mapBackTouch = NOT;
     if (_bindTouch != NOT && touch_done(_bindTouch)) _bindTouch = NOT;
     if (_uiFinger != NOT && touch_done(_uiFinger)) { _uiFinger = NOT;
         if (_uiFeDrag || _uiDragOn) { _uiFeDrag = 0; _uiDragOn = 0; dm_ui_drag_end(); } else dm_ui_touch(3, 0, 0); }
@@ -279,7 +278,6 @@ static void touches_began(int id) {
     for (int i = 0; i < 16; i++) if (_slot[i] == NOT) {
         _slot[i] = id; { int ex = 0; _controls.belt_rows = dm_belt_rows(&ex); _controls.belt_open = ex; } dm_tc_begin_at(&_controls, i, qx, qy, media_time());
         if (!_navigation && _controls.finger[i].target == DM_TC_PORTAL) { dm_tp_request(); LOG("前端：点回城钮 → 免费回城"); }
-        if (!_navigation && _mapBackTouch == NOT && _controls.finger[i].target == DM_TC_NONE && dm_ui_map_is_full()) { _mapBackTouch = id; _mapP0x = qx; _mapP0y = qy; _mapT0 = media_time(); }
         if (_controls.navigation_mode && _controls.pointer_slot == i && BW > 0) { _itemSeq = dm_ui_item_query(qx / BW, qy / BH); _itemAsked = 1; _itemKind = -1; }
         break;
     }
@@ -314,8 +312,6 @@ static void finish_touch(int id, const char *phase) {
     if (id == _bindTouch) { _bindTouch = NOT;
         if (!strcmp(phase, "ended") && !_navigation && hypotf(px - _bindP0x, py - _bindP0y) <= 14) { dm_ui_bind_begin(_bindKey); LOG("前端：点空技能位 (%.0f,%.0f) → 给键 %#llx 选技能", px, py, (unsigned long long)_bindKey); }
         goto done; }
-    if (id == _mapBackTouch) { _mapBackTouch = NOT;
-        if (!strcmp(phase, "ended") && !_navigation && dm_ui_map_is_full() && hypotf(px - _mapP0x, py - _mapP0y) <= 14 && media_time() - _mapT0 < 0.6) { dm_ui_map_full(0); LOG("前端：全屏地图开着，点空处 (%.0f,%.0f) → 回小地图", px, py); } }
     if (!_pendFire && _pendEnd == NOT && !strcmp(phase, "ended") && _controls.navigation_mode && _controls.pointer_slot >= 0 && _slot[_controls.pointer_slot] == id && BW > 0) {
         dm_tc_finger *pf = &_controls.finger[_controls.pointer_slot]; int wait = 0;
         if (_itemAsked && dm_ui_item_result(_itemSeq) < 0) wait = 1;

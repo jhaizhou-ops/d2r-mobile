@@ -1914,7 +1914,7 @@ static void ui_bind_pump(uint64_t root, uint64_t fr) {
 // 「透视地图尺寸」是配置变量 AutoMapMode（对象 main+0x2d479e8，值在 +0xC：0 全屏 / 1 微缩放左 / 2 微缩放右；注册处 main+0x30d2a8），注册时带变更回调 main+0x40f780(int 档)：
 //   [main+0x2d5e8f0] = 档 == 1（放左）；[main+0x2d5c748] = 档 != 0（是否微缩）；变了就调 main+0x411540 重排地图、把卷动量 [0x2d5e910 / 914] 清零。
 // 只改配置值不调回调，画面不变。这里直接调回调：切全屏传 0，切回传配置值（玩家在选项页选的放左 / 放右）；配置对象本身不动，所以不落盘、下一局照玩家的设置来。
-// 触屏模式记住玩家要不要全屏地图（g_map_want）：每局开头与玩家在选项页改档时取「配置是不是全屏档」，点小地图 / 点空处跟着改；
+// 触屏模式记住玩家要不要全屏地图（g_map_want）：每局开头与玩家在选项页改档时取「配置是不是全屏档」，点右上角小地图那一块跟着改（点空处不再改：点地面走路会误触，#186）；
 // 开面板时让成小地图（g_map_hold，前端报面板态），关掉面板、换区域后游戏按配置重建了地图，都按 g_map_want 再切回去。
 // 配置是全屏档（0）时小地图按「微缩放右」（2）显示，配置值不改写——玩家选的全屏照存照用（线上：选全屏无效、开装备栏 / 换图就回小地图）。
 // 手柄上没有切这一档的键（地图键 − 只管开 / 关）。
@@ -1923,7 +1923,7 @@ static void ui_bind_pump(uint64_t root, uint64_t fr) {
 //   [main+0x2d5e8f0] = mode == 1 (on the left); [main+0x2d5c748] = mode != 0 (mini or not); on a change it calls main+0x411540 to re-layout the map and zeroes the scroll values [0x2d5e910 / 914].
 // Changing only the config value without calling the callback leaves the picture unchanged. Here the callback is called directly: pass 0 to switch to fullscreen, pass the config value to switch back (left / right as the player chose on the options page); the config object itself is untouched, so nothing is persisted and the next run follows the player's setting.
 // In touch mode, remember whether the player wants the full-screen map (g_map_want): at the start of each run and whenever the player changes the setting on the options page it follows
-// "is the config the full-screen setting", and tapping the minimap / tapping empty space changes it; while a panel is open the map steps aside to the minimap (g_map_hold, the front end reports panel state),
+// "is the config the full-screen setting", and tapping the top-right minimap block changes it (tapping empty space no longer does: walking by tapping hit it, #186); while a panel is open the map steps aside to the minimap (g_map_hold, the front end reports panel state),
 // and after the panel closes, or after an area change in which the game rebuilt the map from the config, it is switched back to g_map_want.
 // With the config on full screen (0) the minimap is shown as "minimap right" (2) and the config value is not rewritten: the player's full-screen choice is kept and used (player report: choosing full screen had no effect, and opening the inventory / changing area went back to the minimap).
 // The controller has no key for switching this mode (the map key − only opens / closes).
@@ -1987,7 +1987,7 @@ static void ui_map_pump(module_t *m, uint64_t root) {
         atomic_store(&g_map_full_now, mini == 0 && (cfg == 1 || cfg == 2)); return;
     }
     if (cfg != g_map_cfg_seen) {   // 每局第一次读到配置、或玩家在选项页改了档：要不要全屏跟配置走 | first config read in a run, or the player changed the setting on the options page: whether to show the full-screen map follows the config
-        g_map_want = cfg == 0; { static int n; if (n++ < 8) LOG("地图：「透视地图尺寸」读到 %d → 触屏下%s", cfg, cfg == 0 ? "缺省全屏地图（点空处回小地图）" : "缺省小地图"); } g_map_cfg_seen = cfg; }
+        g_map_want = cfg == 0; { static int n; if (n++ < 8) LOG("地图：「透视地图尺寸」读到 %d → 触屏下%s", cfg, cfg == 0 ? "缺省全屏地图（点右上角那一块回小地图）" : "缺省小地图"); } g_map_cfg_seen = cfg; }
     if (r >= 0 && g_map_want != r) { g_map_want = r; LOG("地图：玩家点了 → 记住%s", r ? "全屏地图" : "小地图"); }
     int small = cfg == 1 ? 1 : 2, hold = atomic_load(&g_map_hold), want = g_map_want == 1 && !hold;   // 全屏档时小地图按微缩放右显示 | with the full-screen setting, the minimap is shown as minimap right
     if (hi.valid && (mini == 0) != want) {   // 局内才切（局外原版地图面板还没建）；换区域后游戏按配置重建、开关面板，都在这里对回去 | switch only in a run (outside one the original map panel does not exist yet); after an area change the game rebuilds from the config, and panels open / close: both are put right here
