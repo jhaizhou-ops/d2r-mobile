@@ -5,8 +5,8 @@
 # 用法：d2rm_android.py [--warm-seed <预热种子>] <游戏文件目录> <输出目录>
 #   游戏文件目录 = Switch 版 3.3.94012 的 Update 目录，里面有 ExeFS/{main,sdk} 与 RomFS/data/…（怎么从自己的游戏导出）
 #   工作目录（缓存与中间产物）：环境变量 DM_ROOT，缺省 ~/dm-work；每一步做过就跳过
-#   --warm-seed <文件>：把预热种子放进包里的 shaders/（不给时，仓库里有 dm/android/warm/vk-pipeline-list.seed 就用它）。首次启动、还没有自己的
-#     管线列表时，引擎按种子先建好别的设备见过的管线，第一次进战斗不卡；见 dm/android/README.zh-CN.md「着色器包」一节
+#   --warm-seed <文件>：把预热种子放进包里的 shaders/（不给就不带；种子放在仓库外，免得被提交）。首次启动、还没有自己的管线列表时，引擎按种子先建好
+#     别的设备见过的管线，第一次进战斗不卡；见 dm/android/README.zh-CN.md「着色器包」一节。种子在读参数时就先核一遍（在不在、格式对不对）
 # 之后：把 android 文件夹整个拷到手机的 Download/S2X/D2R Mobile/ 下（和放游戏资源的 data 文件夹并排），打开 App 就会导入；导入完可以删掉这份。
 # 需要：Python 3.9+ 与 pillow numpy lz4 capstone unicorn；.NET SDK（编着色器翻译工具）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
 #   （Mac：brew install spirv-tools shaderc；Windows / Linux：LunarG Vulkan SDK；glslc 也可以用安卓 NDK 里的）。缺什么本工具开头会逐项报。
@@ -19,8 +19,9 @@
 # Usage: d2rm_android.py [--warm-seed <seed file>] <game files directory> <output directory>
 #   game files directory = the Update directory of the Switch version 3.3.94012, with ExeFS/{main,sdk} and RomFS/data/... (how to export them from your own game: docs/GAME_FILES)
 #   working directory (caches and intermediate products): environment variable DM_ROOT, default ~/dm-work; each step that is done is skipped
-#   --warm-seed <file>: put the warm-up seed into the pack's shaders/ (without it, dm/android/warm/vk-pipeline-list.seed is used when the repository has one). On a first launch,
-#     before the engine has a pipeline list of its own, it builds the pipelines other devices saw from the seed, so the first fight does not stutter; see "Shader bundles" in dm/android/README.md
+#   --warm-seed <file>: put the warm-up seed into the pack's shaders/ (none without the option; keep seeds outside the repository so they are not committed). On a first launch,
+#     before the engine has a pipeline list of its own, it builds the pipelines other devices saw from the seed, so the first fight does not stutter; see "Shader bundles" in
+#     dm/android/README.md. The seed is checked as soon as the arguments are read (that it exists and parses)
 # Then: copy the whole android folder to Download/S2X/D2R Mobile/ on the phone (next to the data folder with the game resources); opening the App imports it, and afterwards this copy can be deleted.
 # Needs: Python 3.9+ with pillow numpy lz4 capstone unicorn; the .NET SDK (to build the shader translation tool); spirv-opt, spirv-val and glslc from the Vulkan SDK
 #   (Mac: brew install spirv-tools shaderc; Windows / Linux: the LunarG Vulkan SDK; glslc can also come from the Android NDK). The tool lists anything missing at the start.
@@ -58,9 +59,6 @@ def check_env(game):
     return dotnet
 
 
-WARM_SEED_DEFAULT = os.path.join(DM, 'android', 'warm', 'vk-pipeline-list.seed')
-
-
 def warm_seed_records(data):
     """预热种子的记录数与着色器键：每条记录 = 'XLPW'、阶段数、各阶段的着色器键、管线键字数、管线键（引擎 warm::start 读的格式）；格式不对抛 ValueError
     | The warm-up seed's record count and shader keys: each record = 'XLPW', stage count, the stages' shader keys, pipeline-key word count, pipeline key (the format the engine's warm::start reads); ValueError when malformed"""
@@ -81,16 +79,26 @@ def warm_seed_records(data):
     return records, keys
 
 
-def warm_seed(path, shaders):
-    """把预热种子放进包的 shaders/（引擎首次启动读 shaders/vk-pipeline-list.seed）；返回记进 pack_info.txt 的指纹，没有种子返回 None
-    | Put the warm-up seed into the pack's shaders/ (the engine reads shaders/vk-pipeline-list.seed on a first launch); returns the fingerprint for pack_info.txt, None without a seed"""
-    if not path and os.path.isfile(WARM_SEED_DEFAULT): path = WARM_SEED_DEFAULT
+def warm_seed_load(path):
+    """读参数时就核预热种子：文件在、格式对、不是空的，不对就退出（免得翻译完着色器、两分钟后才失败）；返回 (路径, 内容, 记录数, 着色器键)，没给种子返回 None
+    | Check the warm-up seed as soon as the arguments are read: the file exists, parses and is not empty, otherwise exit (rather than failing two minutes in,
+    after the shader translation); returns (path, data, record count, shader keys), None without a seed"""
     if not path: return None
     if not os.path.isfile(path): die('没有这个预热种子：%s' % path)
     data = open(path, 'rb').read()
     try: records, keys = warm_seed_records(data)
     except ValueError as e: die('预热种子 %s 读不了：%s' % (path, e))
     if not records: die('预热种子 %s 是空的' % path)
+    return path, data, records, keys
+
+
+def warm_seed(seed, shaders):
+    """把核过的预热种子（warm_seed_load 的结果）放进包的 shaders/（引擎首次启动读 shaders/vk-pipeline-list.seed）；着色器键要和这套包对得上。
+    返回记进 pack_info.txt 的指纹，没有种子返回 None
+    | Put the checked warm-up seed (what warm_seed_load returned) into the pack's shaders/ (the engine reads shaders/vk-pipeline-list.seed on a first launch);
+    its shader keys must match this bundle set. Returns the fingerprint for pack_info.txt, None without a seed"""
+    if not seed: return None
+    path, data, records, keys = seed
     have = {f[:-4] for f in os.listdir(shaders) if f.endswith('.xgs')}
     missing = sorted(keys - have)
     if len(missing) == len(keys): die('预热种子 %s 的 %d 个着色器键在这套包里一个都没有：它不是用这版着色器录的' % (path, len(keys)))
@@ -109,6 +117,7 @@ def main():
         else: break
         args = args[2:]
     if len(args) != 2 or T not in ('android', 'ohos'): sys.exit('用法：d2rm_android.py [--target ohos] [--warm-seed <预热种子>] <游戏文件目录> <输出目录>')
+    seed = warm_seed_load(seed)
     game, dst = (os.path.abspath(x) for x in args)
     for st in (sys.stdout, sys.stderr):
         try: st.reconfigure(errors='replace')

@@ -55,7 +55,7 @@ Steps already done are skipped on the next run. This folder contains game conten
 python3 dm/tools/d2rm_android.py --warm-seed <seed file> <game files directory> <output directory>
 ```
 
-A seed at `dm/android/warm/vk-pipeline-list.seed` in the repository is used without the option. The seed is only read on the App's first launch; later launches use the list the phone records itself.
+Keep the seed file outside the repository. It is only read on the App's first launch, so it helps a fresh install; a phone that has already played keeps the list it records itself, even after a new import.
 
 ## Step 2: copy the files to the phone
 

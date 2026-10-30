@@ -55,7 +55,7 @@ android/pack_info.txt 这份导入包是给哪个版本做的
 python3 dm/tools/d2rm_android.py --warm-seed <种子文件> <游戏文件目录> <输出目录>
 ```
 
-仓库里有 `dm/android/warm/vk-pipeline-list.seed` 时不用给这个选项。种子只在 App 首次启动时读；之后用手机自己记下的清单。
+种子文件放在仓库外。它只在 App 首次启动时读，所以对刚装好的 App 有用；已经玩过的手机用自己记下的清单，重新导入也一样。
 
 ## 第二步：把文件拷进手机
 

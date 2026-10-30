@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# 预热种子进导入包的检查：合成一个两条记录的种子，看记录解析、坏格式的拒绝、着色器键核对、拷贝与 pack_info.txt 的指纹。不碰游戏文件。
-# 运行：python3 dm/tools/tests/test_warm_seed.py
-# Checks of the warm-up seed in the import pack: a synthetic two-record seed, its parsing, the rejection of bad formats, the shader-key check,
-# the copy and the fingerprint for pack_info.txt. No game files are needed.
-# Run: python3 dm/tools/tests/test_warm_seed.py
+# 预热种子进导入包的检查：合成一个两条记录的种子，看记录解析、坏格式的拒绝、读参数时的早核（不在 / 坏 / 空就退出）、着色器键核对、拷贝与 pack_info.txt 的指纹。
+# 不碰游戏文件。运行：python3 dm/tools/tests/test_warm_seed.py（make -C dm/host/tests run 也跑它）
+# Checks of the warm-up seed in the import pack: a synthetic two-record seed, its parsing, the rejection of bad formats, the early check when the
+# arguments are read (missing / malformed / empty exits), the shader-key check, the copy and the fingerprint for pack_info.txt. No game files are needed.
+# Run: python3 dm/tools/tests/test_warm_seed.py (make -C dm/host/tests run runs it too)
 import hashlib, os, struct, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.dirname(HERE))
@@ -37,18 +37,21 @@ def main():
         sh = os.path.join(d, 'shaders'); os.makedirs(sh)
         for k in (A, B, C): open(os.path.join(sh, k + '.xgs'), 'wb').close()
         p = os.path.join(d, 'seed.bin'); open(p, 'wb').write(seed)
-        # 没给种子、仓库里也没有缺省的：什么都不放 | no seed given and no default in the repository: nothing is put in
-        if not os.path.isfile(tool.WARM_SEED_DEFAULT):
-            assert tool.warm_seed(None, sh) is None and not os.path.exists(os.path.join(sh, 'vk-pipeline-list.seed'))
-        assert tool.warm_seed(p, sh) == hashlib.sha256(seed).hexdigest()[:16]
+        # 没给种子：什么都不放（仓库里没有缺省种子） | no seed given: nothing is put in (there is no default seed in the repository)
+        assert tool.warm_seed_load(None) is None and tool.warm_seed(None, sh) is None and not os.path.exists(os.path.join(sh, 'vk-pipeline-list.seed'))
+        loaded = tool.warm_seed_load(p); assert loaded[2] == 2 and loaded[3] == {A, B, C}
+        assert tool.warm_seed(loaded, sh) == hashlib.sha256(seed).hexdigest()[:16]
         assert open(os.path.join(sh, 'vk-pipeline-list.seed'), 'rb').read() == seed
-        # 缺一部分键只提醒，一个键都对不上就退出；空种子、不存在的文件也退出
-        # Some keys missing only warns; none matching exits; an empty seed or a missing file exits too
-        os.remove(os.path.join(sh, C + '.xgs')); assert tool.warm_seed(p, sh) is not None
+        # 缺一部分键只提醒，一个键都对不上就退出
+        # Some keys missing only warns; none matching exits
+        os.remove(os.path.join(sh, C + '.xgs')); assert tool.warm_seed(loaded, sh) is not None
         for k in (A, B): os.remove(os.path.join(sh, k + '.xgs'))
-        expect_exit(lambda: tool.warm_seed(p, sh))
-        open(p, 'wb').close(); expect_exit(lambda: tool.warm_seed(p, sh))
-        expect_exit(lambda: tool.warm_seed(os.path.join(d, 'none.bin'), sh))
+        expect_exit(lambda: tool.warm_seed(loaded, sh))
+        # 读参数时的早核：不存在、坏格式、空种子都在着色器翻译之前就退出
+        # The early check when the arguments are read: a missing file, a malformed seed and an empty one all exit before the shader translation
+        expect_exit(lambda: tool.warm_seed_load(os.path.join(d, 'none.bin')))
+        open(p, 'wb').write(seed[:-2]); expect_exit(lambda: tool.warm_seed_load(p))
+        open(p, 'wb').close(); expect_exit(lambda: tool.warm_seed_load(p))
     print('warm seed OK')
 
 
