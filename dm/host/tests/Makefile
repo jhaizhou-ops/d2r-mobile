@@ -53,6 +53,7 @@ run: \
 	$(B)/t_touch_mac \
 	$(B)/t_unit_level \
 	$(B)/t_widestash_restore \
+	$(B)/t_freetp_zr \
 	$(B)/t_widget
 	python3 native_write_scan.py --selftest ..
 	python3 widget_cache_scan.py --selftest ..
@@ -95,6 +96,7 @@ run: \
 	$(B)/t_namegen
 	$(B)/t_minimap_lift
 	$(B)/t_widestash_restore
+	$(B)/t_freetp_zr
 	$(B)/t_modetx
 	$(B)/t_padmap
 	$(B)/t_unit_level
@@ -126,6 +128,8 @@ $(B)/t_minimap_lift: t_minimap_lift.c ../dm_cursor.c ../dm_cursor.h | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_minimap_lift.c
 $(B)/t_widestash_restore: t_widestash_restore.c ../dm_cursor.c ../dm_cursor.h | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_widestash_restore.c
+$(B)/t_freetp_zr: t_freetp_zr.c ../dm_freetp.c ../hle.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_freetp_zr.c
 $(B)/t_modetx: t_modetx.c ../dm_modetx.h | $(B)
 	clang -O1 -Wall -Werror -o $@ t_modetx.c
 $(B)/t_namegen: t_namegen.c ../dm_namegen.c | $(B)
