@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # 安卓版的导入包：用你自己的游戏文件，在电脑上做出发布页那个安卓 App（不含任何游戏内容）缺的全部东西，放进一个文件夹，拷进手机，App 打开时自己导入。
 #   做出来的是 <输出目录>/android/：out/（改写后的游戏程序与配套表）、shaders/（Vulkan 着色器包）、overlay/（触屏覆盖层与界面素材）、
+#   overlay_variants/（「物品注释与旧译名」等走覆盖层的开关打开时用的覆盖层）、
 #   derived.tsv（几张从游戏文件生成的数据表）、pack_info.txt（做给哪一版 App）。游戏文件只在本机读，不上传；这个文件夹里有游戏内容，请只自己用，不要分发。
 # 用法：d2rm_android.py [--warm-seed <预热种子>] <游戏文件目录> <输出目录>
 #   游戏文件目录 = Switch 版 3.3.94012 的 Update 目录，里面有 ExeFS/{main,sdk} 与 RomFS/data/…（怎么从自己的游戏导出）
@@ -15,6 +16,7 @@
 #   另加 ui-art/（技能键标签 lbl_* 与技能剪影 sil_*，各 9 张，取自底栏素材生成器的输出）；把 dm 文件夹拷进手机上和游戏资源 data 并排的「D2R Mobile」文件夹，应用导入时选它。
 # The Android import pack: from your own game files, make on a computer everything the Android App on the release page (which contains no game content) lacks, put it in one folder, copy it to the phone, and the App imports it when opened.
 #   The result is <output directory>/android/: out/ (the rewritten game program and its tables), shaders/ (Vulkan shader bundles), overlay/ (touch overlay and UI art),
+#   overlay_variants/ (the overlays used when switches that go through the overlay, such as "item notes and old names", are on),
 #   derived.tsv (a few data tables generated from the game files), pack_info.txt (which App release it is for). Game files are only read on this machine, never uploaded; this folder contains game content, keep it to yourself and do not distribute it.
 # Usage: d2rm_android.py [--warm-seed <seed file>] <game files directory> <output directory>
 #   game files directory = the Update directory of the Switch version 3.3.94012, with ExeFS/{main,sdk} and RomFS/data/... (how to export them from your own game: docs/GAME_FILES)
@@ -202,6 +204,11 @@ def main():
     shutil.rmtree(part, ignore_errors=True); os.makedirs(part)
     for x in ('out', 'shaders', 'overlay') + (('ui-art',) if T == 'ohos' else ()): shutil.copytree(os.path.join(stage, x), os.path.join(part, x))
     for x in ('derived.tsv', 'pack_info.txt'): shutil.copyfile(os.path.join(stage, x), os.path.join(part, x))
+    # 走覆盖层的自定义开关（物品注释与旧译名，#191）：gen_romfs_overlay.py 在 overlay 旁边出了各开关组合的完整覆盖层，
+    # 安卓 App 启动时按开关挑一份叠在 overlay 前面（jni_android.c）
+    # Custom switches that go through the overlay (item notes and old translated names, #191): gen_romfs_overlay.py writes a complete overlay per
+    # switch combination next to overlay; the Android App picks one by the switches at start and layers it in front of overlay (jni_android.c)
+    if T == 'android' and os.path.isdir(os.path.join(stage, 'overlay_variants')): shutil.copytree(os.path.join(stage, 'overlay_variants'), os.path.join(part, 'overlay_variants'))
     shutil.rmtree(final, ignore_errors=True); os.replace(part, final)
     size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(final) for f in fs)
     if T == 'ohos': say('好了：%s（%.0f MB）。在手机上建一个「D2R Mobile」文件夹，把这个 dm 文件夹和游戏资源（%s 整个拷过去，叫 data）并排放进去，'

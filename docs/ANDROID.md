@@ -43,6 +43,7 @@ python3 dm/tools/d2rm_android.py <game files directory> <output directory>
 android/out/          the rewritten game program and its tables
 android/shaders/      Vulkan shader bundles (6,931)
 android/overlay/      touch overlay and UI art
+android/overlay_variants/  the overlay used while "item notes and old names" is on (Custom page, after a restart)
 android/derived.tsv   a few data tables generated from the game files
 android/pack_info.txt which release this import pack is for
 ```

@@ -41,7 +41,10 @@ import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -189,6 +192,11 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     // pack_info.txt last: if the app is killed or runs out of space, the next start imports again and half a copy is never used.
     // Done before the native library loads: in the release APK without game content, a few tables are read from derived.tsv at load time.
     private static final String[] IMPORT_ITEMS = {"out", "shaders", "overlay", "derived.tsv", "pack_info.txt"};
+    // 可有可无的导入项：走覆盖层的自定义开关的各组合（物品注释与旧译名，#191；jni_android.c 启动时按开关挑一份）。
+    // 旧导入包没有它，照常导入；新导入包没有它时，旧的那份删掉
+    // Optional import items: the overlays for custom switches that go through the overlay (item notes and old names, #191; jni_android.c picks one at start).
+    // Older import packs lack it and still import; when a new import pack lacks it, the old copy is removed
+    private static final String[] OPTIONAL_ITEMS = {"overlay_variants"};
 
     private static String readText(File f) {
         try { return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); } catch (IOException e) { return null; }
@@ -237,23 +245,26 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
 
     private static void importPack(File source, File runtime, Progress progress) throws IOException {
         for (String item : IMPORT_ITEMS) if (!new File(source, item).exists()) throw new IOException("missing " + item);
+        List<String> items = new ArrayList<>(Arrays.asList(IMPORT_ITEMS));
+        for (String item : OPTIONAL_ITEMS) if (new File(source, item).exists()) items.add(item);
         File part = new File(runtime, "import.part");
         deleteTree(part);
         long sum = 0;
-        for (String item : IMPORT_ITEMS) sum += treeSize(new File(source, item));
+        for (String item : items) sum += treeSize(new File(source, item));
         final long total = sum;
         long[] done = {0}; int[] shown = {-1};
         byte[] buffer = new byte[1 << 20];
-        for (String item : IMPORT_ITEMS) copyTree(new File(source, item), new File(part, item), buffer, bytes -> {
+        for (String item : items) copyTree(new File(source, item), new File(part, item), buffer, bytes -> {
             done[0] += bytes;
             int p = (int) (done[0] * 100 / Math.max(1, total));
             if (p != shown[0]) { shown[0] = p; progress.percent(p); }
         });
-        for (String item : IMPORT_ITEMS) {
+        for (String item : items) {
             File from = new File(part, item), to = new File(runtime, item);
             deleteTree(to);
             if (!from.renameTo(to)) throw new IOException("rename " + item);
         }
+        for (String item : OPTIONAL_ITEMS) if (!items.contains(item)) deleteTree(new File(runtime, item));
         deleteTree(part);
     }
 
