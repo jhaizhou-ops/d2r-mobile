@@ -146,7 +146,7 @@ Enter through the red portal in Harrogath after completing Hell. There are 100 l
 | Auto-pickup | Low runes and gems go straight into the Pouch; the high ones are left for you to pick up yourself |
 | Valuable drop alerts | High runes and Unique items raise a light beam and land with a different drop sound; the phone vibrates at one of three strengths — light, medium or heavy — according to value |
 | Runeword helper | Long-press a socketed base to list the Runewords it can make and their stats; once you have the runes, socket them all in one tap |
-| Minimap guidance | Every map marks its Waypoint and exits; every quest goal is on the map; when a target is off screen, its name is written along the screen edge |
+| Minimap guidance | Every map marks its Waypoint and exits, labelled "Waypoint" and with the name of the area each entrance leads to (iOS / Mac); every quest goal is on the map; when a target is off screen, its name is written along the screen edge |
 | Chores removed | Free identification, free Town Portal with no scrolls needed, spawning right beside the Waypoint, Quick Restart, refreshable vendor stock, free and unlimited respecs at Akara |
 | Saves | Saved immediately when you switch apps, swipe the app away or quit; iCloud sync across devices (requires signing with a paid developer account) |
 | Entertainment mode (experimental) | Over-the-shoulder and first-person camera: drag the right half to look around, arrows for monsters off the picture, a facing pointer on the map ([details](docs/over-the-shoulder-camera.md); contributed with [@yyan160](https://github.com/yyan160), [#165](https://github.com/jhaizhou-ops/d2r-mobile/pull/165)) |
