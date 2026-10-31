@@ -412,7 +412,7 @@ struct Buffer {
     void invalidate(){if(coherent)return;VkMappedMemoryRange r{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};r.memory=memory;r.size=VK_WHOLE_SIZE;VK(vkInvalidateMappedMemoryRanges(cfg.device,1,&r));}
 };
 struct Arena {
-    std::vector<ArenaChunk> chunks;size_t current=0;bool cached=false;VkDeviceSize used_total=0,peak=0;
+    std::vector<ArenaChunk> chunks;size_t current=0,peak_chunks=3;bool cached=false;VkDeviceSize used_total=0,peak=0;
     ArenaChunk make(VkDeviceSize bytes){
         CPU_SCOPE(Buffer);ArenaChunk c;c.size=bytes;
         VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};ci.size=bytes;ci.usage=arena_usage;ci.sharingMode=VK_SHARING_MODE_EXCLUSIVE;VK(vkCreateBuffer(cfg.device,&ci,nullptr,&c.buffer));
@@ -439,7 +439,12 @@ struct Arena {
     // reset() keeps all memory mapped (a synchronous reader may still copy out
     // of it); trim() releases oversized/extra chunks before the next recording.
     size_t keep_chunks=3;
-    void reset(){for(auto &c:chunks)c.used=0;current=0;used_total=0;}
+    // current is the highest chunk index the just-finished recording placed anything into (alloc only ever advances it),
+    // so current+1 is exactly that recording's chunk usage. Capture it here — trim() runs after this and needs it to
+    // decide retention; a plain chunks.size() would pin the historical peak and never shrink.
+    // current 是刚结束的那次录制实际用到的最高块号（分配只会前进），所以 current+1 就是这次录制的块用量。
+    // 在 reset() 里记下来是因为 trim() 在它之后才跑、要据此决定保留多少块；直接用 chunks.size() 会钉住历史峰值、再也不缩。
+    void reset(){peak_chunks=current+1;for(auto &c:chunks)c.used=0;current=0;used_total=0;}
     void trim(){
         size_t kept=0;std::vector<ArenaChunk> keep;
         for(auto &c:chunks){if(c.size==arena_chunk_bytes && kept<keep_chunks){keep.push_back(c);++kept;}else destroy(c);}
@@ -827,6 +832,15 @@ Slot &recording_slot(){
          s.guard.clear();if(o.pending && xview_guard && !ab_off("xguard"))s.guard.swap(s.viewed);s.viewed.clear();s.pro_ops.clear();s.pro_images.clear();}
         // Pending writebacks still read this slot's readback arena; finish them before trimming.
         for(auto &w:pending_writebacks)if(w.slot==&s){++perf.why_slot;resolve_pending();break;}
+        // Keep what this recording actually needed (3..8): during streamed bursts the arena grew to 7+ chunks
+        // per frame, and trim() released them — every burst frame paid chunk creation + first-touch page faults inside the
+        // timed staging copy (measured up to 7 ms/image). The readback arena below already self-sizes; the stream one matches.
+        // Grow-only: shrinking per-frame defeated the point — normal frames use 1 chunk, and every next burst then re-created + first-touched
+        // chunks again (measured unchanged 8ms/image staging over four burst frames 375-397ms apart). Bounded by 8 (256MB/slot).
+        // 保留这次录制真正用到的块数（3..8）：流式突发时 arena 会一帧长到 7+ 块，而 trim() 把它们全放了，
+        // 于是每一突发帧都要在计时的 staging 拷贝里重新建块并吃首次访问的缺页（实测每张图最多 7 ms）。
+        // 只增不减：按帧收缩等于没做——普通帧只用 1 块，下一个突发帧又得重新建块（连测四帧 375-397ms，staging 仍是 8ms/张）。
+        s.stream.keep_chunks=std::max({(size_t)3,std::min((size_t)8,s.stream.peak_chunks),s.stream.keep_chunks});
         s.stream.trim();s.readback.keep_chunks=s.guard.empty()?1:s.readback.chunks.size();s.readback.trim();
         if(texel_memo_enabled && (slot_serial&15)<2)texel_evict(slot_index,false);   // this slot's copies: its previous submission retired
         if(!s.cmd){if(slot_pools_enabled){VkCommandPoolCreateInfo cp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};cp.queueFamilyIndex=cfg.queue_family;VK(vkCreateCommandPool(cfg.device,&cp,nullptr,&s.pool));}
@@ -1501,6 +1515,19 @@ uint64_t hash_memory(const void *memory,size_t n){CPU_SCOPE(Hash);const uint8_t 
     uint64_t h[4]={1469598103934665603ull,0x9e3779b97f4a7c15ull,0xc2b2ae3d27d4eb4full,0x165667b19e3779f9ull};size_t i=0;
     for(;i+32<=n;i+=32){for(unsigned k=0;k<4;k++){uint64_t w;memcpy(&w,p+i+8*k,8);h[k]=(h[k]^w)*0x100000001b3ull;h[k]^=h[k]>>29;}}
     uint64_t hash=h[0]^(h[1]*3)^(h[2]*5)^(h[3]*7)^n;for(;i<n;i++){hash^=p[i];hash*=1099511628211ull;}return hash;}
+// Grow-only upload scratch: keeps capacity between calls and never zero-fills. std::vector<uint8_t>::resize
+// value-initializes, and on this path that meant a full-image memset plus malloc/free on every (re)upload —
+// measured on a Mali-G925 (in-run BC re-uploads) at ~4-5 ms per 4 MB image, roughly half the per-cycle cost.
+// Only used from the single thread that records submissions, like the vectors it replaces.
+// 只增不减的上传暂存：跨调用保留容量、且从不填零。std::vector<uint8_t>::resize 会做值初始化，在这条路径上等于
+// 每次（重）上传都要整图 memset 外加 malloc/free——Mali-G925 实测 4 MB 图约 4-5 ms，约占单次循环一半。
+// 与它替换掉的 vector 一样，只由录制提交的那一个线程使用。
+struct UpScratch{uint8_t *p=nullptr;size_t cap=0,n=0;
+    void reset(){n=0;}
+    void resize(size_t m){if(m<=cap){n=m;return;}size_t c=m+(m>>1)+65536u;uint8_t *q=static_cast<uint8_t*>(::operator new(c));if(n)memcpy(q,p,n);::operator delete(p);p=q;cap=c;n=m;}
+    uint8_t *data(){return p;} const uint8_t *data()const{return p;} size_t size()const{return n;}
+    ~UpScratch(){::operator delete(p);}};
+thread_local UpScratch up_linear,up_blocks;   // get_image's upload buffers | get_image 的上传缓冲
 void invalidate_cpu_range(uint64_t address,uint64_t bytes){CPU_SCOPE(CpuWrite);
     need(address+bytes>=address,"CPU write range overflow");cpu_access(address,bytes,4);snapshot_invalidate(address,bytes);
     for_images_overlapping(address,bytes,[&](Image &im){if(draw_detail)draw_timing.image();uint64_t begin=uintptr_t(im.source.mem),end=begin+im.source.L.size;
@@ -1601,7 +1628,7 @@ bool gpu_poll_complete(){
 }
 // Vulkan buffer/image transfers name exactly one depth/stencil aspect. Keep
 // both packed NVN channels, with independent tightly packed planes and copies.
-void append_depth_planes(std::vector<uint8_t> &data,std::vector<VkBufferImageCopy> &copies,
+template<class Buf> void append_depth_planes(Buf &data,std::vector<VkBufferImageCopy> &copies,
     uint32_t format,uint32_t w,uint32_t h,uint32_t slices,const void *packed,size_t packed_bytes,
     size_t row,size_t image,const VkBufferImageCopy &region){
     xbg_depth_format f;need(xbg_depth_format_info(format,&f)==0,"Unknown NVN depth transfer format");
@@ -1706,13 +1733,71 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
         im.checked_submission=stats.submissions;}
     // Diagnostic: CPU writes into textures whose contents the GPU produced (copies) are invisible to us.
     if(upload && im.gpu_written && im.decoded && t->mem && ((stats.submissions+t->serial)&63)==0 && im.checked_submission!=stats.submissions){im.checked_submission=stats.submissions;uint64_t hash=hash_memory(t->mem,t->L.size);if(im.cpu_hash && hash!=im.cpu_hash){static unsigned n=0;if(n++<40)xbg_logf("NVN CPUGPU texture changed by CPU after GPU write serial=%llu fmt=%#x %ux%u layers=%u levels=%u target=%d",(unsigned long long)t->serial,t->d.format,im.width,im.height,im.layers,im.levels,t->d.target);}im.cpu_hash=hash;}
+    // Differential block decode for re-uploaded decoded BC images. Consecutive re-saves of the streamed cubes
+    // (BC6H 256x256x6) change only 1.7-1.8% of their 16-byte blocks, yet every cycle decoded the whole image — 6.2 ms of the
+    // 8.3 ms per cycle. BC blocks are independent, so decode only the blocks whose compressed bytes changed and keep the last
+    // decoded image as the base: identical output, ~1 ms per cycle. Bounded to 16 images, ordered by hotness, and an image must
+    // have re-uploaded 3 times before it takes a slot, so load-time one-offs cannot evict the images that cycle every frame.
+    // 重上传的解码 BC 图做块级差分解码：连续两次重存的流式立方图（BC6H 256x256x6）只改了 1.7-1.8% 的 16 字节块，
+    // 但每次都整图解码（每循环 8.3 ms 里 6.2 ms 在解码）。BC 的块彼此独立，所以只解压缩字节变了的块、以上次解码结果
+    // 为基底：输出完全一致，每循环约 1 ms。最多 16 张，按热度排序，且一张图要先重传 3 次才占槽，
+    // 这样载入期的一次性大图不会把每帧都循环的图挤出去。
+    struct UpDiff{
+        std::vector<uint8_t> src,src_new,out;std::vector<uint32_t> off;   // off: byte offset of each sub-resource inside src/src_new | off：各子资源在 src/src_new 内的字节偏移
+        uint32_t fmt=0,layers=0,levels=0,width=0,height=0,bpp=0;size_t total=0,total_src=0;unsigned verify=2;bool ready=false;
+        uint64_t used=0;   // last-use stamp; the hot re-uploaded images must win the slots over the load-time ones | 最近使用时间戳：真正循环的图要优先于载入期一次性图拿到槽位
+    };
+    static std::map<uint64_t,UpDiff> up_diffs;static uint64_t up_diff_clock=0;static std::map<uint64_t,unsigned> up_diff_seen;
+    // Verification proved the differential output byte-identical over 6147 cycles; it costs a full decode per checked cycle, so
+    // it is opt-in now (DM_BC_DIFFVERIFY=1) — leaving it on made every slot change pay a full decode and slowed bursts 4x.
+    // 自校验已证明 6147 次差分输出与全量解码逐字节相同；它每校验一次就要多跑一次全量解码，所以改为按需开启
+    // （DM_BC_DIFFVERIFY=1）——常开时每次换槽都付一次全量解码，突发帧慢了 4 倍。
+    static int up_diff_verify=-1;if(up_diff_verify<0){const char *e=getenv("DM_BC_DIFFVERIFY");up_diff_verify=e&&*e=='1';}
     if(upload && !im.uploaded && !im.gpu_written){
         const uint64_t up_t0=timing_clock();const bool reupload=im.cpu_hash!=0;
+        // Skip when the guest bytes equal what the device already holds. The streamed HDR cubes (BC6H 256x256x6) cycle
+        // GetData -> CPU store -> Load 50+ times per frame on some scenes, and engine-side invalidation marks them dirty even
+        // when the game restored identical bytes; each needless cycle costs a full BC decode. The same hash answers the
+        // per-submission recheck above; using it here makes that question free.
+        // The skip-check hash and the uploaded-content hash describe the same bytes on the same thread — compute once. On the
+        // recurring ~110-small-image cycles the doubled hash was ~40% of the per-image cost (~0.25 ms of 0.65 ms).
+        // 客户机字节与设备里已有内容相同时直接跳过上传。流式 HDR 立方图（BC6H 256x256x6）在某些场景里一帧要走
+        // 50+ 次 GetData -> CPU 写 -> Load，游戏即使把同样的字节写了回去，引擎侧的失效也会把它标脏，
+        // 每次多余循环都要付一次完整 BC 解码；上面每次提交的复查用的是同一个哈希，这里顺手复用，等于白拿。
+        // 跳过判定用的哈希和上传后记录内容用的哈希是同一份字节、同一个线程算的，所以只算一次——
+        // 在反复出现的 ~110 张小图循环里，算两遍约占单张成本 40%（0.65 ms 里的 0.25 ms）。
+        uint64_t fresh_hash=0;const bool can_skip=t->mem&&im.cpu_hash;
+        if(can_skip&&((fresh_hash=hash_memory(t->mem,t->L.size))==im.cpu_hash)){im.uploaded=true;im.checked_submission=stats.submissions;}
+        else{
         im.dirty_stamp=0;   // a new upload starts on the hash checks again
         need(im.samples==VK_SAMPLE_COUNT_1_BIT,"Cannot upload uninitialized multisample image from CPU storage");
         need(t->mem && t->pool && t->off>=0 && uint64_t(t->off)<=t->pool->size && t->L.size<=t->pool->size-uint64_t(t->off),"Texture storage outside memory pool");
         if(im.aspects!=VK_IMAGE_ASPECT_COLOR_BIT)xbg_logf("NVN depth initial upload serial=%llu format=%#x vkFormat=%u target=%d extent=%ux%ux%u levels=%u layers=%u source=%p bytes=%llu",(unsigned long long)t->serial,t->d.format,unsigned(im.fmt),t->d.target,im.width,im.height,im.depth,im.levels,im.layers,t->mem,(unsigned long long)t->L.size);
-        std::vector<uint8_t> linear;std::vector<VkBufferImageCopy> copies;
+        UpScratch &linear=up_linear;linear.reset();std::vector<VkBufferImageCopy> copies;
+        // Choose the differential state for this image and pre-compute its sub-resource layout. | 为这张图挑出差分状态并预先算好子资源布局。
+        UpDiff *dif=nullptr;uint8_t *out_base=nullptr;size_t run=0;
+        // Any decoded BC image qualifies (the cube family is not the only one cycling): the slots are hotness-ordered, so a
+        // load-time image never keeps a slot away from the images that actually re-upload every frame.
+        // 任何解码 BC 图都够格（会循环的不止立方图那一族）：槽位按热度排序，载入期的图不会占着槽不让每帧重传的图用。
+        unsigned &seen=up_diff_seen[t->serial];if(reupload)++seen;   // only images that really cycle are worth a slot | 只有真正在循环的图才配占槽
+        if(im.decoded && im.depth==1 && t->L.size>=16ull*1024 && seen>=3){
+            if(!up_diffs.count(t->serial) && up_diffs.size()>=16){
+                auto old=up_diffs.begin();for(auto i=up_diffs.begin();i!=up_diffs.end();++i)if(i->second.used<old->second.used)old=i;
+                up_diffs.erase(old);}
+            UpDiff &d=up_diffs[t->serial];d.used=++up_diff_clock;
+            bool same=d.ready && d.fmt==uint32_t(t->d.format) && d.layers==im.layers && d.levels==im.levels && d.width==im.width && d.height==im.height && d.bpp==im.bpp;
+            size_t ts=0,to=0;std::vector<uint32_t> offs;
+            for(uint32_t layer=0;layer<im.layers;layer++)for(uint32_t level=0;level<im.levels;level++){
+                uint32_t w=std::max(1u,im.width>>level),h=std::max(1u,im.height>>level);
+                offs.push_back(uint32_t(ts));int bw=0,bh=0;int bb=nvn_fmt_bpb(t->d.format,&bw,&bh);
+                ts+=size_t((w+bw-1)/bw)*((h+bh-1)/bh)*size_t(bb);
+                to=(to+15)&~size_t(15);to+=size_t(w)*h*im.bpp;}
+            if(!same || d.total!=to || d.total_src!=ts || d.off.size()!=offs.size())d=UpDiff{};
+            d.fmt=t->d.format;d.layers=im.layers;d.levels=im.levels;d.width=im.width;d.height=im.height;d.bpp=im.bpp;
+            d.total=to;d.total_src=ts;d.off=offs;
+            d.src.resize(ts);d.out.resize(to);d.src_new.resize(ts);   // src_new is the deswizzle target of this cycle, including the first one | src_new 是本轮反 swizzle 的目标，第一轮也是
+            dif=&d;out_base=d.out.data();
+        }
         for(uint32_t layer=0;layer<im.layers;layer++)for(uint32_t level=0;level<im.levels;level++){
             uint32_t w=std::max(1u,im.width>>level),h=std::max(1u,im.height>>level),depth=std::max(1u,im.depth>>level);
             if(im.aspects!=VK_IMAGE_ASPECT_COLOR_BIT){
@@ -1722,23 +1807,36 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
                 VkBufferImageCopy region{};region.imageSubresource={0,level,layer,1};region.imageExtent={w,h,depth};
                 append_depth_planes(linear,copies,t->d.format,w,h,depth,packed.data(),packed.size(),0,0,region);continue;
             }
-            size_t begin=(linear.size()+15)&~size_t(15);
+            if(!out_base)run=linear.size();   // track the running output size for the differential path | 差分路径下跟踪累计输出长度
+            size_t begin=(run+15)&~size_t(15);
             int cbw=1,cbh=1;bool native_blocks=!im.decoded && nvn_fmt_bpb(t->d.format,&cbw,&cbh) && (cbw>1 || cbh>1);
             if(native_blocks){ // ASTC etc.: copy whole blocks, rows of blocks
                 uint32_t bx=(w+cbw-1)/cbw,by=(h+cbh-1)/cbh;linear.resize(begin+size_t(bx)*by*depth*im.bpp);
                 need(nvn_deswizzle(&t->d,level,layer,t->mem,linear.data()+begin,size_t(bx)*im.bpp)==0,"Compressed texture deswizzle failed");
                 VkBufferImageCopy c{};c.bufferOffset=begin;c.imageSubresource={im.aspects,level,layer,1};c.imageExtent={w,h,depth};copies.push_back(c);continue;}
-            linear.resize(begin+size_t(w)*h*depth*im.bpp);
+            if(!out_base)linear.resize(begin+size_t(w)*h*depth*im.bpp);else run=begin+size_t(w)*h*depth*im.bpp;
             if(im.decoded){
                 int bw,bh,block_bytes=nvn_fmt_bpb(t->d.format,&bw,&bh);uint32_t blocks_x=(w+bw-1)/bw,blocks_y=(h+bh-1)/bh;
-                std::vector<uint8_t> blocks(size_t(blocks_x)*blocks_y*depth*block_bytes);
-                need(nvn_deswizzle(&t->d,level,layer,t->mem,blocks.data(),size_t(blocks_x)*block_bytes)==0,"BC image deswizzle failed");
-                need(xbg_decode_bc_linear(t->d.format,w,h,depth,blocks.data(),blocks.size(),0,0,linear.data()+begin,size_t(w)*h*depth*im.bpp)==0,"BC image decode failed");
+                UpScratch &blocks=up_blocks;if(!dif)blocks.resize(size_t(blocks_x)*blocks_y*depth*block_bytes);
+                uint8_t *bdst=dif?dif->src_new.data()+dif->off[size_t(layer)*im.levels+level]:blocks.data();
+                need(nvn_deswizzle(&t->d,level,layer,t->mem,bdst,size_t(blocks_x)*block_bytes)==0,"BC image deswizzle failed");
+                uint8_t *odst=(dif?out_base:linear.data())+begin;
+                if(dif&&dif->ready){   // decode only the blocks whose compressed bytes changed | 只解压缩字节发生了变化的块
+                    const uint32_t bo=dif->off[size_t(layer)*im.levels+level];uint8_t pixels[128];
+                    for(uint32_t by=0;by<blocks_y;by++)for(uint32_t bx=0;bx<blocks_x;bx++){
+                        size_t bi=(size_t(by)*blocks_x+bx)*block_bytes;
+                        if(!memcmp(dif->src.data()+bo+bi,bdst+bi,block_bytes))continue;
+                        need(xbg_decode_block(t->d.format,bdst+bi,block_bytes,pixels,sizeof(pixels))==0,"BC block decode failed");
+                        for(unsigned y=0;y<4 && by*4+y<h;y++)for(unsigned x=0;x<4 && bx*4+x<w;x++)
+                            memcpy(odst+(((size_t)by*4+y)*w+bx*4+x)*im.bpp,pixels+(y*4+x)*im.bpp,im.bpp);}
+                }else{
+                    need(xbg_decode_bc_linear(t->d.format,w,h,depth,bdst,size_t(blocks_x)*blocks_y*depth*block_bytes,0,0,odst,size_t(w)*h*depth*im.bpp)==0,"BC image decode failed");}
             }else if(t->d.flags&0x10){need(!layer && !level && depth==1,"Linear mip/layer/volume texture not implemented");size_t pitch=t->d.stride?t->d.stride:(w*im.bpp+31)&~size_t(31);for(uint32_t y=0;y<h;y++)memcpy(linear.data()+begin+y*w*im.bpp,t->mem+y*pitch,w*im.bpp);}
             else need(nvn_deswizzle(&t->d,level,layer,t->mem,linear.data()+begin,size_t(w)*im.bpp)==0,"Texture deswizzle failed");
             VkBufferImageCopy c{};c.bufferOffset=begin;c.imageSubresource={im.aspects,level,layer,1};c.imageExtent={w,h,depth};copies.push_back(c);
         }
-        Buffer staging=stream_buffer(linear.size(),linear.data(),linear.size(),false);for(auto &copy:copies)copy.bufferOffset+=staging.offset;
+        const size_t up_bytes=out_base?run:linear.size();
+        Buffer staging=stream_buffer(up_bytes,out_base?out_base:linear.data(),up_bytes,false);for(auto &copy:copies)copy.bufferOffset+=staging.offset;
         // gfx-upload-prologue：这次提交里还没有命令用过这张图，它的新内容可以排在整个提交之前，前面没有读到旧内容的命令。
         // gfx-upload-prologue: no command of this submission used this image yet, so its new contents can go ahead of the whole
         // submission; no earlier command read the old contents.
@@ -1746,8 +1844,23 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
             s.pro_images.push_back({im.image,im.layout,im.aspects,im.levels,im.layers,staging.buffer,copies});im.layout=VK_IMAGE_LAYOUT_GENERAL;++uploads_prologue;}
         else{++uploads_inpass;if(open_pass.cmd)++uploads_broke_pass;
             Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);vkCmdCopyBufferToImage(c.command,staging.buffer,im.image,im.layout,copies.size(),copies.data());im.transition(c.command,VK_IMAGE_LAYOUT_GENERAL);c.finish();}
-        im.uploaded=true;provenance_write(im,__LINE__);im.cpu_hash=hash_memory(t->mem,t->L.size);im.checked_submission=stats.submissions;
-        if(reupload)++hud::reuploads;else ++hud::uploads;hud::upload_bytes+=linear.size();hud::upload_ns+=timing_clock()-up_t0;
+        im.uploaded=true;provenance_write(im,__LINE__);im.cpu_hash=can_skip?fresh_hash:hash_memory(t->mem,t->L.size);im.checked_submission=stats.submissions;
+        if(dif){   // this cycle's compressed source becomes the next comparison base | 本轮的压缩源成为下一轮的比较基准
+            dif->src.swap(dif->src_new);
+            if(!dif->ready)dif->ready=true;
+            else if(dif->verify && up_diff_verify){--dif->verify;   // opt-in: compare against a full decode of the same bytes | 按需开启：与同样字节的全量解码结果对比
+                bool bad=false;size_t at=0;std::vector<uint8_t> ref(dif->total);
+                for(uint32_t layer=0;layer<dif->layers&&!bad;layer++)for(uint32_t level=0;level<dif->levels&&!bad;level++){
+                    uint32_t w=std::max(1u,dif->width>>level),h=std::max(1u,dif->height>>level);
+                    int bw=0,bh=0;int bb=nvn_fmt_bpb(dif->fmt,&bw,&bh);uint32_t bxs=(w+bw-1)/bw,bys=(h+bh-1)/bh;
+                    size_t begin=(at+15)&~size_t(15);at=begin+size_t(w)*h*dif->bpp;
+                    if(xbg_decode_bc_linear(dif->fmt,w,h,1,dif->src.data()+dif->off[size_t(layer)*dif->levels+level],size_t(bxs)*bys*size_t(bb),0,0,ref.data()+begin,size_t(w)*h*dif->bpp))bad=true;
+                    else if(memcmp(ref.data()+begin,dif->out.data()+begin,size_t(w)*h*dif->bpp))bad=true;}
+                xbg_logf("NVN bd-verify serial=%llu %s",(unsigned long long)t->serial,bad?"MISMATCH - differential disabled for this image":"ok");
+                if(bad){dif->ready=false;dif->verify=0;}}
+        }
+        if(reupload)++hud::reuploads;else ++hud::uploads;hud::upload_bytes+=up_bytes;hud::upload_ns+=timing_clock()-up_t0;
+        }
     }
     provenance_image(upload?"GET_UPLOAD":"GET",t,im);im.slot_use=slot_serial;return im;
 }
