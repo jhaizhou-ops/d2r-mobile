@@ -123,13 +123,18 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     // 手柄事件在这里吃掉，不再往下传给视图（否则会触发触摸控件、系统返回等）。
     // Physical controller: keys and sticks are merged in PadInput into the host controller state (nativePad -> dm_pad_set), combined with
     // the touch stick when the game reads the controller. Controller events are consumed here and not passed on to the views.
+    // 原生库载入之前（导入进度页、「导入包版本不对」等启动错误页）手柄事件不进 PadInput：它要调原生方法，库还没载入就是
+    // UnsatisfiedLinkError，App 直接闪退（#178：装好新版、导入之前连上手柄就闪退）。这时交给系统，照普通界面处理
+    // Before the native library is loaded (the import progress page, start errors such as "the import pack is for another version"), controller
+    // events do not go to PadInput: it calls native methods, which throw UnsatisfiedLinkError while the library is not loaded and kill the app
+    // (#178: connecting a controller after installing a new version, before the import, crashed it). The system handles them as on any other screen
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
-        if (PadInput.onKey(e)) return true;
+        if (libraryLoaded && PadInput.onKey(e)) return true;
         return super.dispatchKeyEvent(e);
     }
 
     @Override public boolean onGenericMotionEvent(MotionEvent e) {
-        if (PadInput.onMotion(e)) return true;
+        if (libraryLoaded && PadInput.onMotion(e)) return true;
         return super.onGenericMotionEvent(e);
     }
 
