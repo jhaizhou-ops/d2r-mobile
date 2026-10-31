@@ -521,7 +521,7 @@ void dm_padmode_step(uint8_t *b, uint64_t frame) {   // 游戏主线程每帧（
         int dm_swapskill_wset(void); int bank = dm_swapskill_wset() ? 16 : 0; char o[240]; size_t L = 0; o[0] = 0;
         static const struct { uint32_t lg; const char *nm; } face[6] = { { 0x2000, "A" }, { 0x1000, "B" }, { 0x8000, "X" }, { 0x4000, "Y" }, { 0x200, "R" }, { 0x800, "ZR" } };
         for (int f = 0; f < 6; f++) for (int i = 0; i < 6; i++) { uint32_t lg, sl[2], id[2] = { 0xffffffffu, 0xffffffffu }; memcpy(&lg, b + 0x2d13cbc + 12 * i, 4); memcpy(sl, b + 0x2d13cbc + 12 * i + 4, 8); if (lg != face[f].lg) continue;
-            for (int k = 0; k < 2; k++) if (sl[k] < 12) memcpy(&id[k], b + 0x2d5f0c0 + (uint64_t)(bank + sl[k]) * 28, 4);
+            for (int k = 0; k < 2; k++) if (sl[k] < 12) { memcpy(&id[k], b + 0x2d5f0c0 + (uint64_t)(bank + sl[k]) * 28, 4); if (id[k] == 0xffffffffu && bank) memcpy(&id[k], b + 0x2d5f0c0 + (uint64_t)sl[k] * 28, 4); }   // II 组那格空着就看 I 组那格（「切换武器时更换技能键」关着时两组共用前 12 格，同 dm_freetp.c） | If the set II slot is empty, look at the set I slot (with "Weapon Swap Separate Skill Buttons" off both sets share the first 12 slots, same as dm_freetp.c)
             L += (size_t)snprintf(o + L, L < sizeof o ? sizeof o - L : 0, " %s=%d/%d", face[f].nm, (int)id[0], (int)id[1]); }
-        LOG("手柄 / 触屏布局：技能格（技能号，/ 后是按着 ZL 的第二组，-1 = 空）%s", o); }
+        LOG("手柄 / 触屏布局：技能格（技能号，/ 后是按着 ZL 的第二组，-1 = 空；当前武器组 %d）%s", dm_swapskill_wset(), o); }
 }

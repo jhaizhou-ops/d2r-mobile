@@ -67,15 +67,24 @@ static void grant(uint8_t *mb, uint64_t unit, int srv) {   // 这个单位的技
 // +16 slots),
 // read the same way as the front end's skill slot snapshot (dm/ios/Sources/dm_touch_game_bridge.c). [0] = the slot ZR uses when ZL is not held,
 // [1] = the slot used while ZL is held
+// 两组都看：只有 I 组（+0）和 II 组（+16）这一格都空着才算空。原先按当前武器组只看一组（组号 -1 未知 / 1 都取 +16），可「切换武器时更换技能键」
+// 关着时原版两组都只用前 12 格（dm_actions.c），于是绑了技能也读成空、ZR 一直被当成回城（iPhone 实测：六个面全读成 -1，前端快照取的是 +0 格）
+// Look at both sets: the slot counts as empty only when it is empty in set I (+0) and in set II (+16). Previously only the current weapon set was read
+// (set number -1 = unknown and 1 both took +16), but with "Weapon Swap Separate Skill Buttons" off the original game uses only the first 12 slots for both
+// sets (dm_actions.c), so a bound skill read as empty and ZR was always taken as town portal (measured on iPhone: all six faces read -1, while the front
+// end's snapshot fetched the +0 slots)
 static _Atomic int g_zr_free[2];
 int dm_freetp_zr_free(int zl) { return atomic_load(&g_zr_free[zl != 0]); }
 void dm_freetp_client_step(uint8_t *mb, uint64_t pl) {   // 游戏主线程每帧（dm_actions.c），pl = 客户端玩家；不在局里传 0 | Every frame on the game main thread (dm_actions.c), pl = the client player; pass 0 when not in a run
     if (!mb || !pl) { atomic_store(&g_zr_free[0], 0); atomic_store(&g_zr_free[1], 0); return; }
     grant(mb, pl, 0);
-    int dm_swapskill_wset(void); int bank = dm_swapskill_wset() ? 16 : 0, fr[2] = { 0, 0 }; uint32_t ids[2] = { 0, 0 };
+    int dm_swapskill_wset(void); int fr[2] = { 0, 0 }; uint32_t ids[2] = { 0, 0 }, ids2[2] = { 0, 0 };
     for (int i = 0; i < 6; i++) { const uint8_t *e = mb + 0x2d13cbc + 12 * i; uint32_t lg, sl[2]; memcpy(&lg, e, 4); memcpy(sl, e + 4, 8); if (lg != 0x800) continue;
-        for (int k = 0; k < 2; k++) if (sl[k] < 12) { memcpy(&ids[k], mb + 0x2d5f0c0 + (uint64_t)(bank + sl[k]) * 28, 4); fr[k] = ids[k] == ZR_EMPTY; } }
-    static uint32_t last[2] = { 1, 1 }; if (ids[0] != last[0] || ids[1] != last[1]) { last[0] = ids[0]; last[1] = ids[1]; LOG("免费回城：ZR 这一格绑的技能 %u（按着 ZL：%u）→ %s", ids[0], ids[1], fr[0] ? "空着，ZR 仍当免费回城" : "已绑技能，ZR 交还原版"); }
+        for (int k = 0; k < 2; k++) if (sl[k] < 12) { memcpy(&ids[k], mb + 0x2d5f0c0 + (uint64_t)sl[k] * 28, 4); memcpy(&ids2[k], mb + 0x2d5f0c0 + (uint64_t)(16 + sl[k]) * 28, 4);
+            fr[k] = ids[k] == ZR_EMPTY && ids2[k] == ZR_EMPTY; } }
+    static uint32_t last[4] = { 1, 1, 1, 1 }; if (ids[0] != last[0] || ids[1] != last[1] || ids2[0] != last[2] || ids2[1] != last[3]) { last[0] = ids[0]; last[1] = ids[1]; last[2] = ids2[0]; last[3] = ids2[1];
+        LOG("免费回城：ZR 这一格绑的技能 I 组 %d / II 组 %d（按着 ZL：%d / %d；当前武器组 %d）→ ZR %s，ZL+ZR %s", (int)ids[0], (int)ids2[0], (int)ids[1], (int)ids2[1], dm_swapskill_wset(),
+            fr[0] ? "空着，当免费回城" : "已绑技能，交还原版", fr[1] ? "空着，当免费回城" : "已绑技能，交还原版"); }
     atomic_store(&g_zr_free[0], fr[0]); atomic_store(&g_zr_free[1], fr[1]);
 }
 void dm_freetp_server_step(uint8_t *mb, uint64_t G, uint64_t player) {   // 服务端拍里调（diag.c） | Called in the server tick (diag.c)
