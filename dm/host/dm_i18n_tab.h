@@ -394,7 +394,7 @@ static const struct { const char *k, *zh, *en, *es, *mx, *ru, *ko; } k_dm_i18n[]
     { "dmCustomCamOff", "原版视角", "Original view", "Vista original", "Vista original", "Исходный вид", "원작 시점" },
     { "dmCustomCamOffHint", "斜俯视，与原版相同", "Angled top-down, as in the original", "Vista cenital inclinada, como el original", "Vista cenital inclinada, como el original", "Наклонный вид сверху, как в оригинале", "원작과 같은 비스듬한 위 시점" },
     { "dmCustomCamOts", "越肩视角（实验）", "Over-the-shoulder (experimental)", "Sobre el hombro (experimental)", "Sobre el hombro (experimental)", "Из-за плеча (эксперимент)", "숄더 뷰 (실험)" },
-    { "dmCustomCamOtsHint", "右半屏上下拖动调整视角", "Drag up or down on the right half to tilt", "Arrastra arriba o abajo a la derecha para inclinar", "Arrastra arriba o abajo a la derecha para inclinar", "Тяните вверх-вниз справа для наклона", "오른쪽 절반을 위아래로 끌어 기울이기" },
+    { "dmCustomCamOtsHint", "右半屏拖动看四周", "Drag on the right half to look around", "Arrastra a la derecha para mirar alrededor", "Arrastra a la derecha para mirar alrededor", "Тяните справа, чтобы осмотреться", "오른쪽 절반을 끌어 둘러보기" },
     { "dmCustomCamFp", "第一人称（实验）", "First person (experimental)", "Primera persona (experimental)", "Primera persona (experimental)", "От первого лица (эксперимент)", "1인칭 (실험)" },
     { "dmCustomCamFpHint", "右半屏拖动转身和抬头", "Drag on the right half to turn and look", "Arrastra a la derecha para girar y mirar", "Arrastra a la derecha para girar y mirar", "Тяните справа для поворота и обзора", "오른쪽 절반을 끌어 돌아보기" },
     { "dmDoorRift", "大秘境", "Greater Rift", "Grieta superior", "Grieta mayor", "Великий рифт", "그레이터 리프트" },
