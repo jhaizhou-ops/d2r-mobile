@@ -108,7 +108,23 @@ def main():
         ru = cache[f][key]['ruRU']; label(ru, col, font).save(os.path.join(OUT, 'label_%d_ru.png' % i))   # 俄语：原版 ruRU 名字 | Russian: original ruRU names
         ko = cache[f][key]['koKR']; label(ko, col, font).save(os.path.join(OUT, 'label_%d_ko.png' % i))   # 韩语：原版 koKR 名字（BlizzardGlobal 带韩文字形）
         man.append({'id': i, 'file': f, 'key': key, 'zhCN': zh, 'old': zo, 'enUS': en, 'esES': es, 'esMX': mx, 'ruRU': ru, 'koKR': ko, 'color': list(col)})
-    json.dump({'text_px': TEXT_PX, 'symbol_frames': 7, 'labels': man}, open(os.path.join(OUT, 'mapgoal.json'), 'w'), ensure_ascii=False, indent=1)
-    print('mapgoal：符号 7 帧、十字 1、朝向指针 1、名牌 %d（旧译名不同的 %d）→ %s' % (len(man), sum(m['old'] != m['zhCN'] for m in man), OUT))
+    # 出入口与传送点的名牌（宿主 dm_world.c 小地图出口名称）：出入口写它通向的区域名（levels.txt 的 LevelName → 原版字符串表 levels），
+    # 文件名 lvl_<区域号>.png；传送点写原版物件名（objects「Waypoint」）lvl_wp.png。各语言、旧译名的后缀同上面的名牌，物件白字
+    # Nameplates for entrances and waypoints (host dm_world.c minimap exit names): an entrance shows the name of the area it leads to (LevelName in levels.txt ->
+    # the original string table levels), file lvl_<level id>.png; a waypoint shows the original object name (objects "Waypoint") lvl_wp.png. Language and
+    # old-name suffixes as for the labels above, white object text
+    from annot_strings import excel
+    lvs = [('lvl_%s' % r['Id'], 'levels', r['LevelName']) for r in excel(ROMFS, 'levels.txt') if r.get('Id', '').isdigit() and r.get('LevelName')]
+    nl = 0
+    for name, f, key in lvs + [('lvl_wp', 'objects', 'Waypoint')]:
+        if f not in cache: cache[f] = strings(f)
+        row = cache[f].get(key)
+        if not row: continue
+        zh = row['zhCN']; zo = old.get((f, key), zh); nl += 1
+        label(zh, OBJ, font).save(os.path.join(OUT, name + '.png'))
+        if zo != zh: label(zo, OBJ, font).save(os.path.join(OUT, name + '_old.png'))
+        for suf, col in (('en', 'enUS'), ('es', 'esES'), ('mx', 'esMX'), ('ru', 'ruRU'), ('ko', 'koKR')): label(row[col], OBJ, font).save(os.path.join(OUT, '%s_%s.png' % (name, suf)))
+    json.dump({'text_px': TEXT_PX, 'symbol_frames': 7, 'labels': man, 'exit_labels': nl}, open(os.path.join(OUT, 'mapgoal.json'), 'w'), ensure_ascii=False, indent=1)
+    print('mapgoal：符号 7 帧、十字 1、朝向指针 1、名牌 %d（旧译名不同的 %d）、出入口 / 传送点名牌 %d → %s' % (len(man), sum(m['old'] != m['zhCN'] for m in man), nl, OUT))
 
 if __name__ == '__main__': ROMFS = sys.argv[1]; main()

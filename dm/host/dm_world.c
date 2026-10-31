@@ -595,6 +595,25 @@ _Atomic int g_dm_dur_sync_n; uint32_t g_dm_dur_sync[16][2];   // DM_TEST_DUR：�
 // Rooms initialized early need not be unloaded by us: the game unloads them itself after about 37 ticks and reloads them as usual when the player gets close (measured 3 round trips); the initialization goes through the client-side objects and spawns no monsters (server monster count unchanged before and after the reveal).
 // Towns (1 / 40 / 75 / 103 / 109) are revealed whole by the original game on entry, so nothing is done. Done once per level entered (after waiting 30 frames to let the map's own loading finish first).
 _Atomic int g_dm_game_ver = -1;
+// 出入口与传送点的名牌（地图标注开着时，和上面的揭雾同一步收集）：揭开的每间带小站的房间记一个「传送点」，每间带出口链表的房间按链表里每个目标关卡记一个
+// 「通向的区域名」，位置取房间中心（房间 40×40 格；出口链表项里没有出口编号、这些房间的预设记录也是空的，取不到出入口砖的精确格子——宿主探针实测
+// 黑色荒地 / 偏远绿洲 / 失落之城 / 遗忘之塔）。原版地图上入口图标就在这间房里，名牌落在它附近。世界坐标记下，房间被游戏卸掉也不受影响。
+// 图样号：MG_WP = 传送点名牌，MG_LVL + 区域号 = 区域名名牌（tools/gen_map_goal_art.py 的 lvl_wp / lvl_<区域号>）
+// Nameplates for entrances and waypoints (collected in the same step as the reveal above while map marking is on): every revealed room with a waypoint records
+// one "Waypoint", every room with an exit linked list records the name of each target level in it, placed at the room centre (rooms are 40x40 cells; the
+// exit list entries carry no exit number and these rooms' preset records are empty, so the exact entrance tile cannot be read -- host probe on Black Marsh /
+// Far Oasis / Lost City / Forgotten Tower). The original map draws the entrance icon inside that room, so the nameplate lands next to it. Stored as world
+// coordinates, unaffected when the game unloads the room. Art numbers: MG_WP = the waypoint nameplate, MG_LVL + level id = the level name nameplate
+// (lvl_wp / lvl_<level id> of tools/gen_map_goal_art.py)
+#define MX_MAX 12
+static struct { uint64_t lv; int n; int32_t x[MX_MAX], y[MX_MAX]; uint16_t art[MX_MAX]; } g_mx;
+static void mx_add(int x, int y, int art) {
+    for (int i = 0; i < g_mx.n; i++) if (g_mx.art[i] == art && abs(g_mx.x[i] - x) < 25 && abs(g_mx.y[i] - y) < 25) return;
+    // 同一间房里的几个名牌（只有一间房的关卡：遗忘之塔一层上下两个出口）错开：世界 (+8, +8) 格在地图上是正下方一段，名牌一行一个不叠
+    // Several nameplates in the same room (single-room levels: the two exits of Forgotten Tower level 1) are staggered: world (+8, +8) cells is straight down on the map, one plate per row
+    for (int i = 0; i < g_mx.n; i++) if (g_mx.x[i] == x && g_mx.y[i] == y) { x += 8; y += 8; i = -1; }
+    if (g_mx.n < MX_MAX) { g_mx.x[g_mx.n] = x; g_mx.y[g_mx.n] = y; g_mx.art[g_mx.n] = (uint16_t)art; g_mx.n++; }
+}
 static void w_map_mark_step(void) {
     // 开关：环境变量 DM_MAP_MARK（测试强制，0 关 / 其余开）优先，否则读自定义页 map_mark（运行中即时生效；关掉只是不再标新进的图，已标的迷雾不收回）
     // Switch: the environment variable DM_MAP_MARK (forced for tests, 0 off / anything else on) takes priority, otherwise read map_mark from the custom page (takes effect immediately at run time; turning it off only stops marking newly entered maps, fog already marked is not taken back)
@@ -602,6 +621,7 @@ static void w_map_mark_step(void) {
     int dm_custom_get(const char *key); if (!(env >= 0 ? env : dm_custom_get("map_mark"))) return;
     uint8_t *b = wb(); uint64_t pl = b ? w_player() : 0, lv = pl ? w_level(pl) : 0; int ver = atomic_load(&g_dm_game_ver); if (!lv || ver < 0) return;
     if (lv != lv_seen) { lv_seen = lv; at = dm_guest_frame() + 30; return; } if (lv == lv_done || dm_guest_frame() < at) return; lv_done = lv;
+    memset(&g_mx, 0, sizeof g_mx); g_mx.lv = lv;
     uint32_t lvno = *(uint32_t *)(lv + 0x1f8); if (lvno == 1 || lvno == 40 || lvno == 75 || lvno == 103 || lvno == 109) return;
     uint64_t map = *(uint64_t *)(lv + 0x1c8), cb = map ? *(uint64_t *)(map + 0x838) : 0; if (!cb) return;
     // 野外图上出口位不能直接用：8 个出口位按关卡的出口槽排，「走过去的相邻关卡」那几个槽的位几乎每间房都带（冰冷之原 0x70 = 三个相邻野外关卡），真有洞口的那间多带一个别的位（0x200）。
@@ -616,12 +636,18 @@ static void w_map_mark_step(void) {
     total = 0;
     for (uint64_t r = *(uint64_t *)(lv + 0x10); r && total < 4096; r = *(uint64_t *)(r + 0x48), total++) { uint32_t fl = *(uint32_t *)(r + 0x50); int wp = (fl & 0x30000) != 0; if (!wp && !(fl & rare)) continue;
         ninit += !*(uint64_t *)(r + 0x58); ((void (*)(int, uint64_t))(b + 0x52dcc0))(ver, r); uint64_t ar = *(uint64_t *)(r + 0x58); if (!ar || (!wp && !*(uint64_t *)(r + 0x78))) continue;
-        ((void (*)(uint64_t))(uintptr_t)cb)(ar); if (wp) nwp++; else nex++; }
+        ((void (*)(uint64_t))(uintptr_t)cb)(ar); if (wp) nwp++; else nex++;
+        int cx = *(int32_t *)(r + 0x60) * 5 + *(int32_t *)(r + 0x68) * 5 / 2, cy = *(int32_t *)(r + 0x64) * 5 + *(int32_t *)(r + 0x6c) * 5 / 2;
+        if (wp) mx_add(cx, cy, DM_MG_WP);
+        for (uint64_t e = *(uint64_t *)(r + 0x78), k = 0; e && k < 16; e = *(uint64_t *)(e + 8), k++) { uint64_t tr = *(uint64_t *)e, tl = tr ? *(uint64_t *)(tr + 0x90) : 0; uint32_t to = tl ? *(uint32_t *)(tl + 0x1f8) : 0;
+            if (to && to != lvno && to < 256) mx_add(cx, cy, DM_MG_LVL + (int)to); } }
     double ms = (w_now_ns() - t0) / 1e6;
     if (getenv("DM_TEST_MAP_MARK_CHECK")) { int miss = 0, all = 0, k = 0; for (uint64_t r = *(uint64_t *)(lv + 0x10); r && k < 4096; r = *(uint64_t *)(r + 0x48), k++) { uint32_t fl = *(uint32_t *)(r + 0x50); if (!(fl & 0xff0) || (fl & 0x30000)) continue;
             ((void (*)(int, uint64_t))(b + 0x52dcc0))(ver, r); if (*(uint64_t *)(r + 0x78)) { all++; if (!(fl & rare)) { miss++; LOG("【红】小地图核对：关卡 %u 房间 (%d,%d) 标志 %#x 有出口链表却没被筛中（少见位 %#x）", lvno, *(int32_t *)(r + 0x60) * 5, *(int32_t *)(r + 0x64) * 5, fl, rare); } } }
         LOG("小地图核对：关卡 %u 逐间全筛有出口链表的房间 %d 间，筛法漏 %d 间（少见位 %#x，各位间数 %d/%d/%d/%d/%d/%d/%d/%d）", lvno, all, miss, rare, cnt[0], cnt[1], cnt[2], cnt[3], cnt[4], cnt[5], cnt[6], cnt[7]); }
     LOG("小地图：关卡 %u 进图标出 小站房间 %d 间、出入口房间 %d 间（共 %d 间房，提前初始化 %d 间，%.2f ms）", lvno, nwp, nex, total, ninit, ms);
+    { char o[200] = ""; int k = 0; for (int i = 0; i < g_mx.n && k < (int)sizeof o - 24; i++) k += snprintf(o + k, sizeof o - k, " %s%d@%d,%d", g_mx.art[i] == DM_MG_WP ? "传送点" : "区域", g_mx.art[i] == DM_MG_WP ? 0 : g_mx.art[i] - DM_MG_LVL, g_mx.x[i], g_mx.y[i]);
+      LOG("小地图：关卡 %u 出入口 / 传送点名牌 %d 个%s", lvno, g_mx.n, o); }
 }
 // 小地图任务终点。
 // 七个墓：法师峡谷里通往本局真墓（幕对象 +0x120）的墓口放任务日志的塔拉夏符号；其余终点放原版地图名牌（名字 + 灰十字）；画面外贴边只写名字（前端画，front_ios.m）。
@@ -700,8 +726,10 @@ static void w_map_goal_step(void) {
     // 发布：玩家世界格、玩家在画面上的位置（脚底，归一化）、终点；前端按地图几何（dm_ui_map_geom）换算到画面
     // Publish: player world cell, player position on screen (feet, normalized), goals; the front end converts to the screen by the map geometry (dm_ui_map_geom)
     dm_map_goal_view v; memset(&v, 0, sizeof v);
-    if (lv && !g_mg.room && g_mg.n) { int px = 0, py = 0; w_unit_xy(pl, &px, &py); v.px = px; v.py = py; int W = 0, H = 0; dm_screen_real(&W, &H); uint64_t scene = *(uint64_t *)(b + 0x2e2a698); float f[2];
-        if (W > 0 && H > 0 && scene && w_project(b, scene, pl, f, 0)) { v.sx = f[0] / W; v.sy = f[1] / H; v.n = g_mg.n; for (int i = 0; i < g_mg.n; i++) { v.x[i] = g_mg.x[i]; v.y[i] = g_mg.y[i]; v.art[i] = g_mg.art[i]; } } }
+    int nx = lv && g_mx.lv == lv ? g_mx.n : 0, ng = !g_mg.room ? g_mg.n : 0;
+    if (lv && ng + nx) { int px = 0, py = 0; w_unit_xy(pl, &px, &py); v.px = px; v.py = py; int W = 0, H = 0; dm_screen_real(&W, &H); uint64_t scene = *(uint64_t *)(b + 0x2e2a698); float f[2];
+        if (W > 0 && H > 0 && scene && w_project(b, scene, pl, f, 0)) { v.sx = f[0] / W; v.sy = f[1] / H; for (int i = 0; i < ng && v.n < DM_MAP_GOAL_MAX; i++, v.n++) { v.x[v.n] = g_mg.x[i]; v.y[v.n] = g_mg.y[i]; v.art[v.n] = g_mg.art[i]; }
+            for (int i = 0; i < nx && v.n < DM_MAP_GOAL_MAX; i++, v.n++) { v.x[v.n] = g_mx.x[i]; v.y[v.n] = g_mx.y[i]; v.art[v.n] = g_mx.art[i]; } } }
     atomic_fetch_add(&g_mg_seq, 1); g_mg_pub = v; atomic_fetch_add(&g_mg_seq, 1);
 }
 int dm_map_goals(dm_map_goal_view *v) {

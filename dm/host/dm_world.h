@@ -9,5 +9,6 @@ void dm_world_watch(int type, uint32_t cls);     // 测试量具：盯住某类�
 int dm_world_watch_pos(float *nx, float *ny);    // 任意线程：盯住的单位在画面内返回 1 并给出归一化坐标 | any thread: returns 1 and gives normalized coordinates when the watched unit is in the picture
 // 小地图任务终点（dm_world.c）：主线程每帧发布，前端任意线程取。x / y = 世界格；art ≥ 64 = 塔拉夏符号第 art−64 帧，其余 = 名牌号（tools/gen_map_goal_art.py）
 // Minimap quest goals (dm_world.c): published by the main thread every frame, fetched by the front end from any thread. x / y = world cell; art >= 64 = frame art-64 of the Tal Rasha symbols, otherwise = nameplate number (tools/gen_map_goal_art.py)
-typedef struct { int n, px, py; float sx, sy; int x[12], y[12]; unsigned char art[12]; } dm_map_goal_view;   // px / py 玩家世界格；sx / sy 玩家脚底在画面上的位置（归一化） | px / py player world cell; sx / sy position of the player's feet on screen (normalized)
+enum { DM_MAP_GOAL_MAX = 24, DM_MG_WP = 255, DM_MG_LVL = 256 };   // 图样号：< 64 任务名牌、64–70 塔拉夏符号、DM_MG_WP 传送点、DM_MG_LVL + 区域号 = 区域名 | art: < 64 quest nameplate, 64–70 Tal Rasha symbol, DM_MG_WP waypoint, DM_MG_LVL + level id = level name
+typedef struct { int n, px, py; float sx, sy; int x[DM_MAP_GOAL_MAX], y[DM_MAP_GOAL_MAX]; unsigned short art[DM_MAP_GOAL_MAX]; } dm_map_goal_view;   // px / py 玩家世界格；sx / sy 玩家脚底在画面上的位置（归一化） | px / py player world cell; sx / sy position of the player's feet on screen (normalized)
 int dm_map_goals(dm_map_goal_view *v);      // 返回终点个数（地图标注开关关着、本关没有终点、还没扫完 = 0） | returns the number of goals (map marking switch off, no goal in this level, scan not finished = 0)

@@ -134,7 +134,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     int _navigation;
     CALayer *_mhPtr, *_thr[8];   // _thr：画面外怪物的指针（threatsSync） | _thr: pointers for monsters off the picture (threatsSync)
       // 镜头实验：小地图 / 全屏地图上人物朝向的指针（mapHeadingSync） | camera experiment: the facing pointer on the minimap / fullscreen map (mapHeadingSync)
-    CALayer *_mgLabel[12], *_mgMark[12];   // 小地图任务终点：每个终点一个名牌 / 符号层 + 一个灰十字层（mapGoalSync） | Minimap quest goals: one nameplate / symbol layer + one grey cross layer per goal (mapGoalSync)
+    CALayer *_mgLabel[DM_MAP_GOAL_MAX], *_mgMark[DM_MAP_GOAL_MAX];   // 小地图任务终点：每个终点一个名牌 / 符号层 + 一个灰十字层（mapGoalSync） | Minimap quest goals: one nameplate / symbol layer + one grey cross layer per goal (mapGoalSync)
     NSMutableDictionary<NSString *,UIImage *> *_mgImg;
     uint64_t _modifierPublishEndNS,_modifierPublishEpoch;
     uint64_t _touchEventSeq,_touchReceiptSeq,_touchPublishedEventSeq; // 仅 DM_TOUCH_CONTROL_LOG 开启时推进 | Advanced only when DM_TOUCH_CONTROL_LOG is on
@@ -406,15 +406,16 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     CGPoint o; CGRect area;
     if(mode==2) { o=CGPointMake(wr.origin.x+v.sx*wr.size.width, wr.origin.y+v.sy*wr.size.height); area=CGRectMake(wr.origin.x+wr.size.width*0.04, wr.origin.y+H*0.06, wr.size.width*0.92, H*0.72); }
     else { area=CGRectMake(mm[0]*z.width, mm[1]*z.height, (mm[2]-mm[0])*z.width, (mm[3]-mm[1])*z.height); o=CGPointMake(CGRectGetMidX(area),CGRectGetMidY(area)); area=CGRectInset(area,area.size.width*0.06,area.size.height*0.08); }
-    for(int i=0;i<12;i++) {
+    for(int i=0;i<DM_MAP_GOAL_MAX;i++) {
         if(!_mgLabel[i]) { _mgLabel[i]=[CALayer layer]; _mgMark[i]=[CALayer layer]; for(CALayer *l in @[_mgLabel[i],_mgMark[i]]) { l.contentsGravity=kCAGravityResizeAspect; l.hidden=YES; [_info.layer addSublayer:l]; } }
         if(!show || i>=n) { _mgLabel[i].hidden=YES; _mgMark[i].hidden=YES; continue; }
         int dx=v.x[i]-v.px, dy=v.y[i]-v.py; CGPoint p=CGPointMake(o.x+(dx-dy)*1.6*c, o.y+(dx+dy)*0.8*c);
         BOOL inside=CGRectContainsPoint(area,p) && !(mode==2 && p.x>wr.origin.x+wr.size.width*0.72 && p.y>wr.origin.y+H*0.45);   // 全屏地图右下是技能区 | The bottom right of the fullscreen map is the skill area
-        int art=v.art[i], sym=art>=64; UIImage *lab=nil, *mark=nil;
+        int art=v.art[i], sym=art>=64 && art<DM_MG_WP; UIImage *lab=nil, *mark=nil;
+        NSString *base=art>=DM_MG_LVL ? [NSString stringWithFormat:@"lvl_%d",art-DM_MG_LVL] : art==DM_MG_WP ? @"lvl_wp" : [NSString stringWithFormat:@"label_%d",sym ? 0 : art];   // 任务名牌 label_<序号>；出入口写通向的区域名 lvl_<区域号>、传送点 lvl_wp（宿主 dm_world.c 出入口名牌） | quest nameplate label_<index>; entrances show the target level name lvl_<level id>, waypoints lvl_wp (host dm_world.c entrance nameplates)
         if(inside && sym) mark=[self mgImage:[NSString stringWithFormat:@"sym_%d.png",art-64]];
-        else { int id=sym ? 0 : art; int lg=dm_lang_group(); lab=lg!=DM_LG_ZH ? [self mgImage:[NSString stringWithFormat:@"label_%d_%s.png",id,lg==DM_LG_ES?"es":lg==DM_LG_MX?"mx":lg==DM_LG_RU?"ru":lg==DM_LG_KO?"ko":"en"]] : (old && dm_lang_index()==8 ? [self mgImage:[NSString stringWithFormat:@"label_%d_old.png",id]] : nil);   // 简中 / 繁体用中文，西语用原版 esES / esMX 名字，俄语用原版 ruRU 名字，其余英文名牌，其余原版 enUS 名牌；旧译名只跟简中（注释一系只写 zhCN） | Simplified / Traditional Chinese use Chinese, Spanish uses the original esES / esMX names, Russian uses the original ruRU names, everything else the original enUS name plates; old names follow only Simplified Chinese (the annotation family writes only zhCN)
-            lab=lab ?: [self mgImage:[NSString stringWithFormat:@"label_%d.png",id]]; if(inside) mark=[self mgImage:@"cross.png"]; }
+        else { int lg=dm_lang_group(); lab=lg!=DM_LG_ZH ? [self mgImage:[NSString stringWithFormat:@"%@_%s.png",base,lg==DM_LG_ES?"es":lg==DM_LG_MX?"mx":lg==DM_LG_RU?"ru":lg==DM_LG_KO?"ko":"en"]] : (old && dm_lang_index()==8 ? [self mgImage:[base stringByAppendingString:@"_old.png"]] : nil);   // 简中 / 繁体用中文，西语用原版 esES / esMX 名字，俄语用原版 ruRU 名字，其余英文名牌，其余原版 enUS 名牌；旧译名只跟简中（注释一系只写 zhCN） | Simplified / Traditional Chinese use Chinese, Spanish uses the original esES / esMX names, Russian uses the original ruRU names, everything else the original enUS name plates; old names follow only Simplified Chinese (the annotation family writes only zhCN)
+            lab=lab ?: [self mgImage:[base stringByAppendingString:@".png"]]; if(inside) mark=[self mgImage:@"cross.png"]; }
         if(!inside) {   // 画面外：沿 玩家点 → 终点 的方向收到可见范围边上（全屏地图再让开右下技能区），只写名字 | Off-screen: clamp along the player point → goal direction to the edge of the visible range (the fullscreen map additionally avoids the bottom-right skill area), name only
             CGFloat tx=p.x>o.x ? (CGRectGetMaxX(area)-o.x)/(p.x-o.x) : p.x<o.x ? (CGRectGetMinX(area)-o.x)/(p.x-o.x) : 1e9, ty=p.y>o.y ? (CGRectGetMaxY(area)-o.y)/(p.y-o.y) : p.y<o.y ? (CGRectGetMinY(area)-o.y)/(p.y-o.y) : 1e9, t=MIN(tx,ty);
             p=CGPointMake(o.x+(p.x-o.x)*t, o.y+(p.y-o.y)*t);
