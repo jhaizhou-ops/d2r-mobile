@@ -142,8 +142,14 @@ A bundle set can also carry `vk-pipeline-list.seed`. On a first launch, before
 lists during start-up, so a first visit to the places it covers does not
 stutter while pipelines build. `dm/android/tools/merge_warm_lists.py` merges
 several devices' `files/dm/vk-pipeline-list.bin` into one seed. A seed only
-works with the bundles it was recorded with, so it ships with them. The
-measurements are in `docs/android-notes/2026-10-22-first-play-stutter.md`.
+works with the bundles it was recorded with, so it ships with them:
+`dm/tools/d2rm_android.py --warm-seed <file>` puts one into the import pack,
+checks it before the slow steps, and records it in `pack_info.txt` as
+`WARM_SEED=<sha256 prefix>`. Keep seeds outside the repository. The seed only
+helps a first launch: a phone that already has `files/dm/vk-pipeline-list.bin`
+keeps using its own list after a re-import. The tool's check runs with
+`make -C dm/host/tests run` (or `python3 dm/tools/tests/test_warm_seed.py`).
+The measurements are in `docs/android-notes/2026-10-22-first-play-stutter.md`.
 
 ## Validation and remaining work
 

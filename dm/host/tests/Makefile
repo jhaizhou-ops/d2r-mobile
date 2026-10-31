@@ -60,6 +60,7 @@ run: \
 	python3 mode_scan.py ../..
 	python3 ../../ios/tools/dm_i18n.py --check
 	python3 ../../i18n/scan_literals.py
+	python3 ../../tools/tests/test_warm_seed.py
 	$(B)/t_thread_leak
 	$(B)/t_loader_weak
 	$(B)/t_mac_overlay
