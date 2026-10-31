@@ -41,8 +41,8 @@ android {
         targetSdk 36
         // 跟发布版本走：versionName = 发布版本号，versionCode = 主 × 10000 + 次 × 100 + 修订（2.0.0 → 20000），只增不减，旧版才能被覆盖升级
         // Follows the release: versionName = release version, versionCode = major × 10000 + minor × 100 + patch (2.0.0 → 20000), only ever increasing so older installs upgrade in place
-        versionCode 20201
-        versionName '2.2.1'
+        versionCode 20202
+        versionName '2.2.2'
         ndk { abiFilters 'arm64-v8a' }
         if (!prebuilt) externalNativeBuild { cmake {
             arguments "-DDM_GEN_DIR=${project.findProperty('dmGenDir') ?: ''}"
