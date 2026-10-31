@@ -406,10 +406,12 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     CGPoint o; CGRect area;
     if(mode==2) { o=CGPointMake(wr.origin.x+v.sx*wr.size.width, wr.origin.y+v.sy*wr.size.height); area=CGRectMake(wr.origin.x+wr.size.width*0.04, wr.origin.y+H*0.06, wr.size.width*0.92, H*0.72); }
     else { area=CGRectMake(mm[0]*z.width, mm[1]*z.height, (mm[2]-mm[0])*z.width, (mm[3]-mm[1])*z.height); o=CGPointMake(CGRectGetMidX(area),CGRectGetMidY(area)); area=CGRectInset(area,area.size.width*0.06,area.size.height*0.08); }
+    CGRect placed[DM_MAP_GOAL_MAX]; int np=0;   // 已画名牌的矩形：后画的和它们重叠就往下挪一个名牌高（遗忘之塔一层两个出口在同一间房里） | rects of plates already drawn: a later plate overlapping them moves down by one plate height (Forgotten Tower level 1 has both exits in one room)
     for(int i=0;i<DM_MAP_GOAL_MAX;i++) {
         if(!_mgLabel[i]) { _mgLabel[i]=[CALayer layer]; _mgMark[i]=[CALayer layer]; for(CALayer *l in @[_mgLabel[i],_mgMark[i]]) { l.contentsGravity=kCAGravityResizeAspect; l.hidden=YES; [_info.layer addSublayer:l]; } }
         if(!show || i>=n) { _mgLabel[i].hidden=YES; _mgMark[i].hidden=YES; continue; }
         int dx=v.x[i]-v.px, dy=v.y[i]-v.py; CGPoint p=CGPointMake(o.x+(dx-dy)*1.6*c, o.y+(dx+dy)*0.8*c);
+        if(v.art[i]>=DM_MG_WP && dx*dx+dy*dy<144) { _mgLabel[i].hidden=YES; _mgMark[i].hidden=YES; continue; }   // 人已在这个入口 / 传送点 12 格内：不画（压在人物脚下，游戏自己有悬停名字） | the player is within 12 cells of this entrance / waypoint: not drawn (it would sit under the character's feet, and the game shows its own hover name)
         BOOL inside=CGRectContainsPoint(area,p) && !(mode==2 && p.x>wr.origin.x+wr.size.width*0.72 && p.y>wr.origin.y+H*0.45);   // 全屏地图右下是技能区 | The bottom right of the fullscreen map is the skill area
         int art=v.art[i], sym=art>=64 && art<DM_MG_WP; UIImage *lab=nil, *mark=nil;
         NSString *base=art>=DM_MG_LVL ? [NSString stringWithFormat:@"lvl_%d",art-DM_MG_LVL] : art==DM_MG_WP ? @"lvl_wp" : [NSString stringWithFormat:@"label_%d",sym ? 0 : art];   // 任务名牌 label_<序号>；出入口写通向的区域名 lvl_<区域号>、传送点 lvl_wp（宿主 dm_world.c 出入口名牌） | quest nameplate label_<index>; entrances show the target level name lvl_<level id>, waypoints lvl_wp (host dm_world.c entrance nameplates)
@@ -421,7 +423,10 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
             p=CGPointMake(o.x+(p.x-o.x)*t, o.y+(p.y-o.y)*t);
             if(mode==2 && p.x>wr.origin.x+wr.size.width*0.72 && p.y>wr.origin.y+H*0.45) p.y=wr.origin.y+H*0.45; }
         CGFloat lw=lab ? lh*lab.size.width/lab.size.height : 0, cw=lh*1.4, ch=cw*18/34;
-        if(lab) { _mgLabel[i].contents=(id)lab.CGImage; _mgLabel[i].frame=CGRectMake(p.x-lw/2, (mark ? p.y-ch/2-2-lh : p.y-lh/2), lw, lh); _mgLabel[i].hidden=NO; } else _mgLabel[i].hidden=YES;
+        if(lab) { CGRect lr=CGRectMake(p.x-lw/2, (mark ? p.y-ch/2-2-lh : p.y-lh/2), lw, lh), occ=mark ? CGRectMake(lr.origin.x, lr.origin.y, lw, lh+2+ch) : lr; CGFloat sh0=0;   // 占地 = 名牌连下面的十字 | footprint = the plate plus the cross under it
+            for(int k=0;k<np;k++) if(CGRectIntersectsRect(CGRectOffset(occ,0,sh0),placed[k])) { sh0=CGRectGetMaxY(placed[k])+1-occ.origin.y; k=-1; }   // 和已画的重叠：挪到它下面，再从头核一遍 | overlaps one already drawn: move below it and check all again
+            lr=CGRectOffset(lr,0,sh0); p.y+=sh0; if(np<DM_MAP_GOAL_MAX) placed[np++]=CGRectOffset(occ,0,sh0);
+            _mgLabel[i].contents=(id)lab.CGImage; _mgLabel[i].frame=lr; _mgLabel[i].hidden=NO; } else _mgLabel[i].hidden=YES;
         if(mark) { CGFloat mw=sym ? sh*mark.size.width/mark.size.height : cw, mh=sym ? sh : ch; _mgMark[i].contents=(id)mark.CGImage; _mgMark[i].frame=CGRectMake(p.x-mw/2, p.y-mh/2, mw, mh); _mgMark[i].hidden=NO; } else _mgMark[i].hidden=YES;
     }
     [CATransaction commit];

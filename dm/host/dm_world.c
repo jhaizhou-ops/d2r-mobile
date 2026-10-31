@@ -609,9 +609,6 @@ _Atomic int g_dm_game_ver = -1;
 static struct { uint64_t lv; int n; int32_t x[MX_MAX], y[MX_MAX]; uint16_t art[MX_MAX]; } g_mx;
 static void mx_add(int x, int y, int art) {
     for (int i = 0; i < g_mx.n; i++) if (g_mx.art[i] == art && abs(g_mx.x[i] - x) < 25 && abs(g_mx.y[i] - y) < 25) return;
-    // 同一间房里的几个名牌（只有一间房的关卡：遗忘之塔一层上下两个出口）错开：世界 (+8, +8) 格在地图上是正下方一段，名牌一行一个不叠
-    // Several nameplates in the same room (single-room levels: the two exits of Forgotten Tower level 1) are staggered: world (+8, +8) cells is straight down on the map, one plate per row
-    for (int i = 0; i < g_mx.n; i++) if (g_mx.x[i] == x && g_mx.y[i] == y) { x += 8; y += 8; i = -1; }
     if (g_mx.n < MX_MAX) { g_mx.x[g_mx.n] = x; g_mx.y[g_mx.n] = y; g_mx.art[g_mx.n] = (uint16_t)art; g_mx.n++; }
 }
 static void w_map_mark_step(void) {
