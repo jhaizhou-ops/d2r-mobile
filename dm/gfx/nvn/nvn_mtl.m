@@ -5055,12 +5055,12 @@ static void mp_check(int i, uint64_t ticket) {
 // 色调映射（片元 a1b1aab66933fa8f）= 把合成后的 HDR ×0.008 做 PQ 编码、再查 32³ 调色表（每帧由计算着色器 552f45c348a61b86 按区域重算，只被色调映射读）。
 // HDR 先乘曝光 k 等价于把表换成 L'(u) = L(PQ(k · PQ⁻¹(u)))：游戏算完表的那次派发之后，拷一份再按此原地重写（32³ 一次小派发）；表每帧重算，不会越乘越亮。
 // 只动 3D 世界：界面、文字、血球在色调映射之后才合；亮部经 PQ 压缩，不会像最后整屏乘系数那样糊成一片白。普通 / 可读 tile 合并 / 冻结各条路径都只是读这张表，一处生效。
-// k 每帧由宿主 dm_bright_k() 给（dm/host/dm_bright.c：局外 1、迷宫类 4、原版画面不随昼夜 4、其余按原版环境亮度推，平滑过渡）；k ≈ 1 时不重写。
+// k 每帧由宿主 dm_bright_k() 给（dm/host/dm_bright.c：默认 1，只有显式诊断开关 DM_BRIGHT_K 才加亮）；k ≈ 1 时不重写。
 // ---------- 3D picture brightening ----------
 // Tone mapping (fragment a1b1aab66933fa8f) = PQ-encode the composited HDR x0.008, then look up a 32^3 color lookup table (recomputed per region every frame by compute shader 552f45c348a61b86, read only by tone mapping).
 // Multiplying HDR by exposure k first is equivalent to replacing the table with L'(u) = L(PQ(k * PQ^-1(u))): after the dispatch in which the game finishes computing the table, make a copy and rewrite it in place accordingly (one small 32^3 dispatch); the table is recomputed every frame, so it does not get brighter with each multiplication.
 // Only the 3D world is touched: UI, text and the health orbs are composited after tone mapping; highlights are compressed by PQ and do not blur into a sheet of white as a final whole-screen multiply would. The normal / readable tile merge / freeze paths all just read this table, so it takes effect in one place.
-// k is given every frame by the host's dm_bright_k() (dm/host/dm_bright.c: 1 out of game, 4 for maze-type areas, 4 where the original game's picture does not follow day and night, the rest derived from the original game's ambient brightness, with smooth transitions); no rewrite when k ~= 1.
+// k is given every frame by the host's dm_bright_k() (dm/host/dm_bright.c: 1 by default; only the explicit diagnostic switch DM_BRIGHT_K enables brightening); no rewrite when k ~= 1.
 __attribute__((weak)) float dm_bright_k(void) { return 1.0f; }   // 宿主 dm_bright.c 提供强定义；图形单测不链宿主时不加亮 | The host's dm_bright.c provides the strong definition; no brightening when graphics unit tests do not link the host
 static const char k_lut_msl[] =
 "#include <metal_stdlib>\nusing namespace metal;\n"
@@ -5083,7 +5083,7 @@ static void bright_lut(NvShader *cs) {
     int tid = 0; for (int i = 0; i < cs->rf.nb && !tid; i++) if (cs->rf.b[i].kind == NVN_RB_IMG && cs->rf.b[i].reg < 32) tid = (int)(S.img[5][cs->rf.b[i].reg] & 0xfffff);
     pthread_mutex_lock(&g_rmu); id<MTLTexture> lut = tid ? tex_by_id(tid) : nil; pthread_mutex_unlock(&g_rmu);
     if (lut && lut.textureType == MTLTextureType3D) { os_unfair_lock_lock(&g_mp_lk); g_mp_lut = lut; os_unfair_lock_unlock(&g_mp_lk); }   // 紫闪探针在出图时取这张表的几格 | The magenta probe samples a few cells of this table at present time
-    float k = dm_bright_k(); if (!(k > 1.005f)) return;   // k ≈ 1（局外 / 正午）：表保持原版 | k ~= 1 (out of game / noon): the table stays as in the original game
+    float k = dm_bright_k(); if (!(k > 1.005f)) return;   // k ≈ 1（缺省）：表保持原版 | k ~= 1 (default): the table stays as in the original game
     if (k > 4.0f) k = 4.0f;
     if (!lut || lut.textureType != MTLTextureType3D || !(lut.usage & MTLTextureUsageShaderWrite)) { static int n; if (!n++) MLOG("【红】3D 画面加亮：调色表认不出（贴图号 %d），不加亮", tid); return; }
     if (!ps) { NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(k_lut_msl) options:nil error:&e]; id<MTLFunction> f = lib ? [lib newFunctionWithName:@"lutk"] : nil;

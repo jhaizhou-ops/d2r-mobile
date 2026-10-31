@@ -52,7 +52,7 @@ Also, besides diagnostics, `diag.c` holds the entry hook of every server tick: w
 | File | What it does |
 |---|---|
 | `dm_uiscreen.c`, `dm_uiscreen.h` | On screens narrower than 16:9 (iPad), lays the UI out at 16:9 while the 3D picture still fills the whole screen |
-| `dm_bright.c` | Dynamic exposure for the 3D brightness boost: how much to brighten depends on the kind of level you are in |
+| `dm_bright.c` | Keeps the original 3D brightness by default; explicit diagnostic switches can fix exposure (`DM_BRIGHT_K=1–4`) or set the time of day (`DM_TEST_DAYTIME`) |
 | `dm_hud.c`, `dm_hud.h` | The numbers on the bottom UI (level, experience percentage, difficulty), and the request for a difficulty step (1–8) |
 
 ### Text and language

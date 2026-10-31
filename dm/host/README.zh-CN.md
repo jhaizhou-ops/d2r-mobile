@@ -52,7 +52,7 @@ English: [README.md](README.md)
 | 文件 | 管什么 |
 |---|---|
 | `dm_uiscreen.c`、`dm_uiscreen.h` | 比 16:9 窄的屏幕（iPad）上，界面按 16:9 摆、3D 画面仍铺满整屏 |
-| `dm_bright.c` | 「3D 画面加亮」的动态曝光：按所在关卡的类型决定加亮多少 |
+| `dm_bright.c` | 默认保持原版 3D 亮度；显式诊断开关可固定曝光（`DM_BRIGHT_K=1–4`）或设置时段（`DM_TEST_DAYTIME`） |
 | `dm_hud.c`、`dm_hud.h` | 底部界面上的数字（等级、经验百分比、难度），以及难度档位（1–8）的请求 |
 
 ### 文字与语言
