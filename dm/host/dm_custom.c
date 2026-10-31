@@ -33,13 +33,13 @@ static const char *const k_keys[] = { "lang",
 #if VOICE_ROW
     "voice",
 #endif
-    "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above", "cam" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
+    "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above", "cam", "bright" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
 #define NK (int)(sizeof k_keys / sizeof *k_keys)
 static const int k_def[NK] = { 0,
 #if VOICE_ROW
     1,
 #endif
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0 };   // 缺省值：省电模式（30 帧）缺省关、3D 画质缺省流畅优先（q3d=0），换组默认在传送门左侧，其余缺省开（voice 的缺省不用：读盘时按当前语言定、「默认」不管它）
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 2 };   // 缺省值：省电模式（30 帧）缺省关、3D 画质缺省流畅优先（q3d=0），换组默认在传送门左侧，其余缺省开（voice 的缺省不用：读盘时按当前语言定、「默认」不管它）
 // q3d（3D 画质）：0 = 流畅优先（掉帧就自动降 3D 比例）、1 = 画质优先（不自动降）。生效 = 调 hle_oe.c 的 dm_3d_quality_mode_set，读盘与点「应用」时当场调，下一帧控制器就按新档走。
 // 页上是上下两项单选（同语言行）：TouchCustom_q3d 是「画质优先」那格（勾上 = 1），TouchCustom_q3d_smooth 是它的反面
 // q3d (3D quality): 0 = smoothness first (automatically lowers the 3D scale on frame drops), 1 = quality first (no automatic lowering). Applied by calling hle_oe.c's dm_3d_quality_mode_set, immediately on load and on tapping "Apply", so the controller follows the new setting from the next frame.
@@ -56,6 +56,15 @@ static const int k_def[NK] = { 0,
 #define CAM_N 3
 static const char *const k_cam_box[CAM_N] = { "TouchCustom_cam", "TouchCustom_cam_ots", "TouchCustom_cam_fp" };
 static const char *const k_cam_name[CAM_N] = { "off", "over-the-shoulder", "first-person" };   // 只进日志 | Log only
+// bright（暗处加亮，#149）：三项单选 0 原版亮度 / 1 适度（最多 2 倍）/ 2 加亮（最多 4 倍，缺省 = 原来的做法），勾选框 TouchCustom_bright / _mid / _full 互斥（同镜头行）；
+// dm_bright.c 每帧按它缩放曝光目标（dm_custom_get），点「应用」后下一帧就按新档平滑过去
+// bright (brightening of dark places, #149): three-option radio 0 original brightness / 1 moderate (up to 2x) / 2 brightened (up to 4x, the default =
+// the previous behaviour), checkboxes TouchCustom_bright / _mid / _full mutually exclusive (like the camera row); dm_bright.c scales its exposure target
+// by it every frame (dm_custom_get), so after Apply the next frames ease to the new level
+#define K_BRIGHT (17 + VOICE_ROW)
+#define BRIGHT_N 3
+static const char *const k_bright_box[BRIGHT_N] = { "TouchCustom_bright", "TouchCustom_bright_mid", "TouchCustom_bright_full" };
+static const char *const k_bright_name[BRIGHT_N] = { "original", "moderate", "brightened" };   // 只进日志 | Log only
 void dm_cam_set_mode(int m);
 void dm_3d_quality_mode_set(int mode);
 static const char *rev_box(int i) { return i == K_VOICE ? "TouchCustom_voice_zh" : i == K_Q3D ? "TouchCustom_q3d_smooth" : i == K_TOUCH_SWAP ? "TouchCustom_touch_swap_above_near" : NULL; }   // 单选行「反面那一项」的勾选框 | Checkbox of the radio row's "inverse option"
@@ -104,6 +113,7 @@ static void load_once(void) {
     while (f && fgets(ln, sizeof ln, f)) { char *eq = strchr(ln, '='); if (!eq) continue; *eq = 0; int i = key_index(ln); if (i > 0) v[i] = eq[1] != '0';
         if (i == 0) { int l = atoi(eq + 1); if (l >= 0 && l < LANG_N) lang = v[0] = l; }
         if (i == K_CAM) { int c = atoi(eq + 1); v[K_CAM] = c >= 0 && c < CAM_N ? c : 0; }
+        if (i == K_BRIGHT) { int c = atoi(eq + 1); v[K_BRIGHT] = c >= 0 && c < BRIGHT_N ? c : k_def[K_BRIGHT]; }
 #if VOICE_ROW
         if (i == K_VOICE) { int x = atoi(eq + 1); if (x == 0 || x == 1) voice = v[K_VOICE] = x; }
 #endif
@@ -126,6 +136,7 @@ static void load_once(void) {
     for (int i = 0; i < NK; i++) { atomic_store(&g_val[i], v[i]); atomic_store(&g_pend[i], -1); }
     dm_cam_set_mode(v[K_CAM]);
     dm_3d_quality_mode_set(v[K_Q3D]); LOG("自定义设置：3D 画质读盘为%s（q3d=%d，已交给 3D 比例控制）", v[K_Q3D] ? "画质优先" : "流畅优先", v[K_Q3D]);
+    LOG("自定义设置：暗处加亮读盘为 %s（bright=%d）", k_bright_name[v[K_BRIGHT]], v[K_BRIGHT]);
     if (!atomic_exchange(&g_loaded, 1)) LOG("自定义设置：读盘 %s%s lang=%d%s%s auto_mana=%d merc_pot=%d drop_light=%d map_mark=%d item_notes=%d icloud=%d pot_pick=%d drop_haptic=%d gem_pick=%d store_btn=%d eco_fps=%d", p, f ? "" : "（没有文件，全按缺省）", v[0], lang < 0 ? "（没写，按当前语言）" : "", vlog, v[1 + VOICE_ROW], v[2 + VOICE_ROW], v[3 + VOICE_ROW], v[4 + VOICE_ROW], v[5 + VOICE_ROW], v[6 + VOICE_ROW], v[7 + VOICE_ROW], v[8 + VOICE_ROW], v[9 + VOICE_ROW], v[10 + VOICE_ROW], v[11 + VOICE_ROW]);
 }
 int dm_custom_get(const char *key) {
@@ -148,7 +159,7 @@ void dm_custom_on_uimsg(const char *cat, const char *act, const char *arg) {
     (void)arg; if (!cat || !act || strcmp(cat, "OptionsPanelMessage")) return;
     load_once();
     if (!strcmp(act, "AcceptChanges")) { int ch = 0;
-        for (int i = 0; i < NK; i++) { int pd = atomic_exchange(&g_pend[i], -1); if (pd >= 0 && pd != atomic_load(&g_val[i])) { atomic_store(&g_val[i], pd); ch = 1; if (i == K_CAM) dm_cam_set_mode(pd); if (i == K_Q3D) { int dm_3d_quality_mode_get(void); float dm_3d_scale_cur(void); dm_3d_quality_mode_set(pd); LOG("自定义设置：3D 画质 → %s（已交给 3D 比例控制，读回模式 %d，此刻 3D 比例 %.2f）", pd ? "画质优先" : "流畅优先", dm_3d_quality_mode_get(), dm_3d_scale_cur()); } if (i == 0) atomic_store(&g_lang_explicit, pd); if (i == K_VOICE) atomic_store(&g_voice_explicit, pd); if (i == K_MERC) atomic_store(&g_merc_explicit, pd); if (i == 0) LOG("自定义设置：语言 → %s（应用；下次启动生效）", k_lang_name[pd]); else if (i == K_VOICE) LOG("自定义设置：配音 → %s（应用；下次启动生效）", pd ? "English" : "中文"); else LOG("自定义设置：%s → %s（应用）", k_keys[i], pd ? "开" : "关"); } }
+        for (int i = 0; i < NK; i++) { int pd = atomic_exchange(&g_pend[i], -1); if (pd >= 0 && pd != atomic_load(&g_val[i])) { atomic_store(&g_val[i], pd); ch = 1; if (i == K_CAM) dm_cam_set_mode(pd); if (i == K_BRIGHT) LOG("自定义设置：暗处加亮 → %s（应用）", k_bright_name[pd]); if (i == K_Q3D) { int dm_3d_quality_mode_get(void); float dm_3d_scale_cur(void); dm_3d_quality_mode_set(pd); LOG("自定义设置：3D 画质 → %s（已交给 3D 比例控制，读回模式 %d，此刻 3D 比例 %.2f）", pd ? "画质优先" : "流畅优先", dm_3d_quality_mode_get(), dm_3d_scale_cur()); } if (i == 0) atomic_store(&g_lang_explicit, pd); if (i == K_VOICE) atomic_store(&g_voice_explicit, pd); if (i == K_MERC) atomic_store(&g_merc_explicit, pd); if (i == 0) LOG("自定义设置：语言 → %s（应用；下次启动生效）", k_lang_name[pd]); else if (i == K_VOICE) LOG("自定义设置：配音 → %s（应用；下次启动生效）", pd ? "English" : "中文"); else LOG("自定义设置：%s → %s（应用）", k_keys[i], pd ? "开" : "关"); } }
         if (ch) save(); }
     else if (!strcmp(act, "CancelChanges")) { for (int i = 0; i < NK; i++) atomic_store(&g_pend[i], -1); atomic_store(&g_repaint, 1); }
     else if (!strcmp(act, "ResetToDefaults")) { for (int i = 1 + VOICE_ROW; i < NK; i++) atomic_store(&g_pend[i], k_def[i]); atomic_store(&g_repaint, 1); }   // 从 1 起（有配音行时从 2 起）：语言与单独配音那一格不归「默认」管
@@ -219,6 +230,9 @@ void dm_custom_ui_pump(unsigned long long root) {
               else if (sel == K_CAM) { int p0 = atomic_load(&g_pend[K_CAM]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[K_CAM]), to = (sh + 1) % CAM_N; atomic_store(&g_pend[K_CAM], to);   // 镜头视角三项：A 依次轮换 | camera view: A cycles through the three
                   for (int k = 0; k < CAM_N; k++) { uint64_t z = find_w(sp, k_cam_box[k], 0); if (z) set_toggle(z, k == to); }
                   LOG("自定义设置：镜头视角 → %s（手柄 A 在三项间轮换；点「应用」生效）", k_cam_name[to]); }
+              else if (sel == K_BRIGHT) { int p0 = atomic_load(&g_pend[K_BRIGHT]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[K_BRIGHT]), to = (sh + 1) % BRIGHT_N; atomic_store(&g_pend[K_BRIGHT], to);   // 暗处加亮三项：A 依次轮换 | brightening: A cycles through the three
+                  for (int k = 0; k < BRIGHT_N; k++) { uint64_t z = find_w(sp, k_bright_box[k], 0); if (z) set_toggle(z, k == to); }
+                  LOG("自定义设置：暗处加亮 → %s（手柄 A 在三项间轮换；点「应用」生效）", k_bright_name[to]); }
               else if (sel == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]), to = (sh + 1) % LANG_N; atomic_store(&g_pend[0], to);   // 语言行是单选的五项：A 依次轮换，四个框当场摆好
                   for (int k = 0; k < LANG_N; k++) { uint64_t z = find_w(sp, k_lang_box[k], 0); if (z) set_toggle(z, k == to); }
                   LOG("自定义设置：语言 → %s（手柄 A 在五项间轮换；点「应用」生效）", k_lang_name[to]); }
@@ -238,7 +252,8 @@ void dm_custom_ui_pump(unsigned long long root) {
               if (top < off) { lf = f; dm_ui_wheel_on(sv, 1); } else if (bot > off + vh) { lf = f; dm_ui_wheel_on(sv, -1); } } } }
     radio_pump(sp, 0, k_lang_box, k_lang_name, LANG_N, &seen[0]);   // 语言行：五项单选，存一个键 lang | language row: five-option radio, one key lang
     radio_pump(sp, K_CAM, k_cam_box, k_cam_name, CAM_N, &seen[K_CAM]);   // 镜头视角：三项单选，存一个键 cam | camera view: three-option radio, one key cam
-    for (int i = 1; i < NK; i++) { if (i == K_CAM) continue; char nm[48]; snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[i]);   // 镜头行是三项单选，在 radio_pump 里 | the camera row is a three-option radio, handled in radio_pump
+    radio_pump(sp, K_BRIGHT, k_bright_box, k_bright_name, BRIGHT_N, &seen[K_BRIGHT]);   // 暗处加亮：三项单选，存一个键 bright | brightening: three-option radio, one key bright
+    for (int i = 1; i < NK; i++) { if (i == K_CAM || i == K_BRIGHT) continue; char nm[48]; snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[i]);   // 镜头行是三项单选，在 radio_pump 里 | the camera row is a three-option radio, handled in radio_pump
         uint64_t w = find_w(sp, nm, 0); if (!w || !*(uint8_t *)(w + 0x50)) continue;
         int pd0 = atomic_load(&g_pend[i]), want = pd0 >= 0 ? pd0 : atomic_load(&g_val[i]);
         uint64_t z = rev_box(i) ? find_w(sp, rev_box(i), 0) : 0;   // 两项单选行（3D 画质：上下的「流畅优先」「画质优先」；换组位置）：存的仍是一个键，反面那一项是它的反面 | Two-option radio rows (3D quality: "Smoothness first" / "Quality first" stacked; swap-group position): still stores one key, the other option is its negation

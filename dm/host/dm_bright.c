@@ -7,6 +7,8 @@
 // 「原版给固定环境亮度」照原版 0x55a140 的分支判：第四幕（幕号 3，按表 128 / 64 / 56 / 48，其余 16）、区域 120（亚瑞特之巅）/ 137 钉 200、环境 +0x34 置位（收敛到 32）。
 // 原版环境结构：客户端当前幕 = [main + 0x2d20bd0]，环境 = [幕 + 8]；+0x8 float 累加时间、+0xc int 环境亮度、+0x2c int 流速（太阳角 = 时间 ÷ 流速，0–360°）、+0x34 int 标志。
 // 关卡表由 dm/tools/gen_bright_levels.py 从原版数据生成（dm_bright_levels.inc）。k 在对数空间按时间常数 0.33 秒平滑（约 1 秒到位），切地图 / 进出局不跳变。
+// 玩家可在自定义页「暗处加亮」三档里选（dm_custom.c 键 bright，#149）：0 原版亮度 / 1 适度 / 2 加亮（缺省，即上面的规则）。按档把目标的 log k 乘 0 / 0.5 / 1，
+// 最大曝光分别是 1 / 2 / 4，昼夜与迷宫的相对关系不变；换档后照样平滑过去。
 // 测试开关：DM_BRIGHT_K=<k> 固定曝光（1 = 原版亮度，画面闸门用）；DM_TEST_DAYTIME=<角度>@<拍>：第 <拍> 拍把服务端各幕与客户端的环境时间写成该太阳角
 // （看正午 / 黄昏 / 午夜；要挂拍入口观测门，带 DM_C2S_LOG 等任一）。只写客户端那份会被服务端同步回去。
 // Dynamic exposure for the 3D scene brightening (the snowy mountain summit at noon is overexposed after brightening; only dark places need brightening). The graphics layer's nvn_mtl.m bright_lut calls dm_bright_k() every frame to get the exposure k (1–4).
@@ -18,6 +20,9 @@
 // "The original game gives a fixed ambient brightness" is judged by the branches of the original game's 0x55a140: Act 4 (act index 3, 128 / 64 / 56 / 48 per the table, 16 for the rest), areas 120 (Arreat Summit) / 137 pinned at 200, environment +0x34 set (converges to 32).
 // Original-game environment structure: client current act = [main + 0x2d20bd0], environment = [act + 8]; +0x8 float accumulated time, +0xc int ambient brightness, +0x2c int flow rate (sun angle = time ÷ flow rate, 0–360°), +0x34 int flags.
 // The level table is generated from the original game's data by dm/tools/gen_bright_levels.py (dm_bright_levels.inc). k is smoothed in log space with a time constant of 0.33 seconds (settles in about 1 second), with no jump on map changes / entering or leaving a run.
+// The player picks one of three levels on the Custom page, "Brighten dark places" (dm_custom.c key bright, #149): 0 original brightness / 1 moderate /
+// 2 brightened (the default, the rules above). The target log k is multiplied by 0 / 0.5 / 1 by level, so the maximum exposure is 1 / 2 / 4 and day / night
+// and mazes keep their relative order; a level change eases over as usual.
 // Test switches: DM_BRIGHT_K=<k> fixed exposure (1 = original brightness, used by the screenshot gate); DM_TEST_DAYTIME=<angle>@<tick>: at tick <tick>, write the environment time of every act on the server and of the client to that sun angle
 // (to view noon / dusk / midnight; the tick entry observation gate must be attached, with any one of DM_C2S_LOG etc.). Writing only the client's copy gets synced back by the server.
 #include "dm.h"
@@ -57,20 +62,24 @@ static double target_logk(int *why, int *area, int *I, double *ang) {
     return e * log(4.0);
 }
 
+int dm_custom_get(const char *key);
 float dm_bright_k(void) {   // 图形层每帧调（单线程：出图 / 回放线程） | called every frame by the graphics layer (single thread: the present / replay thread)
     static int fixed = -2; static float kf;
     if (fixed == -2) { const char *e = getenv("DM_BRIGHT_K"); fixed = e != NULL; if (e) { kf = (float)atof(e); LOG("DM_BRIGHT_K=%g：3D 画面曝光由测试开关固定", kf); } }
     if (fixed) return kf;
-    static double logk = 0; static uint64_t last; static int lwhy = -1, larea = -2; static uint64_t llog; static double ltgt = -1;
+    static double logk = 0; static uint64_t last; static int lwhy = -1, larea = -2, llvl = -1; static uint64_t llog; static double ltgt = -1;
     uint64_t t = now_ns();
     { int dm_loadscreen_up(void); if (dm_loadscreen_up()) { last = t; static int tr = -1; static unsigned n; if (tr < 0) tr = getenv("DM_BRIGHT_TRACE") != NULL; if (tr && n++ % 6 == 0) LOG("3D 画面加亮：k %.3f（读取画面中，保持）", exp(logk)); return (float)exp(logk); } }   // 读取画面（进出局、走进洞口）：保持当前 k，撤掉后从原值平滑走到新目标，不先掉回 1 | loading screen (entering/leaving a run, walking into a cave entrance): keep the current k, and after it is taken down move smoothly from the old value to the new target without dropping back to 1 first
     int why, area, I; double ang; double tgt = target_logk(&why, &area, &I, &ang);
+    // 自定义页的档：0 原版（k 恒 1）/ 1 适度（最多 2 倍）/ 2 加亮（最多 4 倍）
+    // The Custom page level: 0 original (k stays 1) / 1 moderate (up to 2x) / 2 brightened (up to 4x)
+    int lvl = dm_custom_get("bright"); tgt *= lvl <= 0 ? 0 : lvl == 1 ? 0.5 : 1;
     double dt = last ? (t - last) / 1e9 : 0; last = t; if (dt > 0.034) dt = 0.034;   // 读取画面期间不调用（不派发调色表计算）：每次最多按一帧（30 帧档的帧长）推进，撤屏后从原来的 k 起步，不一步跳 | not called during the loading screen (no palette table computation is dispatched): advances by at most one frame each time (the frame length of the 30 fps tier), and after the screen is taken down it starts from the previous k instead of jumping in one step
     logk += (tgt - logk) * (1 - exp(-dt / 0.33));
-    if (why != lwhy || area != larea || fabs(tgt - ltgt) > 0.05 || t - llog > 10000000000ull) {   // 规则 / 区域 / 目标变了，或每 10 秒：打一行原版值与 k | when the rule / area / target changed, or every 10 seconds: print one line with the original values and k
-        LOG("3D 画面加亮：目标 k %.2f（规则 %s，区域 %d，原版环境亮度 %d，太阳角 %.0f°），当前 k %.2f", exp(tgt),
-            why == 1 ? "①局外" : why == 2 ? "②迷宫类" : why == 3 ? "③原版画面不随昼夜" : "④按原版环境亮度", area, I, ang, exp(logk));
-        lwhy = why; larea = area; llog = t; ltgt = tgt; }
+    if (why != lwhy || area != larea || lvl != llvl || fabs(tgt - ltgt) > 0.05 || t - llog > 10000000000ull) {   // 规则 / 区域 / 目标变了，或每 10 秒：打一行原版值与 k | when the rule / area / target changed, or every 10 seconds: print one line with the original values and k
+        LOG("3D 画面加亮：目标 k %.2f（规则 %s，区域 %d，原版环境亮度 %d，太阳角 %.0f°，档 %d），当前 k %.2f", exp(tgt),
+            why == 1 ? "①局外" : why == 2 ? "②迷宫类" : why == 3 ? "③原版画面不随昼夜" : "④按原版环境亮度", area, I, ang, lvl, exp(logk));
+        lwhy = why; larea = area; llvl = lvl; llog = t; ltgt = tgt; }
     { static int tr = -1; static unsigned n; if (tr < 0) tr = getenv("DM_BRIGHT_TRACE") != NULL; if (tr && n++ % 6 == 0) LOG("3D 画面加亮：k %.3f（目标 %.3f，规则 %d）", exp(logk), exp(tgt), why); }   // 诊断：每 6 帧一行 | diagnostics: one line every 6 frames
     return (float)exp(logk);
 }

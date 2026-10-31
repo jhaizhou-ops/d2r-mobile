@@ -31,6 +31,14 @@ for name in ('TouchCustom_touch_swap_above', 'TouchCustom_touch_swap_above_near'
 assert nodes['TouchCustom_touch_swap_above_Text']['fields']['rect']['height'] == 360
 for suffix in ('Near', 'Far'):
     assert any(n.get('fields', {}).get('text') == '@dmCustomTouchSwap' + suffix for n in nodes.values())
+# 暗处加亮（bright，#149）：三项单选，三个勾选框各发自己的点击消息，整行三行高，三项标题都在
+# Brighten dark places (bright, #149): a three-option radio, each of the three checkboxes sends its own click message, the row is three rows high, all three titles are present
+for name in ('TouchCustom_bright', 'TouchCustom_bright_mid', 'TouchCustom_bright_full'):
+    assert nodes[name]['type'] == 'ToggleButtonWidget'
+    assert nodes[name]['fields']['onClickMessage'].endswith(name)
+assert nodes['TouchCustom_bright_Text']['fields']['rect']['height'] == 540
+for suffix in ('Off', 'Mid', 'Full'):
+    assert any(n.get('fields', {}).get('text') == '@dmCustomBright' + suffix for n in nodes.values())
 host_src = (root / 'host/dm_custom.c').read_text()
 def host_variant(voice):   # 宿主按 VOICE_ROW（DM_MOVIE_FFMPEG）条件编译的两份键表：缺省去掉 #if VOICE_ROW 块，开关包只去掉预处理行
     keep = re.sub(r'#if VOICE_ROW\n(.*?)#endif\n', (lambda m: m[1]) if voice else '', host_src, flags=re.S)
@@ -44,7 +52,8 @@ for voice in (False, True):
     assert ('voice' in keys) == voice
     defaults = [int(x) for x in re.search(r'k_def\[NK\].*?=\s*\{(.*?)\}', host, re.S)[1].split(',')]
     assert len(defaults) == len(keys) and defaults[keys.index('touch_swap_above')] == 0
+    assert defaults[keys.index('bright')] == 2
 os.environ.pop('MOVIE_FFMPEG'); layout = importlib.reload(layout)
 host = host_src
 assert 'TouchCustom_touch_swap_above_near' in host
-print('PASS touch layout options: generated radio pair, labels, defaults, host order (default and MOVIE_FFMPEG=1) and scrolling row extent')
+print('PASS touch layout options: generated radio pair, brightness radio, labels, defaults, host order (default and MOVIE_FFMPEG=1) and scrolling row extent')

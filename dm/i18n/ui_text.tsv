@@ -395,6 +395,13 @@ dmCustomCamOts	越肩视角（实验）	Over-the-shoulder (experimental)	Sobre e
 dmCustomCamOtsHint	右半屏上下拖动调整视角	Drag up or down on the right half to tilt	Arrastra arriba o abajo a la derecha para inclinar		Тяните вверх-вниз справа для наклона	오른쪽 절반을 위아래로 끌어 기울이기	越肩下面的说明小字
 dmCustomCamFp	第一人称（实验）	First person (experimental)	Primera persona (experimental)		От первого лица (эксперимент)	1인칭 (실험)	镜头单选第三项（cam=2）
 dmCustomCamFpHint	右半屏拖动转身和抬头	Drag on the right half to turn and look	Arrastra a la derecha para girar y mirar		Тяните справа для поворота и обзора	오른쪽 절반을 끌어 돌아보기	第一人称下面的说明小字
+dmCustomBright	暗处加亮	Brighten dark places	Aclarar lo oscuro		Осветление темноты	어두운 곳 밝게	自定义页暗处加亮单选的标题（dm_custom.c 键 bright，#149）
+dmCustomBrightOff	原版亮度	Original brightness	Brillo original		Исходная яркость	원작 밝기	暗处加亮第一项（bright=0）
+dmCustomBrightOffHint	地下城与夜里和原版一样暗	Dungeons and nights as dark as the original	Mazmorras y noches tan oscuras como el original		Подземелья и ночи темны, как в оригинале	던전과 밤이 원작처럼 어두움	原版亮度下面的说明小字
+dmCustomBrightMid	暗处适度加亮	Brighten dark places a little	Algo más claro en lo oscuro		Немного светлее в темноте	어두운 곳 조금 밝게	暗处加亮第二项（bright=1）
+dmCustomBrightMidHint	地下城与夜里最多亮 2 倍	Dungeons and nights up to 2x brighter	Mazmorras y noches hasta 2 veces más claras		Подземелья и ночи до 2 раз ярче	던전과 밤 최대 2배 밝게	适度加亮下面的说明小字
+dmCustomBrightFull	暗处加亮（缺省）	Brighten dark places (default)	Más claro en lo oscuro (pred.)		Светлее в темноте (по умолч.)	어두운 곳 밝게 (기본)	暗处加亮第三项（缺省，bright=2）
+dmCustomBrightFullHint	地下城与夜里最多亮 4 倍	Dungeons and nights up to 4x brighter	Mazmorras y noches hasta 4 veces más claras		Подземелья и ночи до 4 раз ярче	던전과 밤 최대 4배 밝게	加亮下面的说明小字
 dmDoorRift	大秘境	Greater Rift	Grieta superior	Grieta mayor	Великий рифт	그레이터 리프트	城里大秘境传送门头顶的名牌（dm_rift.c dm_door_label）
 dmDoorRiftTown	回城	Return to Town	Volver a la ciudad		Портал в город	마을로	秘境图里回城门头顶的名牌（dm_rift.c dm_door_label）
 dmDoorBossRush	Boss 连战	Boss Rush	Ronda de jefes		Босс-раш	보스 러시	城里 Boss 连战门头顶的名牌（dm_bossrush.c dm_door_label）
