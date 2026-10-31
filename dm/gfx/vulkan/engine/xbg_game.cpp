@@ -528,6 +528,11 @@ uint64_t cleanup_ns[5]={},writeback_bytes=0; // perf: cleanup phase split
 // Driver/support constant buffers are rebuilt only when their inputs change (iOS: reuse parameter
 // blocks for identical inputs). Generations bump on binding ops; slot_serial on every frame-slot switch.
 uint64_t tex_gen[6]={},buf_gen[6]={},slot_serial=1;
+// Last in-run re-upload of a software-decoded BC image (GPUs without BC). The burst-sized stream arena and the upload caches
+// of get_image_slow are kept only while these keep coming; soft_bc_idle_ns without one returns them to the normal footprint.
+// 最近一次软解 BC 图（显卡不支持 BC）在局内重传的时刻。突发用的 stream arena 块数与 get_image_slow 的上传缓存只在重传持续时保留；
+// 超过 soft_bc_idle_ns 没有重传就退回平常的占用。
+uint64_t soft_bc_reupload_ns=0;constexpr uint64_t soft_bc_idle_ns=10ull*1000000000;
 struct DriverCache{uint64_t gen=0,slot=0;Buffer buffer;};DriverCache driver_cache[6][2];
 struct SupportCache{float w=-1,h=-1;uint64_t slot=0;Buffer buffer;};SupportCache support_cache;
 struct SetKeyHash{size_t operator()(const std::vector<uint64_t> &k)const{uint64_t h=1469598103934665603ull;for(uint64_t v:k){h^=v;h*=1099511628211ull;h^=h>>32;}return size_t(h);}};
@@ -836,11 +841,15 @@ Slot &recording_slot(){
         // per frame, and trim() released them — every burst frame paid chunk creation + first-touch page faults inside the
         // timed staging copy (measured up to 7 ms/image). The readback arena below already self-sizes; the stream one matches.
         // Grow-only: shrinking per-frame defeated the point — normal frames use 1 chunk, and every next burst then re-created + first-touched
-        // chunks again (measured unchanged 8ms/image staging over four burst frames 375-397ms apart). Bounded by 8 (256MB/slot).
+        // chunks again (measured unchanged 8ms/image staging over four burst frames 375-397ms apart). Bounded by 8 (256MB/slot),
+        // and only while soft-decoded BC images keep re-uploading: once they stop, back to 3.
         // 保留这次录制真正用到的块数（3..8）：流式突发时 arena 会一帧长到 7+ 块，而 trim() 把它们全放了，
         // 于是每一突发帧都要在计时的 staging 拷贝里重新建块并吃首次访问的缺页（实测每张图最多 7 ms）。
         // 只增不减：按帧收缩等于没做——普通帧只用 1 块，下一个突发帧又得重新建块（连测四帧 375-397ms，staging 仍是 8ms/张）。
-        s.stream.keep_chunks=std::max({(size_t)3,std::min((size_t)8,s.stream.peak_chunks),s.stream.keep_chunks});
+        // 上限 8 块（每槽 256MB），且只在软解 BC 图持续重传期间保留：停下来以后回到 3 块。
+        if(soft_bc_reupload_ns && timing_clock()-soft_bc_reupload_ns<soft_bc_idle_ns)
+            s.stream.keep_chunks=std::max({(size_t)3,std::min((size_t)8,s.stream.peak_chunks),s.stream.keep_chunks});
+        else s.stream.keep_chunks=3;
         s.stream.trim();s.readback.keep_chunks=s.guard.empty()?1:s.readback.chunks.size();s.readback.trim();
         if(texel_memo_enabled && (slot_serial&15)<2)texel_evict(slot_index,false);   // this slot's copies: its previous submission retired
         if(!s.cmd){if(slot_pools_enabled){VkCommandPoolCreateInfo cp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};cp.queueFamilyIndex=cfg.queue_family;VK(vkCreateCommandPool(cfg.device,&cp,nullptr,&s.pool));}
@@ -1526,14 +1535,39 @@ struct UpScratch{uint8_t *p=nullptr;size_t cap=0,n=0;
     void reset(){n=0;}
     void resize(size_t m){if(m<=cap){n=m;return;}size_t c=m+(m>>1)+65536u;uint8_t *q=static_cast<uint8_t*>(::operator new(c));if(n)memcpy(q,p,n);::operator delete(p);p=q;cap=c;n=m;}
     uint8_t *data(){return p;} const uint8_t *data()const{return p;} size_t size()const{return n;}
+    void release(){::operator delete(p);p=nullptr;cap=n=0;}
     ~UpScratch(){::operator delete(p);}};
 thread_local UpScratch up_linear,up_blocks;   // get_image's upload buffers | get_image 的上传缓冲
+// Differential block decode for re-uploaded decoded BC images. Consecutive re-saves of the streamed cubes
+// (BC6H 256x256x6) change only 1.7-1.8% of their 16-byte blocks, yet every cycle decoded the whole image — 6.2 ms of the
+// 8.3 ms per cycle. BC blocks are independent, so decode only the blocks whose compressed bytes changed and keep the last
+// decoded image as the base: identical output, ~1 ms per cycle. Bounded to 16 images, ordered by hotness, and an image must
+// have re-uploaded 3 times before it takes a slot, so load-time one-offs cannot evict the images that cycle every frame.
+// 重上传的解码 BC 图做块级差分解码：连续两次重存的流式立方图（BC6H 256x256x6）只改了 1.7-1.8% 的 16 字节块，
+// 但每次都整图解码（每循环 8.3 ms 里 6.2 ms 在解码）。BC 的块彼此独立，所以只解压缩字节变了的块、以上次解码结果
+// 为基底：输出完全一致，每循环约 1 ms。最多 16 张，按热度排序，且一张图要先重传 3 次才占槽，
+// 这样载入期的一次性大图不会把每帧都循环的图挤出去。
+struct UpDiff{
+    std::vector<uint8_t> src,src_new,out;std::vector<uint32_t> off;   // off: byte offset of each sub-resource inside src/src_new | off：各子资源在 src/src_new 内的字节偏移
+    uint32_t fmt=0,layers=0,levels=0,width=0,height=0,bpp=0;size_t total=0,total_src=0;unsigned verify=2;bool ready=false;
+    uint64_t used=0;   // last-use stamp; the hot re-uploaded images must win the slots over the load-time ones | 最近使用时间戳：真正循环的图要优先于载入期一次性图拿到槽位
+};
+std::map<uint64_t,UpDiff> up_diffs;uint64_t up_diff_clock=0,up_diff_bytes=0;std::map<uint64_t,unsigned> up_diff_seen;
+// Byte budget of the differential state (src + src_new + out of every slot) and the size of the re-upload counter map.
+// 差分状态的字节预算（所有槽的 src + src_new + out 之和），以及重传计数表的条目上限。
+constexpr uint64_t up_diff_budget=64ull*1024*1024;constexpr size_t up_diff_seen_max=4096;
+size_t up_diff_size(const UpDiff &d){return d.src.size()+d.src_new.size()+d.out.size();}
+void upload_cache_release(){up_diffs.clear();up_diff_bytes=0;up_diff_seen.clear();up_linear.release();up_blocks.release();}
 void invalidate_cpu_range(uint64_t address,uint64_t bytes){CPU_SCOPE(CpuWrite);
     need(address+bytes>=address,"CPU write range overflow");cpu_access(address,bytes,4);snapshot_invalidate(address,bytes);
     for_images_overlapping(address,bytes,[&](Image &im){if(draw_detail)draw_timing.image();uint64_t begin=uintptr_t(im.source.mem),end=begin+im.source.L.size;
         // A full storage overwrite replaces the prior GPU contents. A partial
         // overwrite requires GPU-to-NVN readback/merge before applying CPU data.
         need(!im.gpu_written || (address<=begin && address+bytes>=end),"Partial CPU write aliases GPU-written texture; readback/merge required");
+        // The device now holds GPU-written contents, not the bytes cpu_hash describes: forget it so the upload below cannot be
+        // skipped because the guest happened to write back what it last uploaded.
+        // 设备里现在是 GPU 写出的内容，不是 cpu_hash 所描述的字节：清掉它，免得客户机恰好写回上次上传的字节时下面的上传被跳过。
+        if(im.gpu_written)im.cpu_hash=0;
         im.gpu_written=false;provenance_write(im,__LINE__);im.uploaded=false;im.checked_submission=UINT64_MAX;
     });
 }
@@ -1733,21 +1767,6 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
         im.checked_submission=stats.submissions;}
     // Diagnostic: CPU writes into textures whose contents the GPU produced (copies) are invisible to us.
     if(upload && im.gpu_written && im.decoded && t->mem && ((stats.submissions+t->serial)&63)==0 && im.checked_submission!=stats.submissions){im.checked_submission=stats.submissions;uint64_t hash=hash_memory(t->mem,t->L.size);if(im.cpu_hash && hash!=im.cpu_hash){static unsigned n=0;if(n++<40)xbg_logf("NVN CPUGPU texture changed by CPU after GPU write serial=%llu fmt=%#x %ux%u layers=%u levels=%u target=%d",(unsigned long long)t->serial,t->d.format,im.width,im.height,im.layers,im.levels,t->d.target);}im.cpu_hash=hash;}
-    // Differential block decode for re-uploaded decoded BC images. Consecutive re-saves of the streamed cubes
-    // (BC6H 256x256x6) change only 1.7-1.8% of their 16-byte blocks, yet every cycle decoded the whole image — 6.2 ms of the
-    // 8.3 ms per cycle. BC blocks are independent, so decode only the blocks whose compressed bytes changed and keep the last
-    // decoded image as the base: identical output, ~1 ms per cycle. Bounded to 16 images, ordered by hotness, and an image must
-    // have re-uploaded 3 times before it takes a slot, so load-time one-offs cannot evict the images that cycle every frame.
-    // 重上传的解码 BC 图做块级差分解码：连续两次重存的流式立方图（BC6H 256x256x6）只改了 1.7-1.8% 的 16 字节块，
-    // 但每次都整图解码（每循环 8.3 ms 里 6.2 ms 在解码）。BC 的块彼此独立，所以只解压缩字节变了的块、以上次解码结果
-    // 为基底：输出完全一致，每循环约 1 ms。最多 16 张，按热度排序，且一张图要先重传 3 次才占槽，
-    // 这样载入期的一次性大图不会把每帧都循环的图挤出去。
-    struct UpDiff{
-        std::vector<uint8_t> src,src_new,out;std::vector<uint32_t> off;   // off: byte offset of each sub-resource inside src/src_new | off：各子资源在 src/src_new 内的字节偏移
-        uint32_t fmt=0,layers=0,levels=0,width=0,height=0,bpp=0;size_t total=0,total_src=0;unsigned verify=2;bool ready=false;
-        uint64_t used=0;   // last-use stamp; the hot re-uploaded images must win the slots over the load-time ones | 最近使用时间戳：真正循环的图要优先于载入期一次性图拿到槽位
-    };
-    static std::map<uint64_t,UpDiff> up_diffs;static uint64_t up_diff_clock=0;static std::map<uint64_t,unsigned> up_diff_seen;
     // Verification proved the differential output byte-identical over 6147 cycles; it costs a full decode per checked cycle, so
     // it is opt-in now (DM_BC_DIFFVERIFY=1) — leaving it on made every slot change pay a full decode and slowed bursts 4x.
     // 自校验已证明 6147 次差分输出与全量解码逐字节相同；它每校验一次就要多跑一次全量解码，所以改为按需开启
@@ -1755,6 +1774,12 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
     static int up_diff_verify=-1;if(up_diff_verify<0){const char *e=getenv("DM_BC_DIFFVERIFY");up_diff_verify=e&&*e=='1';}
     if(upload && !im.uploaded && !im.gpu_written){
         const uint64_t up_t0=timing_clock();const bool reupload=im.cpu_hash!=0;
+        // Free the upload caches once soft-decoded BC re-uploads have stopped. Done here, before this upload touches them, and not
+        // in recording_slot: stream_buffer below can start a recording while the scratch and the differential state are in use.
+        // 软解 BC 重传停下来以后释放上传缓存。放在这里、在本次上传用到它们之前，而不放在 recording_slot：下面的 stream_buffer
+        // 可能在暂存与差分状态还在用的时候开新录制。
+        if(soft_bc_reupload_ns && up_t0-soft_bc_reupload_ns>=soft_bc_idle_ns){soft_bc_reupload_ns=0;upload_cache_release();}
+        if(reupload && im.decoded)soft_bc_reupload_ns=up_t0;
         // Skip when the guest bytes equal what the device already holds. The streamed HDR cubes (BC6H 256x256x6) cycle
         // GetData -> CPU store -> Load 50+ times per frame on some scenes, and engine-side invalidation marks them dirty even
         // when the game restored identical bytes; each needless cycle costs a full BC decode. The same hash answers the
@@ -1779,12 +1804,18 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
         // Any decoded BC image qualifies (the cube family is not the only one cycling): the slots are hotness-ordered, so a
         // load-time image never keeps a slot away from the images that actually re-upload every frame.
         // 任何解码 BC 图都够格（会循环的不止立方图那一族）：槽位按热度排序，载入期的图不会占着槽不让每帧重传的图用。
+        if(up_diff_seen.size()>=up_diff_seen_max && !up_diff_seen.count(t->serial))up_diff_seen.clear();   // stale serials of freed images | 已释放图的旧序号
         unsigned &seen=up_diff_seen[t->serial];if(reupload)++seen;   // only images that really cycle are worth a slot | 只有真正在循环的图才配占槽
-        if(im.decoded && im.depth==1 && t->L.size>=16ull*1024 && seen>=3){
-            if(!up_diffs.count(t->serial) && up_diffs.size()>=16){
+        if(im.decoded && im.depth==1 && t->L.size>=16ull*1024 && t->L.size<=up_diff_budget/32 && seen>=3){
+            // Evict least recently used slots until a new one fits both the count (16) and the byte budget; the incoming image's
+            // own size is not known before its layout, so its payload is capped above at budget/32 (decoded output is at most 8x the
+            // BC payload, so one image stays under budget/4 and the total under the budget).
+            // 按最久未用淘汰，直到新槽同时满足条数（16）与字节预算；进来的图在算布局前不知道大小，所以上面限单张负载 ≤ 预算/32
+            // （解码输出最多是 BC 负载的 8 倍，单张不超过预算的 1/4，总量不超过预算）。
+            if(!up_diffs.count(t->serial))while(!up_diffs.empty() && (up_diffs.size()>=16 || up_diff_bytes>up_diff_budget*3/4)){
                 auto old=up_diffs.begin();for(auto i=up_diffs.begin();i!=up_diffs.end();++i)if(i->second.used<old->second.used)old=i;
-                up_diffs.erase(old);}
-            UpDiff &d=up_diffs[t->serial];d.used=++up_diff_clock;
+                up_diff_bytes-=up_diff_size(old->second);up_diffs.erase(old);}
+            UpDiff &d=up_diffs[t->serial];up_diff_bytes-=up_diff_size(d);d.used=++up_diff_clock;
             bool same=d.ready && d.fmt==uint32_t(t->d.format) && d.layers==im.layers && d.levels==im.levels && d.width==im.width && d.height==im.height && d.bpp==im.bpp;
             size_t ts=0,to=0;std::vector<uint32_t> offs;
             for(uint32_t layer=0;layer<im.layers;layer++)for(uint32_t level=0;level<im.levels;level++){
@@ -1796,6 +1827,7 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
             d.fmt=t->d.format;d.layers=im.layers;d.levels=im.levels;d.width=im.width;d.height=im.height;d.bpp=im.bpp;
             d.total=to;d.total_src=ts;d.off=offs;
             d.src.resize(ts);d.out.resize(to);d.src_new.resize(ts);   // src_new is the deswizzle target of this cycle, including the first one | src_new 是本轮反 swizzle 的目标，第一轮也是
+            up_diff_bytes+=up_diff_size(d);
             dif=&d;out_base=d.out.data();
         }
         for(uint32_t layer=0;layer<im.layers;layer++)for(uint32_t level=0;level<im.levels;level++){
