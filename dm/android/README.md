@@ -164,6 +164,16 @@ javac -encoding UTF-8 -d /tmp/dm-input-tests \
 java -cp /tmp/dm-input-tests com.xiaoboluo.d2r.TextInputRulesTest
 ```
 
+Save export / import (`SaveTransfer.java`, see "Backing up and moving saves" in
+`docs/ANDROID.md`) is tested in a temporary directory the same way:
+
+```sh
+javac -encoding UTF-8 -d /tmp/dm-save-tests \
+  dm/android/app/src/main/java/com/xiaoboluo/d2r/SaveTransfer.java \
+  dm/android/tests/SaveTransferTest.java
+java -cp /tmp/dm-save-tests com.xiaoboluo.d2r.SaveTransferTest
+```
+
 Device acceptance must separately record installation, genuine GPU output/FPS,
 character creation, entering a world, moving and stopping, NPC interaction,
 inventory/skills, sound, background/resume, and saving/reloading. Headless host

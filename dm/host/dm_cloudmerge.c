@@ -330,8 +330,11 @@ void dm_cloudmerge_srv_tick(uint8_t *b, uint64_t G, uint64_t player) {
     if (g_gold > 0 && !g_gold_sent) { add_gold(G, player); saved |= g_gold_sent != 0; }
     for (int i = 0, miss = 0; i < g_plan.n && g_npend < 32 && miss < 8; i++) { if (pend_has(i)) continue; int r = take_one(G, player, i); if (r > 0) saved = 1; else if (r == 0) { full = 1; miss++; } }   // 大件放不下时接着试小件，一拍最多试 8 件放不下的 | When a large item does not fit, keep trying smaller ones; at most 8 non-fitting items are tried per tick
     int left = g_plan.n - g_npend, done = !g_plan.n && g_gold <= 0 && !g_npend && !g_dirty, pend = g_npend || g_gold_sent || g_dirty;
-    static int said; if (saved && !said) { said = 1; snprintf(g_notice, sizeof g_notice, "%s", dm_str(b, "dmCloudMergeBack")); atomic_store(&g_notice_req, 1); }
-    if (full && left) { static uint32_t fl; if (!fl || tq - fl > 750) { fl = tq; snprintf(g_notice, sizeof g_notice, "%s", dm_str(b, "dmCloudMergeFull")); atomic_store(&g_notice_req, 1); } }
+    // 安卓「导入存档」放进来的条目（目录名以 -import 结尾，SaveTransfer.java）：提示说「导入的共享仓库」，不说 iCloud
+    // Entries put in by Android's save import (directory name ending in -import, SaveTransfer.java): the notices say "imported shared stash", not iCloud
+    int imp = strstr(g_entry, "-import") != NULL;
+    static int said; if (saved && !said) { said = 1; snprintf(g_notice, sizeof g_notice, "%s", dm_str(b, imp ? "dmImportMergeBack" : "dmCloudMergeBack")); atomic_store(&g_notice_req, 1); }
+    if (full && left) { static uint32_t fl; if (!fl || tq - fl > 750) { fl = tq; snprintf(g_notice, sizeof g_notice, "%s", dm_str(b, imp ? "dmImportMergeFull" : "dmCloudMergeFull")); atomic_store(&g_notice_req, 1); } }
     if (done) { LOG("iCloud 并回：%s 的 %s 并完", g_entry, g_stash); none = !entry_pick(wd); said = 0; }
     pthread_mutex_unlock(&g_mu);
     { static uint32_t lastreq; if (saved || (pend && tq - lastreq >= 50)) { lastreq = tq; dm_request_save(); } }
