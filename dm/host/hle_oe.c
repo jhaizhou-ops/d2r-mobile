@@ -175,14 +175,31 @@ static int s3_max_level(float cfg, float floor) {
     int n = 0; for (int k = 0; k < S3_NLV; k++) if (g_s3_levels[k] < cfg - 1e-4f && g_s3_levels[k] >= floor - 1e-4f) n++;
     return n;
 }
-// 配置值：DM_3D_SCALE（0.5–1.0），缺省手机 0.75、Mac 宿主 1.0；读一次
-// Configured value: DM_3D_SCALE (0.5–1.0), default 0.75 on phones and 1.0 on the Mac host; read once
+// 自定义页「3D 清晰度」给的配置值（dm_3d_scale_level_set，只在手机上给）；0 = 还没给
+// The configured value from the Custom page "3D resolution" (dm_3d_scale_level_set, given on phones only); 0 = not given yet
+static _Atomic float g_s3_set;
+// 手机的缺省配置值（自定义页「均衡」档）：前端可用 DM_3D_SCALE_DEFAULT 给本平台的缺省（安卓 0.85，jni_android.c）；
+// 它和 DM_3D_SCALE 不同，不压过自定义页选的档。没给就是 0.75（iPhone、鸿蒙）
+// The phones' default configured value (the Custom page's "balanced" level): a front end can give its platform's default with DM_3D_SCALE_DEFAULT
+// (0.85 on Android, jni_android.c); unlike DM_3D_SCALE it does not override the level chosen on the Custom page. Without it 0.75 (iPhone, HarmonyOS)
+static float s3_phone_default(void) {
+    static float d = -1;
+    if (d < 0) { const char *e = getenv("DM_3D_SCALE_DEFAULT"); float v = 0.75f;
+        if (e) { char *end; float x = strtof(e, &end); if (end != e && !*end && x >= 0.5f && x <= 1.0f) v = x; else LOG("【红】DM_3D_SCALE_DEFAULT 非法：%s（要求 0.5–1.0），按 0.75", e); }
+        d = v; }
+    return d;
+}
+// 配置值：DM_3D_SCALE（0.5–1.0）优先（测试、测量要把比例钉住）；没有时手机按自定义页的档（缺省 = 本平台缺省），Mac 宿主 1.0。环境变量只读一次，档随时可改
+// Configured value: DM_3D_SCALE (0.5–1.0) wins (tests and measurements pin the scale); without it phones follow the Custom page level (default = the platform
+// default) and the Mac host uses 1.0. The environment is read once; the level can change at any time
 static float s3_cfg(void) {
-    static float cfg = -1;
-    if (cfg < 0) { const char *e = getenv("DM_3D_SCALE"); float v = DM_PHONE ? 0.75f : 1.0f;
+    static float env = -1;
+    if (env < 0) { const char *e = getenv("DM_3D_SCALE"); float v = 0;
         if (e) { char *end; v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); }
-        cfg = v; }
-    return cfg;
+        env = v; }
+    if (env > 0) return env;
+    float s = atomic_load(&g_s3_set);
+    return DM_PHONE ? (s > 0 ? s : s3_phone_default()) : 1.0f;
 }
 #define S3_FLOOR_DEF 0.60f   // 待真机扫档（热机稳态最后 30 秒掉帧 ≤ 1%）定 | To be set by a device level sweep (dropped frames ≤ 1% in the last 30 s of warm steady state)
 // 纯函数控制器（单测 t_oe.c 直接喂序列）：level 0 = 配置值，越大越低。判据只认实际上屏：
@@ -245,6 +262,22 @@ void dm_3d_quality_mode_set(int mode) { atomic_store(&g_3d_quality_mode, mode ==
 int dm_3d_quality_mode_get(void) { return atomic_load(&g_3d_quality_mode); }
 static _Atomic int g_scale3d_level;
 static _Atomic int g_scale3d_resumed;
+static _Atomic float g_s3g_scale;
+// 自定义页「3D 清晰度」（dm_custom.c 键 scale3d，#149）：0 省电 0.60 / 1 均衡 = 本平台缺省（缺省档；安卓 0.85，别的手机 0.75）/ 2 清晰 1.00。读盘与点「应用」时调；只在手机上生效，DM_3D_SCALE 仍优先。
+// 换了档：两个动态控制器的档清零，从新配置值重新往下判（scale3d_tick 下一次取系统通知时按新比例重建 3D 目标）
+// The Custom page "3D resolution" (dm_custom.c key scale3d, #149): 0 power saver 0.60 / 1 balanced = the platform default (the default level; 0.85 on
+// Android, 0.75 on other phones) / 2 sharp 1.00. Called on load and on Apply;
+// takes effect on phones only, and DM_3D_SCALE still wins. On a level change both dynamic controllers go back to level 0 and judge again downwards from the
+// new configured value (scale3d_tick rebuilds the 3D targets at the new scale the next time system notifications are fetched)
+void dm_3d_scale_level_set(int level) {
+    const float k[3] = {0.60f, s3_phone_default(), 1.00f};
+    if (level < 0 || level > 2) level = 1;
+    if (!DM_PHONE) { static int said; if (!said++) LOG("3D 比例：Mac 宿主不按自定义页的档（配置 %.2f）", s3_cfg()); return; }
+    float old = atomic_exchange(&g_s3_set, k[level]);
+    if (old == k[level]) return;
+    atomic_store(&g_scale3d_level, 0); atomic_store(&g_s3g_scale, 0.0f);
+    LOG("3D 比例：档 %d → 配置 %.2f%s", level, k[level], getenv("DM_3D_SCALE") ? "（DM_3D_SCALE 优先，档不生效）" : "");
+}
 void dm_3d_scale_resumed(void) { atomic_store(&g_scale3d_resumed, 1); }   // 前端：刚回前台。回来头几秒的慢帧是恢复（表面重建、缓存变冷），不是 GPU 吃紧：停判 3 秒 | front end: just returned to foreground. Slow frames in the first few seconds back are recovery (surface rebuild, caches gone cold), not GPU pressure: suspend judging for 3 seconds
 // 按 GPU 耗时的动态 3D 比例（DM_3D_SCALE_GPU=1，鸿蒙缺省开）：上面的控制器按「60 帧、超 25 ms 算掉帧」判，帧率在 30 上下时一进局就降到底，且档位是绝对值。
 // 这里每 2 秒看一次：帧时间 > 35 ms 且 GPU 占帧时间 ≥ 85%（卡在 GPU，发热后常见）→ 降一档；GPU 只占 < 75%（有富余）连续 10 秒 → 升一档。档位 = 配置值 × 系数，
@@ -253,14 +286,26 @@ void dm_3d_scale_resumed(void) { atomic_store(&g_scale3d_resumed, 1); }   // 前
 // a run starts, and its levels are absolute. Here, every 2 s: frame time > 35 ms with the GPU at >= 85% of it (GPU-bound, common once hot) -> one level down; GPU below 75% (headroom)
 // for 10 s in a row -> one level up. Level = configured value x factor, floor DM_3D_SCALE_GPU_FLOOR (default 0.40). CPU-bound frames do not lower it (resolution does not save CPU).
 static const float g_s3g_mult[] = {0.92f, 0.85f, 0.78f, 0.72f, 0.66f, 0.60f};
-static _Atomic float g_s3g_scale;   // > 0：覆盖动态档（scale3d_tick）| > 0: overrides the dynamic level (scale3d_tick)
+// g_s3g_scale（定义在上面 dm_3d_scale_level_set 前）> 0：覆盖动态档（scale3d_tick）
+// g_s3g_scale (defined above, before dm_3d_scale_level_set) > 0: overrides the dynamic level (scale3d_tick)
 __attribute__((weak)) double xbg_recent_gpu_ms(void) { return -1; }   // 空的弱定义（不是弱声明）：苹果链接器要求弱引用链接时有定义；Vulkan 后端 / 鸿蒙平台层给强定义 | empty weak definitions (not declarations): Apple's linker needs a weak reference to resolve; the Vulkan backend / HarmonyOS platform give the strong ones
 static int s3g_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_3D_SCALE_GPU"); on = e && *e == '1'; } return on; }
+// GPU 控制器的配置值：手机同 s3_cfg（DM_3D_SCALE / 自定义页的档 / 0.75）；Mac 宿主照旧 DM_3D_SCALE 或 0.75
+// The GPU controller's configured value: on phones the same as s3_cfg (DM_3D_SCALE / the Custom page level / 0.75); the Mac host as before, DM_3D_SCALE or 0.75
+static float s3g_cfg(void) {
+    if (DM_PHONE) return s3_cfg();
+    static float v = -1; if (v < 0) { const char *e = getenv("DM_3D_SCALE"); v = e ? strtof(e, NULL) : 0.75f; }
+    return v;
+}
 static void s3g_feed(double iv_ms) {
-    static double acc; static unsigned n; static uint64_t hold; static int lv, good, maxlv = -1, was_in; static float cfg;
-    if (maxlv < 0) { const char *e = getenv("DM_3D_SCALE"), *f = getenv("DM_3D_SCALE_GPU_FLOOR"); cfg = e ? strtof(e, NULL) : 0.75f; float fl = f ? strtof(f, NULL) : 0.40f;
-        maxlv = 0; for (int k = 0; k < (int)(sizeof g_s3g_mult / sizeof g_s3g_mult[0]); k++) if (cfg * g_s3g_mult[k] >= fl - 1e-4f) maxlv = k + 1;
-        LOG("3D 比例控制（按 GPU 耗时）：配置 %.2f，最多降 %d 档（最低 %.2f）", cfg, maxlv, maxlv ? cfg * g_s3g_mult[maxlv - 1] : cfg); }
+    static double acc; static unsigned n; static uint64_t hold; static int lv, good, maxlv, was_in; static float cfg = -1, fl = -1;
+    if (fl < 0) { const char *f = getenv("DM_3D_SCALE_GPU_FLOOR"); fl = f ? strtof(f, NULL) : 0.40f; }
+    // 配置值变了（第一次，或自定义页换档）：重算最多降几档，档回到 0
+    // The configured value changed (first time, or a Custom page level change): recompute how many levels it may go down, back to level 0
+    { float c3 = s3g_cfg();
+      if (c3 != cfg) { cfg = c3; lv = 0; good = 0; atomic_store(&g_s3g_scale, 0.0f);
+          maxlv = 0; for (int k = 0; k < (int)(sizeof g_s3g_mult / sizeof g_s3g_mult[0]); k++) if (cfg * g_s3g_mult[k] >= fl - 1e-4f) maxlv = k + 1;
+          LOG("3D 比例控制（按 GPU 耗时）：配置 %.2f，最多降 %d 档（最低 %.2f）", cfg, maxlv, maxlv ? cfg * g_s3g_mult[maxlv - 1] : cfg); } }
     uint64_t now = now_ns();
     if (!dm_ingame_now()) { was_in = 0; acc = 0; n = 0; return; }
     if (!was_in) { was_in = 1; hold = now + 20 * S3_SEC; }   // 刚进局的 20 秒是装载 | the first 20 s of a run are loading
@@ -276,12 +321,18 @@ static void s3g_feed(double iv_ms) {
         LOG("3D 比例控制（按 GPU 耗时）：帧 %.1f ms、GPU %.1f ms → %s到第 %d 档（3D 比例 %.2f）", fr, g, lv > old ? "降" : "升", lv, lv ? cfg * g_s3g_mult[lv - 1] : cfg); }
 }
 void dm_3d_scale_feed(double iv_ms) {   // 出图线程每帧调（diag.c dm_perf_present 转来）：实际上屏间隔 ms，−1 = 被丢弃，0 = 无读数 | called by the present thread every frame (forwarded from diag.c dm_perf_present): actual present interval in ms, −1 = dropped, 0 = no reading
-    static scale3d_ctl c; static int on = -1; static long inj0 = -1, inj1 = -1;
+    static scale3d_ctl c; static int on = -1; static long inj0 = -1, inj1 = -1; static float fl, mcfg = -1;
     if (on < 0) { const char *e = getenv("DM_3D_SCALE_DYN"), *j = getenv("DM_3D_SCALE_DYN_INJECT"); on = !(e && !strcmp(e, "0")) && !getenv("DM_THERMAL_NOFALLBACK");
         if (j) { inj0 = atol(j); inj1 = strchr(j, '-') ? atol(strchr(j, '-') + 1) : inj0; }
-        const char *fe = getenv("DM_3D_SCALE_FLOOR"); float fl = fe ? strtof(fe, NULL) : S3_FLOOR_DEF;   // 下限：档位表里不低于它的最深一档 | Floor: the deepest level in the level table that is not below it
-        c.max_level = s3_max_level(s3_cfg(), fl);
-        LOG("3D 比例控制：%s，配置 %.2f，下限 %.2f（第 %d 档）", on ? "开" : "关", s3_cfg(), s3_level_scale(s3_cfg(), c.max_level), c.max_level); }
+        // 下限：档位表里不低于它的最深一档
+        // Floor: the deepest level in the level table that is not below it
+        const char *fe = getenv("DM_3D_SCALE_FLOOR"); fl = fe ? strtof(fe, NULL) : S3_FLOOR_DEF; }
+    // 配置值变了（第一次，或自定义页换档）：档位表跟着新配置值重排，从 0 档重新判
+    // The configured value changed (first time, or a Custom page level change): the level table follows the new configured value, judging again from level 0
+    { float cf = s3_cfg();
+      if (cf != mcfg) { if (mcfg >= 0) { c.level = 0; atomic_store(&g_scale3d_level, 0); scale3d_ctl_hold(&c, now_ns(), 3 * S3_SEC); }
+          mcfg = cf; c.max_level = s3_max_level(cf, fl);
+          LOG("3D 比例控制：%s，配置 %.2f，下限 %.2f（第 %d 档）", on ? "开" : "关", cf, s3_level_scale(cf, c.max_level), c.max_level); } }
     if (!on) return;
     if (s3g_on() && atomic_load(&g_3d_quality_mode) != 1) { s3g_feed(iv_ms); return; }
     if (atomic_load(&g_3d_quality_mode) == 1) { if (c.level) { c.level = 0; LOG("3D 比例控制：画质优先，回到配置值"); } atomic_store(&g_scale3d_level, 0); return; }
@@ -302,11 +353,11 @@ void dm_3d_scale_hot(int hot) { (void)hot; }   // 过热不再直接降档（改
 static _Atomic float g_scale3d_cur = 1.0f;
 float dm_3d_scale_cur(void) { return atomic_load(&g_scale3d_cur); }
 static void scale3d_tick(void) {
-    static float want_cfg = -1, cur = 1.0f; static module_t *main;
-    if (want_cfg < 0) {
-        want_cfg = s3_cfg();
-        for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) main = &g_mod[i];
-    }
+    static float cur = 1.0f; static module_t *main; static int found;
+    if (!found) { found = 1; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) main = &g_mod[i]; }
+    // 配置值每次现取：自定义页换档后下一次就按新比例重建
+    // The configured value is fetched every time: after a Custom page level change the next call rebuilds at the new scale
+    float want_cfg = s3_cfg();
     // 动态档：0 = 配置值，k = 表里第 k 个低于配置值的比例
     // Dynamic level: 0 = configured value, k = the k-th table scale below the configured value
     int lv = atomic_load(&g_scale3d_level); float dyn = s3_level_scale(want_cfg, lv);
