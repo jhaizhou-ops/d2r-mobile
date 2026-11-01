@@ -14,7 +14,7 @@
 //   所以要「换到副手 → 把该补的全放完 → 换回」。换走期间主手与盾的属性全没了，条件比第一笔严：站立、不在城里、没死、手上没拿东西、
 //   副手组技能的连招没在进行、周围 DM_AUTOBUFF_SAFE 格（缺省 40）内没有活着的敌对怪。换武器调游戏自己的 main+0x41db90(当前组)（同 dm_actions.c）。
 //   任何情况下不把玩家留在副手：换过去后最多等 6 秒（DM_AUTOBUFF_SWAPMAX，拍），到点不管放没放完都换回；换回一直重试到成（每 8 拍一次，死了等复活）。
-//   同一个技能本局经换武器补失败 2 次就不再为它换；两轮之间至少隔 10 秒。
+//   同一个技能经换武器连着 2 次没补上就歇 60 秒再试（人在走动 / 挨打、死了的那一轮不算）；两轮之间至少隔 10 秒。该补却没换的原因记日志。
 // Automatic self-buff recast: when a self-buff you cast yourself drops (expired / dispelled), recast it for the player on a tick where the character is standing. Part 1 only covers skills the character learned and does not swap weapons.
 // The list (filtered from the game's skills.txt: not passive, not an aura, puts a state on yourself, needs no target, no cooldown, not a shapeshift / curse / summon) is in k_ab:
 //   skill id, the state it puts on yourself (row in states.txt), mutual-exclusion group (skills in one group replace each other; only the one the player cast last is recast; 0 = none), and whether it can be cast in town.
@@ -31,7 +31,7 @@
 //   so it takes "swap to off-hand -> cast everything due -> swap back". While swapped away all main-hand and shield stats are gone, so the conditions are stricter than part 1: standing, not in town, not dead, nothing on the cursor,
 //   no off-hand-set skill combo in progress, no living hostile monster within DM_AUTOBUFF_SAFE tiles (default 40). The weapon swap calls the game's own main+0x41db90(current set) (same as dm_actions.c).
 //   The player is never left on the off-hand: after swapping, wait at most 6 seconds (DM_AUTOBUFF_SWAPMAX, ticks), then swap back whether or not everything was cast; swapping back is retried until it succeeds (every 8 ticks; if dead, wait for resurrection).
-//   A skill that fails twice this game through a weapon swap is no longer swapped for; at least 10 seconds between two rounds.
+//   A skill missed twice in a row through a weapon swap rests 60 seconds before the next try (a round in which the character was moving / being hit or died does not count); at least 10 seconds between two rounds. Why a due round did not start is logged.
 #include "dm.h"
 #include "dm_custom.h"
 #include "dm_hud.h"
@@ -126,7 +126,7 @@ static int mana_cost(uint64_t node, int lvl) {
 static uint8_t g_fail[NAB], g_stop[NAB]; static int g_last[8]; static uint32_t g_try[NAB];   // 连败次数 / 本局不再补 / 互斥组本局见到在身上的那个（-1 = 没见过）/ 上次发出的拍 | consecutive failures / no more recasts this game / mutex-group member seen active this game (-1 = none seen) / tick of the last request
 static _Atomic int g_req = -1, g_busy, g_unusable = -1;
 enum { W_IDLE, W_OUT, W_CAST, W_BACK };
-static int w_ph, w_from, w_tries, w_list[6], w_n, w_life0, w_lr0[2]; static uint32_t w_t0, w_start, w_next; static uint8_t w_fail[NAB];   // 换武器补的状态机（见文件头第二笔） | state machine for weapon-swap recast (see part 2 in the file header)
+static int w_ph, w_from, w_tries, w_list[6], w_n, w_life0, w_lr0[2]; static uint32_t w_t0, w_start, w_next; static uint8_t w_fail[NAB]; static uint32_t w_until[NAB]; static int w_moved;   // 换武器补的状态机（见文件头第二笔） | state machine for weapon-swap recast (see part 2 in the file header)
 int dm_swapskill_wset(void); int dm_swapskill_busy(void); static int g_wait = -1, g_mana0; static uint32_t g_wait_until;   // 交服务端拍放的那个；服务端那一拍没法放（还在动作里）；在等它出现的那个、请求时的法力 | the one handed to the server tick to cast; the server could not cast on that tick (still mid-action); the one we are waiting to see appear, Mana at request time
 
 // 测试开关 DM_TEST_BUFF_LEARN=<技能号>[:<等级>][,…]（造现场用：手头的测试角色都没学名单里的技能）：给这个单位的技能链挂上这些技能并把基础等级设到这个数
@@ -138,6 +138,19 @@ static void test_learn(uint8_t *b, uint64_t unit, const char *side) {
     for (char *sv, *k = strtok_r(bf, ",", &sv); k; k = strtok_r(NULL, ",", &sv)) { int sk = 0, lv = 1; if (sscanf(k, "%d:%d", &sk, &lv) < 1 || sk <= 0) continue;
         uint64_t n = own_node(unit, sk); if (!n) n = ((uint64_t (*)(uint64_t, int))(b + 0x7bf010))(unit, sk);
         if (n && *(int32_t *)(n + 0x38) < lv) { *(int32_t *)(n + 0x38) = lv; LOG("测试 DM_TEST_BUFF_LEARN：%s玩家技能 %d 基础等级设成 %d", side, sk, lv); } }
+}
+// 第二笔该补却没换武器的原因：玩家看不到，记进日志（每种原因 10 秒一行，只在确有副手组的增益该补时记）
+// Why part 2 did not swap although something is due: invisible to the player, so it goes to the log (one line per reason per 10 seconds, only when an off-hand-set buff really is due)
+static uint32_t w_said[8];
+static int w_due(uint8_t *b, uint64_t pl, const int *has, uint32_t t, int *cooling) {
+    int n = 0; if (cooling) *cooling = 0;
+    for (int i = 0; i < NAB; i++) { if (has[i] || g_stop[i] || skipped(k_ab[i].skill)) continue; uint64_t node = own_node(pl, k_ab[i].skill); if (node && eff_level(b, pl, node) > 0) continue;
+        if (!swap_gives(b, pl, k_ab[i].skill)) continue; if (t < w_until[i]) { if (cooling) (*cooling)++; } else n++; }
+    return n;
+}
+static void w_why(uint8_t *b, uint64_t pl, const int *has, uint32_t t, int why, const char *txt) {
+    if (why < 0 || why >= 8 || (w_said[why] && t - w_said[why] < 250) || !w_due(b, pl, has, t, NULL)) return;
+    w_said[why] = t; LOG("增益自动补：副手组的增益要补，但%s", txt);
 }
 // 主线程每帧调（dm_potpick.c 的每帧入口带过来；pl = 客户端玩家，不在局内为 0）
 // Called every frame on the main thread (via the per-frame entry in dm_potpick.c; pl = client player, 0 when not in a game)
@@ -156,7 +169,7 @@ void dm_autobuff_pump(uint8_t *b, uint64_t pl) {
           LOG("测试 DM_TEST_EQUIP：拍 %u 背包里的 %s id %u → 交原版装备；此刻生命 %d / 上限 %d", t, code, iid, gs(pl, 6, 0) >> 8, gs(pl, 7, 0) >> 8); } }
     if (pl != lp || t < lt) {   // 进局 / 换局 | entering / switching games
         lp = pl; memset(g_fail, 0, sizeof g_fail); memset(g_stop, 0, sizeof g_stop); memset(g_try, 0, sizeof g_try); for (int i = 0; i < 8; i++) g_last[i] = -1;
-        g_wait = -1; atomic_store(&g_req, -1); w_ph = W_IDLE; w_next = 0; memset(w_fail, 0, sizeof w_fail); }
+        g_wait = -1; atomic_store(&g_req, -1); w_ph = W_IDLE; w_next = 0; memset(w_fail, 0, sizeof w_fail); memset(w_until, 0, sizeof w_until); }
     { static uint64_t dumped; if (dumped != pl && t > 60 && getenv("DM_TEST_BUFF_DUMP")) { dumped = pl; char bf[900]; int o = 0; bf[0] = 0;   // 测试读数：名单里每个技能在客户端技能链上的节点、基础等级、有效等级 | test readout: for each listed skill, its node on the client skill chain, base level, effective level
         for (int i = 0; i < NAB && o < 860; i++) { uint64_t n = own_node(pl, k_ab[i].skill); if (n) o += snprintf(bf + o, sizeof bf - o, " %s(%d)基础%d有效%d", k_ab[i].nm, k_ab[i].skill, *(int32_t *)(n + 0x38), eff_level(b, pl, n)); }
         uint64_t sl = *(uint64_t *)(pl + 0x100); int nn = 0; for (uint64_t n = sl ? *(uint64_t *)sl : 0; n && nn < 512; n = *(uint64_t *)(n + 8)) nn++;
@@ -174,13 +187,20 @@ void dm_autobuff_pump(uint8_t *b, uint64_t pl) {
     uint32_t mode = *(uint32_t *)(pl + 0xc); int wset = dm_swapskill_wset(), dead = mode == 0 || mode == 17; void (*swap0)(int) = (void (*)(int))(b + 0x41db90);
     static int swapmax = -1, safe, swaplife; if (swapmax < 0) { swapmax = cfg("DM_AUTOBUFF_SWAPMAX", 150); safe = cfg("DM_AUTOBUFF_SAFE", 40); swaplife = cfg("DM_AUTOBUFF_SWAPLIFE", 50); }
     if (w_ph == W_OUT) {   // 等换过去 | waiting for the swap to land
-        if (wset >= 0 && wset != w_from) { w_ph = W_CAST; w_start = t; LOG("增益自动补：拍 %u 已换到副手组（第 %d 组），开始补（此刻生命 %d / 上限 %d）", t, wset, ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 6, 0) >> 8, ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 7, 0) >> 8); }
+        if (wset >= 0 && wset != w_from) { w_ph = W_CAST; w_start = t; w_moved = 0; LOG("增益自动补：拍 %u 已换到副手组（第 %d 组），开始补（此刻生命 %d / 上限 %d）", t, wset, ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 6, 0) >> 8, ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 7, 0) >> 8); }
         else if (dead || t - w_start > 60) { w_ph = W_IDLE; w_next = t + 250; LOG("增益自动补：拍 %u 换武器没换过去（%s），这一轮作罢", t, dead ? "人死了" : "2 秒多没变"); return; }
         else if (t - w_t0 >= 8 && w_tries < 4 && (mode == 1 || mode == 5)) { w_tries++; w_t0 = t; swap0(w_from); return; }
         else return; }
     if (w_ph == W_CAST) {   // 在副手组：该补的都补上了、或到点了 → 换回。补放本身走下面第一笔的循环（这套在手时节点就在技能链上） | on the off-hand set: everything due has been recast, or time is up → swap back. The casts themselves go through the part 1 loop below (with this set in hand the nodes are on the skill chain)
+        if (mode == 2 || mode == 3 || mode == 4 || mode == 18) w_moved = 1;   // 走 / 跑 / 受击 / 被击退：站立拍等不来，补不上不怪技能 | walk / run / hit / knocked back: no standing tick comes, so a miss is not the skill's fault
         int left = 0; for (int k = 0; k < w_n; k++) if (!has[w_list[k]] && !g_stop[w_list[k]]) left++;
-        if (!left || dead || t - w_start > (uint32_t)swapmax) { for (int k = 0; k < w_n; k++) if (!has[w_list[k]]) w_fail[w_list[k]]++;
+        if (!left || dead || t - w_start > (uint32_t)swapmax) {
+            // 补不上记一次失败；人在走动 / 挨打或死了，这一轮不算。连败 2 次歇一段（DM_AUTOBUFF_SWAPCOOL 拍，缺省 60 秒）再试，不再本局封死
+            // A miss counts as one failure; not when the character was moving / being hit or died. After 2 misses in a row rest for a while (DM_AUTOBUFF_SWAPCOOL ticks, default 60 seconds) and try again, instead of giving up for the rest of the game
+            static int cool = -1; if (cool < 0) cool = cfg("DM_AUTOBUFF_SWAPCOOL", 1500);
+            if (left && (w_moved || dead)) LOG("增益自动补：拍 %u 副手组这一轮人在%s，没补完的不算失败", t, dead ? "死亡中" : "走动 / 挨打");
+            else for (int k = 0; k < w_n; k++) { int x = w_list[k]; if (has[x]) { w_fail[x] = 0; continue; } if (++w_fail[x] < 2) continue; w_fail[x] = 0; w_until[x] = t + (uint32_t)cool;
+                LOG("增益自动补：「%s」换武器连着 2 次没补上，歇 %d 秒再试", k_ab[x].nm, cool / 25); }
             LOG("增益自动补：拍 %u 副手组上%s → 换回第 %d 组", t, !left ? "该补的都补上了" : dead ? "人死了" : "到点了还没补完", w_from); w_ph = W_BACK; w_t0 = 0; w_tries = 0; g_wait = -1; } }
     if (w_ph == W_BACK) {   // 换回：一直重试到成 | swap back: retry until it succeeds
         if (wset == w_from) { w_ph = W_IDLE; w_next = t + 250; int l1 = ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 6, 0) >> 8, mx = ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 7, 0) >> 8;
@@ -188,8 +208,9 @@ void dm_autobuff_pump(uint8_t *b, uint64_t pl) {
         else { if (!dead && (mode == 1 || mode == 5 || t - w_t0 >= 25) && (!w_t0 || t - w_t0 >= 8)) { w_t0 = t; w_tries++; swap0(wset);
                    if (w_tries % 10 == 0) LOG("【红】增益自动补：换回第 %d 组已试 %d 次还没成（模式 %u），继续试", w_from, w_tries, mode); }
                return; } }
-    if (mode != 1 && mode != 5) return;   // 只在站立那一拍（1 野外站立、5 城镇站立——刚出城还没迈步时服务端仍是 5，实测）；城里另由关卡号挡 | only on a standing tick (1 = standing outside, 5 = standing in town; just out of town before the first step the server still says 5, measured); town is blocked separately by level id
-    if (dm_hud_area_is_town(dm_unit_level(pl)) || ((uint64_t (*)(void))(b + 0x2aa7c0))()) return;   // 城里不放；手上拿着东西不放 | no cast in town; no cast with an item on the cursor
+    if (mode != 1 && mode != 5) { if (!dead && w_ph == W_IDLE) w_why(b, pl, has, t, 0, "人没站定（走 / 跑 / 攻击 / 施法 / 受击中），等站住的那一拍"); return; }   // 只在站立那一拍（1 野外站立、5 城镇站立——刚出城还没迈步时服务端仍是 5，实测）；城里另由关卡号挡 | only on a standing tick (1 = standing outside, 5 = standing in town; just out of town before the first step the server still says 5, measured); town is blocked separately by level id
+    if (dm_hud_area_is_town(dm_unit_level(pl))) return;
+    if (((uint64_t (*)(void))(b + 0x2aa7c0))()) { if (w_ph == W_IDLE) w_why(b, pl, has, t, 1, "手上拿着物品"); return; }   // 城里不放；手上拿着东西不放 | no cast in town; no cast with an item on the cursor
     static int retry = -1; if (retry < 0) retry = cfg("DM_AUTOBUFF_RETRY", 75);
     { static uint32_t last_sig; equip_ok(b, pl, 0); if (g_hand_sig != last_sig) { last_sig = g_hand_sig; memset(g_stop, 0, sizeof g_stop); memset(g_fail, 0, sizeof g_fail); } }   // 手上的装备变了：之前判「用不了 / 连败」的重新算 | held gear changed: re-evaluate those previously judged "unusable / failing repeatedly"
     int mana = ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 8, 0);
@@ -207,13 +228,15 @@ void dm_autobuff_pump(uint8_t *b, uint64_t pl) {
         return; }
     // 第二笔：当前这套补不了、副手那套给的 → 条件都满足就起一轮「换过去 → 补 → 换回」
     // Part 2: cannot be recast with the current set but granted by the off-hand set → if all conditions hold, start one round of "swap over → recast → swap back"
-    if (w_ph != W_IDLE || g_wait >= 0 || t < w_next || wset < 0 || dm_swapskill_busy()) return;
-    w_n = 0; for (int i = 0; i < NAB && w_n < 6; i++) { if (has[i] || g_stop[i] || w_fail[i] >= 2 || skipped(k_ab[i].skill)) continue;
+    if (w_ph != W_IDLE || g_wait >= 0 || t < w_next) return;
+    if (wset < 0) { w_why(b, pl, has, t, 2, "读不到当前武器组"); return; }
+    if (dm_swapskill_busy()) { w_why(b, pl, has, t, 3, "副手组技能的一键放正在进行"); return; }
+    w_n = 0; for (int i = 0; i < NAB && w_n < 6; i++) { if (has[i] || g_stop[i] || t < w_until[i] || skipped(k_ab[i].skill)) continue;
         uint64_t node = own_node(pl, k_ab[i].skill); if (node && eff_level(b, pl, node) > 0) continue;   // 当前这套就能放的归第一笔 | anything the current set can cast belongs to part 1
         if (swap_gives(b, pl, k_ab[i].skill)) w_list[w_n++] = i; }
-    if (!w_n) return;
+    if (!w_n) { int cooling = 0; if (w_due(b, pl, has, t, &cooling) == 0 && cooling && (!w_said[5] || t - w_said[5] >= 250)) { w_said[5] = t; LOG("增益自动补：副手组的增益要补，但换武器连败后在歇（%d 个）", cooling); } return; }
     { int lf = ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 6, 0) >> 8, mx = ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 7, 0) >> 8;   // 换走期间主手 / 盾加的生命上限没了、当前生命会被截到新上限，换回不回补：血量不到上限的一半（DM_AUTOBUFF_SWAPLIFE，百分数）时不换 | while swapped away the max Life from main hand / shield is gone, current Life is clamped to the new max and not restored on swap back: do not swap when Life is below half of max (DM_AUTOBUFF_SWAPLIFE, percent)
-      if (mx > 0 && (long long)lf * 100 < (long long)mx * swaplife) return; }
+      if (mx > 0 && (long long)lf * 100 < (long long)mx * swaplife) { char m[64]; snprintf(m, sizeof m, "生命 %d / %d 不到上限的 %d%%", lf, mx, swaplife); w_why(b, pl, has, t, 4, m); return; } }
     int en = enemy_near(b, pl, safe); if (en >= 0) { static uint32_t said; if (!said || t - said > 250) { said = t; LOG("增益自动补：副手组的增益要补，但 %d 格内有敌对怪（最近 %d 格），先不换武器", safe, en); } return; }
     w_ph = W_OUT; w_from = wset; w_t0 = w_start = t; w_tries = 1; w_life0 = ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 6, 0) >> 8; w_lr0[0] = lr_skill(pl, 0); w_lr0[1] = lr_skill(pl, 1);
     { char bf[120]; int o = 0; for (int k = 0; k < w_n; k++) o += snprintf(bf + o, sizeof bf - o, " %s", k_ab[w_list[k]].nm); LOG("增益自动补：拍 %u 副手组给的增益不在身上（%s）→ 换武器（当前第 %d 组，生命 %d / 上限 %d，左键技能 %d、右键技能 %d）", t, bf, wset, w_life0, ((int (*)(uint64_t, int, int))(b + 0x5b9290))(pl, 7, 0) >> 8, w_lr0[0], w_lr0[1]); }

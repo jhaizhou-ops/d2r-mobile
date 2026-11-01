@@ -48,3 +48,4 @@ int main(int argc,char **argv) {
 }
 
 int dm_swapskill_equipped(int32_t item) { (void)item; return 0; }   /* 副手组技能（宿主 dm_actions.c）：单测里没有穿着的物品 | Secondary weapon set skills (host dm_actions.c): there are no worn items in the unit test */
+int dm_swapskill_offhand_gives(int skill) { (void)skill; return 0; }

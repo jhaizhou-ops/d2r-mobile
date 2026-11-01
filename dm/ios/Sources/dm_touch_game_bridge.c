@@ -77,7 +77,8 @@ static int skill_live(const unsigned char *b,uint32_t id,int32_t item) {
         int lv=*(int32_t*)(n+0x38); if(item==-1)lv+=((int(*)(uint64_t,uint64_t,int))(b+0x5b1710))(pl,n,0);
         int cap=**(int32_t**)(*(uint64_t*)(b+0x2d64a18+(uint64_t)ver*16)+0x1500); if(lv<0)lv=0; if(lv>cap)lv=cap;
         return lv>0; }
-    { int dm_swapskill_equipped(int32_t); return item!=-1 && dm_swapskill_equipped(item); }   /* 副手组技能：物品还穿在换手那组上 = 按下会先换武器再放（dm_actions.c），照常显示、角标「II」 | Off-hand set skill: the item is still worn on the weapon-swap set = pressing will swap weapons first and then cast (dm_actions.c); shown as usual, with corner badge "II" */
+    /* 战争召唤这类（物品 -1）：换手那组给 = 按下会先换武器再放，照常显示 | Call to Arms style (item -1): granted by the swap set = a press swaps weapons first, shown as usual */
+    { int dm_swapskill_equipped(int32_t),dm_swapskill_offhand_gives(int); return item!=-1 ? dm_swapskill_equipped(item) : dm_swapskill_offhand_gives((int)id); }   /* 副手组技能：物品还穿在换手那组上 = 按下会先换武器再放（dm_actions.c），照常显示、角标「II」 | Off-hand set skill: the item is still worn on the weapon-swap set = pressing will swap weapons first and then cast (dm_actions.c); shown as usual, with corner badge "II" */
 }
 static void binding_getter(const uint64_t *regs) {
     const module_t *m=main_module;

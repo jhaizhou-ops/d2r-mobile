@@ -35,6 +35,8 @@ static int cap=20, equipped;
 static uint64_t player_lookup(uint32_t id) { (void)id; return (uint64_t)player; }
 static int equip_bonus(uint64_t pl,uint64_t n,int x) { (void)pl;(void)n;(void)x;return 0; }
 int dm_swapskill_equipped(int32_t item) { return item==42 && equipped; }
+static int offgives;
+int dm_swapskill_offhand_gives(int skill) { return skill==149 && offgives; }
 static void putptr(void *p,void *v) { memcpy(p,&v,8); }
 ''' + '\n' + predicate + r'''
 static int count, bad;
@@ -55,6 +57,8 @@ int main(void) {
     check("missing learned skill",base,36,-1,0);
     check("removed item skill",base,36,42,0);
     equipped=1;check("still equipped offhand skill",base,36,42,1);equipped=0;
+    check("swap-set oskill absent",base,149,-1,0);
+    offgives=1;check("swap-set oskill (Call to Arms)",base,149,-1,1);check("oskill with an item id",base,149,42,0);offgives=0;
     check("unrelated monster skill",base,365,-1,0);
     check("unknown id",base,999,-1,0);
     putptr(list,node);putptr(node,row);*(int16_t *)row=36;*(int32_t *)(node+0x38)=1;*(int32_t *)(node+0x44)=-1;

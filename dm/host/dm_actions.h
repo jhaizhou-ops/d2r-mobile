@@ -71,3 +71,4 @@ uint64_t dm_swapskill_filter(uint64_t buttons);   // 取手柄状态处（hle_hi
 void dm_swapskill_srv_wset(int w);                // 服务端拍（diag.c hud_tick）发布当前武器组 0 / 1 | the server tick (diag.c hud_tick) publishes the current weapon set 0 / 1
 int dm_swapskill_slot(int slot, int *charges);    // 技能钮显示：1 = 技能在另一组（「II」角标），2 = 充能技能（*charges = 剩余次数） | skill button display: 1 = the skill is in the other set ("II" badge), 2 = charged skill (*charges = remaining charges)
 int dm_swapskill_equipped(int32_t item_id);       // 这件物品身上穿着（含换手那组） | this item is worn on the body (including the weapon-swap set)
+int dm_swapskill_offhand_gives(int skill);         // 换手那组的装备给这个非职业技能（战争召唤等，绑定里物品 -1） | the gear in the weapon-swap set grants this non-class skill (Call to Arms and the like; item -1 in the binding)
