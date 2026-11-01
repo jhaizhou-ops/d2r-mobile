@@ -3,6 +3,7 @@ DM_ROOT ?= $(HOME)/dm-work
 # dm/host unit tests in one command: make -C dm/host/tests run (takes seconds; build output goes to build/ and is not committed)
 PY ?= $(DM_ROOT)/build/cache/dm/venv/bin/python
 EXEFS ?= $(DM_ROOT)/data/switch/3.3.94012/Update/ExeFS
+ROMFS ?= $(or $(DM_ROMFS_SRC),$(DM_ROOT)/data/switch/3.3.94012/Update/RomFS)
 B = build
 MOVIE_PACKAGES = libavformat libavcodec libavutil libswscale
 MOVIE_TEST_FLAGS ?= -O1
@@ -26,6 +27,7 @@ run: \
 	$(B)/t_hid_script \
 	$(B)/t_hud_dead \
 	$(B)/t_i18n \
+	$(B)/t_legend \
 	$(B)/t_minimap_lift \
 	$(B)/t_loader_weak \
 	$(B)/t_mac_overlay \
@@ -51,7 +53,9 @@ run: \
 	$(B)/t_thread_leak \
 	$(B)/t_touch \
 	$(B)/t_touch_mac \
+	$(B)/t_ui_move \
 	$(B)/t_unit_level \
+	$(B)/t_vault_icons \
 	$(B)/t_widestash_restore \
 	$(B)/t_freetp_zr \
 	$(B)/t_widget
@@ -99,6 +103,9 @@ run: \
 	$(B)/t_widestash_restore
 	$(B)/t_freetp_zr
 	$(B)/t_modetx
+	$(B)/t_ui_move
+	$(B)/t_legend
+	$(B)/t_vault_icons
 	$(B)/t_padmap
 	$(B)/t_unit_level
 	$(B)/t_widget
@@ -219,3 +226,14 @@ $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h | $(B)
 
 $(B)/t_rift_hud: t_rift_hud.m ../../ios/Sources/dm_rift_hud.m ../../ios/Sources/dm_rift_hud.h ../dm_rift.h | $(B)
 	clang -O1 -Wall -Werror -Wno-deprecated-declarations -fobjc-arc -I.. -framework Cocoa -framework QuartzCore -framework CoreText -o $@ t_rift_hud.m ../../ios/Sources/dm_rift_hud.m
+
+$(B)/t_ui_move: t_ui_move.c ../dm_cursor.c $(wildcard ../*.h) | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -Wl,-dead_strip -o $@ t_ui_move.c
+$(B)/t_legend: t_legend.c ../dm_padmode.c $(wildcard ../*.h) | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -Wl,-dead_strip -o $@ t_legend.c
+$(B)/t_vault_icons: t_vault_icons.c ../dm_vault_ui.c ../dm_vault_tab.h $(wildcard ../*.h) | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -Wl,-dead_strip -o $@ t_vault_icons.c
+# 新检出尚无仓库表头时，复用宿主生成规则，只读玩家本机的游戏文件，生成物不入库。
+# On a fresh checkout, reuse the host generator with the player's local game files; generated output stays untracked.
+../dm_vault_tab.h: ../../ios/tools/gen_vault_table.py
+	$(MAKE) -C .. dm_vault_tab.h DM_ROOT="$(DM_ROOT)" ROMFS="$(ROMFS)"

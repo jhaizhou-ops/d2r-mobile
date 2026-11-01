@@ -131,7 +131,9 @@ static void vu_tile(uint8_t *b, uint64_t cell, const char *tile, const vt_row *r
     static struct { dm_wref r; const char *icon; } cache[VPER + VSET_ROWS * VSET_N]; int ci = -1, fr = -1;   // 图标控件 → 上次换上的图（带界面代号：重建后旧条目取到 0、腾给新控件） | Icon widget → the image last swapped in (with UI generation: after a rebuild, old entries read 0 and are freed up for new widgets)
     for (int i = 0; i < (int)(sizeof cache / sizeof cache[0]); i++) { uint64_t cw = dm_wref_get(&cache[i].r); if (cw == im) { ci = i; break; } if (fr < 0 && !cw) fr = i; }
     if (ci < 0 && fr >= 0) { ci = fr; dm_wref_set(&cache[ci].r, im); cache[ci].icon = NULL; }
-    if (ci >= 0 && cache[ci].icon != r->icon) { cache[ci].icon = r->icon; vu_image(b, im, r->icon); *(int32_t *)(im + 0x70) = 0; *(int32_t *)(im + 0x74) = 0; *(float *)(im + 0x80) = 1.0f; }
+    // 同地址也可能是新控件；尺寸为零时重试，避免空图或尚未加载成功的图被当作缓存命中。
+    // A new widget can reuse the same address. Retry an empty image instead of treating it as a cache hit.
+    if (ci >= 0 && (cache[ci].icon != r->icon || *(int32_t *)(im + 0x78) <= 0 || *(int32_t *)(im + 0x7c) <= 0)) { cache[ci].icon = r->icon; vu_image(b, im, r->icon); *(int32_t *)(im + 0x70) = 0; *(int32_t *)(im + 0x74) = 0; *(float *)(im + 0x80) = 1.0f; }
     int bw = *(int32_t *)(box + 0x78), bh = *(int32_t *)(box + 0x7c), iw = *(int32_t *)(im + 0x78), ih = *(int32_t *)(im + 0x7c);
     if (iw > 0 && ih > 0 && bw > 0 && bh > 0) { float s = (float)bw / iw < (float)bh / ih ? (float)bw / iw : (float)bh / ih; if (s > 1.0f) s = 1.0f;
         *(float *)(im + 0x80) = s; vu_move(im, (int)((bw - iw * s) / 2), (int)((bh - ih * s) / 2)); }

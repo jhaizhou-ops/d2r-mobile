@@ -296,6 +296,7 @@ uint64_t svc_host_call(int num, uint64_t *regs) {
     case SVC_HOST_MERC_SLOT: { void svc_merc_slot(uint64_t *); svc_merc_slot(regs); return 1; }
     case SVC_HOST_MERC_SLOT_CL: { void svc_merc_slot_cl(uint64_t *); svc_merc_slot_cl(regs); return 1; }
     case SVC_HOST_CAM_AHEAD: { void svc_cam_ahead(uint64_t *); svc_cam_ahead(regs); return 1; }
+    case SVC_HOST_LEGEND_APPEND: { void svc_legend_append(uint64_t *); svc_legend_append(regs); return 1; }
     }
     return 0;
 }
