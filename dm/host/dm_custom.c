@@ -222,7 +222,10 @@ void dm_custom_ui_pump(unsigned long long root) {
       if (dm_wref_get(&sel_sp) != sp) { dm_wref_set(&sel_sp, sp); sel = 0; }
       uint64_t dm = find_w(sp, "TouchCustomSel", 0), tw = 0, cw = 0; char nm[64];
       if (pad) { uint64_t ev = dm_padmode_page_keys(DM_BTN_UP | DM_BTN_DOWN | DM_BTN_A);
-          if (ev & DM_BTN_DOWN) sel = sel + 1 < NK ? sel + 1 : sel; else if (ev & DM_BTN_UP) sel = sel > 0 ? sel - 1 : 0;
+          // 上下键跳过页上没有的行（安卓导入包不出 iCloud 行，touch_layout.py _CUSTOM_HIDDEN）：停在没有的行上，选中框会消失，A 也没处落
+          // Up / down skip rows the page does not have (the Android import pack has no iCloud row, touch_layout.py _CUSTOM_HIDDEN): stopping on a missing row would hide the selection frame and leave A nowhere to land
+          int d = (ev & DM_BTN_DOWN) ? 1 : (ev & DM_BTN_UP) ? -1 : 0;
+          for (int i = sel + d; d && i >= 0 && i < NK; i += d) { snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[i]); if (find_w(sp, i == 0 ? k_lang_box[LANG_N - 1] : nm, 0)) { sel = i; break; } }
           snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[sel]); cw = find_w(sp, sel == 0 ? k_lang_box[LANG_N - 1] : nm, 0); snprintf(nm, sizeof nm, "TouchCustom_%s_Text", k_keys[sel]); tw = find_w(sp, nm, 0);   // 语言行：框住标签到最右那一格 | Language row: box from the label to the rightmost cell
           if ((ev & DM_BTN_A) && cw && dm_wref_get(&seen[sel]) == cw) {
               if (sel == K_VOICE || sel == K_Q3D || sel == K_TOUCH_SWAP) { int p0 = atomic_load(&g_pend[sel]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[sel]); atomic_store(&g_pend[sel], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, rev_box(sel), 0); if (z) set_toggle(z, sh); }
