@@ -249,7 +249,14 @@ void dm_custom_ui_pump(unsigned long long root) {
       if (pad && tw && cw) { uint64_t rw = find_w(sp, "TouchCustomRows", 0), view = rw ? *(uint64_t *)(rw + 0x30) : 0, sv = view ? *(uint64_t *)(view + 0x30) : 0; static uint64_t lf; uint64_t dm_guest_frame(void); uint64_t f = dm_guest_frame();
           if (sv && f - lf >= 4) { int32_t *t = (int32_t *)(tw + 0x70), *c = (int32_t *)(cw + 0x70); int top = (t[1] < c[1] ? t[1] : c[1]) - 10, bot = (t[1] + t[3] > c[1] + c[3] ? t[1] + t[3] : c[1] + c[3]) + 10;
               int off = -*(int32_t *)(view + 0x74), vh = *(int32_t *)(sv + 0x7c); if (vh <= 0) vh = 1260; void dm_ui_wheel_on(uint64_t, int); if (sel == 0) top = 0;   /* 选回第一行：一直滚到最顶，把标题行露出来 | selection back on the first row: scroll all the way to the top so that the header row is revealed */
-              if (top < off) { lf = f; dm_ui_wheel_on(sv, 1); } else if (bot > off + vh) { lf = f; dm_ui_wheel_on(sv, -1); } } } }
+              // 滚到头了还差一点（最后一行「暗处加亮」整行比滚动区最底还低 24 单位）：同方向连着两格已滚量都没变就停，换行再算。不停的话每 4 帧发一次鼠标移动 + 滚轮，
+              // iPhone 上把原版页面搅得自己往下滚、在暂停菜单和选项之间来回跳
+              // Scrolled to the end and still a little short (the last row "Brighten dark places" ends 24 units below the bottom of the scroll area): stop once two notches in a row in the same
+              // direction leave the scrolled amount unchanged; start again on another row. Otherwise a mouse move + wheel goes out every 4 frames, which on iPhone made the original page scroll by itself and jump between the pause menu and the options
+              static int lo, ldir, lsel = -1, stuck; int dir = top < off ? 1 : bot > off + vh ? -1 : 0;
+              if (sel != lsel || dir != ldir || off != lo) stuck = 0; else if (dir) stuck++;
+              lsel = sel; ldir = dir; lo = off;
+              if (dir && stuck < 2) { lf = f; dm_ui_wheel_on(sv, dir); } } } }
     radio_pump(sp, 0, k_lang_box, k_lang_name, LANG_N, &seen[0]);   // 语言行：五项单选，存一个键 lang | language row: five-option radio, one key lang
     radio_pump(sp, K_CAM, k_cam_box, k_cam_name, CAM_N, &seen[K_CAM]);   // 镜头视角：三项单选，存一个键 cam | camera view: three-option radio, one key cam
     radio_pump(sp, K_BRIGHT, k_bright_box, k_bright_name, BRIGHT_N, &seen[K_BRIGHT]);   // 暗处加亮：三项单选，存一个键 bright | brightening: three-option radio, one key bright
