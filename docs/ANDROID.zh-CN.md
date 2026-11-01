@@ -43,6 +43,7 @@ python3 dm/tools/d2rm_android.py <游戏文件目录> <输出目录>
 android/out/          改写后的游戏程序与配套表
 android/shaders/      Vulkan 着色器包（6,931 个）
 android/overlay/      触屏覆盖层、界面素材
+android/overlay_variants/  「物品注释与旧译名」打开时用的覆盖层（自定义页，重启后生效）
 android/derived.tsv   几张从游戏文件生成的数据表
 android/pack_info.txt 这份导入包是给哪个版本做的
 ```
