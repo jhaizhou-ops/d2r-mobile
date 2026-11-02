@@ -8,6 +8,8 @@ English: [HARMONYOS.md](HARMONYOS.md)
 
 使用发布页里与源码版本配套的 **unsigned HAP**。若发布页尚无该资产，请等待维护者发布，或参考[开发者构建说明](../dm/harmony/README.zh-CN.md)。不要使用别人内置游戏内容或调试签名材料的测试包。
 
+另见 [MatePad mini 实验性适配报告](devices/MATEPAD_MINI.zh-CN.md)，记录启动阻塞及个人构建的结果；不代表发布壳已兼容该设备。
+
 ## 准备
 
 - 一台支持该 HAP 最低 API 的鸿蒙手机，启用开发者模式和 USB 调试。本轮只验证了上面的 API 26 设备；系统营销版本号不能直接当成 API 版本。
