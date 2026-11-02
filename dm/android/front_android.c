@@ -51,7 +51,12 @@ uint64_t front_game_res(int docked) {
     if (e && sscanf(e, "%ux%u", &w, &h) == 2) return docked ? (uint64_t)h << 32 | w : (uint64_t)(h * 4 / 5) << 32 | (w * 4 / 5 + 3) / 4 * 4;
     int dm = atomic_load(&g_screen_w), sh = atomic_load(&g_screen_h);
     unsigned bh = docked ? 900 : 720;
-    if (dm > 0 && sh > 0 && dm * 9 > sh * 16) {
+    // 比例与 16:9 不同就按同高取屏幕比例：更宽的屏放宽（手机），更窄的屏收窄（4:3 平板，收窄后 dm_uiscreen 把界面落回 16:9、3D 铺满，与 iPad 同一规则）；
+    // 此前窄屏落到 16:9 默认值，整帧被拉伸铺满窄屏，画面瘦长
+    // When the aspect differs from 16:9, take the screen aspect at the same height: wider screens widen (phones), narrower screens narrow
+    // (a 4:3 tablet; after narrowing, dm_uiscreen lays the UI back into 16:9 and lets the 3D fill, the same rule as iPad).
+    // Narrower screens used to fall to the 16:9 default and the whole frame was stretched to fill them, elongating the picture
+    if (dm > 0 && sh > 0 && dm * 9 != sh * 16) {
         unsigned bw = (unsigned)(llround((double)bh * dm / sh / 8) * 8); if (bw > 4096) bw = 4096;
         return (uint64_t)bh << 32 | bw;
     }
