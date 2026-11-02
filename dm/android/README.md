@@ -16,6 +16,9 @@ player" below.
   platform front-end interfaces.
 - `touch_android*`: bridge to the shared `dm/ios/Sources/dm_touch_controls.c` state
   machine; `text_input_jni.c` bridges synchronous guest prompts to Android dialogs.
+- `gamepad_android.c`: physical controllers (the Android port of
+  `dm/ios/Sources/dm_gamepad.m`; merging / modes / glyphs live in the native layer,
+  the Java side only reads events).
 - `vulkan_present.*`: Android window ownership, swapchain, and presentation.
 - `../gfx/vulkan/`: NVN replay adapter and Vulkan engine.
 - `compat/`: Android implementations of the host's Apple platform interfaces.

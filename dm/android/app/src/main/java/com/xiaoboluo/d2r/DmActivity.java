@@ -9,6 +9,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.hardware.display.DisplayManager;
+import android.hardware.input.InputManager;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
@@ -20,6 +21,10 @@ import android.text.SpanWatcher;
 import android.text.Spannable;
 import android.text.Spanned;
 import android.text.TextWatcher;
+import android.util.SparseArray;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -41,13 +46,17 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Locale;
 
-public class DmActivity extends Activity implements SurfaceHolder.Callback, DisplayManager.DisplayListener {
+public class DmActivity extends Activity implements SurfaceHolder.Callback, DisplayManager.DisplayListener, InputManager.InputDeviceListener {
     static native int nativeStart(String filesDir, String extDir, String romfsSrc, String lang);
     static native void nativeSurface(Object surface, int w, int h);
     static native void nativeRefresh(float hz);
     static native void nativeTouch(int n, int[] ids, float[] xs, float[] ys);
     static native void nativeFocus(int ev);
     static native void nativeTextResult(long id, boolean accepted, String text);
+    // 一只手柄的现值（电平）整只送原生层（gamepad_android.c）：deviceId = InputDevice 的 id；kind / buttons 见下面的常量
+    // One controller's current values (levels) are handed over whole (gamepad_android.c): deviceId = the InputDevice id; kind / buttons as in the constants below
+    static native void nativePad(int deviceId, int kind, int buttons, float lx, float ly, float rx, float ry);
+    static native void nativePadGone(int deviceId);
 
     private static WeakReference<DmActivity> current = new WeakReference<>(null);
     private static volatile int bootFailure;
@@ -61,6 +70,138 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     private boolean libraryLoaded;
     private boolean resumed;
     private DisplayManager displays;
+    private InputManager inputManager;
+    private final SparseArray<PadState> pads = new SparseArray<>();
+
+    // ---- 手柄（iOS GameController 那层的安卓对接；合并 / 模式 / 键帽逻辑都在原生 gamepad_android.c）----
+    // ---- Controllers (the Android counterpart of iOS's GameController layer; merging / modes / glyphs live in native gamepad_android.c) ----
+    // 通用键位：与 gamepad_android.c 的 GPB_* 同一组数字。面键是「按位置」的（下 = BUTTON_A、右 = BUTTON_B、左 = BUTTON_X、上 = BUTTON_Y），
+    // 位置 → 游戏键的排法按设备类型在原生层做。
+    // Generic bits: the same numbers as GPB_* in gamepad_android.c. Face buttons are positional (bottom = BUTTON_A, right = BUTTON_B, left =
+    // BUTTON_X, top = BUTTON_Y); how positions map to game buttons is decided per device kind in the native layer.
+    private static final int GPB_A = 1, GPB_B = 2, GPB_X = 4, GPB_Y = 8, GPB_L1 = 16, GPB_R1 = 32, GPB_L2 = 64, GPB_R2 = 128,
+        GPB_LS = 256, GPB_RS = 512, GPB_START = 1024, GPB_BACK = 2048, GPB_DL = 4096, GPB_DU = 8192, GPB_DR = 16384, GPB_DD = 32768;
+    private static final int KIND_OTHER = 0, KIND_NINTENDO = 1, KIND_XBOX = 2, KIND_PS = 3;
+
+    /** 一只手柄的现值：按键电平 + 四根轴（±1，上为正），有变化才送原生层。 | One controller's current values: button levels + four axes (±1, up positive), handed over only on change. */
+    private static final class PadState {
+        int kind, buttons, sentButtons = -1;
+        float lx, ly, rx, ry, sentLx, sentLy, sentRx, sentRy;
+        boolean sent;
+        void setBit(int bit, boolean down) { if (down) buttons |= bit; else buttons &= ~bit; }
+        void publish(int id) {
+            if (sent && buttons == sentButtons && lx == sentLx && ly == sentLy && rx == sentRx && ry == sentRy) return;
+            DmActivity.nativePad(id, kind, buttons, lx, ly, rx, ry);
+            sentButtons = buttons; sentLx = lx; sentLy = ly; sentRx = rx; sentRy = ry; sent = true;
+        }
+    }
+
+    /** 手柄键（按钮 / 十字键 / 开始 / 选择）：返回通用键位，0 = 不是手柄键。BACK / MENU 只认真实手柄设备（见 dispatchKeyEvent），不算注入。 | A controller key (buttons / D-pad / start / select): returns the generic bit, 0 = not a controller key. BACK / MENU count only from real controller devices (see dispatchKeyEvent), never from injection. */
+    private static int padKeyBit(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_BUTTON_A: return GPB_A;
+            case KeyEvent.KEYCODE_BUTTON_B: return GPB_B;
+            case KeyEvent.KEYCODE_BUTTON_X: return GPB_X;
+            case KeyEvent.KEYCODE_BUTTON_Y: return GPB_Y;
+            case KeyEvent.KEYCODE_BUTTON_L1: return GPB_L1;
+            case KeyEvent.KEYCODE_BUTTON_R1: return GPB_R1;
+            case KeyEvent.KEYCODE_BUTTON_L2: return GPB_L2;
+            case KeyEvent.KEYCODE_BUTTON_R2: return GPB_R2;
+            case KeyEvent.KEYCODE_BUTTON_THUMBL: return GPB_LS;
+            case KeyEvent.KEYCODE_BUTTON_THUMBR: return GPB_RS;
+            case KeyEvent.KEYCODE_BUTTON_START: return GPB_START;
+            case KeyEvent.KEYCODE_BUTTON_SELECT: return GPB_BACK;
+            case KeyEvent.KEYCODE_DPAD_LEFT: return GPB_DL;
+            case KeyEvent.KEYCODE_DPAD_UP: return GPB_DU;
+            case KeyEvent.KEYCODE_DPAD_RIGHT: return GPB_DR;
+            case KeyEvent.KEYCODE_DPAD_DOWN: return GPB_DD;
+            case KeyEvent.KEYCODE_MENU: return GPB_START;
+            case KeyEvent.KEYCODE_BACK: return GPB_BACK;
+            default: return 0;
+        }
+    }
+
+    /** 手柄类型（面键排法与键帽样式，原生层用）：vendor id 认不出的再用名字认。 | The controller kind (face layout and glyph style, used by the native layer): by vendor id first, then by name. */
+    private static int deviceKind(InputDevice device) {
+        if (device == null) return KIND_OTHER;
+        int vendor = device.getVendorId();
+        if (vendor == 0x054c) return KIND_PS;
+        if (vendor == 0x045e) return KIND_XBOX;
+        if (vendor == 0x057e) return KIND_NINTENDO;
+        String name = device.getName() == null ? "" : device.getName().toLowerCase(Locale.ROOT);
+        if (name.contains("xbox")) return KIND_XBOX;
+        if (name.contains("dualsense") || name.contains("dualshock")) return KIND_PS;
+        if (name.contains("switch") || name.contains("nintendo") || name.contains("pro controller")) return KIND_NINTENDO;
+        return KIND_OTHER;
+    }
+
+    private PadState padOf(int id, InputDevice device) {
+        PadState pad = pads.get(id);
+        if (pad == null) { pad = new PadState(); pad.kind = deviceKind(device); pads.put(id, pad); }
+        return pad;
+    }
+
+    // 手柄按键：按设备记电平，整只手柄现值送原生层。手柄上重复的 DOWN（按住不放）不改电平，publish 里比过就不再送。
+    // 来源只认真实手柄（SOURCE_GAMEPAD / SOURCE_JOYSTICK）；没有设备的 BUTTON_*/十字键 = adb `input keyevent` 注入（真设备都带
+    // deviceId ≥ 0），同 iOS dm_gamepad_inject 的测试路。BACK / MENU 不走注入：手势返回也长这样，吃了它返回手势就失灵。
+    // Controller buttons: levels per device, the whole controller handed to the native layer. Repeated DOWNs (a held button) do not change the
+    // level, and publish already compares before sending. Only real controllers are accepted (SOURCE_GAMEPAD / SOURCE_JOYSTICK); BUTTON_* / D-pad
+    // keys without a device are adb `input keyevent` injection (real devices always have deviceId >= 0), the same test path as iOS dm_gamepad_inject.
+    // BACK / MENU never come from injection: the back gesture looks exactly like that, and swallowing it would break the gesture.
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (started) {
+            int bit = padKeyBit(event.getKeyCode());
+            InputDevice device = event.getDevice();
+            boolean fromPad = device != null && (device.getSources() & (InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_JOYSTICK)) != 0;
+            boolean injected = (device == null || event.getDeviceId() <= 0)
+                && event.getKeyCode() != KeyEvent.KEYCODE_BACK && event.getKeyCode() != KeyEvent.KEYCODE_MENU;
+            if (bit != 0 && (fromPad || injected) && (event.getAction() == KeyEvent.ACTION_DOWN || event.getAction() == KeyEvent.ACTION_UP)) {
+                PadState pad = padOf(event.getDeviceId(), device);
+                pad.setBit(bit, event.getAction() == KeyEvent.ACTION_DOWN);
+                pad.publish(event.getDeviceId());
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    // 摇杆 / 十字键帽 / 扳机轴：与 iOS 相反安卓「上为负」，这里翻成正，原生层照 GameController 的值乘 32767。模拟扳机轴过半算按下，
+    // 与数字扳机的键位取或（不少手柄两样都报）。
+    // Sticks / hat / trigger axes: Android is "up is negative", opposite to iOS, so flip to positive here; the native layer multiplies by 32767 as
+    // GameController values. An analog trigger past half counts as pressed, ORed with the digital trigger's key (many pads report both).
+    @Override public boolean onGenericMotionEvent(MotionEvent event) {
+        if (started && event.getActionMasked() == MotionEvent.ACTION_MOVE
+                && (event.getSource() & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_GAMEPAD)) != 0) {
+            PadState pad = padOf(event.getDeviceId(), event.getDevice());
+            pad.lx = event.getAxisValue(MotionEvent.AXIS_X);
+            pad.ly = -event.getAxisValue(MotionEvent.AXIS_Y);
+            pad.rx = event.getAxisValue(MotionEvent.AXIS_Z);
+            pad.ry = -event.getAxisValue(MotionEvent.AXIS_RZ);
+            float hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X), hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y);
+            pad.setBit(GPB_DL, hatX < -0.5f); pad.setBit(GPB_DR, hatX > 0.5f);
+            pad.setBit(GPB_DU, hatY < -0.5f); pad.setBit(GPB_DD, hatY > 0.5f);
+            pad.setBit(GPB_L2, event.getAxisValue(MotionEvent.AXIS_LTRIGGER) > 0.5f);
+            pad.setBit(GPB_R2, event.getAxisValue(MotionEvent.AXIS_RTRIGGER) > 0.5f);
+            pad.publish(event.getDeviceId());
+            return true;
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    private static String kindName(int kind) {
+        return kind == KIND_XBOX ? "Xbox" : kind == KIND_PS ? "PlayStation" : kind == KIND_NINTENDO ? "Nintendo" : "other";
+    }
+
+    @Override public void onInputDeviceAdded(int id) {
+        InputDevice device = InputDevice.getDevice(id);
+        if (device != null && (device.getSources() & (InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_JOYSTICK)) != 0)
+            android.util.Log.i("dm", String.format(Locale.ROOT, "手柄：连上 %s（vendor %04x product %04x）→ %s",
+                device.getName(), device.getVendorId(), device.getProductId(), kindName(deviceKind(device))));
+    }
+    @Override public void onInputDeviceRemoved(int id) {
+        if (pads.indexOfKey(id) >= 0) { pads.remove(id); if (started) nativePadGone(id); android.util.Log.i("dm", "手柄：断开 device " + id); }
+    }
+    @Override public void onInputDeviceChanged(int id) { pads.remove(id); }
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -73,6 +214,8 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         current = new WeakReference<>(this);
         displays = getSystemService(DisplayManager.class);
         if (displays != null) displays.registerDisplayListener(this, null);
+        inputManager = getSystemService(InputManager.class);
+        if (inputManager != null) inputManager.registerInputDeviceListener(this, null);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getAttributes().layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         view = new SurfaceView(this);
@@ -393,7 +536,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     @Override protected void onPause() { resumed = false; if (inputDialog != null) inputDialog.dismiss(); releaseTouches(); if (touchOverlay != null) touchOverlay.setInputEnabled(false); if (started) nativeFocus(0); super.onPause(); }
     @Override protected void onStart() { super.onStart(); if (started) nativeFocus(2); }
     @Override protected void onStop() { if (started) nativeFocus(1); com.xiaoboluo.d2r.widget.HeroWidgetProvider.requestUpdate(this); super.onStop(); }
-    @Override protected void onDestroy() { if (displays != null) displays.unregisterDisplayListener(this); if (inputDialog != null) inputDialog.dismiss(); if (current.get() == this) current.clear(); super.onDestroy(); }
+    @Override protected void onDestroy() { if (displays != null) displays.unregisterDisplayListener(this); if (inputManager != null) inputManager.unregisterInputDeviceListener(this); if (inputDialog != null) inputDialog.dismiss(); if (current.get() == this) current.clear(); super.onDestroy(); }
     @Override public void onWindowFocusChanged(boolean f) { super.onWindowFocusChanged(f); if (f) immersive(); else releaseTouches(); }
 
     @Override public void surfaceCreated(SurfaceHolder h) {}

@@ -75,6 +75,7 @@ endforeach()
 set(ANDROID_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/front_android.c
   ${CMAKE_CURRENT_SOURCE_DIR}/touch_android.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/gamepad_android.c
   ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_present.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/compat/clonefile.c
   ${CMAKE_CURRENT_SOURCE_DIR}/compat/digest.c

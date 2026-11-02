@@ -342,6 +342,7 @@ JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeTouch(JNIEnv *env
 JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeFocus(JNIEnv *env, jclass cls, jint ev) {
     (void)env; (void)cls;
     dm_android_touch_focus(ev == 2 || ev == 3);
+    if (ev == 0) { void dm_gamepad_reset(void); dm_gamepad_reset(); }   // 失焦：手柄的键和摇杆一并清零——按着键切走、在后台松开，回来不会补「松开」（gamepad_android.c，同 iOS front_ios_focus_event） | Focus lost: zero the controller buttons and sticks too -- a button held while switching away and released in the background replays no "release" (gamepad_android.c, as iOS front_ios_focus_event)
     if (lifecycle_ready()) {
         dm_lifecycle_post(&g_lifecycle, ev);
         __android_log_print(ANDROID_LOG_INFO, "dm-lifecycle", "UI posted event=%d", ev);

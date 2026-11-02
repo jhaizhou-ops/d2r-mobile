@@ -9,6 +9,7 @@
 #include "../ios/Sources/dm_touch_native_art.h"
 #include <pthread.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -49,6 +50,27 @@ static unsigned seen_world, seen_mouse, seen_tab, seen_use, seen_ident, seen_lon
    without it the front end is the original controller page and keeps the navigation keys. */
 static int frontend, fe_slot = -1, fe_drag;
 static float fe_x0, fe_y0;
+/* 手柄模式（gamepad_android.c 模式回调）：不画触屏控件、底栏，触屏控件层的输入整根吞掉（同 iOS front_ios.m 的 _padMode 藏 _overlay）。
+   切换时取消在途手势：控件层随即隐藏，按到一半的拖放不能悬在半路 */
+/* Controller mode (gamepad_android.c's mode callback): no touch controls or bottom bar are drawn, and the touch control layer's input is swallowed
+   whole (as iOS front_ios.m's _padMode hides _overlay). In-flight gestures are cancelled on the switch: the control layer is about to hide, and a
+   half-finished drag must not be left hanging */
+static int pad_mode;
+static uint64_t swallow;   // 手柄模式 / 切换事务进行中落下的手指槽位集：整根吞掉（同 iOS front_ios.m 的 _swallow） | Finger slots that landed in controller mode / during a switch transaction: swallowed whole (as iOS front_ios.m's _swallow)
+static void cancel_locked(void);
+void dm_android_touch_pad_mode(int pad) {
+    pthread_mutex_lock(&lock);
+    if (pad_mode != pad) { pad_mode = pad; cancel_locked(); head = tail = 0; }
+    pthread_mutex_unlock(&lock);
+}
+/* 面板 / 读取画面 / 前端页开着（非零）：gamepad_android.c 的 dm_front_navigation 读它，只在游戏态接管 ZR（同 iOS front_ios.m 的 g_nav_pub）。
+   在 uimsg 回调（游戏主线程）里更新 */
+/* A panel / loading screen / front-end page is open (non-zero): read by dm_front_navigation of gamepad_android.c, which takes over ZR only in the
+   gameplay state (as iOS front_ios.m's g_nav_pub). Updated in the uimsg callback (game main thread) */
+static _Atomic int g_nav_pub;
+int dm_android_touch_navigation(void) { return atomic_load(&g_nav_pub); }
+void dm_gamepad_touched(void);   // gamepad_android.c：碰屏 → 回触屏模式。只在放掉本层锁之后调（那边会再拿本层的锁） | gamepad_android.c: screen touched -> back to touch mode. Called only after this layer's lock is dropped (that side takes this layer's lock again)
+int dm_padmode_busy(void);       // 宿主 dm_padmode.c：切换事务进行中（控件层还没露出来） | Host dm_padmode.c: a switch transaction is in progress (the control layer has not been revealed yet)
 /* 面板态的五个虚拟手柄圆钮：缺省不给（同 iOS front_ios.m navigationMode：点按 / 双击 / 拖放 / 点页签 / 面板外点按已全部替代）；DM_TOUCH_NAV_PAD=1 调试时叫回来
    The five virtual pad buttons in panel state: off by default (as iOS front_ios.m navigationMode: tap / double tap / drag / tab tap / tap outside
    the panel replace them all); DM_TOUCH_NAV_PAD=1 brings them back for debugging */
@@ -135,6 +157,7 @@ void dm_android_touch_uimsg(const char *cat, const char *act, const char *arg) {
     }
     int fe = !scene.game && touch_overlay();
     if (fe != frontend) { cancel_locked(); head = tail = 0; frontend = fe; }
+    atomic_store(&g_nav_pub, nav || fe);   // 面板 / 读取画面 / 前端页状态交给手柄层（dm_front_navigation） | the panel / loading / front-end state is handed to the controller side (dm_front_navigation)
     dm_tc_set_navigation_mode(&tc, nav);
     dm_tc_set_joy_block(&tc, !!(dm_ui_panel_state() & DM_PS_TEXT));
     /* 游戏态不要右上地图键（同 iOS front_ios.m navigationMode：点右上角小地图本身就开全屏地图，见 direct_begin）
@@ -248,8 +271,10 @@ static void point_tick(double now) {
 }
 void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     (void)guest_now;
+    dm_android_gamepad_test_pump();   // 手柄测试开关（gamepad_android.c DM_TEST_PAD）：放在拿本层锁之前——它会经模式切换回调再拿本层的锁
     pthread_mutex_lock(&lock);
     init_locked();
+    int switch_touch = 0;   // 手柄模式下有手指落下：出锁后调 dm_gamepad_touched（它要拿本层的锁） | A finger landed in controller mode: call dm_gamepad_touched after unlocking (it takes this layer's lock)
     int next_swap = dm_custom_get("touch_swap_above");
     if (next_swap != swap_above) { swap_above = next_swap; resizing = cancel = 1; }
     if (cancel) { cancel_locked(); cancel = 0; }
@@ -277,6 +302,15 @@ void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, i
     uint64_t latched[DM_TC_MAX_TOUCH] = {0};
     while (head != tail) {
         touch_event e = queue[head++ % 256];
+        /* 手柄模式下碰屏 = 回触屏模式（gamepad_android.c），这一下只做这一件事：此刻屏上是手柄版界面，触屏控件还没显示出来（布局重载要几十帧），
+           所以整根吞掉（同 iOS front_ios.m 的 _swallow）。前端页 / 面板 / 局内都一样，判断在最前（iOS 在 touchesBegan 最前）。切换事务进行中落下的
+           手指同样整根不执行（控件层还没露出来） */
+        /* Touching the screen in controller mode = back to touch mode (gamepad_android.c), and this touch does that one thing only: at this moment the
+           screen shows the controller UI and the touch controls are not up yet (the layout reload takes dozens of frames), so the whole touch is
+           swallowed (as iOS front_ios.m's _swallow). Front-end page / panels / in game all the same; the check comes first (in iOS it is first in
+           touchesBegan). Fingers landing while a switch transaction is in progress are likewise ignored whole */
+        if (e.phase == 0 && (pad_mode || dm_padmode_busy())) { swallow |= 1ull << e.slot; switch_touch |= pad_mode; continue; }
+        if (swallow & (1ull << e.slot)) { if (e.phase == 2 || e.phase == 3) swallow &= ~(1ull << e.slot); continue; }
         if (frontend) { fe_event_locked(&e); continue; }
         if (direct_event(&e) || (e.phase==0 && direct_begin(&e))) continue;
         dm_tc_finger *f = &tc.finger[e.slot];
@@ -363,6 +397,7 @@ void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, i
     if (!*lx && !*ly) { *lx = tc.lx; *ly = tc.ly; }
     if (!*rx && !*ry) { *rx = tc.rx; *ry = tc.ry; }
     pthread_mutex_unlock(&lock);
+    if (switch_touch) dm_gamepad_touched();
 }
 void dm_android_touch_layout(float out[DM_ANDROID_TOUCH_DRAW_FLOATS]) {
     pthread_mutex_lock(&lock); init_locked();
@@ -391,6 +426,7 @@ void dm_android_touch_layout(float out[DM_ANDROID_TOUCH_DRAW_FLOATS]) {
         }
         if (frontend) p[3]=0;   /* 前端页面不画控件（见 frontend） | No controls drawn on front-end pages (see frontend) */
     }
+    if (pad_mode) for (int i=0;i<23;++i) out[4+i*5+3]=0;   /* 手柄模式不画触屏控件与摇杆（gamepad_android.c 模式回调） | No touch controls or stick drawn in controller mode (gamepad_android.c's mode callback) */
     dm_tg_snapshot native; dm_touch_game_snapshot(&native);
     for (int i=0;i<6;++i) {
         float *p=out+DM_ANDROID_TOUCH_GLYPHS+i*8;
@@ -405,7 +441,7 @@ void dm_android_touch_layout(float out[DM_ANDROID_TOUCH_DRAW_FLOATS]) {
     }
     dm_hud_info h; dm_hud_get(&h);
     float *hud=out+DM_ANDROID_TOUCH_HUD;
-    hud[0]=!frontend && dm_hud_bar_visible(&h,tc.navigation_mode && !dm_tc_scene_dialog_only(&scene),hud_blocked>0);
+    hud[0]=!frontend && !pad_mode && dm_hud_bar_visible(&h,tc.navigation_mode && !dm_tc_scene_dialog_only(&scene),hud_blocked>0);
     hud[1]=h.level; hud[2]=h.exp_permille;
     for (int i=0;i<4;++i) hud[3+i]=h.belt[i];
     hud[7]=h.players; hud[8]=h.hp; hud[9]=h.hp_max; hud[10]=h.mp; hud[11]=h.mp_max;

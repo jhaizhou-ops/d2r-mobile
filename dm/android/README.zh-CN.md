@@ -9,6 +9,7 @@ English: [README.md](README.md)
 - `app/`：Java Activity、全屏 SurfaceView、触摸覆盖层及 Gradle 应用工程。
 - `jni_android.c`、`front_android.c`：启动、资源路径、生命周期及平台前端接口。
 - `touch_android*`：接入公用 `dm/ios/Sources/dm_touch_controls.c` 状态机；`text_input_jni.c` 将客体同步输入请求接到安卓系统对话框。
+- `gamepad_android.c`：实体手柄（`dm/ios/Sources/dm_gamepad.m` 的安卓移植；合并 / 模式 / 键帽在原生层，Java 侧只读事件）。
 - `vulkan_present.*`：安卓窗口引用、交换链及呈现。
 - `../gfx/vulkan/`：NVN 回放适配器和 Vulkan 引擎。
 - `compat/`：宿主 Apple 平台接口的安卓实现。
