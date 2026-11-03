@@ -3359,7 +3359,11 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     double ui_uy=0,ui_vs=1;g_ui_moff=0;g_ui_moff_addr=0;
     if(g_ui_rect_fn && orig_count==4 && state.shader[0]->inputs.size()==2 && state.stream[0].stride==20){double uh=1;g_ui_rect_fn(&ui_uy,&uh);
         if(uh>0 && uh<1){if(ui_cover_all(uh))ui_vs=1/uh;else if(ui_uy>0){auto u=state.ub[0][0];if(u.address && u.size>=64 && u.size<=4096){g_ui_moff=2*ui_uy;g_ui_moff_addr=u.address;}}}
-        if(ui_vs==1 && g_ui_moff==0)ui_uy=0;}
+        if(ui_vs==1 && g_ui_moff==0)ui_uy=0;
+        // 真全屏第一次真的挪了界面：记一行，玩家日志里能确认「界面按 16:9 贴底」这段接上了（没挪就是宿主没登记或界面这一趟没被认出来）。
+        // First real UI shift under true fullscreen: one line, so the player's log shows the "UI anchored at 16:9" path engaged (no shift = the host did not register or this pass was not recognised).
+        static bool once;if(!once && (ui_vs!=1 || g_ui_moff!=0)){once=true;xbg_logf("真全屏：界面下移 y=%.3f 高 %.3f 视口放大 %.3f",ui_uy,uh,ui_vs);}
+    }
     Commands c(true);Descriptors &d=acquire_descriptors();descriptors(d,c,false);Pass p;create_pass(p,c);
     static std::vector<VkVertexInputAttributeDescription> attributes;attributes.clear();VkVertexInputBindingDescription binding_slots[16];uint32_t binding_used=0;
     int zero_binding=-1;

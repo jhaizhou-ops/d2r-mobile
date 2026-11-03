@@ -54,8 +54,10 @@ int dm_ui_bind_active(void) { return 0; }
 int dm_belt_rows(int *expanded) { if (expanded) *expanded = 0; return 1; }
 void dm_hud_get(dm_hud_info *out) { memset(out, 0, sizeof *out); }
 int dm_custom_get(const char *key) { (void)key; return 0; }
-void dm_ui_safe_left(int units) { (void)units; }
-void dm_ui_safe_right(int units) { (void)units; }
+/* 安全区单位由桥按视图高换算后交来，用例直接读；视图矩形用例要验它。 | The bridge hands the safe-area units in after converting by the view height; the view-rectangle case reads them back. */
+static int seen_safe_left = -1, seen_safe_right = -1;
+void dm_ui_safe_left(int units) { seen_safe_left = units; }
+void dm_ui_safe_right(int units) { seen_safe_right = units; }
 int dm_touch_game_snapshot(dm_tg_snapshot *out) { memset(out,0,sizeof *out); return 0; }
 dm_ta_glyph dm_ta_skill(uint32_t id) { (void)id; return (dm_ta_glyph){.status=DM_TA_UNKNOWN,.atlas=-1}; }
 dm_ta_glyph dm_ta_current_set(const dm_tg_snapshot *s,uint64_t key,uint64_t now,int set) { (void)s; (void)key; (void)now; (void)set; return dm_ta_skill(0); }
@@ -68,7 +70,16 @@ int dm_cam_style(void) { return 0; }
 void dm_cam_tilt(float rad) { (void)rad; }
 void dm_cam_turn(float rad) { (void)rad; }
 void dm_ui_map_full(int on) { (void)on; unexpected_host_call(__func__); }
-unsigned dm_world_tap(float x,float y) { (void)x; (void)y; unexpected_host_call(__func__); return 0; }
+/* 真全屏 / 真实画面 / 界面矩形的桩：开关与读数由用例给（front_android.c 归 Lead，这里不链产品代码）。
+ * True fullscreen / real picture / UI rectangle stubs: the case supplies the switch and the readings (front_android.c is the Lead's and no product code is linked here). */
+static int test_full, test_real_w = 1000, test_real_h = 500, test_ui_x, test_ui_y = 150, test_ui_w = 1000, test_ui_h = 350;
+int front_android_full(void) { return test_full; }
+int dm_screen_real(int *w, int *h) { if (w) *w = test_real_w; if (h) *h = test_real_h; return test_real_h > 0; }
+void dm_ui_rect(int *x, int *y, int *w, int *h) { if (x) *x = test_ui_x; if (y) *y = test_ui_y; if (w) *w = test_ui_w; if (h) *h = test_ui_h; }
+/* 点世界两个入口分开记：requests 那侧视图归一化与画面归一化都要对，direct_event 那侧只有画面归一化。别的用例不该走到这里。
+ * The two world-tap entries are recorded separately: the requests side needs both the view and the picture normalisation, the direct_event side only the picture one. Other cases must not reach here. */
+static int world_tap_expected; static float tap_ux, tap_uy, tap_wx, tap_wy, map_wx, map_wy;
+unsigned dm_world_tap(float x,float y) { if (!world_tap_expected) unexpected_host_call(__func__); map_wx = x; map_wy = y; return 0; }
 int dm_world_tap_result(unsigned seq) { (void)seq; return -1; }
 uint32_t dm_ui_hit_id(void) { return 0; }
 void dm_points_get(dm_points_info *out) { memset(out,0,sizeof *out); }
@@ -89,7 +100,10 @@ int dm_ui_drop_point(float *x, float *y) { (void)x; (void)y; unexpected_host_cal
 int dm_ui_origin_point(float *x, float *y) { (void)x; (void)y; unexpected_host_call(__func__); return 0; }
 int dm_ui_bind_skill_hit(float *x, float *y) { (void)x; (void)y; unexpected_host_call(__func__); return 0; }
 void dm_ui_bind_begin(uint64_t key) { (void)key; unexpected_host_call(__func__); }
-void dm_ui_world_tap(float ux, float uy, float wx, float wy) { (void)ux; (void)uy; (void)wx; (void)wy; unexpected_host_call(__func__); }
+void dm_ui_world_tap(float ux, float uy, float wx, float wy) {
+    if (!world_tap_expected) unexpected_host_call(__func__);
+    tap_ux = ux; tap_uy = uy; tap_wx = wx; tap_wy = wy;
+}
 void dm_ui_stack_take_at(float x, float y) { (void)x; (void)y; unexpected_host_call(__func__); }
 void dm_ui_stack_cube_at(float x, float y) { (void)x; (void)y; unexpected_host_call(__func__); }
 void dm_ui_shop_buy_at(float x, float y) { (void)x; (void)y; unexpected_host_call(__func__); }
@@ -122,7 +136,10 @@ static void fixture(int navigation) {
     memset(&scene, 0, sizeof scene);
     memset(queue, 0, sizeof queue);
     head = tail = 0; ready = 0; focused = 1; cancel = resizing = ui_drag = 0;
-    width = 800; height = 375; safe_left = safe_right = safe_bottom = 0; tablet_layout = swap_above = 0;
+    /* 窗口 = 视图 = 800x375（没给视图矩形时的整屏回退）；真全屏与点世界读数回缺省。 | Window = view = 800x375 (the whole-window fallback); true fullscreen and world readings default. */
+    width = 800; height = 375; win_w = 800; win_h = 375; vr_x = vr_y = 0; vr_w = 800; vr_h = 375;
+    safe_left = safe_right = safe_bottom = 0; tablet_layout = swap_above = 0;
+    test_full = 0; world_tap_expected = 0; tap_ux = tap_uy = tap_wx = tap_wy = map_wx = map_wy = 0; seen_safe_left = seen_safe_right = -1;
     epoch = world = 1; pulse_epoch = pulse_sample = resume_sample = 0; pulse_hold_start = 0;
     seen_world = seen_mouse = seen_tab = seen_use = seen_ident = seen_long = seen_item = seen_stack = 0;
     frontend = 0; fe_slot = -1; fe_drag = 0; fe_x0 = fe_y0 = 0;
@@ -389,6 +406,66 @@ static void test_android_panel_observation(void) {
     REQUIRE(tc.navigation_mode==0 && observed_panel==0 && panel_calls==5 && map_hold==0);
 }
 
+/* 游戏视图矩形：dm_android_touch_resize 给整屏（安全区也按整屏给），dm_android_touch_view 给视图矩形；dm_tc 的布局空间是视图尺寸，
+ * 触点是窗口 dp，入队前减视图原点（真全屏下 y 可为负）；安全区只算落在视图里的那部分，并按视图高换算成 2160 高的布局单位。
+ * Game view rectangle: dm_android_touch_resize gives the whole screen (safe area included) and dm_android_touch_view the view rectangle;
+ * dm_tc's layout space is the view size, touches are window dp and get the view origin subtracted before queueing (y may be negative in
+ * true fullscreen); only the part of the safe area inside the view counts, converted to 2160-high layout units by the view height. */
+static void test_android_view_rect_coordinates(void) {
+    fixture(0); float a[DM_ANDROID_TOUCH_DRAW_FLOATS];
+    dm_android_touch_resize(1000, 500, 0, 0, 0);
+    REQUIRE(width == 1000 && height == 500 && vr_x == 0 && vr_y == 0 && vr_w == 1000 && vr_h == 500);   /* 没给视图矩形时 = 整屏 | view = whole window until a view rect arrives */
+    REQUIRE(resizing == 1 && cancel == 1);
+    dm_android_touch_view(100, 150, 800, 350);
+    REQUIRE(width == 800 && height == 350 && vr_x == 100 && vr_y == 150 && vr_w == 800 && vr_h == 350 && resizing == 1);
+    dm_android_touch_view(100, 150, 0, 350);   /* 非法宽度不认 | an invalid width is ignored */
+    REQUIRE(vr_w == 800 && width == 800);
+    queue_sample(); REQUIRE(resizing == 0);
+    REQUIRE(tc.layout.width == 800 && tc.layout.height == 350);   /* 布局空间 = 视图尺寸，不是整屏 | layout space = view size, not the whole screen */
+    read_twice(a); REQUIRE(a[0] == 800 && a[1] == 350);           /* 绘图快照头同样是视图尺寸 | the drawing snapshot header is the view size too */
+    dm_android_touch_event(0, 0, 500, 300);   /* 窗口 dp → 视图坐标：(500,300) − (100,150) | window dp → view coordinates */
+    REQUIRE(tail - head == 1 && queue[(tail - 1) % 256].x == 400 && queue[(tail - 1) % 256].y == 150);
+    dm_android_touch_event(1, 0, 500, 50);    /* 视图上方那条 3D：y = −100，允许（点怪 / 点地照常） | the 3D strip above the view: y = −100, allowed (tapping monsters / ground as usual) */
+    REQUIRE(tail - head == 2 && queue[(tail - 1) % 256].x == 400 && queue[(tail - 1) % 256].y == -100);
+    dm_android_touch_event(3, 0, 500, 50); queue_sample(); REQUIRE(head == tail);
+    /* 没有底边安全区：视图左下那一点起的是摇杆。 | Without a bottom inset the same point in the view's bottom-left starts the stick (not DM_TC_EDGE). */
+    dm_android_touch_event(0, 1, 300, 480); queue_sample();
+    REQUIRE(tc.finger[1].active && tc.finger[1].target == DM_TC_JOYSTICK);
+    dm_android_touch_event(3, 1, 300, 480); queue_sample();
+    /* 安全区：左边 60 全落在视图左边距（100）里 → 0；右边 150 减视图右边距 100 → 50；底边 40 贴视图底 → 40。
+     * Safe area: left 60 falls entirely in the view's left margin (100) → 0; right 150 minus the view's right margin 100 → 50; bottom 40, the view reaches the window bottom → 40. */
+    dm_tc_target main0 = tc.layout.target[DM_TC_MAIN]; float joy0 = tc.layout.joy_x;
+    dm_android_touch_resize(1000, 500, 60, 150, 40);
+    queue_sample();
+    REQUIRE(vr_x == 100 && vr_w == 800);   /* resize 不丢掉已给的视图矩形 | resize keeps the view rect that was given */
+    REQUIRE(seen_safe_left == 0 && seen_safe_right == (int)lroundf(50 * 2160.0f / 350));
+    REQUIRE(fabsf(main0.x - tc.layout.target[DM_TC_MAIN].x - 50) < 0.01f);   /* 右侧安全区 50 把技能组整体左移 | the right inset of 50 moves the skill group left */
+    REQUIRE(tc.layout.joy_x == joy0);                                      /* 左侧安全区被视图裁成 0，摇杆不动 | left inset clipped to 0, the stick does not move */
+    dm_android_touch_event(0, 1, 300, 480); queue_sample();               /* 视图 (200,330)，离视图底 20 < 40 | view (200,330), 20 above the view's bottom < 40 */
+    REQUIRE(tc.finger[1].active && tc.finger[1].target == DM_TC_EDGE);
+    dm_android_touch_event(3, 1, 300, 480); queue_sample();
+}
+
+/* 点世界换算：nx,ny 仍是视图归一化（宿主按界面矩形归一化），wx,wy 是出图画面归一化。真全屏局内画面铺满整窗，世界矩形 = 整窗在视图坐标里的矩形；
+ * 不是真全屏时世界矩形 = 视图矩形，与改动前完全一致。两个入口都走：requests（界面消息那侧）与 direct_event（小地图直点）。
+ * World-tap normalisation: nx,ny stay view-normalised (the host normalises by the UI rectangle) and wx,wy are picture-normalised. In a
+ * true-fullscreen run the picture fills the whole window, so the world rectangle is the whole window in view coordinates; without true
+ * fullscreen it is the view rectangle, exactly as before. Both entries are covered: requests and direct_event. */
+static void test_android_world_tap_fullscreen(void) {
+    fixture(0); dm_android_touch_resize(1000, 500, 0, 0, 0); dm_android_touch_view(100, 150, 800, 350); queue_sample();
+    test_full = 1; world_tap_expected = 1;
+    tc.world_tap_x = 500; tc.world_tap_y = 200; ++tc.world_tap_seq; requests();   /* 视图 (500,200) = 窗口 (600,350) | view (500,200) = window (600,350) */
+    REQUIRE(fabsf(tap_ux - 500.0f / 800) < 1e-5f && fabsf(tap_uy - 200.0f / 350) < 1e-5f);   /* 界面矩形归一化不变 | UI-rectangle normalisation unchanged */
+    REQUIRE(fabsf(tap_wx - 600.0f / 1000) < 1e-5f && fabsf(tap_wy - 350.0f / 500) < 1e-5f);  /* 整窗归一化 | window normalisation */
+    test_full = 0;                                                                          /* 普通手机：世界 = 视图，与改动前一致 | ordinary phone: world = view, as before */
+    ++tc.world_tap_seq; requests();
+    REQUIRE(fabsf(tap_wx - 500.0f / 800) < 1e-5f && fabsf(tap_wy - 200.0f / 350) < 1e-5f);
+    test_full = 1; direct[0] = (direct_gesture){2, 500, 250, 100.0, 0};                       /* 小地图那一下：视图 (500,250) = 窗口 (600,400) | the minimap tap: view (500,250) = window (600,400) */
+    dm_android_touch_event(2, 0, 600, 400); queue_sample();
+    REQUIRE(map_world_pending == 1);
+    REQUIRE(fabsf(map_wx - 600.0f / 1000) < 1e-5f && fabsf(map_wy - 400.0f / 500) < 1e-5f);
+}
+
 static void run_case(const char *name, void (*body)(void)) {
     case_name = name; body(); ++cases; printf("PASS %s\n", name);
 }
@@ -404,6 +481,8 @@ int main(void) {
     run_case("difficulty_hit_and_close", test_difficulty_hit_and_close);
     run_case("belt_diff_target_no_false_highlight", test_belt_diff_target_does_not_light_difficulty);
     run_case("navigation_and_resize", test_navigation_and_resize);
+    run_case("android_view_rect_coordinates", test_android_view_rect_coordinates);
+    run_case("android_world_tap_fullscreen", test_android_world_tap_fullscreen);
     run_case("android_queue_ten_short_taps", test_android_queue_ten_short_taps);
     run_case("android_focus_cancel", test_android_focus_cancel);
     run_case("android_cancelled_latch", test_android_cancelled_latch);

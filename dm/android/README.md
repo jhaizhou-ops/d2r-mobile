@@ -152,6 +152,16 @@ keeps using its own list after a re-import. The tool's check runs with
 `make -C dm/host/tests run` (or `python3 dm/tools/tests/test_warm_seed.py`).
 The measurements are in `docs/android-notes/2026-10-22-first-play-stutter.md`.
 
+## Screens narrower than 16:9 (foldables)
+
+A foldable inner panel (vivo X Fold3: 2480x2200, aspect 1.127) is narrower than 16:9, so a 16:9 picture leaves black bars at the top and bottom. `front_android.c` therefore turns on the same "true fullscreen" the iOS (`front_ios.m`) and HarmonyOS (`front_ohos.c`) ports use: in a run the picture is output at the screen aspect and the 3D fills the screen, the host lays the game UI out at 16:9 anchored to the bottom (`dm_uiscreen.c`), and the Vulkan engine shifts that UI draw pass down (`xbg_set_ui_rect_fn`). Front-end pages and the loading screen stay 16:9 centered with margins, because they are designed as whole 16:9 pages.
+
+The touch overlay (`TouchOverlay.java`) and the native touch layout follow `front_android_view_rect`: the bottom 16:9 UI rectangle in a run, the centered 16:9 block outside it, the whole window on screens wider than 16:9 (where nothing changes). Drawing, hit tests and `dm_ui_*` coordinates live inside that rectangle; touches above it are still world taps (the game side receives a negative y), and world taps convert back to picture coordinates (`world_rect`/`world_norm`, as in `touch_ohos.c`).
+
+The output size is the screen aspect with a 1080-line short side by default, and the 3D scale defaults to about 700 lines (0.65): the same GPU budget as the old 720p x 0.75, with a UI 2.25x sharper than 720p. Native pixels would lift the 3D from 540p to 1100p, because the game's 3D scale floors at 0.5 (`hle_oe.c`), which no Snapdragon 8-class device holds at 60 fps. `DM_ANDROID_RES=<short side>` overrides the profile, `DM_NATIVE_RES=1` uses the screen's native pixels, and `DM_ANDROID_FULL=0` turns true fullscreen off (16:9 with bars everywhere, like `DM_IPAD_FULL=0` on iPads).
+
+The game only accepts a render size at or below the window texture it created at startup (`dm_uiscreen.c`), so the first value reported is the cap and later values are the current size. Unfolding / folding recomputes the current size, scales it into the cap and pushes notification 31 so the game rereads. Started on the wide outer screen, unfolding can only scale into the cap reported at startup: the picture fills but is softer than starting unfolded. The regression cases are in `dm/android/tests/test_touch_snapshot.c` (`android_view_rect_coordinates`, `android_world_tap_fullscreen`).
+
 ## Validation and remaining work
 
 Run the root contribution checks, plus `:app:lintDebug`. The pure Java input

@@ -78,6 +78,16 @@ APK 和 Git 仓库均不含游戏程序、着色器、游戏美术或存档。�
 
 一套包还可以附带 `vk-pipeline-list.seed`。首次启动、还没有 `files/dm/vk-pipeline-list.bin` 时，引擎在启动期间编好种子里列出的管线，种子覆盖的地方第一次去就不会因为现编管线而卡。`dm/android/tools/merge_warm_lists.py` 把几台设备的 `files/dm/vk-pipeline-list.bin` 合成一个种子。种子只能和录它时的那套包一起用，所以随包发放：`dm/tools/d2rm_android.py --warm-seed <文件>` 把它放进导入包（在耗时的步骤之前先核种子），并记在 `pack_info.txt` 的 `WARM_SEED=` 一行。种子放在仓库外。种子只对首次启动有用：手机上已经有 `files/dm/vk-pipeline-list.bin` 的，重新导入后仍用自己的清单。工具的检查随 `make -C dm/host/tests run` 跑（也可以 `python3 dm/tools/tests/test_warm_seed.py`）。实测见 `docs/android-notes/2026-10-22-first-play-stutter.zh-CN.md`。
 
+## 比 16:9 窄的屏幕（折叠屏内屏）
+
+折叠屏内屏（vivo X Fold3：2480x2200，比例 1.127）比 16:9 窄，按 16:9 出图上下就会留黑边。所以 `front_android.c` 接上 iOS（`front_ios.m`）与鸿蒙（`front_ohos.c`）那套「真全屏」：局内按屏幕比例出图、3D 铺满整屏，游戏界面由宿主按 16:9 摆好并贴底（`dm_uiscreen.c`），图形层把界面那一趟绘制下移（`xbg_set_ui_rect_fn`）。前端各页与读取画面仍是 16:9 居中留边——它们本来就是按 16:9 整页设计的。
+
+触控层（`TouchOverlay.java`）与原生触控布局都按 `front_android_view_rect` 走：局内是贴底的 16:9 界面矩形，局外是居中的 16:9，比 16:9 宽的屏幕（普通手机）= 整个窗口（行为不变）。绘制、命中判定与 `dm_ui_*` 坐标都在这个矩形里；矩形上方那条只有 3D 的区域仍能点世界（游戏侧收到负的 y），点世界再按 `world_rect`/`world_norm` 换回出图画面归一化（同 `touch_ohos.c`）。
+
+出图尺寸缺省 = 屏幕比例、短边 1080，3D 比例缺省补到约 700 高（0.65）：GPU 开销与原来 720p × 0.75 相当，界面比 720p 清晰 2.25 倍。用屏幕原生像素会把 3D 从 540p 抬到 1100p——游戏的 3D 比例下限是 0.5（`hle_oe.c`），骁龙 8 这一档没有能稳住 60 帧的。`DM_ANDROID_RES=<短边>` 覆盖这档，`DM_NATIVE_RES=1` 用屏幕原生像素（跑得动再开），`DM_ANDROID_FULL=0` 关掉真全屏（全程 16:9 留边，同 iPad 的 `DM_IPAD_FULL=0`）。
+
+游戏只接受不超过它启动时那张窗口贴图（`dm_uiscreen.c`）的出图尺寸，所以第一次报出去的值是「上限」，之后报当前值。展开 / 折叠时重算当前值、等比缩进上限里，并推通知 31 让游戏重读。先在外屏启动再展开的，只能缩进启动时给的上限：画面铺满但不如展开着启动清晰。相关回归用例在 `dm/android/tests/test_touch_snapshot.c`（`android_view_rect_coordinates`、`android_world_tap_fullscreen`）。
+
 ## 验证与剩余工作
 
 执行根目录贡献检查及 `:app:lintDebug`。纯 Java 输入测试不需要手机：
