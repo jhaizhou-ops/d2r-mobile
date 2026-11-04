@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""我们自己加的界面文字的多语表：唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / Español / Español MX / Русский / 한국어 / 用在哪）。
+"""我们自己加的界面文字的多语表：唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / Español / Español MX / Português (Brasil) / Русский / 한국어 / 用在哪）。
 做法 = 把每一行作为新条目追加进原版字符串表 ui.json（RomFS 覆盖层，与 touch_strings 同一套机制）：zhCN / zhTW 列 = 中文（繁体玩家读简体比读英文顺），
-esES 列 = Español，esMX 列 = Español MX（空 = 同 Español；只在拉美官方用词与 esES 不同时填），ruRU 列 = Русский，koKR 列 = 한국어，其余 7 种语言列 = English。
+esES 列 = Español，esMX 列 = Español MX（空 = 同 Español；只在拉美官方用词与 esES 不同时填），ptBR 列 = Português (Brasil)，ruRU 列 = Русский，koKR 列 = 한국어，其余 6 种语言列 = English。
 这样布局里写「@键」、宿主用原版取串 main+0x7f5630 取，语言切换由原版自己重装字符串表完成（SetLanguage，r34 起不剪），不用我们另跟语言。"""
 import csv, json, os, re
 
@@ -32,7 +32,7 @@ EN_LIMITS = (
     (r'dmRiftCap.*', 20),                                 # 按钮上方的说明（英文专用小字号控件） | caption above the buttons (English-only small-font widget)
     (r'dmRiftBtn.*', 12),                                 # 按钮上的字 | text on the buttons
     (r'dmRiftMsItem\d+', 15), (r'dmRiftMsSub\d+', 19), (r'dmRiftMsTier\d+', 4), (r'dmRiftMs(Got|Next|No)', 7), (r'dmRiftMsT', 12), (r'dmRiftMsNEn', 38),
-    (r'dmRiftHud(Title)', 4), (r'dmRiftHud(Done|Late|Guard)', 18), (r'dmRiftHud(Next|Same|Kill|Goal)', 26),
+    (r'dmRiftHud(Title)', 5), (r'dmRiftHud(Done|Late|Guard)', 18), (r'dmRiftHud(Next|Same|Kill|Goal)', 26),
     (r'dmKbRiftUnlock', 9), (r'dmKbRift(Best|Total)', 16),
 )
 # 键只许字母数字：布局里「@键」的解析遇到 _ 就断（@dmCustom_auto_mana 显示成「丢失字符串_auto_mana」，Mac 上的 iOS 包实测）
@@ -41,21 +41,21 @@ EN_LIMITS = (
 # Keys that must show Chinese characters in the English UI as well (the language row of the Custom page: someone who switched to the wrong language has to be able to read it). Only allowed on text controls that specify the global font BlizzardGlobal -- the default font of the English UI has no Chinese characters
 EN_HAS_ZH = {'dmCustomLangZh', 'dmCustomLangHintZh'}
 def rows():
-    """[(键, 中文, English, Español, Español MX, Русский, 한국어)]；Español MX 空 = 同 Español。"""
+    """[(键, 中文, English, Español, Español MX, Português (Brasil), Русский, 한국어)]；Español MX 空 = 同 Español。"""
     out = []
     with open(TABLE, encoding='utf-8') as f:
         for r in csv.DictReader(f, delimiter='\t'):
-            k = r['键']; zh, en, es, mx, ru, ko = (r[c].replace('\\n', '\n') for c in ('中文', 'English', 'Español', 'Español MX', 'Русский', '한국어'))
-            if not re.fullmatch(r'dm[A-Za-z0-9]+', k) or not zh or not en or not es or not ru or not ko: raise SystemExit('dm_i18n：表里这一行不对：%r' % r)
+            k = r['键']; zh, en, es, mx, pt, ru, ko = (r[c].replace('\\n', '\n') for c in ('中文', 'English', 'Español', 'Español MX', 'Português (Brasil)', 'Русский', '한국어'))
+            if not re.fullmatch(r'dm[A-Za-z0-9]+', k) or not zh or not en or not es or not pt or not ru or not ko: raise SystemExit('dm_i18n：表里这一行不对：%r' % r)
             mx = mx or es
-            for nm, t in (('英文', en), ('西语', es), ('拉美西语', mx), ('俄语', ru), ('韩语', ko)):   # 韩文字母不在汉字区间里，韩语列同样不许混进汉字
+            for nm, t in (('英文', en), ('西语', es), ('拉美西语', mx), ('葡语', pt), ('俄语', ru), ('韩语', ko)):   # 韩文字母不在汉字区间里，韩语列同样不许混进汉字
                 if k not in EN_HAS_ZH and re.search(r'[　-鿿＀-￯]', re.sub(PROPER, '', t)): raise SystemExit('dm_i18n：%s 的%s里有中文字符：%r' % (k, nm, t))
                 if FMT.findall(zh) != FMT.findall(t): raise SystemExit('dm_i18n：%s 的中文与%s占位符不一致：%s / %s' % (k, nm, FMT.findall(zh), FMT.findall(t)))
                 if t.count('\n') != en.count('\n'): raise SystemExit('dm_i18n：%s 的%s换行数与英文不同（行高按行数排）：%r' % (k, nm, t))
-            lim = next((n for pat, n in EN_LIMITS if re.fullmatch(pat, k)), None)   # 字数闸（见 EN_LIMITS；西语 / 俄语 / 韩语同一栏同一上限）
-            for nm, t in (('英文', en), ('西语', es), ('拉美西语', mx), ('俄语', ru), ('韩语', ko)):
+            lim = next((n for pat, n in EN_LIMITS if re.fullmatch(pat, k)), None)   # 字数闸（见 EN_LIMITS；西语 / 葡语 / 俄语 / 韩语同一栏同一上限）
+            for nm, t in (('英文', en), ('西语', es), ('拉美西语', mx), ('葡语', pt), ('俄语', ru), ('韩语', ko)):
                 if lim is not None and len(FMT.sub('000', t).split('\n')[0]) > lim: raise SystemExit('dm_i18n：%s 的%s「%s」%d 个字符，超过这一栏的上限 %d（会顶框 / 被截断；压短，或给这一栏做专用的小字号控件）' % (k, nm, t, len(FMT.sub('000', t).split('\n')[0]), lim))
-            out.append((k, zh, en, es, mx, ru, ko))
+            out.append((k, zh, en, es, mx, pt, ru, ko))
     ks = [r[0] for r in out]
     if len(set(ks)) != len(ks): raise SystemExit('dm_i18n：键重复：%s' % sorted({k for k in ks if ks.count(k) > 1}))
     return out
@@ -70,8 +70,8 @@ def build(romfs, outdir, repl):
     rs = rows()
     clash = [r[0] for r in rs if r[0] in have]
     if clash: raise SystemExit('dm_i18n：键和原版重名：%s' % clash)
-    col = lambda l, zh, en, es, mx, ru, ko: zh if l in ('zhCN', 'zhTW') else es if l == 'esES' else mx if l == 'esMX' else ru if l == 'ruRU' else ko if l == 'koKR' else en
-    add = [{'id': ID0 + i, 'Key': k, **{l: col(l, zh, en, es, mx, ru, ko) for l in LANGS}} for i, (k, zh, en, es, mx, ru, ko) in enumerate(rs)]
+    col = lambda l, zh, en, es, mx, pt, ru, ko: zh if l in ('zhCN', 'zhTW') else es if l == 'esES' else mx if l == 'esMX' else pt if l == 'ptBR' else ru if l == 'ruRU' else ko if l == 'koKR' else en
+    add = [{'id': ID0 + i, 'Key': k, **{l: col(l, zh, en, es, mx, pt, ru, ko) for l in LANGS}} for i, (k, zh, en, es, mx, pt, ru, ko) in enumerate(rs)]
     end = text.rstrip().rindex(']')
     body = ',\n'.join('  ' + json.dumps(e, ensure_ascii=False) for e in add)
     text = text[:end].rstrip() + ',\n' + body + '\n' + text[end:]
@@ -83,8 +83,8 @@ def header():
     """dm/host/dm_i18n_tab.h 的内容（游戏外画的字用的编译期表）。 | Contents of dm/host/dm_i18n_tab.h (the compile-time table for text drawn outside the game)."""
     c = lambda s: json.dumps(s, ensure_ascii=False)   # JSON 串的转义在 C 里同样成立（\n \" \\） | JSON string escapes are equally valid in C (newline, double quote, backslash)
     out = ['// 生成文件，勿手改：python3 dm/ios/tools/dm_i18n.py --header > dm/host/dm_i18n_tab.h（表 dm/i18n/ui_text.tsv）', '#pragma once',
-           'static const struct { const char *k, *zh, *en, *es, *mx, *ru, *ko; } k_dm_i18n[] = {']
-    out += ['    { %s, %s, %s, %s, %s, %s, %s },' % (c(k), c(zh), c(en), c(es), c(mx), c(ru), c(ko)) for k, zh, en, es, mx, ru, ko in rows()]
+           'static const struct { const char *k, *zh, *en, *es, *mx, *pt, *ru, *ko; } k_dm_i18n[] = {']
+    out += ['    { %s, %s, %s, %s, %s, %s, %s, %s },' % (c(k), c(zh), c(en), c(es), c(mx), c(pt), c(ru), c(ko)) for k, zh, en, es, mx, pt, ru, ko in rows()]
     return '\n'.join(out + ['};', ''])
 
 if __name__ == '__main__':

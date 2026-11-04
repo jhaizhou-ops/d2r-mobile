@@ -2,19 +2,19 @@
 
 中文: [README.zh-CN.md](README.zh-CN.md)
 
-All UI text we added on top of the original game exists in Chinese, English, Spanish and Russian and is registered in one table here; a scanning script makes sure no text bypasses that table. The game's own text is not handled here; it follows the game's own string tables.
+All UI text we added on top of the original game exists in Chinese, English, Spanish, Portuguese, Russian and Korean and is registered in one table here; a scanning script makes sure no text bypasses that table. The game's own text is not handled here; it follows the game's own string tables.
 
 ## The three files
 
 | File | What it is |
 |---|---|
-| `ui_text.tsv` | The string table, the single source of the UI text we added. Six tab-separated columns: `键` (key), `中文` (Chinese), `English`, `Español`, `Español MX` (empty = same as `Español`), `Русский`, `用在哪` (where used) |
+| `ui_text.tsv` | The string table, the single source of the UI text we added. Nine tab-separated columns: `键` (key), `中文` (Chinese), `English`, `Español`, `Español MX` (empty = same as `Español`), `Português (Brasil)`, `Русский`, `한국어`, `用在哪` (where used) |
 | `scan_literals.py` | The literal gate: scans the sources for string literals containing Chinese and reports any that reach the screen without going through the table |
 | `literal_whitelist.tsv` | The gate's whitelist: Chinese literals that really never reach the screen are registered here. Three columns: `文件` (file), `匹配` (match), `理由` (reason) |
 
 The table is read by `dm/ios/tools/dm_i18n.py`, which does two things with it:
 
-- **Text drawn inside the game**: when the overlay is built, every row is appended to the game's string table, with Chinese in the Simplified and Traditional Chinese columns, Spanish in esES / esMX, Russian in ruRU and English in all the remaining languages. Layouts write `@key`, and the host fetches by key with `dm_str`. Switching language is done by the game itself.
+- **Text drawn inside the game**: when the overlay is built, every row is appended to the game's string table, with Chinese in the Simplified and Traditional Chinese columns, Spanish in esES / esMX, Portuguese in ptBR, Russian in ruRU, Korean in koKR and English in all the remaining languages. Layouts write `@key`, and the host fetches by key with `dm_str`. Switching language is done by the game itself.
 - **Text drawn outside the game** (system alerts, the resource download page and so on): it generates `dm/host/dm_i18n_tab.h`, which is compiled in and read by key with `dm_ui`.
 
 The lookup interface is in `dm/host/dm_i18n.h`.

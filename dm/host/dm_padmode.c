@@ -101,7 +101,7 @@ static int pfx_write(uint8_t *b, int pad) {
     if (pad && g_glyph_next) memcpy(b + GLYPH_OFF, k_glyph[g_glyph_next], strlen(k_glyph[g_glyph_next]));
     return 1;
 }
-enum { NSTR = 160 };   // 中 / 英 / esES / esMX / ruRU / koKR 各一套（去重后 138 条）
+enum { NSTR = 192 };   // 中 / 英 / esES / esMX / ruRU / koKR / ptBR 各一套（去重后 162 条）
 static struct { char *key, *val; size_t klen; char sha[9]; uint64_t node, orig, olen; } g_str[NSTR];
 static int g_nstr;
 static uint8_t *g_b;

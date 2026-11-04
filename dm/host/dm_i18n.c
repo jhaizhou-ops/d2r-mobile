@@ -1,6 +1,6 @@
-// 我们自己加的界面文字取串（语言跟原版设置走：简中 / 繁中用中文，esES / esMX 用西语，ruRU 用俄语，koKR 用韩语，其余英文；物品注释只做了中文与西语（俄语、韩语界面不显示），旧译名只有中文）。
-// 唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / Español / Español MX / Русский / 한국어 / 用在哪），dm/ios/tools/dm_i18n.py 用它做两件事：
-//   · 追加进原版字符串表 ui.json（RomFS 覆盖层）：zhCN、zhTW 列 = 中文，esES = 西语，esMX = 拉美西语，ruRU = 俄语，koKR = 韩语，其余 7 列 = 英文。布局写「@键」、宿主 dm_str 走原版取串 main+0x7f5630，
+// 我们自己加的界面文字取串（语言跟原版设置走：简中 / 繁中用中文，esES / esMX 用西语，ruRU 用俄语，koKR 用韩语，ptBR 用葡语，其余英文；物品注释只做了中文与西语（俄语、韩语、葡语界面不显示），旧译名只有中文）。
+// 唯一来源 dm/i18n/ui_text.tsv（键 / 中文 / English / Español / Español MX / Русский / 한국어 / Português (Brasil) / 用在哪），dm/ios/tools/dm_i18n.py 用它做两件事：
+//   · 追加进原版字符串表 ui.json（RomFS 覆盖层）：zhCN、zhTW 列 = 中文，esES = 西语，esMX = 拉美西语，ruRU = 俄语，koKR = 韩语，ptBR = 葡语，其余 6 列 = 英文。布局写「@键」、宿主 dm_str 走原版取串 main+0x7f5630，
 //     切语言时原版自己清空 + 重装字符串表（SetLanguage 0x317298，r34 起不剪），不用我们跟。
 //   · 生成 dm_i18n_tab.h（本文件编进去）：游戏画不到的地方（UIKit 弹框、资源下载页、分享文件名、底栏字形）按 dm_lang_group() 取。
 // 语言：游戏设过（SetLanguage 观测门）就以它为准；之前（资源下载页、进前端前）读存档 Settings/Settings.json 的 "Language"；
@@ -17,14 +17,14 @@ _Atomic int g_dm_lang = -1;
 #if TARGET_OS_IPHONE
 #include <CoreFoundation/CoreFoundation.h>
 #endif
-// 语言标记（BCP 47，如 en-US、zh-Hans-CN、zh-Hant-TW、yue-Hant-HK、es-419）→ 原版语言号。只落四种：语言码是中文（zh）或汉语方言
+// 语言标记（BCP 47，如 en-US、zh-Hans-CN、zh-Hant-TW、yue-Hant-HK、es-419、pt-BR）→ 原版语言号。只落这几种：语言码是中文（zh）或汉语方言
 // （yue 粤、wuu 吴、hak 客、nan 闽南、cmn 官话、gan 赣、hsn 湘、lzh 文言）→ 8 简中，不看字形和地区——我们没有繁体的自有文字，
 // 原版繁中 + 我们的简体字一屏两种字；西语（es）→ 地区是西班牙或没写地区 = 2 esES，其余地区（es-419、es-MX、es-US…）= 10 esMX；
-// 其余一律 0 英文——我们自有的字只有中英西三套，德 / 日等原版语言配英文自有字没人验过。空标记 = 简中
-// Language tag (BCP 47, e.g. en-US, zh-Hans-CN, zh-Hant-TW, yue-Hant-HK, es-419) → original language number. Maps to only four: language code Chinese (zh) or a Chinese dialect
+// 葡语（pt）→ 12 ptBR（原版只有巴西葡语）；其余一律 0 英文——我们自有的字只有中英西俄韩葡六套，德 / 日等原版语言配英文自有字没人验过。空标记 = 简中
+// Language tag (BCP 47, e.g. en-US, zh-Hans-CN, zh-Hant-TW, yue-Hant-HK, es-419, pt-BR) → original language number. Maps to only these: language code Chinese (zh) or a Chinese dialect
 // (yue Cantonese, wuu Wu, hak Hakka, nan Min Nan, cmn Mandarin, gan Gan, hsn Xiang, lzh Classical Chinese) → 8 Simplified Chinese, regardless of script and region — we have no Traditional text of our own,
 // so original Traditional Chinese + our Simplified text would mix two scripts on one screen; Spanish (es) → region Spain or no region = 2 esES, any other region (es-419, es-MX, es-US…) = 10 esMX;
-// everything else is 0 English — our own text comes only in Chinese, English and Spanish; nobody has verified German / Japanese etc. original languages paired with our English text. Empty tag = Simplified Chinese
+// Portuguese (pt) → 12 ptBR (the original has only Brazilian Portuguese); everything else is 0 English — our own text comes only in Chinese, English, Spanish, Russian, Korean and Portuguese; nobody has verified German / Japanese etc. original languages paired with our English text. Empty tag = Simplified Chinese
 int dm_lang_from_tag(const char *t) {
     if (!t || !*t) return 8;
     char l[4] = { 0 }; int i = 0; while (i < 3 && t[i] && t[i] != '-' && t[i] != '_') { l[i] = (char)(t[i] | 0x20); i++; }
@@ -32,17 +32,18 @@ int dm_lang_from_tag(const char *t) {
     for (unsigned k = 0; k < sizeof zh / sizeof *zh; k++) if (!strcmp(l, zh[k])) return 8;
     if (!strcmp(l, "ko")) return 5;   // koKR：韩国官方文字，配音在资源分块 11（hle_fs.c voice_for）
     if (!strcmp(l, "ru")) return 7;   // ruRU：俄罗斯官方文字，包里配音只有中英，语音按 voice_for 走英文 | ruRU: the official Russian text; the voice-over follows voice_for (Russian only when the resources carry it, otherwise English)
+    if (!strcmp(l, "pt")) return 12;  // ptBR：原版只有巴西葡语，葡萄牙地区也用这一套 | ptBR: the original only ships Brazilian Portuguese, so Portugal also uses it
     if (!strcmp(l, "es")) {   // 地区子标记：跳过 4 个字母的字形子标记（es-Latn-ES），取紧跟的 2 个字母或 3 位数字 | Region subtag: skip a 4-letter script subtag (es-Latn-ES), take the 2 letters or 3 digits that follow
         const char *r = t + i; while (*r == '-' || *r == '_') { r++; size_t n = strcspn(r, "-_"); if (n == 4) { r += n; continue; }
             return (n == 2 && (r[0] | 0x20) == 'e' && (r[1] | 0x20) == 's') ? 2 : 10; }
         return 2; }
     return 0;
 }
-// 首次安装（还没有设置文件）时的语言：按 iOS 首选语言第一项（CFLocaleCopyPreferredLanguages，过 dm_lang_from_tag：中文及汉语方言 → 简中，其余 → 英文）。
-// 曾一律简中（那时触屏版没有能改语言的入口，系统是英文的中文玩家新装进了英文版改不回来）；自定义页标题行有语言开关（dm_custom.c lang_en），放开。
+// 首次安装（还没有设置文件）时的语言：按 iOS 首选语言第一项（CFLocaleCopyPreferredLanguages，过 dm_lang_from_tag：中文及汉语方言 → 简中，es → 西语，ru → 俄语，ko → 韩语，pt → 葡语，其余 → 英文）。
+// 曾一律简中（那时触屏版没有能改语言的入口，系统是英文的中文玩家新装进了英文版改不回来）；自定义页标题行有语言开关（dm_custom.c lang），放开。
 // DM_LANG（宿主 / 测试模拟，同 hle_oe.c）优先；非 iOS 的宿主没有系统语言可问，照旧简中
-// Language on first install (no settings file yet): by the first entry of the iOS preferred languages (CFLocaleCopyPreferredLanguages, through dm_lang_from_tag: Chinese and Sinitic varieties → Simplified Chinese, everything else → English).
-// It used to be always Simplified Chinese (back then the touch version had no way to change the language, and a Chinese player whose system was in English got the English version on a fresh install and could not change it back); the Custom page title row now has a language switch (dm_custom.c lang_en), so this is opened up.
+// Language on first install (no settings file yet): by the first entry of the iOS preferred languages (CFLocaleCopyPreferredLanguages, through dm_lang_from_tag: Chinese and Sinitic varieties → Simplified Chinese, es → Spanish, ru → Russian, ko → Korean, pt → Portuguese, everything else → English).
+// It used to be always Simplified Chinese (back then the touch version had no way to change the language, and a Chinese player whose system was in English got the English version on a fresh install and could not change it back); the Custom page title row now has a language switch (dm_custom.c lang), so this is opened up.
 // DM_LANG (host / test simulation, same as hle_oe.c) takes priority; a non-iOS host has no system language to ask and stays Simplified Chinese as before
 int dm_sys_lang(void) {
     const char *e = getenv("DM_LANG"); if (e && *e) return dm_lang_from_tag(e);
@@ -73,10 +74,10 @@ int dm_lang_zh(void) { int l = dm_lang_index(); return l == 8 || l == 9; }   // 
 int dm_lang_group(void) { return dm_lang_group_of(dm_lang_index()); }
 
 const char *dm_ui(const char *key) { return dm_ui_group(key, dm_lang_group()); }
-int dm_lang_group_of(int l) { return l == 8 || l == 9 ? DM_LG_ZH : l == 2 ? DM_LG_ES : l == 10 ? DM_LG_MX : l == 7 ? DM_LG_RU : l == 5 ? DM_LG_KO : DM_LG_EN; }
+int dm_lang_group_of(int l) { return l == 8 || l == 9 ? DM_LG_ZH : l == 2 ? DM_LG_ES : l == 10 ? DM_LG_MX : l == 7 ? DM_LG_RU : l == 5 ? DM_LG_KO : l == 12 ? DM_LG_PT : DM_LG_EN; }
 const char *dm_ui_group(const char *key, int group) {
     for (unsigned i = 0; i < sizeof k_dm_i18n / sizeof *k_dm_i18n; i++) if (!strcmp(k_dm_i18n[i].k, key)) {
-        switch (group) { case DM_LG_ZH: return k_dm_i18n[i].zh; case DM_LG_ES: return k_dm_i18n[i].es; case DM_LG_MX: return k_dm_i18n[i].mx; case DM_LG_RU: return k_dm_i18n[i].ru; case DM_LG_KO: return k_dm_i18n[i].ko; default: return k_dm_i18n[i].en; } }
+        switch (group) { case DM_LG_ZH: return k_dm_i18n[i].zh; case DM_LG_ES: return k_dm_i18n[i].es; case DM_LG_MX: return k_dm_i18n[i].mx; case DM_LG_RU: return k_dm_i18n[i].ru; case DM_LG_KO: return k_dm_i18n[i].ko; case DM_LG_PT: return k_dm_i18n[i].pt; default: return k_dm_i18n[i].en; } }
     return key;
 }
 

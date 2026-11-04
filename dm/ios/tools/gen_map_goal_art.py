@@ -4,7 +4,7 @@
   · 塔拉夏符号 hd/global/ui/PANEL/Quest_Log/TalRashaSymbol.sprite（7 帧；第 N 帧 = 关卡 66+N 墓门门楣上刻的那个，宿主逐门截图对过 66/67/68/70）
   · 名牌下的灰十字 = 自动地图单位十字 hd/global/ui/AUTOMAP/Units.sprite 第 6 帧（白）按 50% 透明画（原版地图上 NPC 名字下就是这个灰十字）
   · 名牌 = 原版地图给 NPC / 物件标名的样式：深色半透明底 + 名字；人名浅金 (212,196,145)、物件白字（取自原版小地图截图）；字体 hd/ui/fonts/BlizzardGlobal-V5_81.ttf
-  · 名字 = 原版字符串（data/local/lng/strings/*.json 的 zhCN；英文 label_<序号>_en.png 取 enUS，西语 label_<序号>_es.png / _mx.png 取 esES / esMX，俄语 label_<序号>_ru.png 取 ruRU，韩语 label_<序号>_ko.png 取 koKR）；旧译名（自定义页「物品注释与旧译名」开着时游戏显示的名字）取 annot/oldnames.tsv
+  · 名字 = 原版字符串（data/local/lng/strings/*.json 的 zhCN；英文 label_<序号>_en.png 取 enUS，西语 label_<序号>_es.png / _mx.png 取 esES / esMX，俄语 label_<序号>_ru.png 取 ruRU，韩语 label_<序号>_ko.png 取 koKR，葡语 label_<序号>_pt.png 取 ptBR）；旧译名（自定义页「物品注释与旧译名」开着时游戏显示的名字）取 annot/oldnames.tsv
 产物（构建时生成，不进仓库）：Gen/assets/NativeHUD/mapgoal/{sym_0..6.png, cross.png, heading.png（镜头实验的朝向指针，原版表情轮盘指针）, label_<序号>.png, 旧译名不同的 label_<序号>_old.png, mapgoal.json}。
 用法：python3 dm/ios/tools/gen_map_goal_art.py <原版 RomFS（Update）>   （读包与解贴图走 romfs_art.py）"""
 import csv, json, os, struct, sys
@@ -107,7 +107,8 @@ def main():
         mx = cache[f][key]['esMX']; label(mx, col, font).save(os.path.join(OUT, 'label_%d_mx.png' % i))
         ru = cache[f][key]['ruRU']; label(ru, col, font).save(os.path.join(OUT, 'label_%d_ru.png' % i))   # 俄语：原版 ruRU 名字 | Russian: original ruRU names
         ko = cache[f][key]['koKR']; label(ko, col, font).save(os.path.join(OUT, 'label_%d_ko.png' % i))   # 韩语：原版 koKR 名字（BlizzardGlobal 带韩文字形）
-        man.append({'id': i, 'file': f, 'key': key, 'zhCN': zh, 'old': zo, 'enUS': en, 'esES': es, 'esMX': mx, 'ruRU': ru, 'koKR': ko, 'color': list(col)})
+        pt = cache[f][key]['ptBR']; label(pt, col, font).save(os.path.join(OUT, 'label_%d_pt.png' % i))   # 葡语：原版 ptBR 名字
+        man.append({'id': i, 'file': f, 'key': key, 'zhCN': zh, 'old': zo, 'enUS': en, 'esES': es, 'esMX': mx, 'ruRU': ru, 'koKR': ko, 'ptBR': pt, 'color': list(col)})
     # 出入口与传送点的名牌（宿主 dm_world.c 小地图出口名称）：出入口写它通向的区域名（levels.txt 的 LevelName → 原版字符串表 levels），
     # 文件名 lvl_<区域号>.png；传送点写原版物件名（objects「Waypoint」）lvl_wp.png。各语言、旧译名的后缀同上面的名牌，物件白字
     # Nameplates for entrances and waypoints (host dm_world.c minimap exit names): an entrance shows the name of the area it leads to (LevelName in levels.txt ->
@@ -123,7 +124,7 @@ def main():
         zh = row['zhCN']; zo = old.get((f, key), zh); nl += 1
         label(zh, OBJ, font).save(os.path.join(OUT, name + '.png'))
         if zo != zh: label(zo, OBJ, font).save(os.path.join(OUT, name + '_old.png'))
-        for suf, col in (('en', 'enUS'), ('es', 'esES'), ('mx', 'esMX'), ('ru', 'ruRU'), ('ko', 'koKR')): label(row[col], OBJ, font).save(os.path.join(OUT, '%s_%s.png' % (name, suf)))
+        for suf, col in (('en', 'enUS'), ('es', 'esES'), ('mx', 'esMX'), ('ru', 'ruRU'), ('ko', 'koKR'), ('pt', 'ptBR')): label(row[col], OBJ, font).save(os.path.join(OUT, '%s_%s.png' % (name, suf)))
     json.dump({'text_px': TEXT_PX, 'symbol_frames': 7, 'labels': man, 'exit_labels': nl}, open(os.path.join(OUT, 'mapgoal.json'), 'w'), ensure_ascii=False, indent=1)
     print('mapgoal：符号 7 帧、十字 1、朝向指针 1、名牌 %d（旧译名不同的 %d）、出入口 / 传送点名牌 %d → %s' % (len(man), sum(m['old'] != m['zhCN'] for m in man), nl, OUT))
 

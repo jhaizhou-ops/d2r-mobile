@@ -1,13 +1,13 @@
 // dm_i18n.c 的语言来源（UIKit 文字用）：游戏设过语言（SetLanguage 观测门写 g_dm_lang）以它为准；没设过读存档 Settings/Settings.json 的 "Language"；
-// 没有设置文件 = 首次安装，按系统语言（测试用 DM_LANG 模拟）。我们的字：zhCN、zhTW 用中文，其余英文。
-// 期望值来自规则本身（8 zhCN / 9 zhTW 中文，其余英文；语言号表见 diag.c 名表 main+0x20ae478），不跑游戏。每个情形单独起进程（文件读一次就缓存），所以本程序按 argv 跑一个情形，Makefile 逐个调。
+// 没有设置文件 = 首次安装，按系统语言（测试用 DM_LANG 模拟）。我们的字：zhCN、zhTW 用中文，esES / esMX 用西语，ruRU 用俄语，koKR 用韩语，ptBR 用葡语，其余英文。
+// 期望值来自规则本身（8 zhCN / 9 zhTW 中文，12 ptBR 葡语，其余英文；语言号表见 diag.c 名表 main+0x20ae478），不跑游戏。每个情形单独起进程（文件读一次就缓存），所以本程序按 argv 跑一个情形，Makefile 逐个调。
 // Language source of dm_i18n.c (for UIKit text): once the game has set the language (the SetLanguage observation gate writes g_dm_lang), that value
 // wins; if not, read "Language" from Settings/Settings.json in the save data;
-// no settings file = first install, use the system language (simulated in tests with DM_LANG). Our text: Chinese for zhCN and zhTW, English for
-// everything else.
-// Expected values come from the rule itself (8 zhCN / 9 zhTW are Chinese, everything else is English; for the language index table see the name table at
-// main+0x20ae478 in diag.c), without running the game. Each case needs its own process (the file is read once and then cached), so this program runs one
-// case per argv and the Makefile invokes them one by one.
+// no settings file = first install, use the system language (simulated in tests with DM_LANG). Our text: Chinese for zhCN and zhTW, Spanish for esES /
+// esMX, Russian for ruRU, Korean for koKR, Portuguese for ptBR, English for everything else.
+// Expected values come from the rule itself (8 zhCN / 9 zhTW are Chinese, 12 ptBR is Portuguese, everything else is English; for the language index table
+// see the name table at main+0x20ae478 in diag.c), without running the game. Each case needs its own process (the file is read once and then cached), so
+// this program runs one case per argv and the Makefile invokes them one by one.
 #include "../dm_i18n.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,14 +30,15 @@ int main(int argc, char **argv) {
     else if (!strcmp(mode, "systw")) { setenv("DM_LANG", "zh-Hant-TW", 1); expect("没有设置文件、系统语言 zh-Hant-TW（繁体用中文）", dm_ui("dmConfirm"), "确定"); }
     else if (!strcmp(mode, "sysru")) { setenv("DM_LANG", "ru-RU", 1); expect("没有设置文件（首次安装）、系统语言 ru-RU", dm_ui("dmConfirm"), "ОК"); }
     else if (!strcmp(mode, "sysko")) { setenv("DM_LANG", "ko-KR", 1); expect("没有设置文件（首次安装）、系统语言 ko-KR", dm_ui("dmConfirm"), "확인"); }
+    else if (!strcmp(mode, "syspt")) { setenv("DM_LANG", "pt-BR", 1); expect("没有设置文件（首次安装）、系统语言 pt-BR", dm_ui("dmConfirm"), "OK"); }
     else if (!strcmp(mode, "tags")) {   // 语言标记 → 原版语言号 | language tag → the original game's language index
         static const struct { const char *t; int want; } c[] = { { "en-US", 0 }, { "en-GB", 0 }, { "zh-Hans-CN", 8 }, { "zh-Hans", 8 }, { "zh", 8 }, { "zh-Hans-HK", 8 }, { "zh-Hans-TW", 8 }, { "zh-Hans-MO", 8 },
             { "zh-Hant-TW", 8 }, { "zh-Hant-HK", 8 }, { "zh-Hant", 8 }, { "zh-HK", 8 }, { "zh_TW", 8 }, { "yue-Hant-HK", 8 }, { "yue-Hans-CN", 8 }, { "yue", 8 }, { "wuu-Hans-CN", 8 },
-            { "de-DE", 0 }, { "ru-RU", 7 }, { "ru", 7 }, { "ru-UA", 7 }, { "be-BY", 0 }, { "uk-UA", 0 }, { "es-ES", 2 }, { "es", 2 }, { "es_ES", 2 }, { "es-Latn-ES", 2 }, { "es-419", 10 }, { "es-MX", 10 }, { "es-US", 10 }, { "es-AR", 10 }, { "fr-CA", 0 }, { "it-IT", 0 }, { "ko-KR", 5 }, { "ko", 5 }, { "ko_KR", 5 }, { "ko-Kore-KR", 5 }, { "pl-PL", 0 }, { "ja-JP", 0 }, { "pt-BR", 0 }, { "nl-NL", 0 }, { "ar", 0 }, { "zu-ZA", 0 } };
+            { "de-DE", 0 }, { "ru-RU", 7 }, { "ru", 7 }, { "ru-UA", 7 }, { "be-BY", 0 }, { "uk-UA", 0 }, { "es-ES", 2 }, { "es", 2 }, { "es_ES", 2 }, { "es-Latn-ES", 2 }, { "es-419", 10 }, { "es-MX", 10 }, { "es-US", 10 }, { "es-AR", 10 }, { "fr-CA", 0 }, { "it-IT", 0 }, { "ko-KR", 5 }, { "ko", 5 }, { "ko_KR", 5 }, { "ko-Kore-KR", 5 }, { "pl-PL", 0 }, { "ja-JP", 0 }, { "pt-BR", 12 }, { "pt", 12 }, { "pt-PT", 12 }, { "pt_BR", 12 }, { "nl-NL", 0 }, { "ar", 0 }, { "zu-ZA", 0 } };
         for (unsigned i = 0; i < sizeof c / sizeof *c; i++) { char w[8], g[8]; snprintf(w, sizeof w, "%d", c[i].want); snprintf(g, sizeof g, "%d", dm_lang_from_tag(c[i].t)); expect(c[i].t, g, w); }
         expect("性别标记：[ms] 去掉", dm_untag("[ms]Gorro"), "Gorro"); expect("性别标记：连写去掉", dm_untag("[fs][fp]Botas"), "Botas");
         expect("性别标记：注释方括号不动", dm_untag("[Exc] Botas"), "[Exc] Botas"); expect("性别标记：中文原样", dm_untag("谐角之冠"), "谐角之冠"); expect("性别标记：只有标记 = 空串", dm_untag("[ms]"), ""); }
-    else if (!strcmp(mode, "game")) {   // 设置文件写的英文，游戏随后切回简中：以游戏为准；再切到 zhTW（9）、deDE（1）、esES（2）、esMX（10） | Settings file says English, then the game switches back to Simplified Chinese: the game wins; then switch to zhTW (9), deDE (1), esES (2), esMX (10)
+    else if (!strcmp(mode, "game")) {   // 设置文件写的英文，游戏随后切回简中：以游戏为准；再切到 zhTW（9）、deDE（1）、esES（2）、esMX（10）、ruRU（7）、koKR（5）、ptBR（12） | Settings file says English, then the game switches back to Simplified Chinese: the game wins; then switch to zhTW (9), deDE (1), esES (2), esMX (10), ruRU (7), koKR (5), ptBR (12)
         expect("游戏没设前按设置文件", dm_ui("dmConfirm"), "OK");
         atomic_store(&g_dm_lang, 8); expect("游戏切到 zhCN", dm_ui("dmConfirm"), "确定");
         atomic_store(&g_dm_lang, 9); expect("游戏切到 zhTW（繁体用中文）", dm_ui("dmConfirm"), "确定");
@@ -50,7 +51,9 @@ int main(int argc, char **argv) {
         expect("游戏切到 ruRU：表里的条目按俄语取（储藏箱 Тайник）", strstr(dm_ui("dmStoreStash"), "Тайник") ? "有" : "没有", "有");
         atomic_store(&g_dm_lang, 5); expect("游戏切到 koKR（韩语）", dm_ui("dmConfirm"), "확인");
         expect("游戏切到 koKR：表里的条目按韩语取（储藏箱 창고）", strstr(dm_ui("dmStoreStash"), "창고") ? "有" : "没有", "有");
+        atomic_store(&g_dm_lang, 12); expect("游戏切到 ptBR（葡语）", dm_ui("dmConfirm"), "OK");
+        expect("游戏切到 ptBR：表里的条目按葡语取（储藏箱 Baú）", strstr(dm_ui("dmStoreStash"), "Baú") ? "有" : "没有", "有");
         expect("表里没有的键原样返回", dm_ui("dmNoSuchKey"), "dmNoSuchKey"); }
-    else { fprintf(stderr, "用法：t_i18n en|zh|none|sysen|syses|systw|sysru|sysko|tags|game\n"); return 2; }
+    else { fprintf(stderr, "用法：t_i18n en|zh|none|sysen|syses|systw|sysru|sysko|syspt|tags|game\n"); return 2; }
     return fails ? 1 : 0;
 }

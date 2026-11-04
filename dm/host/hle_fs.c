@@ -361,13 +361,13 @@ static void low_vision_off(const char *save_dir) {
     if (ok && !rename(tmp, path)) LOG("设置兜底：「大字体」（Low Vision Mode）是开着的，已改回关"); else remove(tmp);
 }
 // 语音语言跟着文字语言走，但资源里不一定有那种配音：出包（dm/ios/tools/testflight.sh）裁掉了 11 种语言的配音分块 06–16，只留简中（17）与英文（基底）；
-// 自己从完整数据出包的（公开仓库的做法）都在。俄语配音在分块 16、韩语配音在分块 11（build_manifest.psv 里 locales/audio/ruRU、koKR 各 1689 个文件，Chunk 列分别全是 16、11）：
-// 简中（8）配简中配音；俄语（7）/ 韩语（5）在资源里有对应分块时配那种配音，没有就配英文；其余一律英文配音（0）——西语文字配英文配音
+// 自己从完整数据出包的（公开仓库的做法）都在。俄语配音在分块 16、韩语配音在分块 11、巴西葡语配音在分块 15（build_manifest.psv 里 locales/audio/ruRU、koKR、ptBR 各 1689 个文件，Chunk 列分别全是 16、11、15）：
+// 简中（8）配简中配音；俄语（7）/ 韩语（5）/ 葡语（12）在资源里有对应分块时配那种配音，没有就配英文；其余一律英文配音（0）——西语文字配英文配音
 static int voice_chunk_present(int chunk) {
     char b[1024], p[1100]; snprintf(p, sizeof p, "%s/data/%02d-00000001.data", envdir("DM_ROMFS", "data/switch/3.3.94012/Update/RomFS", b, sizeof b), chunk);
     return !access(p, F_OK);
 }
-static int voice_for(int lang) { return lang == 8 ? 8 : lang == 7 && voice_chunk_present(16) ? 7 : lang == 5 && voice_chunk_present(11) ? 5 : 0; }
+static int voice_for(int lang) { return lang == 8 ? 8 : lang == 7 && voice_chunk_present(16) ? 7 : lang == 5 && voice_chunk_present(11) ? 5 : lang == 12 && voice_chunk_present(15) ? 12 : 0; }
 static void settings_seed(const char *save_dir) {
     const char *e = getenv("DM_TOUCH_DEFAULTS"); int on = e ? strcmp(e, "0") != 0 : DM_PHONE; if (!on) return;
     static const char *kv[][2] = {{"\"Item Name Display\"", "1"}, {"\"Item Tooltip Hotkey Appender\"", "0"},
@@ -393,10 +393,10 @@ static void settings_seed(const char *save_dir) {
     fclose(f); if (rename(tmp, path)) { LOG("【红】设置缺省：改名到 %s 失败", path); return; }
     LOG("设置缺省：%s 补了 %d 个键（显示物品 = 开关式 / 说明条热键 = 关 / 小地图放右、进局自动开%s；已有的键不动）", path, added, first ? " / 首次安装按系统语言写 Language" : "");
 }
-// 语言开关（自定义页标题行那一格，dm_custom.c 的 lang：0 中文 / 1 English / 2 Español / 3 Русский / 4 한국어）：玩家点过「应用」后设置文件里有明确的值，每次挂存档（游戏读设置之前）
+// 语言开关（自定义页标题行那一格，dm_custom.c 的 lang：0 中文 / 1 English / 2 Español / 3 Русский / 4 한국어 / 5 Português）：玩家点过「应用」后设置文件里有明确的值，每次挂存档（游戏读设置之前）
 // 按它把原版设置文件的 Language（文字）和 VoiceLanguage（语音，语音跟着切，见 voice_for）改好。只在「与开关不符」时改：
-// 文字语言已落在这一项里（中文 = 简中 / 繁中，English = 英文，Español = esES / esMX，Русский = ruRU，한국어 = koKR）就不动文字，所以开关是中文时玩家在原版里选的繁中不会被改回简中；
-// 选 Español 时要改才改，按系统地区定 esES（2）或 esMX（10）；选 Русский = 7 ruRU（原版只有一种俄文），选 한국어 = 5 koKR。两个键缺哪个补哪个。没点过应用（-1）= 一个字不动
+// 文字语言已落在这一项里（中文 = 简中 / 繁中，English = 英文，Español = esES / esMX，Русский = ruRU，한국어 = koKR，Português = ptBR）就不动文字，所以开关是中文时玩家在原版里选的繁中不会被改回简中；
+// 选 Español 时要改才改，按系统地区定 esES（2）或 esMX（10）；选 Русский = 7 ruRU（原版只有一种俄文），选 한국어 = 5 koKR，选 Português = 12 ptBR（原版只有巴西葡语）。两个键缺哪个补哪个。没点过应用（-1）= 一个字不动
 static int json_int_set(char *buf, size_t cap, const char *key, int val) {   // 把 "key": N 的 N 换成 val（没有这个键就插在第一个 { 之后）；返回 1 = 改了 | Replace the N of "key": N with val (if the key is absent, insert it after the first {); returns 1 = changed
     char *k = strstr(buf, key); char num[16]; snprintf(num, sizeof num, "%d", val);
     if (!k) { char *b = strchr(buf, '{'); char ins[96]; int m = snprintf(ins, sizeof ins, "\n    %s: %s,", key, num); if (!b || strlen(buf) + (size_t)m + 1 >= cap) return 0;
@@ -405,21 +405,21 @@ static int json_int_set(char *buf, size_t cap, const char *key, int val) {   // 
     if (e == v || atoi(v) == val) return 0; size_t nl = strlen(num); if (strlen(buf) + nl + 1 >= cap) return 0;
     memmove(v + nl, e, strlen(e) + 1); memcpy(v, num, nl); return 1; }
 static void settings_lang_apply(const char *save_dir) {
-    int dm_custom_lang_explicit(void); int sel = dm_custom_lang_explicit(); if (sel > 4) sel = -1;
+    int dm_custom_lang_explicit(void); int sel = dm_custom_lang_explicit(); if (sel > 5) sel = -1;
     int dm_custom_voice_explicit(void); int vsel = dm_custom_voice_explicit(); if (vsel > 1) vsel = -1;   // 单独配音（只有编进过场解码的包才有这一行，缺省包恒为 -1）
     if (sel < 0 && vsel < 0) return;
     char path[1200]; snprintf(path, sizeof path, "%s/Settings/Settings.json", save_dir); static char buf[66000]; FILE *f = fopen(path, "rb"); if (!f) return;
     size_t n = fread(buf, 1, 65535, f); fclose(f); if (n == 65535) return; buf[n] = 0;
     const char *k = strstr(buf, "\"Language\""), *c = k ? strchr(k + 10, ':') : NULL; int cur = c ? atoi(c + 1) : 8;   // 没写 = 游戏缺省（宿主报简中） | Not written = game default (the host reports Simplified Chinese)
-    int in = sel == 0 ? (cur == 8 || cur == 9) : sel == 1 ? cur == 0 : sel == 3 ? cur == 7 : sel == 4 ? cur == 5 : (cur == 2 || cur == 10);   // 文字语言已落在选中的那一项里 | The text language already falls within the selected option
-    int dm_sys_lang(void); int want = sel < 0 || in ? cur : sel == 0 ? 8 : sel == 1 ? 0 : sel == 3 ? 7 : sel == 4 ? 5 : (dm_sys_lang() == 10 ? 10 : 2);
+    int in = sel == 0 ? (cur == 8 || cur == 9) : sel == 1 ? cur == 0 : sel == 3 ? cur == 7 : sel == 4 ? cur == 5 : sel == 5 ? cur == 12 : (cur == 2 || cur == 10);   // 文字语言已落在选中的那一项里 | The text language already falls within the selected option
+    int dm_sys_lang(void); int want = sel < 0 || in ? cur : sel == 0 ? 8 : sel == 1 ? 0 : sel == 3 ? 7 : sel == 4 ? 5 : sel == 5 ? 12 : (dm_sys_lang() == 10 ? 10 : 2);
     const char *vk = strstr(buf, "\"VoiceLanguage\""), *vc = vk ? strchr(vk + 15, ':') : NULL; int vcur = vc ? atoi(vc + 1) : -1;
     int voice = vsel == 0 ? 8 : vsel == 1 ? 0 : in && sel == 0 && vcur > 0 ? vcur : voice_for(want);   // 明确选了配音就用它；没选时维持原来的跟随规则
     int ch = json_int_set(buf, sizeof buf, "\"Language\"", want) | json_int_set(buf, sizeof buf, "\"VoiceLanguage\"", voice); if (!ch) return;
     char tmp[1300]; snprintf(tmp, sizeof tmp, "%s.lang", path); f = fopen(tmp, "wb"); size_t m = strlen(buf);
     if (!f || fwrite(buf, 1, m, f) != m) { if (f) fclose(f); LOG("【红】语言开关：写 %s 失败", tmp); return; }
     fclose(f); if (rename(tmp, path)) { LOG("【红】语言开关：改名到 %s 失败", path); return; }
-    static const char *const nm[5] = { "中文", "English", "Español", "Русский", "한국어" };
+    static const char *const nm[6] = { "中文", "English", "Español", "Русский", "한국어", "Português" };
     LOG("语言开关：设置文件的 Language / VoiceLanguage 改成 %d / %d（%s；单独配音 %s；原文字语言 %d）", want, voice, sel < 0 ? "不改文字" : nm[sel], vsel < 0 ? "跟随语言" : vsel ? "English" : "中文", cur);
 }
 // 事务式存档当前的工作目录（游戏读写的那份；宿主自己的旁路文件写在这里才会随 Commit 进已提交版）。没挂载存档时返回 NULL

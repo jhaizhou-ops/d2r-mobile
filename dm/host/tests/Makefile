@@ -111,7 +111,7 @@ run: \
 	$(B)/t_widget
 	$(B)/t_doorspot
 	TMPDIR="$(abspath $(B))" $(B)/t_cloudsync 2>/dev/null
-	for m in en zh none sysen syses systw sysru sysko tags game; do TMPDIR="$(abspath $(B))" $(B)/t_i18n $$m || exit 1; done
+	for m in en zh none sysen syses systw sysru sysko syspt tags game; do TMPDIR="$(abspath $(B))" $(B)/t_i18n $$m || exit 1; done
 	$(PY) movie_cut.py $(B)/main.orig.bin $(B)/subsdk0.orig.bin
 	$(PY) oe_notify.py $(B)/main.orig.bin
 $(B)/t_i18n: t_i18n.c ../dm_i18n.c ../dm_i18n.h ../dm_i18n_tab.h | $(B)

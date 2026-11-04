@@ -83,17 +83,17 @@ static const char *rev_box(int i) { return i == K_VOICE ? "TouchCustom_voice_zh"
 static _Atomic int g_val[NK];        // 已生效：1 开 / 0 关 | In effect: 1 on / 0 off
 static _Atomic int g_pend[NK];       // 选项页上改了还没应用：-1 = 没改 | Changed on the options page but not applied yet: -1 = not changed
 static _Atomic int g_loaded;         // 0 没读盘 / 1 已读 | 0 not read from disk / 1 read
-// lang（语言开关，自定义页第一行）：五项单选 0 中文 / 1 English / 2 Español / 3 Русский / 4 한국어（勾选框 TouchCustom_lang_zh / _en / _es / _ru / _ko 互斥）。它不是功能开关，生效方式不同——
+// lang（语言开关，自定义页第一行）：六项单选 0 中文 / 1 English / 2 Español / 3 Русский / 4 한국어 / 5 Português（勾选框 TouchCustom_lang_zh / _en / _es / _ru / _ko / _pt 互斥）。它不是功能开关，生效方式不同——
 // 下次启动挂存档时由 hle_fs.c 按它改写原版设置文件的 Language / VoiceLanguage（游戏运行中自己会把内存里的语言写回设置文件，所以只能在游戏读设置之前改；
 // 见 dm_custom_lang_explicit）。文件里没有这个键（还没点过应用；旧版本写的布尔键 lang_en 不再读——原版设置文件里本来就记着上次选的语言）
 // = 不动原版设置，勾选框按当前实际语言显示；「默认」不改它（按一下默认把语言切了不合适）
-#define LANG_N 5
-static const char *const k_lang_box[LANG_N] = { "TouchCustom_lang_zh", "TouchCustom_lang_en", "TouchCustom_lang_es", "TouchCustom_lang_ru", "TouchCustom_lang_ko" };
-static const char *const k_lang_hint[LANG_N] = { "TouchCustomLangHintZh", "TouchCustomLangHintEn", "TouchCustomLangHintEs", "TouchCustomLangHintRu", "TouchCustomLangHintKo" };
-static const char *const k_lang_name[LANG_N] = { "zh", "en", "es", "ru", "ko" };   // 只进日志 | Log only
-static _Atomic int g_lang_explicit = -1;   // 文件里写着的 lang：-1 没写 / 0 中文 / 1 English / 2 Español / 3 Русский / 4 한국어
-static int g_lang_test;   // 测试开关 DM_TEST_LANG=<0–4>：当作玩家选了这一项并应用（走 hle_fs.c 挂存档时的真实改写），但不写回 sw_custom.txt（容器各局共用）
-static int lang_running(void) { int g = dm_lang_group(); return g == DM_LG_ZH ? 0 : g == DM_LG_ES || g == DM_LG_MX ? 2 : g == DM_LG_RU ? 3 : g == DM_LG_KO ? 4 : 1; }   // 此刻实际在跑的语言落在哪一项 | Which option the currently running language falls into
+#define LANG_N 6
+static const char *const k_lang_box[LANG_N] = { "TouchCustom_lang_zh", "TouchCustom_lang_en", "TouchCustom_lang_es", "TouchCustom_lang_ru", "TouchCustom_lang_ko", "TouchCustom_lang_pt" };
+static const char *const k_lang_hint[LANG_N] = { "TouchCustomLangHintZh", "TouchCustomLangHintEn", "TouchCustomLangHintEs", "TouchCustomLangHintRu", "TouchCustomLangHintKo", "TouchCustomLangHintPt" };
+static const char *const k_lang_name[LANG_N] = { "zh", "en", "es", "ru", "ko", "pt" };   // 只进日志 | Log only
+static _Atomic int g_lang_explicit = -1;   // 文件里写着的 lang：-1 没写 / 0 中文 / 1 English / 2 Español / 3 Русский / 4 한국어 / 5 Português
+static int g_lang_test;   // 测试开关 DM_TEST_LANG=<0–5>：当作玩家选了这一项并应用（走 hle_fs.c 挂存档时的真实改写），但不写回 sw_custom.txt（容器各局共用）
+static int lang_running(void) { int g = dm_lang_group(); return g == DM_LG_ZH ? 0 : g == DM_LG_ES || g == DM_LG_MX ? 2 : g == DM_LG_RU ? 3 : g == DM_LG_KO ? 4 : g == DM_LG_PT ? 5 : 1; }   // 此刻实际在跑的语言落在哪一项 | Which option the currently running language falls into
 static _Atomic int g_voice_explicit = -1;   // 文件里写着的 voice：-1 没写 / 0 中文配音 / 1 英文配音
 static int g_voice_test;   // 测试开关 DM_TEST_VOICE=0|1；只用于真机回归，不写回文件
 #if VOICE_ROW
@@ -201,9 +201,9 @@ static void set_toggle(uint64_t w, int on) {
     static const int32_t fr[2][4] = { { 0, 1, 3, 2 }, { 4, 5, 6, -1 } };
     *(uint8_t *)(w + 0xa88) = on != 0; memcpy((void *)(w + 0x6e8), fr[on != 0], sizeof fr[0]); *(int32_t *)(w + 0x610) = fr[on != 0][0];
 }
-// 多项单选行（语言五项、镜头视角三项）：几个勾选框互斥、存一个键 i（值 = 选中第几项）。页刚出现（布局里一律没勾）先摆成该显示的值、这一帧不当玩家点了；
+// 多项单选行（语言六项、镜头视角三项）：几个勾选框互斥、存一个键 i（值 = 选中第几项）。页刚出现（布局里一律没勾）先摆成该显示的值、这一帧不当玩家点了；
 // 之后点没选中的那一项 = 选它，点已选中的那一项不变（摆回勾上）。改了只记待定值，点「应用」才生效
-// Multi-option radio rows (language: five, camera view: three): the checkboxes are mutually exclusive and store one key i (value = which option is selected).
+// Multi-option radio rows (language: six, camera view: three): the checkboxes are mutually exclusive and store one key i (value = which option is selected).
 // When the page has just appeared (everything unchecked in the layout), first set what should show and do not treat this frame as a tap; after that,
 // tapping an unselected option = select it, tapping the selected one changes nothing (it is re-checked). A change only records the pending value; Apply makes it take effect
 static void radio_pump(uint64_t sp, int i, const char *const *box, const char *const *name, int n, dm_wref *seen) {
@@ -253,9 +253,9 @@ void dm_custom_ui_pump(unsigned long long root) {
               else if (sel == K_SCALE3D) { int p0 = atomic_load(&g_pend[K_SCALE3D]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[K_SCALE3D]), to = (sh + 1) % SCALE3D_N; atomic_store(&g_pend[K_SCALE3D], to);
                   for (int k = 0; k < SCALE3D_N; k++) { uint64_t z = find_w(sp, k_scale3d_box[k], 0); if (z) set_toggle(z, k == to); }
                   LOG("自定义设置：3D 清晰度 → %s（手柄 A 在三项间轮换；点「应用」生效）", k_scale3d_name[to]); }
-              else if (sel == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]), to = (sh + 1) % LANG_N; atomic_store(&g_pend[0], to);   // 语言行是单选的五项：A 依次轮换，四个框当场摆好
+              else if (sel == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]), to = (sh + 1) % LANG_N; atomic_store(&g_pend[0], to);   // 语言行是单选的六项：A 依次轮换，六个框当场摆好
                   for (int k = 0; k < LANG_N; k++) { uint64_t z = find_w(sp, k_lang_box[k], 0); if (z) set_toggle(z, k == to); }
-                  LOG("自定义设置：语言 → %s（手柄 A 在五项间轮换；点「应用」生效）", k_lang_name[to]); }
+                  LOG("自定义设置：语言 → %s（手柄 A 在六项间轮换；点「应用」生效）", k_lang_name[to]); }
               else set_toggle(cw, !TOGGLED(cw)); } }
       if (dm) { int32_t *r = (int32_t *)(dm + 0x70), want[4] = { 99999, 0, r[2], r[3] };   /* 不用时只把 x 挪出屏：它在滚动区里，y 放远了会撑大可滚范围 | when unused only x is moved off screen: it is inside the scroll area, and a far-away y would enlarge the scrollable range */
           if (dm_padmode_current() && tw && cw) { int32_t *t = (int32_t *)(tw + 0x70), *c = (int32_t *)(cw + 0x70); int top = t[1] < c[1] ? t[1] : c[1], bot = t[1] + t[3] > c[1] + c[3] ? t[1] + t[3] : c[1] + c[3];   // 框住整行：文字与勾选框两者的上下沿取并，再各放 10 单位（原先只按文字框的高度算，文字框比字矮，框成了横穿文字中线的一条） | Frame the whole row: take the union of the top and bottom edges of the text and the checkbox, then pad 10 units on each side (previously computed from the text box height only; the text box is shorter than the glyphs, so the frame became a strip cutting across the middle of the text)
@@ -277,7 +277,7 @@ void dm_custom_ui_pump(unsigned long long root) {
               if (sel != lsel || dir != ldir || off != lo) stuck = 0; else if (dir) stuck++;
               lsel = sel; ldir = dir; lo = off;
               if (dir && stuck < 2) { lf = f; dm_ui_wheel_on(sv, dir); } } } }
-    radio_pump(sp, 0, k_lang_box, k_lang_name, LANG_N, &seen[0]);   // 语言行：五项单选，存一个键 lang | language row: five-option radio, one key lang
+    radio_pump(sp, 0, k_lang_box, k_lang_name, LANG_N, &seen[0]);   // 语言行：六项单选，存一个键 lang | language row: six-option radio, one key lang
     radio_pump(sp, K_CAM, k_cam_box, k_cam_name, CAM_N, &seen[K_CAM]);   // 镜头视角：三项单选，存一个键 cam | camera view: three-option radio, one key cam
     radio_pump(sp, K_BRIGHT, k_bright_box, k_bright_name, BRIGHT_N, &seen[K_BRIGHT]);   // 暗处加亮：三项单选，存一个键 bright | brightening: three-option radio, one key bright
     // 3D 清晰度：三项单选，存一个键 scale3d（Mac App 没有这一行：radio_pump 找不到勾选框就不动）
