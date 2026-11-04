@@ -50,7 +50,7 @@ import java.util.UUID;
 final class SaveTransfer {
     private SaveTransfer() {}
 
-    static final int EXPORTED = 1, EXPORT_EMPTY = 2, IMPORTED = 3, IMPORT_REJECTED = 4, FAILED = 5;
+    static final int EXPORTED = 1, EXPORT_EMPTY = 2, IMPORTED = 3, IMPORT_REJECTED = 4, FAILED = 5, IMPORT_PARTIAL = 6;
     static final String EXPORT_MARKER = "export", EXPORT_DIR = "save-export", IMPORT_DIR = "save-import", INBOX = "_cloudinbox";
     static final String SOURCE_FILE = "export-source.txt", ID_FILE = "save-transfer-id";
     static final int MERGE_NONE = 0, MERGE_QUEUED = 1, MERGE_ALREADY = 2, MERGE_SAME_PHONE = 3;
@@ -102,33 +102,48 @@ final class SaveTransfer {
     }
 
     // 逐项加：角色文件夹、共享仓库文件夹、Settings；手机上已有同名的跳过（已有的共享仓库改走并回收件箱）。每项先拷进 files/save.import.part/<名字>（存档目录旁边，不在里面），拷完再改名到位，
-    // 中途失败不留半个角色；别的文件（说明、系统生成的小文件）不导
+    // 中途失败不留半个角色；别的文件（说明、系统生成的小文件）不导。按名字顺序导。
+    // 中途失败时，这一次已经加进来的几项再删掉，存档回到导入之前（提示里「原存档没动」才是真的），save-import 不改名、下次打开再导；
+    // 删不掉（极少见）就报 IMPORT_PARTIAL，提示里列出已经加进来的名字
     // Add item by item: character folders, shared stash folders, Settings; anything whose name the phone already has is skipped (a shared stash the
-// phone already has goes to the merge inbox instead). Each item is
-    // copied into files/save.import.part/<name> first (next to the save directory, not inside it) and renamed into place once complete, so a failure halfway leaves no half character; other
-    // files (notes, small files the system makes) are not imported
+    // phone already has goes to the merge inbox instead). Each item is copied into files/save.import.part/<name> first (next to the save directory, not
+    // inside it) and renamed into place once complete, so a failure halfway leaves no half character; other files (notes, small files the system makes)
+    // are not imported. Items are imported in name order. When it fails halfway, the items this run already added are deleted again, so the saves are as
+    // before the import (and the message's "your saves are unchanged" is true); save-import is not renamed and is imported again at the next start. If
+    // they cannot be deleted (rare), the result is IMPORT_PARTIAL and the message lists the names already added
     private static Result importFrom(File game, File root, File in, File save, String stamp) throws IOException {
         File[] list = root.listFiles();
         if (list == null) throw new IOException("list " + root.getName());
+        Arrays.sort(list, (a, b) -> a.getName().compareTo(b.getName()));
         if (!save.isDirectory() && !save.mkdirs()) throw new IOException("mkdir " + save.getName());
         File part = new File(save.getAbsoluteFile().getParentFile(), save.getName() + ".import.part");
         deleteTree(part);
         StringBuilder added = new StringBuilder(), skipped = new StringBuilder();
-        List<File> stashes = new ArrayList<>();
+        List<File> stashes = new ArrayList<>(), placed = new ArrayList<>();
         byte[] buffer = new byte[1 << 16];
+        int merge;
         try {
-            for (File c : list) {
-                if (!c.isDirectory() || !(isCharacter(c) || isStash(c) || c.getName().equals("Settings"))) continue;
-                File dst = new File(save, c.getName());
-                if (dst.exists() && isStash(c)) { stashes.add(c); continue; }
-                if (dst.exists()) { append(skipped, c.getName()); continue; }
-                File tmp = new File(part, c.getName());
-                copyTree(c, tmp, buffer);
-                if (!tmp.renameTo(dst)) throw new IOException("rename " + c.getName());
-                append(added, c.getName());
-            }
-        } finally { deleteTree(part); }
-        int merge = stashes.isEmpty() ? MERGE_NONE : fromThisPhone(root, save) ? MERGE_SAME_PHONE : queueMerge(save, stashes);
+            try {
+                for (File c : list) {
+                    if (!c.isDirectory() || !(isCharacter(c) || isStash(c) || c.getName().equals("Settings"))) continue;
+                    File dst = new File(save, c.getName());
+                    if (dst.exists() && isStash(c)) { stashes.add(c); continue; }
+                    if (dst.exists()) { append(skipped, c.getName()); continue; }
+                    File tmp = new File(part, c.getName());
+                    copyTree(c, tmp, buffer);
+                    if (!tmp.renameTo(dst)) throw new IOException("rename " + c.getName());
+                    placed.add(dst); append(added, c.getName());
+                }
+            } finally { deleteTree(part); }
+            merge = stashes.isEmpty() ? MERGE_NONE : fromThisPhone(root, save) ? MERGE_SAME_PHONE : queueMerge(save, stashes);
+        } catch (IOException e) {
+            // 撤回这一次已经加进来的（都是手机上原来没有的，删掉就回到导入之前）
+            // Take back what this run already added (none of it was on the phone before, so deleting it restores the state before the import)
+            StringBuilder kept = new StringBuilder();
+            for (File p : placed) { try { deleteTree(p); } catch (IOException ignored) { } if (p.exists()) append(kept, p.getName()); }
+            if (kept.length() == 0) throw e;
+            return new Result(IMPORT_PARTIAL, reason(e), kept.toString(), MERGE_NONE);
+        }
         // 加完：save-import 改不了名也不算失败（下次打开再导一遍，已有的都会跳过）
         // Done adding: failing to rename save-import is not a failure (the next start imports again, and everything already there is skipped)
         File done = unused(new File(game, IMPORT_DIR + ".done-" + stamp));
@@ -229,9 +244,11 @@ final class SaveTransfer {
         return false;
     }
 
-    // 存档根：一个角色一个文件夹（<名字>/<名字>.d2s）或共享仓库文件夹（ModernSharedStash…/*.d2i）；导出那一层 <日期-时间>/ 往下找一层
-    // The saves root: one folder per character (<name>/<name>.d2s) or a shared stash folder (ModernSharedStash.../*.d2i); one level further down for
-    // the <date-time>/ level of an export
+    // 存档根：一个角色一个文件夹（<名字>/<名字>.d2s）、共享仓库文件夹（ModernSharedStash…/*.d2i）或游戏设置 Settings/，有一样就算；
+    // 导出那一层 <日期-时间>/ 往下找一层。只有 Settings/ 的也算存档（照「只在手机上还没有时才导」处理），不当成认不出
+    // The saves root: one folder per character (<name>/<name>.d2s), a shared stash folder (ModernSharedStash.../*.d2i) or the game settings Settings/,
+    // any one of them is enough; one level further down for the <date-time>/ level of an export. A folder with only Settings/ counts as saves too
+    // (handled by "only imported while the phone has none"), not as unrecognised
     static File savesRoot(File dir) {
         if (looksLikeSaves(dir)) return dir;
         File[] list = dir.listFiles();
@@ -244,7 +261,7 @@ final class SaveTransfer {
     private static boolean looksLikeSaves(File dir) {
         File[] list = dir.listFiles();
         if (list == null) return false;
-        for (File c : list) if (c.isDirectory() && (isCharacter(c) || isStash(c))) return true;
+        for (File c : list) if (c.isDirectory() && (isCharacter(c) || isStash(c) || c.getName().equals("Settings"))) return true;
         return false;
     }
 
