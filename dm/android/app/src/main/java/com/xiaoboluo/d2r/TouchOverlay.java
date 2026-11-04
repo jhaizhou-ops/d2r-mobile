@@ -412,22 +412,13 @@ public final class TouchOverlay extends View {
             catch(Exception ignored) { }
         }
     }
-    // 自绘 HUD 的水平基准：游戏按 16:9 设计排版，HUD 中线始终落在「界面矩形左起 1920 布局单位」处，
-    // 换算成效果图像素就是 1173.6（1920 ÷ 2160 × 1320）。界面矩形正好 16:9 时它就是矩形中线（所以宽屏、16:9 及以上的
-    // 视图偏差为 0）；界面矩形比 16:9 窄时（游戏的界面高有 720 下限，被抬过就是这种情况）中线比矩形中线偏右，
-    // 按当前视图矩形的宽高把这个偏差算出来补上，格子/数字/角标才和游戏内容对齐。全部由分辨率推出，不写死。
-    // Horizontal reference of the self-drawn HUD: the game lays its HUD out for 16:9, so the HUD centreline always sits at
-    // 1920 layout units from the UI rectangle's left edge -- 1173.6 mockup pixels (1920 / 2160 * 1320). On a 16:9 rectangle
-    // that is exactly the rectangle's centreline (so wide screens and 16:9 views need no correction); on a rectangle narrower
-    // than 16:9 (which is what the game's 720-pixel UI-height floor produces) the centreline sits right of the rectangle's
-    // centreline, and that offset is computed from the current view rectangle so cells, numbers and badges stay on the game's
-    // content. Derived from the resolution, nothing hard-coded.
-    private float hudX(double x,float u) {
-        float mockW=viewW()/u;                 // 视图矩形宽折算成效果图像素 | the view rectangle's width in mockup pixels
-        float dx=1173.6f-mockW/2f;             // 游戏 HUD 中线 - 视图矩形中线 | game HUD centreline minus the view rectangle's centreline
-        if(dx<0) dx=0;                         // 比 16:9 宽时游戏按矩形居中，没有偏差 | wider than 16:9: the game centres on the rectangle, no offset
-        return viewW()/2f+((float)x-1434f+dx)*u;
-    }
+    // 自绘 HUD 的水平基准：视图矩形（front_android_view_rect）就带着游戏 HUD 中线的水平偏移，画布按它平移到视图原点，
+    // 所以这里只按效果图中线（1434）对齐即可；偏移量是「HUD 中线 = 界面矩形左起 1920 布局单位」按当前分辨率算出来的。
+    // Horizontal reference of the self-drawn HUD: the view rectangle (front_android_view_rect) already carries the game HUD
+    // centreline's horizontal offset and the canvas is translated to the view origin, so aligning to the mockup centreline (1434)
+    // is enough; that offset is derived from the current resolution ("HUD centreline = 1920 layout units from the UI rectangle's
+    // left edge").
+    private float hudX(double x,float u) { return viewW()/2f+((float)x-1434f)*u; }
     private void hudImage(Canvas c,String name,double x,double y,float u) {
         Bitmap b=image("hud_v4_ui/"+name); if(b==null)return;
         float left=hudX(x,u),top=(float)y*u;

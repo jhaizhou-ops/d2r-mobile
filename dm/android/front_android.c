@@ -204,7 +204,17 @@ void front_android_view_rect(int win_w, int win_h, int out[4]) {
     if (front_android_full()) {
         int x, y, w, h, rw = 0, rh = 0; dm_ui_rect(&x, &y, &w, &h);
         int vh = (int)floor(win_w * 9.0 / 16), vy = (win_h - vh) / 2;
-        if (dm_screen_real(&rw, &rh) && h > 0 && h < rh) { vy = (int)lround((double)win_h * y / rh); vh = (int)lround((double)win_h * h / rh); }
+        if (dm_screen_real(&rw, &rh) && h > 0 && h < rh) { vy = (int)lround((double)win_h * y / rh); vh = (int)lround((double)win_h * h / rh);
+            /* 真全屏：游戏按 16:9 设计排版，HUD 中线固定在「界面矩形左起 1920 布局单位」= 1173.6 效果图像素处。界面矩形比 16:9 窄
+               （界面高被游戏的 720 下限抬过就是这种）时这条中线比矩形中线偏右，覆盖层（自绘 HUD 与按钮）整体右移同一差值——
+               点按跟着视图原点一起平移，世界换算（touch_android.c world_rect）用 −vr_x 又加回来，所以点世界不受影响。
+               16:9 及以上算出来是 0，行为不变。 | True fullscreen: the game lays its HUD out for 16:9, so the HUD centreline always
+               sits "1920 layout units from the UI rectangle's left edge" = 1173.6 mockup pixels. On a rectangle narrower than 16:9
+               (what the game's 720-pixel UI-height floor produces) that centreline sits right of the rectangle's centreline, so the
+               whole overlay (self-drawn HUD and buttons) moves right by the same difference: touches follow the view origin, and
+               world_rect adds -vr_x back, leaving world taps untouched. On 16:9 and wider it works out to 0 and nothing changes. */
+            float hu = (float)vh / 1320.0f; int shift = (int)lroundf(1173.6f * hu - (float)win_w * 0.5f);
+            if (shift > 0) out[0] = shift; }
         else if (rw > 0 && rh > 0 && (double)rw * 9 > (double)rh * 16) { vh = (int)lround((double)win_w * rh / rw); vy = (win_h - vh) / 2; }
         out[1] = vy; out[3] = vh; return;
     }
