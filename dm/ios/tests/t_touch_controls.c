@@ -297,6 +297,31 @@ static void pointer_stack_tap(void) {
     dm_tc_end_at(&s,0,14.5); CHECK(s.pulse_button==0); CHECK(s.stack_take_seq==1);
     dm_tc_navigation(&scene,"PanelManager","UnloadAll","");
 }
+/* 雇佣名单的一行（命中类 12，#216）：点按 = 鼠标点击（选中 / 雇）；按住不动满 0.5 秒起按住 X，松手放开、不算点按；按住后起滚动、系统取消手指都放开 X；
+   滑一下就起滚动的不按 X；面板里别的控件按住不动不按 X
+   A row of the hire list (hit class 12, #216): a tap = mouse click (select / hire); holding still for 0.5 s holds X, and the release lets go without counting as a tap; starting a scroll after the hold and a system-cancelled finger both let go of X;
+   a press that turns into a scroll right away does not press X; holding still on another widget inside the panel does not press X */
+static void pointer_merc_hold(void) {
+    dm_tc_state s; dm_tc_init(&s,667,375); dm_tc_set_navigation_mode(&s,1); s.mouse_click_mode=1;
+    dm_tc_begin_at(&s,0,400,120,10.0); dm_tc_pointer_item(&s,12); dm_tc_end_at(&s,0,10.1);
+    CHECK(s.mouse_click_seq==1); CHECK(s.buttons==0); CHECK(!s.pointer_valid); CHECK(s.pointer_merc==0);
+    dm_tc_begin_at(&s,0,400,120,11.0); dm_tc_pointer_item(&s,12); dm_tc_tick(&s,11.3); CHECK(s.buttons==0);
+    dm_tc_tick(&s,11.6); CHECK(s.buttons==DM_BTN_X); CHECK(!s.pointer_valid); CHECK(s.pulse_button==0);
+    dm_tc_tick(&s,13.0); CHECK(s.buttons==DM_BTN_X);
+    dm_tc_end_at(&s,0,13.1); CHECK(s.buttons==0); CHECK(s.mouse_click_seq==1); CHECK(s.long_press_seq==0); CHECK(s.pulse_button==0); CHECK(s.pointer_merc==0);
+    dm_tc_begin_at(&s,0,400,120,14.0); dm_tc_pointer_item(&s,12); dm_tc_tick(&s,14.6); CHECK(s.buttons==DM_BTN_X);
+    dm_tc_move_at(&s,0,400,180,14.7); CHECK(s.finger[0].ui_drag==1); CHECK(s.buttons==0);
+    dm_tc_end_at(&s,0,14.8); CHECK(s.mouse_click_seq==1); CHECK(s.buttons==0);
+    dm_tc_begin_at(&s,0,400,120,15.0); dm_tc_pointer_item(&s,12); dm_tc_move_at(&s,0,400,180,15.1); dm_tc_tick(&s,15.8); CHECK(s.buttons==0);
+    dm_tc_end_at(&s,0,15.9); CHECK(s.mouse_click_seq==1);
+    dm_tc_begin_at(&s,0,400,120,16.0); dm_tc_pointer_item(&s,0); dm_tc_tick(&s,16.8); CHECK(s.buttons==0);
+    dm_tc_end_at(&s,0,16.9); CHECK(s.mouse_click_seq==1);
+    dm_tc_begin_at(&s,0,400,120,18.0); dm_tc_pointer_item(&s,12); dm_tc_tick(&s,18.6); CHECK(s.buttons==DM_BTN_X);
+    dm_tc_cancel_finger(&s,0); CHECK(s.buttons==0); CHECK(s.pointer_merc==0);
+    dm_tc_set_navigation_mode(&s,0); dm_tc_set_navigation_mode(&s,1);
+    dm_tc_begin_at(&s,0,400,120,20.0); dm_tc_pointer_item(&s,12); dm_tc_tick(&s,20.6); CHECK(s.buttons==DM_BTN_X);
+    dm_tc_set_navigation_mode(&s,0); CHECK((s.buttons&DM_BTN_X)==0);
+}
 static void pointer_item_tap(void) {
     dm_tc_scene scene={0}; dm_tc_navigation(&scene,"PanelManager","UnloadAll","");
     dm_tc_state s; dm_tc_init(&s,667,375); dm_tc_set_navigation_mode(&s,1);
@@ -642,7 +667,7 @@ int main(void) {
     RUN(hit_edges); RUN(key_hold_and_ownership); RUN(two_fingers_same_key); RUN(joystick_deadzone); RUN(joystick_clamp_956);
     RUN(joystick_axes); RUN(joystick_plus_skills); RUN(no_auto_handoff); RUN(background_no_key);
     RUN(circles_before_joystick); RUN(cancel_and_resize); RUN(deferred_skill_vs_belt); RUN(held_skill2_vs_belt); RUN(belt_single_double); RUN(no_ui_drag_outside_modal); RUN(invalid_slots_and_repeated_begin); RUN(all_slots_hold); RUN(enabled_targets); RUN(ui_scene_messages);
-    RUN(pointer_tap); RUN(world_tap); RUN(pointer_outside_close); RUN(scene_dialog_only); RUN(pointer_item_tap); RUN(pointer_stack_tap); RUN(pointer_over_disabled_target); RUN(ui_drag_typing); RUN(pointer_drag_out); RUN(pointer_drag); RUN(pointer_long); RUN(pointer_long_then_drag); RUN(pointer_long_seq); RUN(pointer_shop_drag); RUN(pointer_control_hit); RUN(pointer_game_mode); RUN(pointer_pulse_queue); RUN(safe_insets); RUN(swap_key); RUN(skill_cluster_clearance);
+    RUN(pointer_tap); RUN(world_tap); RUN(pointer_outside_close); RUN(scene_dialog_only); RUN(pointer_item_tap); RUN(pointer_stack_tap); RUN(pointer_merc_hold); RUN(pointer_over_disabled_target); RUN(ui_drag_typing); RUN(pointer_drag_out); RUN(pointer_drag); RUN(pointer_long); RUN(pointer_long_then_drag); RUN(pointer_long_seq); RUN(pointer_shop_drag); RUN(pointer_control_hit); RUN(pointer_game_mode); RUN(pointer_pulse_queue); RUN(safe_insets); RUN(swap_key); RUN(skill_cluster_clearance);
     RUN(belt_expand);
     printf("PASS %d/%d cases; %d/%d checks\n",cases,cases,checks,checks); return 0;
 }
