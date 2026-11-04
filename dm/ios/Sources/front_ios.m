@@ -135,7 +135,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     CALayer *_mhPtr, *_thr[8];   // _thr：画面外怪物的指针（threatsSync） | _thr: pointers for monsters off the picture (threatsSync)
       // 镜头实验：小地图 / 全屏地图上人物朝向的指针（mapHeadingSync） | camera experiment: the facing pointer on the minimap / fullscreen map (mapHeadingSync)
     CALayer *_mgLabel[DM_MAP_GOAL_MAX], *_mgMark[DM_MAP_GOAL_MAX];   // 小地图任务终点：每个终点一个名牌 / 符号层 + 一个灰十字层（mapGoalSync） | Minimap quest goals: one nameplate / symbol layer + one grey cross layer per goal (mapGoalSync)
-    NSMutableDictionary<NSString *,UIImage *> *_mgImg;
+    NSMutableDictionary<NSString *,id> *_mgImg;   // NSNull = 文件不存在（不再每帧读盘重试） | NSNull = file missing (no per-frame disk retry)
     uint64_t _modifierPublishEndNS,_modifierPublishEpoch;
     uint64_t _touchEventSeq,_touchReceiptSeq,_touchPublishedEventSeq; // 仅 DM_TOUCH_CONTROL_LOG 开启时推进 | Advanced only when DM_TOUCH_CONTROL_LOG is on
     UITouch *_pendEnd; double _pendEndTime,_pendWall; BOOL _pendFire,_finalAsked;   // 松手了但宿主的答案还没回：这根手指的「抬起」先挂着（见 finishTouches） | Released but the host's answer is not back yet: this finger's "lift" is held pending (see finishTouches)
@@ -263,7 +263,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
         _overlay.nativeMapping.secondary_group,_overlay.nativeMapping.group_seen,_overlay.nativeMapping.identity_scope);
         _touchPublishedEventSeq=_touchEventSeq;
     }
-    [_overlay setNeedsDisplay];
+    [_overlay controlsChanged];
 }
 - (void)cancelControlsFrom:(const char *)source {
     _pendEnd=nil; _finalAsked=NO;
@@ -322,7 +322,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
         dm_tc_resize(&_controls,self.bounds.size.width,self.bounds.size.height);[_overlay setNeedsDisplay];
     }
     hud_stack_watch();
-    { dm_hud_info h, o=_overlay.hud; dm_hud_get(&h); h.x=h.y=0; if (memcmp(&h,&o,sizeof h)) { _overlay.hud=h; [_overlay setNeedsDisplay]; } }   // 覆盖层不画玩家坐标：不清掉的话走路时每个逻辑拍都判「变了」、整层全屏重画一遍 | The overlay does not draw player coordinates: without clearing them, every logic tick while walking would be judged "changed" and redraw the whole layer fullscreen
+    { dm_hud_info h, o=_overlay.hud; dm_hud_get(&h); h.x=h.y=0; if (memcmp(&h,&o,sizeof h)) _overlay.hud=h; }   // 覆盖层不画玩家坐标：不清掉的话走路时每个逻辑拍都判「变了」、整层全屏重画一遍；重画范围由 setHud 定（DmTouchOverlay.m） | The overlay does not draw player coordinates: without clearing them, every logic tick while walking would be judged "changed" and redraw the whole layer fullscreen; setHud picks the redraw area (DmTouchOverlay.m)
     dm_tg_snapshot snapshot={0};
     dm_touch_game_snapshot(&snapshot);
     _overlay.nativeMapping=snapshot;
@@ -392,15 +392,19 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
 // Conversion: world cell (x, y) on the map is at player point + ((Δx−Δy)×1.6, (Δx+Δy)×0.8) × pixels per cell; the player point on the fullscreen map = the on-screen position of the player's feet, on the minimap = the center of the minimap frame.
 // Not drawn while a panel is open (navigation mode) -- the top-right minimap is collapsed then too. Layers have no implicit animation; positions update every frame as the player walks.
 - (UIImage *)mgImage:(NSString *)name {
-    UIImage *im=_mgImg[name]; if(im) return im; if(!_mgImg) _mgImg=[NSMutableDictionary dictionary];
-    im=[UIImage imageWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:[@"mapgoal/" stringByAppendingString:name]]];
-    if(im) _mgImg[name]=im; return im;
+    id hit=_mgImg[name]; if(hit) return hit==NSNull.null ? nil : hit; if(!_mgImg) _mgImg=[NSMutableDictionary dictionary];
+    UIImage *im=[UIImage imageWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:[@"mapgoal/" stringByAppendingString:name]]];
+    _mgImg[name]=im ?: NSNull.null; return im;
 }
 - (void)mapGoalSync {
     static int old=-1; if(old<0) { int dm_custom_get(const char *key); old=dm_custom_get("item_notes")!=0; }   // 旧译名开关重启生效，启动读一次（名牌字跟游戏显示的一致） | The old translation names switch takes effect on restart; read once at launch (nameplate text matches what the game shows)
-    dm_map_goal_view v; float cell=0; int mode=dm_ui_map_geom(&cell), n=dm_map_goals(&v); int rw=0,rh=0; dm_screen_real(&rw,&rh);
+    dm_map_goal_view v={0}; float cell=0; int mode=dm_ui_map_geom(&cell), n=dm_map_goals(&v); int rw=0,rh=0; dm_screen_real(&rw,&rh);
     CGRect wr=world_rect(self); float mm[4]; BOOL haveMini=dm_ui_minimap_rect(mm);
     BOOL show=mode && n>0 && !_navigation && !_info.hidden && rw>0 && cell>0 && (mode==2 || haveMini);
+    // 输入和上一帧一样就不动图层（显示链接 120 Hz，终点 / 玩家格按逻辑拍才变） | Same inputs as last frame: leave the layers alone (display link runs at 120 Hz, goals / player cell change per logic tick)
+    { static struct { dm_map_goal_view v; float cell, mm[4]; int mode, rw, rh, show, lg; CGRect wr; CGSize z; } last, cur; memset(&cur,0,sizeof cur);
+      cur.v=v; cur.cell=cell; if(haveMini) memcpy(cur.mm,mm,sizeof mm); cur.mode=mode; cur.rw=rw; cur.rh=rh; cur.show=show; cur.lg=dm_lang_group(); cur.wr=wr; cur.z=self.bounds.size;
+      if(_mgLabel[0] && !memcmp(&cur,&last,sizeof cur)) return; last=cur; }
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     CGSize z=self.bounds.size; CGFloat k=wr.size.width/rw, c=cell*k, H=wr.size.height, lh=H*0.0236, sh=H*0.085*(mode==1?0.6:1);   // 名牌高（原版名牌字高约屏高 1/53）、符号高（的大小） | Nameplate height (the original game's nameplate glyph height is about 1/53 of screen height), symbol height (its size)
     CGPoint o; CGRect area;

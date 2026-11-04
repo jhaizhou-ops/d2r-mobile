@@ -12,5 +12,6 @@
 @property(nonatomic, assign) dm_hud_info hud;
 @property(nonatomic, assign) BOOL dialogOnly;   // 只开着 NPC 对话菜单：底栏照常画 | only the NPC dialog menu is open: the bottom bar is drawn as usual
 @property(nonatomic, assign) BOOL hudBlocked;   // 面板栈里有非常驻面板：UIKit 底栏让开（front_ios.m hud_stack_message）   // 宿主每拍发布的 HUD 数字（底部 UI v4：经验条、角标、难度） | the panel stack has a non-persistent panel: the UIKit bottom bar gets out of the way (front_ios.m hud_stack_message)   // HUD numbers published by the host every tick (bottom UI v4: experience bar, badges, difficulty)
+- (void)controlsChanged;   // 触控状态变了（front_ios pushFrom）：挪摇杆层，按钮显示变了才重画 | touch state changed (front_ios pushFrom): move the joystick layers, redraw only when the button visuals change
 - (NSDictionary *)controlMetadata;
 @end
