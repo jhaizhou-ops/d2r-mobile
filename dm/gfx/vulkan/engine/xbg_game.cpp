@@ -2584,11 +2584,12 @@ VkSampler sampler_slow(const samp_par &p,Image &im,VkFormat viewed,bool integer_
     VkSamplerCreateInfo s{};int result=xbg_sampler_from_nvn(&input,&limits,&s);
     if(result)xbg_fatalf("NVN sampler %s result=%d min=%u mag=%u wrap=%u/%u/%u lod=%g/%g bias=%g aniso=%g compare=%u/%u border=%g,%g,%g,%g texture=%llu format=%#x vk=%u mirrorEnabled=%u",xbg_sampler_error(result),result,p.minf,p.magf,p.ws,p.wt,p.wr,p.lod_min,p.lod_max,p.lod_bias,p.aniso,p.cmp_mode,p.cmp_func,p.border[0],p.border[1],p.border[2],p.border[3],(unsigned long long)im.source.serial,im.source.d.format,unsigned(viewed),sampler_mirror_clamp_enabled);
     const VkFormatProperties &fp=format_properties(viewed);
-    if((s.minFilter==VK_FILTER_LINEAR || s.magFilter==VK_FILTER_LINEAR) && !(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)){
+    if((s.minFilter==VK_FILTER_LINEAR || s.magFilter==VK_FILTER_LINEAR || s.mipmapMode==VK_SAMPLER_MIPMAP_MODE_LINEAR) && !(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)){
         // 个别驱动（如 Mali）不为某些格式报告线性过滤（Adreno 报告）：降级为最近点并记日志，不再中止 | Some drivers (e.g. Mali) omit the linear-filter bit for formats Adreno reports it for: fall back to NEAREST with a log line instead of aborting
         xbg_logf("NVN sampler linear unsupported min=%u mag=%u compare=%u/%u format=%#x vk=%u optimalFeatures=%#x texture=%llu decoded=%d imfmt=%u -> NEAREST",p.minf,p.magf,p.cmp_mode,p.cmp_func,im.source.d.format,unsigned(viewed),fp.optimalTilingFeatures,(unsigned long long)im.source.serial,int(im.decoded),unsigned(im.fmt));
         if(s.minFilter==VK_FILTER_LINEAR)s.minFilter=VK_FILTER_NEAREST;
         if(s.magFilter==VK_FILTER_LINEAR)s.magFilter=VK_FILTER_NEAREST;
+        s.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;   // 线性 mipmap 同样要求这一能力位（Vulkan 规范）| linear mipmapping needs the same feature bit (Vulkan spec)
         s.anisotropyEnable=VK_FALSE;s.maxAnisotropy=1.0f;
     }
     need(s.pNext==nullptr,"Unexpected sampler extension chain");

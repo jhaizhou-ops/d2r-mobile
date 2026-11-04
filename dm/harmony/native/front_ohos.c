@@ -301,10 +301,10 @@ uint64_t front_game_res(int docked) {
             // 900 tall x 0.75 while UI text is sharp; measured about 2-3 FPS less on the Pura X (GPU 24 -> 27 ms). A DM_3D_SCALE given in dm/env is left alone
             const char *nr = getenv("DM_NATIVE_RES");
             if ((!nr || *nr != '0') && docked && nh >= 720) { unsigned nw = (unsigned)(llround(nh * aspect / 8) * 8); if (nw > 4096) { nw = 4096; nh = (unsigned)llround(4096 / aspect); }
-                if (!getenv("DM_3D_SCALE")) { double sc = 700.0 / nh; char v[16]; snprintf(v, sizeof v, "%.2f", sc < 0.5 ? 0.5 : sc > 0.75 ? 0.75 : sc); setenv("DM_3D_SCALE", v, 0); setenv("DM_3D_SCALE_FLOOR", v, 0);
+                if (!getenv("DM_3D_SCALE")) { double sc = 700.0 / nh; char v[16]; snprintf(v, sizeof v, "%.2f", sc < 0.5 ? 0.5 : sc > 0.75 ? 0.75 : sc); setenv("DM_3D_SCALE_DEFAULT", v, 0); setenv("DM_3D_SCALE_FLOOR", v, 0);
                     LOG("画面：原生像素出图 %ux%u，3D 比例 %s", nw, nh, v); }
                 return (uint64_t)nh << 32 | nw; }
-            if (docked && !getenv("DM_3D_SCALE")) { setenv("DM_3D_SCALE", "0.75", 0); setenv("DM_3D_SCALE_FLOOR", "0.75", 0); }
+            if (docked && !getenv("DM_3D_SCALE")) { setenv("DM_3D_SCALE_DEFAULT", "0.75", 0); setenv("DM_3D_SCALE_FLOOR", "0.75", 0); }
             unsigned bw = (unsigned)(llround((double)bh * aspect / 8) * 8); if (bw > 4096) bw = 4096;
             return (uint64_t)bh << 32 | bw;
         }
