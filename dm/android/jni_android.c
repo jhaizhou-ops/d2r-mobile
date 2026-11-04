@@ -227,12 +227,14 @@ JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeStart(JNIEnv *env
     // A draw whose pipeline state equals the previous draw's reuses its pipeline without serializing the create info for a
     // lookup (the engine's gfx-pipe-memo; a marker file still wins).
     setenv("DM_GFX_PIPE_MEMO", "1", 0);
-    // 3D 渲染比例上限 0.85（其他手机平台缺省 0.75，见 hle_oe.c；env 文件仍优先）：Redmi K50 Ultra 营地和 9 分钟战斗都稳 60 帧，比 0.75
-    // 多 28% 像素，打 9 分钟多热约 2 °C；重场景或机身过热掉帧时，动态比例每次退 0.05。
-    // 3D render scale ceiling 0.85 (other phone platforms default to 0.75, see hle_oe.c; the env file still wins): on the Redmi K50
-    // Ultra the camp and a 9-minute fight hold 60 fps with 28% more pixels than 0.75 and about 2 C more heat; when heavy scenes or
-    // a hot phone drop frames, the dynamic scale steps down 0.05 at a time.
-    setenv("DM_3D_SCALE", "0.85", 0);
+    // 3D 渲染比例缺省 0.85，即自定义页「3D 清晰度」的「均衡」档（其他手机平台缺省 0.75；省电 0.60、清晰 1.00，见 hle_oe.c）：Redmi K50 Ultra
+    // 营地和 9 分钟战斗都稳 60 帧，比 0.75 多 28% 像素，打 9 分钟多热约 2 °C；重场景或机身过热掉帧时，动态比例每次退 0.05。
+    // 给的是缺省、不是 DM_3D_SCALE：玩家在自定义页选的档照样生效；env 文件里的 DM_3D_SCALE 仍把比例钉住（测试、测量）。
+    // 3D render scale default 0.85, the "balanced" level of the Custom page's "3D resolution" (other phone platforms default to 0.75; power saver 0.60,
+    // sharp 1.00, see hle_oe.c): on the Redmi K50 Ultra the camp and a 9-minute fight hold 60 fps with 28% more pixels than 0.75 and about 2 C more heat;
+    // when heavy scenes or a hot phone drop frames, the dynamic scale steps down 0.05 at a time. This sets the default, not DM_3D_SCALE, so the level the
+    // player picks on the Custom page takes effect; DM_3D_SCALE in the env file still pins the scale (tests, measurements).
+    setenv("DM_3D_SCALE_DEFAULT", "0.85", 0);
     // Vulkan 适配器先沿用同步提交；上游新增翻译线程需独立验证对象生命周期。
     // Keep synchronous submission until the new upstream translation thread's object lifetimes are verified with Vulkan.
     setenv("DM_NVN_SYNC", "1", 0);

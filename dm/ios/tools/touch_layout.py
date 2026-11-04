@@ -1179,7 +1179,7 @@ def _drop_rows(*rows):
 # 视频页的表格整个换成我们的行：分节标题 + 每个开关一行原版勾选框（照「游戏」页「自动拾取金币」那一行的字段）。控件名 TouchCustom_<键>，
 # 宿主 dm_custom.c 读勾没勾、按应用 / 放弃 / 默认处理。勾选框的消息发一条无害的 ClosePanel（同「极乐世界」），游戏不认
 # 「配音」单选（voice：中文配音 / English voice）只在编进过场解码的包里有（MOVIE_FFMPEG=1，与宿主 dm_custom.c 的 DM_MOVIE_FFMPEG 同一个开关）：缺省包的自定义页一行不多
-_CUSTOM_KEYS = (('voice',) if os.environ.get('MOVIE_FFMPEG') == '1' else ()) + ('auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes', 'icloud', 'pot_pick', 'drop_haptic', 'gem_pick', 'store_btn', 'eco_fps', 'q3d', 'loot_filter', 'auto_buff', 'touch_swap_above', 'cam', 'bright')
+_CUSTOM_KEYS = (('voice',) if os.environ.get('MOVIE_FFMPEG') == '1' else ()) + ('auto_mana', 'merc_pot', 'drop_light', 'map_mark', 'item_notes', 'icloud', 'pot_pick', 'drop_haptic', 'gem_pick', 'store_btn', 'eco_fps', 'q3d', 'loot_filter', 'auto_buff', 'touch_swap_above', 'cam', 'bright', 'scale3d')
 # 字在中英表（dm/i18n/ui_text.tsv 的 dmCustom<键名驼峰>），布局写 @键、跟原版语言走（英文版）；行高按中文行数分，英文必须同样行数（不然换语言排版变）
 # The text lives in the Chinese-English string table (dmCustom<key name in camel case> in dm/i18n/ui_text.tsv); layouts write @key and follow the
 # original game's language (English version); row height is assigned by the number of Chinese lines, and English must have the same number of lines
@@ -1206,12 +1206,14 @@ _CUSTOM_ALL = (('lang', '@dmCustomLang'),) + _CUSTOM_ROWS
 # 这一行高度记 0、控件不出，后面的行往上补；_CUSTOM_ALL 照旧含它（与宿主 k_keys 同序，键存盘照旧），宿主手柄上下选行时跳过页上没有的行（dm_custom.c）
 # Rows not shown: the Android import pack (d2rm_android.py sets DM_OVERLAY_NO_ICLOUD=1) has no iCloud -- only iOS / Mac cloud_ios.m reads this switch, so on Android ticking it changes nothing.
 # The row gets height 0 and no widgets, and the rows below move up; _CUSTOM_ALL still contains it (same order as the host's k_keys, the key is still saved), and the host skips rows the page does not have when the controller moves up or down (dm_custom.c)
-_CUSTOM_HIDDEN = frozenset(('icloud',)) if os.environ.get('DM_OVERLAY_NO_ICLOUD') == '1' else frozenset()
+# Mac App（DM_OVERLAY_MAC）不出「3D 清晰度」：Mac 宿主的 3D 比例恒为 1.0，不按这个档（hle_oe.c dm_3d_scale_level_set）
+# The Mac App (DM_OVERLAY_MAC) does not show "3D resolution": the Mac host's 3D scale is always 1.0 and does not follow this level (hle_oe.c dm_3d_scale_level_set)
+_CUSTOM_HIDDEN = frozenset((('icloud',) if os.environ.get('DM_OVERLAY_NO_ICLOUD') == '1' else ()) + (('scale3d',) if os.environ.get('DM_OVERLAY_MAC') else ()))
 _CUSTOM_TEST_ROWS = int(os.environ.get('DM_CUSTOM_TEST_ROWS', '0'))   # 测试（造现场）：末尾多摆这么多行假行，验更多行时的滚动；产品不设 | test (test setup): append this many dummy rows at the end, to verify scrolling with more rows; not set in the product
 # 「3D 画质」（q3d）是单选的两项、每项下面一行说明小字，占两行高（_CUSTOM_Q3D_H）；其余各行一行高
 # "3D Quality" (q3d) is a radio with two options, each with a line of small description text below, taking two rows of height (_CUSTOM_Q3D_H); every other row is one row high
 _CUSTOM_Q3D_H = 2 * _CUSTOM_LINE_H
-_CUSTOM_ROW_H = [(0 if k in _CUSTOM_HIDDEN else 3 * _CUSTOM_LINE_H if k in ('cam', 'bright') else _CUSTOM_Q3D_H if k in ('voice', 'q3d', 'touch_swap_above') else _CUSTOM_LINE_H) for k, _ in _CUSTOM_ALL] + [_CUSTOM_LINE_H] * _CUSTOM_TEST_ROWS
+_CUSTOM_ROW_H = [(0 if k in _CUSTOM_HIDDEN else 3 * _CUSTOM_LINE_H if k in ('cam', 'bright', 'scale3d') else _CUSTOM_Q3D_H if k in ('voice', 'q3d', 'touch_swap_above') else _CUSTOM_LINE_H) for k, _ in _CUSTOM_ALL] + [_CUSTOM_LINE_H] * _CUSTOM_TEST_ROWS
 _CUSTOM_Y = [_CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H[:i]) for i in range(len(_CUSTOM_ROW_H))]
 _CUSTOM_H = _CUSTOM_TITLE_H + sum(_CUSTOM_ROW_H)
 def _custom_toggle_row(i, key, label):
@@ -1271,6 +1273,7 @@ def _custom_q3d_row(i, setting="q3d"):
                (('dmCustomQ3dSmooth', prefix + '_smooth'), ('dmCustomQ3dQuality', prefix)) if setting == 'q3d' else
                _CAM_OPTS if setting == 'cam' else
                _BRIGHT_OPTS if setting == 'bright' else
+               _SCALE3D_OPTS if setting == 'scale3d' else
                (('dmCustomTouchSwapNear', prefix + '_near'), ('dmCustomTouchSwapFar', prefix)))
     out = '        { "type": "TextBoxWidget", "name": "%s_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "" } },\n' % (prefix, y, len(choices) * h)   # 空字、盖住全部选项（手柄选中框用） | empty, covering all options (for the controller selection frame)
     for k, (key, nm) in enumerate(choices):
@@ -1290,6 +1293,12 @@ _CAM_OPTS = (('dmCustomCamOff', 'TouchCustom_cam'), ('dmCustomCamOts', 'TouchCus
 # dm_custom.c makes the three mutually exclusive and stores one key bright, which dm_bright.c scales its exposure by; TouchCustom_bright_Text is empty and
 # covers all three, for the controller selection frame
 _BRIGHT_OPTS = (('dmCustomBrightOff', 'TouchCustom_bright'), ('dmCustomBrightMid', 'TouchCustom_bright_mid'), ('dmCustomBrightFull', 'TouchCustom_bright_full'))
+# 「3D 清晰度」（scale3d：0 省电 60% / 1 均衡 = 本平台缺省（安卓 85%、别的手机 75%）/ 2 清晰 100%，#149）：同暗处加亮，上下三项单选、每项一行说明小字、占三行高。勾选框 TouchCustom_scale3d（省电）/
+# _mid / _full，宿主 dm_custom.c 让三框互斥、存一个键 scale3d，hle_oe.c 按它定 3D 比例的配置值；TouchCustom_scale3d_Text 空字、盖住三项，给手柄选中框框整行用
+# "3D resolution" (scale3d: 0 power saver 60% / 1 balanced = the platform default (85% on Android, 75% on other phones) / 2 sharp 100%, #149): like brightening, a stacked three-option radio, each option with a
+# line of small description text, three rows high. Checkboxes TouchCustom_scale3d (power saver) / _mid / _full; the host's dm_custom.c makes the three mutually
+# exclusive and stores one key scale3d, from which hle_oe.c sets the configured 3D scale; TouchCustom_scale3d_Text is empty and covers all three, for the controller selection frame
+_SCALE3D_OPTS = (('dmCustomScale3dLow', 'TouchCustom_scale3d'), ('dmCustomScale3dMid', 'TouchCustom_scale3d_mid'), ('dmCustomScale3dFull', 'TouchCustom_scale3d_full'))
 def _custom_page(text):
     if '"name": "VideoOptionsPanel"' not in text or '"name": "OptionsTable"' not in text: raise SystemExit('touch_layout：主机版视频页不是原样（原版布局变了？），自定义页没换')
     title = ('{ "type": "TableRowWidget", "name": "Row TouchCustomTitle", "children": [\n'
@@ -1303,7 +1312,7 @@ def _custom_page(text):
            '            { "type": "TableWidget", "name": "OptionsTable", "fields": { "columns": [ "$OptionsTableColumn1", "$OptionsTableColumn2" ], "rowHeight": %d }, "children": [\n' % _CUSTOM_TITLE_H
            + title + '            ] },\n'
            + '            { "type": "Widget", "name": "TouchCustomRows", "fields": { "rect": { "x": 0, "y": 0, "width": 1500, "height": %d } }, "children": [\n' % _CUSTOM_H
-           + _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('voice', 'q3d', 'touch_swap_above', 'cam', 'bright') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i and k not in _CUSTOM_HIDDEN) + _CUSTOM_LANG_HINT
+           + _custom_lang_row() + ''.join((_custom_q3d_row(i, k) if k in ('voice', 'q3d', 'touch_swap_above', 'cam', 'bright', 'scale3d') else _custom_toggle_row(i, k, l)) for i, (k, l) in enumerate(_CUSTOM_ALL) if i and k not in _CUSTOM_HIDDEN) + _CUSTOM_LANG_HINT
            + ''.join('        { "type": "TextBoxWidget", "name": "TouchCustomTest%d_Text", "fields": { "rect": { "x": 0, "y": %d, "width": 1000, "height": %d }, "text": "@KeyBindingTypeCustom", "style": "$StyleSettingsText" } },\n'
                      % (n, _CUSTOM_Y[len(_CUSTOM_ALL) + n], _CUSTOM_LINE_H) for n in range(_CUSTOM_TEST_ROWS)) +
            # 手柄模式的选中框（同符文之语清单 TouchRwSel）：框住十字键选中的那一行，宿主摆（dm_custom.c）；触屏模式一直在屏外（只把 x 挪出去、y 留在内容范围内：滚动区按子控件的范围算内容高度，y 放到 99999 会把可滚范围撑到十万）。和各行在同一个容器里，跟着滚
