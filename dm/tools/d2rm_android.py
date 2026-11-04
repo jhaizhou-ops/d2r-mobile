@@ -163,7 +163,9 @@ def main():
     # 三、覆盖层（触屏布局、界面底图）+ 技能图集与 HUD 小图，最后写清单（App 启动时逐文件核对）
     # 3. Overlay (touch layout, UI base art) + skill atlases and small HUD images, then write the manifest (the App checks it file by file at startup)
     say('生成覆盖层')
-    run([PY, os.path.join(IOS, 'tools', 'gen_romfs_overlay.py'), romfs, os.path.join(stage, 'overlay')], cwd=IOS, env={'DM_ROMFS_SRC': romfs}, log=os.path.join(stage, 'gen_overlay.log'), what='生成覆盖层')
+    # 安卓没有 iCloud（自定义页那一行只有 iOS / Mac 的 cloud_ios.m 读）：DM_OVERLAY_NO_ICLOUD=1 让 touch_layout.py 不出这一行
+    # Android has no iCloud (only iOS / Mac cloud_ios.m reads that Custom page row): DM_OVERLAY_NO_ICLOUD=1 makes touch_layout.py leave the row out
+    run([PY, os.path.join(IOS, 'tools', 'gen_romfs_overlay.py'), romfs, os.path.join(stage, 'overlay')], cwd=IOS, env=dict({'DM_ROMFS_SRC': romfs}, **({'DM_OVERLAY_NO_ICLOUD': '1'} if T == 'android' else {})), log=os.path.join(stage, 'gen_overlay.log'), what='生成覆盖层')
     sys.path.insert(0, os.path.join(DM, 'android', 'tools')); import stage_touch_assets
     hud = os.path.join(IOS, 'Gen', 'assets', 'NativeHUD', 'v4', 'hud_v4_ui')
     stage_touch_assets.stage(os.path.join(gen, 'TouchArt'), hud, os.path.join(stage, 'overlay'))

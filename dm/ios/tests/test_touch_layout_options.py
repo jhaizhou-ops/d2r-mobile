@@ -54,6 +54,16 @@ for voice in (False, True):
     assert len(defaults) == len(keys) and defaults[keys.index('touch_swap_above')] == 0
     assert defaults[keys.index('bright')] == 2
 os.environ.pop('MOVIE_FFMPEG'); layout = importlib.reload(layout)
+# 安卓导入包（DM_OVERLAY_NO_ICLOUD=1）：没有 iCloud 那一行，下一行顶到它原来的位置；键表照旧含 icloud（与宿主同序）
+# Android import pack (DM_OVERLAY_NO_ICLOUD=1): no iCloud row, the next row moves up to its place; the key list still contains icloud (same order as the host)
+all_keys = [k for k, _ in layout._CUSTOM_ALL]; y_icloud = layout._CUSTOM_Y[all_keys.index('icloud')]
+os.environ['DM_OVERLAY_NO_ICLOUD'] = '1'; layout = importlib.reload(layout)
+out, _ = layout._custom_page('"name": "VideoOptionsPanel", "name": "OptionsTable"')
+assert 'TouchCustom_icloud' not in out and 'dmCustomIcloud' not in out
+assert re.search(r'"name": "TouchCustom_pot_pick_Text", "fields": \{ "rect": \{ "x": 0, "y": %d,' % y_icloud, out)
+assert [k for k, _ in layout._CUSTOM_ALL] == all_keys
+os.environ.pop('DM_OVERLAY_NO_ICLOUD'); layout = importlib.reload(layout)
+assert 'TouchCustom_icloud' in layout._custom_page('"name": "VideoOptionsPanel", "name": "OptionsTable"')[0]
 host = host_src
 assert 'TouchCustom_touch_swap_above_near' in host
-print('PASS touch layout options: generated radio pair, brightness radio, labels, defaults, host order (default and MOVIE_FFMPEG=1) and scrolling row extent')
+print('PASS touch layout options: generated radio pair, brightness radio, labels, defaults, host order (default and MOVIE_FFMPEG=1), no iCloud row for Android and scrolling row extent')
