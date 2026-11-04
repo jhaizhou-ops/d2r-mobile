@@ -53,6 +53,7 @@ public final class TouchOverlay extends View {
     // 游戏视图矩形：整窗视图照旧收全部触点，绘制与取点都按这块矩形（真全屏时比整窗小）；每帧比对，变了才通知 native 并重画。
     // Game view rect: the full-window view still receives every touch, but drawing and hit points use this rectangle (smaller
     // than the window in true fullscreen); compared every frame, native is told and the view redraws only when it changes.
+    private boolean debugNoHud;
     private final int[] viewRect = new int[4], lastRect = new int[4];
     private boolean rectValid;
     private float viewXdp, viewYdp, viewWdp, viewHdp;
@@ -411,7 +412,15 @@ public final class TouchOverlay extends View {
             catch(Exception ignored) { }
         }
     }
-    private float hudX(double x,float u) { return viewW()/2+((float)x-1434)*u; }
+    // 真全屏（界面矩形比整窗矮）时，游戏这套 HUD 的水平基准比 16:9 效果图（2868 宽、中线 1434）右移 44 效果图像素：
+    // 实测 2480x2200 下腰带药水图标比自绘格子偏右约 50 屏幕像素 = 45 效果图像素（pitch 一致、偏差是纯平移），
+    // 宽屏（16:9 及以上）下没有这个偏差。前后端按同一个基准画，格子/数字/角标才与游戏内容对齐。
+    // In true fullscreen (the UI rectangle is shorter than the window) the game's own HUD is centred 44 mockup pixels
+    // right of the 16:9 mockup's centreline (2868 wide, centre 1434): measured on 2480x2200 the belt potion icons sit
+    // about 50 screen pixels right of the self-drawn cells = 45 mockup pixels (same pitch, so it is a pure translation),
+    // while wide screens (16:9 and up) show no such offset. Draw everything on the same reference so cells, numbers and
+    // badges stay on the game's content.
+    private float hudX(double x,float u) { return viewW()/2+((float)x-1434+(viewYdp>0.5f||viewXdp>0.5f?44f:0f))*u; }
     private void hudImage(Canvas c,String name,double x,double y,float u) {
         Bitmap b=image("hud_v4_ui/"+name); if(b==null)return;
         float left=hudX(x,u),top=(float)y*u;
@@ -472,8 +481,11 @@ public final class TouchOverlay extends View {
             }
         } catch(Exception ignored) { /* 缺损美术不制造HUD数据。 | Missing art never fabricates HUD values. */ }
     }
+    /** 调试包：启动参数 dmNoHud 只留 touch 收点、不画任何自绘层（量游戏自己的 HUD 位置用）。 | Debug builds: the dmNoHud launch extra keeps touch input but draws no overlay (used to measure the game's own HUD). */
+    public void setDebugNoHud(boolean v) { debugNoHud=v; drawnValid=false; invalidate(); }
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas); if (!inputEnabled) return;
+        if (debugNoHud) { if (syncViewRect()) invalidate(); return; }
         // 整窗视图只负责收触点；绘制平移到游戏视图矩形里，放大仍然按 density，于是 layout / HUD 里原有的视图内 dp 直接可用。
         // The full-window view only collects touches; drawing is translated into the game view rect and still scaled by density,
         // so the view-local dp in the layout / HUD can be drawn as-is.

@@ -306,6 +306,12 @@ void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, i
            Only the part of the safe area that falls inside the game view counts (as touch_ohos.c layout_view): the 3D strip above the view
            and the margins outside it do not move the controls. */
         float sl = fmaxf(0, safe_left - vr_x), sr = fmaxf(0, safe_right - (win_w - vr_x - vr_w)), sb = fmaxf(0, safe_bottom - (win_h - vr_y - vr_h));
+        /* 真全屏（视图矩形比整窗矮，界面是贴底的一条）：游戏把右上角小地图与地名画到画面右边缘之外（实测尾部被裁），
+           给它们一份缺省右安全区让整块内移——宽屏上这块本来就摆得下，值保持 0，行为不变。
+           True fullscreen (the view rectangle is shorter than the window, the UI is a bottom strip): the game draws the top-right minimap
+           and the area name past the picture's right edge (measured: the tail is clipped), so give them a default right safe area to move
+           the block inward -- on wide screens the block already fits, the value stays 0 and nothing changes. */
+        if ((vr_y > 0.5f || vr_x > 0.5f) && sr < 0.07f * height) sr = 0.07f * height;
         dm_tc_set_tall_scale(tablet_layout); dm_tc_set_swap_above(swap_above);
         dm_tc_set_safe_insets(sl,sr); dm_tc_set_edge_bottom(sb); dm_tc_set_safe_bottom(sb);
         /* 安全区按视图高换算成 2160 高的布局单位（界面归一化也按视图）。 | Safe area becomes 2160-high layout units via the view height (UI normalisation is by the view too). */
