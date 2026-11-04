@@ -311,12 +311,18 @@ void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, i
            True fullscreen (the view rectangle is shorter than the window, the UI is a bottom strip): the game draws the top-right minimap
            and the area name past the picture's right edge (measured: the tail is clipped), so give them a default right safe area to move
            the block inward -- on wide screens the block already fits, the value stays 0 and nothing changes. */
-        if ((vr_y > 0.5f || vr_x > 0.5f) && sr < 0.07f * height) sr = 0.07f * height;
         dm_tc_set_tall_scale(tablet_layout); dm_tc_set_swap_above(swap_above);
         dm_tc_set_safe_insets(sl,sr); dm_tc_set_edge_bottom(sb); dm_tc_set_safe_bottom(sb);
         /* 安全区按视图高换算成 2160 高的布局单位（界面归一化也按视图）。 | Safe area becomes 2160-high layout units via the view height (UI normalisation is by the view too). */
         dm_ui_safe_left((int)lroundf(sl * 2160 / height));
-        dm_ui_safe_right((int)lroundf(sr * 2160 / height));
+        /* 真全屏（界面是贴底的一条）时游戏把右上角小地图与地名画到画面右缘之外（实测尾部被裁），给游戏那侧一份缺省右安全区让它
+           整块内移；触控布局按真实安全区走，不受影响。16:9 及以上时界面矩形就是整窗，游戏本来就摆得下，值保持 0。
+           True fullscreen (the UI is a bottom strip): the game draws the top-right minimap and area name past the picture's right edge
+           (measured: the tail is clipped), so give the game's side a default right safe area to move that block inward; the touch
+           layout keeps the real insets and is untouched. On 16:9 and wider the UI rectangle is the whole window and the value stays 0. */
+        int gui_sr = (int)lroundf(sr * 2160 / height);
+        if ((vr_y > 0.5f || vr_x > 0.5f) && gui_sr < (int)lroundf(0.07f * 2160)) gui_sr = (int)lroundf(0.07f * 2160);
+        dm_ui_safe_right(gui_sr);
         dm_tc_resize(&tc,width,height); resizing = 0;
     }
     if (!focused) { pthread_mutex_unlock(&lock); return; }
