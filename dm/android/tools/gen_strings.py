@@ -16,7 +16,9 @@ def generate(output):
     shared = {"dmInputTitle", "dmNameTitle", "dmNameRule", "dmQtyTitle", "dmNameBlankRandom",
               "dmNamePickIme", "dmNameTooShort", "dmNameEdge", "dmCancel", "dmConfirm", "dmTcCancel", "dmHudLife", "dmHudMana"}
     rows = [r for r in table.rows() if r[0].startswith("dmAndroid") or r[0] in shared]
-    for folder, column in (("values", 2), ("values-zh", 1)):
+    # 葡语用 values-pt（系统 pt-BR / pt-PT 都会落到这一份；项目把 pt 统一映射到原版 ptBR）
+    # Portuguese goes to values-pt (both pt-BR and pt-PT systems fall back to it; the project maps every pt to the original ptBR)
+    for folder, column in (("values", 2), ("values-zh", 1), ("values-pt", 5)):
         lines = ['<?xml version="1.0" encoding="utf-8"?>', '<resources>']
         for row in rows:
             value = escape(row[column]).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n")

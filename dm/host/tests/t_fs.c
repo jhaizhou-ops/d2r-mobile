@@ -182,7 +182,7 @@ int main(void) {
     CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "去掉注入重新挂载：事务式照常，写 a=ok3 提交成功");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "已提交 a = ok3");
 
-    // 语言开关改写设置文件（settings_lang_apply）：期望值按规则手算——只在「与开关不符」时把 Language / VoiceLanguage 改成 0（英文）、8（简中）、2 / 10（西语）、7（俄语）或 5（韩语），配音按 voice_for 走中英，别的键和别的语言不动
+    // 语言开关改写设置文件（settings_lang_apply）：期望值按规则手算——只在「与开关不符」时把 Language / VoiceLanguage 改成 0（英文）、8（简中）、2 / 10（西语）、7（俄语）、5（韩语）或 12（巴西葡语），配音按 voice_for 走资源里有的那种，别的键和别的语言不动
     { extern int g_t_lang, g_t_voice; char sd[1200], sf[1300], gotj[512]; snprintf(sd, sizeof sd, "%s/langt", root); mkdir(sd, 0755); snprintf(sf, sizeof sf, "%s/Settings", sd); mkdir(sf, 0755); snprintf(sf, sizeof sf, "%s/Settings/Settings.json", sd);
       #define LANGCASE(dm, in, want, what) do { g_t_lang = (dm); g_t_voice = -1; put(sf, (in)); settings_lang_apply(sd); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "语言开关：%s", (what)); } while (0)
       #define VOICECASE(dm, voice, in, want, what) do { g_t_lang = (dm); g_t_voice = (voice); put(sf, (in)); settings_lang_apply(sd); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "单独配音：%s", (what)); } while (0)
@@ -192,7 +192,7 @@ int main(void) {
       LANGCASE(0, "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "开关 = 中文、玩家在原版里选了繁中：不改回简中");
       LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文件已是英文：不动");
       LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 8 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文字已英文但语音还是中文：语音跟上");
-      LANGCASE(1, "{ \"Language\": 12 }", "{\n    \"VoiceLanguage\": 0, \"Language\": 0 }", "开关 = 英文、两位数的语言号且没有语音键：改写并补上语音键");
+      LANGCASE(1, "{ \"Language\": 10 }", "{\n    \"VoiceLanguage\": 0, \"Language\": 0 }", "开关 = 英文、两位数的语言号且没有语音键：改写并补上语音键");
       // 西语（开关 = 2）：只有简中与英文的配音在资源包里，西语文字配英文配音；宿主没有系统语言可问时按 esES（2）
       // Spanish (switch = 2): only Simplified Chinese and English voice-overs are in the resource pack, Spanish text gets the English voice-over; when the host has no system language to ask, use esES (2)
       LANGCASE(2, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 2, \"VoiceLanguage\": 0 }", "开关 = 西语、文件是简中：文字 esES、语音英文");
@@ -216,6 +216,12 @@ int main(void) {
       LANGCASE(4, "{ \"Language\": 5, \"VoiceLanguage\": 5 }", "{ \"Language\": 5, \"VoiceLanguage\": 5 }", "开关 = 韩语、文件已是韩文配韩语语音：不动");
       LANGCASE(3, "{ \"Language\": 5, \"VoiceLanguage\": 5 }", "{ \"Language\": 7, \"VoiceLanguage\": 7 }", "开关 = 俄语、文件是韩文：文字与语音都改成 ruRU");
       LANGCASE(1, "{ \"Language\": 5, \"VoiceLanguage\": 5 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文件是韩文：文字与语音都改英文");
+      // 葡语（开关 = 5）：原版只有巴西葡语 = 12 ptBR；葡语配音在分块 15，规则同俄语 / 韩语（资源目录此刻有 11、16，还没有 15）
+      LANGCASE(5, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 12, \"VoiceLanguage\": 0 }", "开关 = 葡语、资源里没有葡语配音分块：文字改 ptBR，语音配英文");
+      { char rd[1300]; snprintf(rd, sizeof rd, "%s/romfs_ru/data/15-00000001.data", root); put(rd, "x"); }
+      LANGCASE(5, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 12, \"VoiceLanguage\": 12 }", "开关 = 葡语、资源里有 15 号分块：文字与语音都改成 ptBR");
+      LANGCASE(5, "{ \"Language\": 12, \"VoiceLanguage\": 12 }", "{ \"Language\": 12, \"VoiceLanguage\": 12 }", "开关 = 葡语、文件已是葡语配葡语语音：不动");
+      LANGCASE(1, "{ \"Language\": 12, \"VoiceLanguage\": 12 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文件是葡语：文字与语音都改英文");
       VOICECASE(0, 1, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 8, \"VoiceLanguage\": 0 }", "中文文字 + English 配音，只改 VoiceLanguage");
       VOICECASE(0, 0, "{ \"Language\": 8, \"VoiceLanguage\": 0 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "中文文字 + 中文配音，只改 VoiceLanguage");
       VOICECASE(-1, 1, "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "{ \"Language\": 9, \"VoiceLanguage\": 0 }", "没动语言行，只把繁中配音改成 English，文字保持繁中");

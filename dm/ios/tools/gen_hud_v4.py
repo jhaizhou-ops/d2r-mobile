@@ -144,7 +144,7 @@ def glyphs(tag,fill,font=font,chars='0123456789Lv·% '):     # 与效果图 shad
     return m
 ui={'ref':[W,H],'center_x':W/2,'slots':g['slots'],'inner':[g['IX0'],g['IY0'],g['IX1'],g['IY1']],
     'exp':{'x0':g['EX0'],'x1':g['EX1'],'y':g['EY'],'h':6,'track':[22,18,14],'edge':[70,58,40],'fill':[196,160,70],'ticks':20},
-    'lv':{'x':(g['EX0']+g['EX1'])/2,'baseline':g['EY']-6,'glyphs':glyphs('lv',(205,185,140,255))},
+    'lv':{'x':(g['EX0']+g['EX1'])/2,'baseline':g['EY']-6},
     'badge':{'glyphs':glyphs('b',(235,235,235,255)),'dx':-3,'dy':-1},     # 右下内角锚点 = 格左上 + 内框右下 + (dx,dy)，右对齐、基线 | Lower-right inner corner anchor = slot top-left + inner frame bottom-right + (dx,dy), right-aligned, baseline
     'pick':{'center_x':1390,'pitch':120,'y':1051.5},
     'vital':{'left_x':g['LBC'][0],'right_x':g['RBC'][0],'baseline':g['YB']}}
@@ -153,6 +153,11 @@ import re, dm_i18n   # 生命 / 法力两行的字形：原有中文这一套 + 
 _vt={r[0]:r[1:] for r in dm_i18n.rows()}; _vc='生命法力:/ 0123456789'
 _vc+=''.join(sorted({c for k in ('dmHudLife','dmHudMana') for c in dm_i18n.FMT.sub('',''.join(_vt[k]))}-set(_vc)))
 ui['vital']['glyphs']=glyphs('v',(235,235,235,255),font_v,_vc)
+# 等级行各语言不一样（en「Lv」/ es・pt「Nv.」/ ru「Ур.」/ ko「레벨」）：字形集合同样从表里取；字体缺的字形会空着
+# The level line differs per language (en "Lv" / es・pt "Nv." / ru "Ур." / ko "레벨"): take the glyph set from the table too; glyphs missing from the font are left empty
+_vlt={r[0]:r[1:] for r in dm_i18n.rows()}; _lvc='0123456789Lv·% .'
+_lvc+=''.join(sorted({c for k in ('dmAndroidHudLevel',) for c in dm_i18n.FMT.sub('',''.join(_vlt[k]))}-set(_lvc)))
+ui['lv']['glyphs']=glyphs('lv',(205,185,140,255),font,_lvc)
 g['slot'].save(os.path.join(UI,'slot.png'))
 FULL.save(os.path.join(UI,'base_full.png')); ui['base']={'x':bx0,'y':by0}
 lvlsheet=SRC.img('levelupbutton')   # 原版 LevelUpButton 两帧（亮 / 按下），整格替换第 6 格 | The original game's LevelUpButton two frames (lit / pressed), replaces slot 6 entirely

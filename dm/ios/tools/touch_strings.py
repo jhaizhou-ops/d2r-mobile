@@ -51,8 +51,8 @@ TABLE = {
     },
 }
 
-# 英文列（英文版）：同一批键的 enUS 改成触摸说法；口径同上（空串 = 这句不要）。不在这里的键英文照原版。俄语列见下面 RU，韩语列见下面 KO。
-# 人物页「%s\n命中值」那两条是中文大字号排版问题，英文不动。西语两列见下面 ES / MX；别的语言列不改（我们自己的字只做中英西俄韩，别的语言按英文）
+# 英文列（英文版）：同一批键的 enUS 改成触摸说法；口径同上（空串 = 这句不要）。不在这里的键英文照原版。俄语列见下面 RU，韩语列见下面 KO，葡语列见下面 PT。
+# 人物页「%s\n命中值」那两条是中文大字号排版问题，英文不动。西语两列见下面 ES / MX；别的语言列不改（我们自己的字只做中英西俄韩葡，别的语言按英文）
 # 与中文表同一写法：原文只存校验（SHA-1 前 8 位），表里不存原版文字
 EN = {
     'ui-controller.json': {
@@ -216,7 +216,39 @@ KO = {
         'MoviePlaybackHoldToSkip': ('9c102e1d', ''),
     },
 }
-EXTRA = (('enUS', EN), ('esES', ES), ('esMX', MX), ('ruRU', RU), ('koKR', KO))   # 中文以外改的列 | Columns changed besides Chinese
+# 葡语列（葡语版）：同一批键的 ptBR 改成触摸说法，口径同英文（空串 = 这句不要）；用词跟原版葡语（「Segure」换成「Toque duas vezes」，其余照原句）；原版葡语的原文校验各自单独存
+PT = {
+    'ui-controller.json': {
+        'UseItemController': ('fe58f6b2', 'Toque duas vezes para usar'),
+        'OpenHoradricCubeController': ('afa25395', 'Toque duas vezes para abrir'),
+        'ReadScrollController': ('436612cb', 'Toque duas vezes para ler'),
+        'UsePotionOfLifeController': ('d25575ff', 'Toque duas vezes para adicionar 20 pontos de vida permanentemente'),
+        'UseBookOfSkillController': ('1c65ad05', 'Toque duas vezes para aprender uma habilidade à sua escolha'),
+        'UseScrollOfResistanceController': ('9e729a79', 'Toque duas vezes para lançar'),
+        'UseTokenOfAbsolutionController': ('10c01129', 'Toque duas vezes para redefinir pontos de habilidades/atributos'),
+        'UseTerrorTokenAct1Controller': ('b74b6353', 'Toque duas vezes para aterrorizar o Ato 1'),
+        'UseTerrorTokenAct2Controller': ('055782ed', 'Toque duas vezes para aterrorizar o Ato 2'),
+        'UseTerrorTokenAct3Controller': ('9c07fd7c', 'Toque duas vezes para aterrorizar o Ato 3'),
+        'UseTerrorTokenAct4Controller': ('7a53f852', 'Toque duas vezes para aterrorizar o Ato 4'),
+        'UseTerrorTokenAct5Controller': ('45b4825a', 'Toque duas vezes para aterrorizar o Ato 5'),
+        'comparisonTooltipController': ('6ec5c0d6', ''),
+        'hireComparisonTooltipController': ('6ec5c0d6', ''),
+        'StrYouDiedConsole': ('5205feea', 'Você morreu'),
+        'ControllerInteractButton': ('54234e14', ''),
+        'ControllerTitleScreenPrompt': ('2bcda740', 'Toque na tela para começar'),
+        'EnterCharacterName': ('d8fc6117', ''),
+        'ControllerCycleComparisonTooltips': ('138181e2', 'Toque de novo para comparar com o outro'),
+        'SelectButtonNoteText': ('42e98096', ''),
+        'MoviePlaybackHoldToSkip_switch': ('b4969597', ''),
+    },
+    'ui.json': {
+        'LevelUpStatsNotificationController': ('1f8aa3c8', 'Você subiu de nível.'),
+        'LevelUpNotificationController': ('2801d211', 'Você subiu de nível.'),
+        'QuestLogNotificationController': ('a9e68f30', 'A missão foi atualizada.'),
+        'MoviePlaybackHoldToSkip': ('b4969597', ''),
+    },
+}
+EXTRA = (('enUS', EN), ('esES', ES), ('esMX', MX), ('ruRU', RU), ('koKR', KO), ('ptBR', PT))   # 中文以外改的列 | Columns changed besides Chinese
 
 # 手柄支持：手柄说法 ↔ 触摸说法按模式切，不再改字符串文件——build_sidecar 出旁路表，宿主触屏模式把串表里这几个键的串换成触摸说法、
 # 手柄模式换回原文（dm/host/dm_padmode.c）。只有下面这两条是排版用的（大字号，两种模式都要），照旧改文件
