@@ -92,6 +92,15 @@ Saves live in the App's internal storage. **Uninstalling the App deletes the sav
 
 The other way round holds too: as long as you upgrade with our released APK, your saves stay.
 
+### Backing up and moving saves
+
+Both work through the game folder `Download/S2X/D2R Mobile/` and take effect when the App starts, so close it fully first (swipe it away from recent apps):
+
+- **Back up:** put an empty file named `export` in the game folder and open the App. Your saves are copied to `save-export/<date-time>/` there, and the `export` file is deleted. Copy that folder somewhere safe.
+- **Restore or move from another phone:** put the saves in a folder named `save-import` in the game folder and open the App. The folder can be one of your `save-export/<date-time>/` folders, renamed, or the saves inside it: one folder per character holding `<name>.d2s` and its companion files. The characters in it are **added**; nothing on the phone is replaced. A character with the same name as one already on the phone is not imported, and the game settings are only imported when the phone has none yet. The shared stash is copied in if the phone has none; if it has one, the two are **merged** in game: the next time you open the stash, the backup's items that the phone's stash does not have are put into your inventory (drag them into the stash; if the inventory fills up, open the stash again later for the rest), and the backup's gold is added to the shared stash. The softcore and hardcore shared stashes are merged separately, each the next time a character of that kind opens the stash. The same backup stash is only merged once, and a backup made on this same phone is not merged back into its stash at all: that would add its gold again and duplicate the items you have taken out of the stash since. Only a stash from another phone is merged. Afterwards `save-import` is renamed to `save-import.done-<date-time>` so it is not imported again.
+
+A short message on the screen says what was imported and what was skipped. If no saves are found in `save-import`, nothing changes and the folder is renamed to `save-import.rejected-<date-time>`. To replace a character you already have with another copy, delete the one on the phone in the game first, then import.
+
 ## When something goes wrong
 
 | Message | What to do |

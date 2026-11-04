@@ -89,6 +89,15 @@ javac -encoding UTF-8 -d /tmp/dm-input-tests \
 java -cp /tmp/dm-input-tests com.xiaoboluo.d2r.TextInputRulesTest
 ```
 
+存档导出 / 导入（`SaveTransfer.java`，见 `docs/ANDROID.zh-CN.md`「备份与搬存档」）同样只在临时目录里测：
+
+```sh
+javac -encoding UTF-8 -d /tmp/dm-save-tests \
+  dm/android/app/src/main/java/com/xiaoboluo/d2r/SaveTransfer.java \
+  dm/android/tests/SaveTransferTest.java
+java -cp /tmp/dm-save-tests com.xiaoboluo.d2r.SaveTransferTest
+```
+
 真机验收须分别记录安装、真实 GPU 出图/帧率、建角、进局、移动停止、NPC 交互、背包/技能、声音、后台恢复及保存重进。无窗口宿主帧率不等于渲染帧率。本后端尚未接入 Metal GPU 计时及实际扫描显示时间，缺失读数不能当作零耗时。
 
 Vulkan 当前每次全画，并使用同步宿主翻译（`DM_NVN_SYNC=1`）；上游新增异步路径需独立审计对象生命周期。呈现层仍逐帧等待队列。iOS 技能图、空技能槽菜单、专用数量/属性加点浮层及商店拖动跟随图尚未完整实现，通用控件和系统输入框不代表完整 iOS 功能对齐。提交上游集成前，还须在 Apple 构建机上验证 macOS/iOS 回归。
