@@ -29,11 +29,18 @@ import java.util.Locale;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
-/** 透明悬浮触摸层：与游戏Surface同尺寸，不挤占游戏高度。 | Transparent overlay sharing the game Surface bounds without reducing its height. */
+/** 透明悬浮触摸层：铺满窗口（整窗收触点，真全屏时视图矩形上方那条 3D 也能点），自绘 HUD / 控件按「游戏视图矩形」画与取点。
+    Transparent overlay filling the window (the whole window takes touches, including the 3D-only strip above the view rect in true
+    fullscreen); the custom HUD / controls are drawn and hit-tested inside the game view rectangle. */
 public final class TouchOverlay extends View {
     private static native void nativeEvent(int phase, int slot, float x, float y);
     private static native void nativeResize(float width, float height, float left, float right, float bottom, boolean tablet);
     private static native void nativeLayout(float[] out);
+    // 游戏视图矩形（px，窗口坐标系）：真全屏局内是贴底的 16:9 界面矩形，局外是居中的 16:9，没开真全屏 = 整窗。
+    // The game view rect (px, window coordinates): the bottom-anchored 16:9 UI block in a true-fullscreen run, the centered
+    // 16:9 outside it, the whole window without true fullscreen.
+    private static native void nativeViewRect(int widthPx, int heightPx, int[] out);
+    private static native void nativeView(float x, float y, float width, float height);
     private final float density;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final int GLYPHS=119, HUD=167, DRAW_FLOATS=185;
@@ -43,10 +50,21 @@ public final class TouchOverlay extends View {
     // Coordinates, visibility, pressed state and skill set all participate in that snapshot.
     private final float[] probe = new float[DRAW_FLOATS], drawn = new float[DRAW_FLOATS];
     private boolean drawnValid;
+    // 游戏视图矩形：整窗视图照旧收全部触点，绘制与取点都按这块矩形（真全屏时比整窗小）；每帧比对，变了才通知 native 并重画。
+    // Game view rect: the full-window view still receives every touch, but drawing and hit points use this rectangle (smaller
+    // than the window in true fullscreen); compared every frame, native is told and the view redraws only when it changes.
+    private boolean debugNoHud;
+    private final int[] viewRect = new int[4], lastRect = new int[4];
+    private boolean rectValid;
+    private float viewXdp, viewYdp, viewWdp, viewHdp;
     private final Choreographer.FrameCallback poll = new Choreographer.FrameCallback() {
         @Override public void doFrame(long frameTimeNanos) {
             if (!running) return;
-            if (inputEnabled && isShown()) { nativeLayout(probe); if (!drawnValid || !Arrays.equals(probe, drawn)) invalidate(); }
+            if (inputEnabled && isShown()) {
+                boolean moved = syncViewRect();
+                nativeLayout(probe);
+                if (moved || !drawnValid || !Arrays.equals(probe, drawn)) invalidate();
+            }
             Choreographer.getInstance().postFrameCallback(this);
         }
     };
@@ -102,9 +120,32 @@ public final class TouchOverlay extends View {
         }
     }
     private void resizeNative() {
+        // 窗口尺寸变了：先按整屏 resize，再由下一帧的 syncViewRect 把视图矩形交给 native（先 resize 再 view）。
+        // Window size changed: resize for the whole screen first; the next frame's syncViewRect publishes the view rect (resize before view).
+        rectValid=false;
         if (inputEnabled && getWidth()>0 && getHeight()>0) nativeResize(getWidth()/density,getHeight()/density,safeLeft,safeRight,safeBottom,
                 getResources().getConfiguration().smallestScreenWidthDp>=600);
     }
+    // 刷新游戏视图矩形；返回是否变化（变化时 native 侧已收到新布局，调用方要重画）。每帧路径不分配对象。
+    // Refresh the game view rect; returns whether it changed (native has the new layout then, so the caller must redraw). No allocation per frame.
+    private boolean syncViewRect() {
+        int w=getWidth(), h=getHeight(); if (w<=0 || h<=0) return false;
+        nativeViewRect(w,h,viewRect);
+        if (viewRect[2]<=0 || viewRect[3]<=0) { viewRect[0]=0; viewRect[1]=0; viewRect[2]=w; viewRect[3]=h; }
+        if (rectValid && viewRect[0]==lastRect[0] && viewRect[1]==lastRect[1] && viewRect[2]==lastRect[2] && viewRect[3]==lastRect[3]) return false;
+        System.arraycopy(viewRect,0,lastRect,0,4); rectValid=true;
+        viewXdp=viewRect[0]/density; viewYdp=viewRect[1]/density; viewWdp=viewRect[2]/density; viewHdp=viewRect[3]/density;
+        nativeView(viewXdp,viewYdp,viewWdp,viewHdp);
+        // 矩形变了：按住的触点要按新矩形重发一遍归一化坐标，否则手指不动时 native 一直留着旧值（归一化 0..1 变了）。
+        // The rect changed: republish the held touches with the new normalisation, or native keeps the old 0..1 values while the finger rests.
+        publishRaw();
+        return true;
+    }
+    // 自绘尺寸都按视图矩形（dp）取：屏幕比例变了但视图比例不变时，HUD / 控件大小与整屏时完全一致（没开真全屏 = 整窗）。
+    // Custom-drawn sizes use the view rect in dp: with the same view aspect the HUD / controls are sized exactly as on the whole
+    // screen (and without true fullscreen the view rect is the whole window).
+    private float viewW() { return viewWdp>0?viewWdp:getWidth()/density; }
+    private float viewH() { return viewHdp>0?viewHdp:getHeight()/density; }
     @Override protected void onSizeChanged(int w,int h,int oldw,int oldh) {
         cancelTouches(); resizeNative();
     }
@@ -123,8 +164,16 @@ public final class TouchOverlay extends View {
     }
     private void publishRaw() {
         int count=0;
-        if (getWidth()>0 && getHeight()>0) for (int s=0;s<16;++s) if (pointerIds[s]>=0) {
-            rawIds[count]=s; rawX[count]=lastX[s]*density/getWidth(); rawY[count]=lastY[s]*density/getHeight(); ++count;
+        if (getWidth()>0 && getHeight()>0) {
+            // 前端页面直通的原生触点按视图矩形归一化（整窗坐标先减视图原点）；没开真全屏时矩形 = 整窗，与原来一致。
+            // 这里不再调 nativeViewRect：窗口刚改尺寸时要先 resize 再 view，触点在 onDraw / poll 同步之后最多晚一帧。
+            // The native touch points passed straight to front-end pages are normalised by the view rect (the window point minus
+            // the rect origin); without true fullscreen the rect is the window, exactly as before. No nativeViewRect call here: a
+            // window size change must resize before view, and touches are at most one frame behind the onDraw / poll sync.
+            float vx=viewXdp, vy=viewYdp, vw=viewW(), vh=viewH();
+            if (vw>0 && vh>0) for (int s=0;s<16;++s) if (pointerIds[s]>=0) {
+                rawIds[count]=s; rawX[count]=(lastX[s]-vx)/vw; rawY[count]=(lastY[s]-vy)/vh; ++count;
+            }
         }
         DmActivity.nativeTouch(count,rawIds,rawX,rawY);
     }
@@ -358,12 +407,18 @@ public final class TouchOverlay extends View {
             float ts=br*1.15f; caption(c,"Ⅱ",bx,by-ts*.62f,ts,1);
         }
         if((kind&2)!=0 && hudUi!=null) {
-            float u=getHeight()/density/1320, W=getWidth()/density;
+            float u=viewH()/1320, W=viewW();
             try { JSONObject bd=hudUi.getJSONObject("badge"); hudText(c,Integer.toString(Math.max(0,(int)layout[p+7])),bd.getJSONObject("glyphs"),(x+r*.66f-W/2)/u+1434,(y+r*.42f)/u,true,u); }
             catch(Exception ignored) { }
         }
     }
-    private float hudX(double x,float u) { return getWidth()/density/2+((float)x-1434)*u; }
+    // 自绘 HUD 的水平基准：视图矩形（front_android_view_rect）就带着游戏 HUD 中线的水平偏移，画布按它平移到视图原点，
+    // 所以这里只按效果图中线（1434）对齐即可；偏移量是「HUD 中线 = 界面矩形左起 1920 布局单位」按当前分辨率算出来的。
+    // Horizontal reference of the self-drawn HUD: the view rectangle (front_android_view_rect) already carries the game HUD
+    // centreline's horizontal offset and the canvas is translated to the view origin, so aligning to the mockup centreline (1434)
+    // is enough; that offset is derived from the current resolution ("HUD centreline = 1920 layout units from the UI rectangle's
+    // left edge").
+    private float hudX(double x,float u) { return viewW()/2f+((float)x-1434f)*u; }
     private void hudImage(Canvas c,String name,double x,double y,float u) {
         Bitmap b=image("hud_v4_ui/"+name); if(b==null)return;
         float left=hudX(x,u),top=(float)y*u;
@@ -383,7 +438,7 @@ public final class TouchOverlay extends View {
     }
     private void hud(Canvas c) {
         if(hudUi==null || layout[HUD]==0) return;
-        float u=getHeight()/density/1320;
+        float u=viewH()/1320;
         try {
             JSONObject base=hudUi.getJSONObject("base");hudImage(c,"base_full.png",base.getDouble("x"),base.getDouble("y"),u);
             JSONArray slots=hudUi.getJSONArray("slots"), inner=hudUi.getJSONArray("inner"), menu=slots.getJSONArray(5);
@@ -424,9 +479,17 @@ public final class TouchOverlay extends View {
             }
         } catch(Exception ignored) { /* 缺损美术不制造HUD数据。 | Missing art never fabricates HUD values. */ }
     }
+    /** 调试包：启动参数 dmNoHud 只留 touch 收点、不画任何自绘层（量游戏自己的 HUD 位置用）。 | Debug builds: the dmNoHud launch extra keeps touch input but draws no overlay (used to measure the game's own HUD). */
+    public void setDebugNoHud(boolean v) { debugNoHud=v; drawnValid=false; invalidate(); }
     @Override protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas); if (!inputEnabled) return; nativeLayout(layout); System.arraycopy(layout, 0, drawn, 0, layout.length); drawnValid=true;
-        canvas.save(); canvas.scale(density,density);
+        super.onDraw(canvas); if (!inputEnabled) return;
+        if (debugNoHud) { if (syncViewRect()) invalidate(); return; }
+        // 整窗视图只负责收触点；绘制平移到游戏视图矩形里，放大仍然按 density，于是 layout / HUD 里原有的视图内 dp 直接可用。
+        // The full-window view only collects touches; drawing is translated into the game view rect and still scaled by density,
+        // so the view-local dp in the layout / HUD can be drawn as-is.
+        syncViewRect();
+        nativeLayout(layout); System.arraycopy(layout, 0, drawn, 0, layout.length); drawnValid=true;
+        canvas.save(); canvas.translate(viewRect[0],viewRect[1]); canvas.scale(density,density);
         boolean navigation=layout[2]!=0;
         float k=layout[4+12*5+2]/60;   // 与 iOS 同一个字号 / 粗细单位：摇杆半径 / 60 | the same size unit as iOS: joystick radius / 60
         // 同 iOS drawRect：底栏六格（腰带 / 十字）由底栏画、这里只留命中区；难度与 1–8 选择条也由底栏画（hud）。

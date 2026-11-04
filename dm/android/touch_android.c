@@ -1,4 +1,5 @@
 #include "touch_android.h"
+#include "front_android.h"
 #include "../ios/Sources/dm_touch_controls.h"
 #include "../host/dm_input.h"
 #include "../host/dm_cursor.h"
@@ -6,6 +7,7 @@
 #include "../host/dm_hud.h"
 #include "../host/dm_custom.h"
 #include "../host/dm_world.h"
+#include "../host/dm_uiscreen.h"
 #include "../ios/Sources/dm_touch_native_art.h"
 #include <pthread.h>
 #include <math.h>
@@ -29,7 +31,10 @@ static int hud_blocked;
 static touch_event queue[256];
 static unsigned head, tail;
 static int ready, focused = 1, cancel, resizing, ui_drag;
-static float width = 800, height = 375, safe_left, safe_right, safe_bottom;
+/* 窗口 dp（整屏，dm_android_touch_resize）与游戏视图矩形 dp（相对窗口左上角，dm_android_touch_view）；width/height 是视图尺寸，也就是 dm_tc 的坐标空间。
+   没收到视图矩形时视图 = 整屏。 | Window dp (whole screen, dm_android_touch_resize) and the game view rectangle in dp (from the window's top-left corner,
+   dm_android_touch_view); width/height is the view size, i.e. dm_tc's coordinate space. The view is the whole window until a view rectangle arrives. */
+static float width = 800, height = 375, win_w = 800, win_h = 375, vr_x, vr_y, vr_w = 800, vr_h = 375, safe_left, safe_right, safe_bottom;
 static int tablet_layout, swap_above;
 typedef struct { int kind; float x,y; double time; uint64_t key; } direct_gesture;
 static direct_gesture direct[DM_TC_MAX_TOUCH];
@@ -93,8 +98,31 @@ static void cancel_locked(void) {
 void dm_android_touch_resize(float w, float h, float l, float r, float b) {
     if (!isfinite(w) || !isfinite(h) || w <= 0 || h <= 0) return;
     pthread_mutex_lock(&lock);
-    width = w; height = h; safe_left = fmaxf(0,l); safe_right = fmaxf(0,r); safe_bottom = fmaxf(0,b);
+    /* w/h 仍是整屏窗口 dp（安全区也按整屏给）；dm_tc 的坐标空间是游戏视图矩形，由 dm_android_touch_view 给。
+       w/h is still the whole window in dp (the safe area is given for the whole screen too); dm_tc's coordinate space is the game view
+       rectangle, which dm_android_touch_view provides. */
+    int whole = vr_w <= 0 || (vr_x == 0 && vr_y == 0 && vr_w == win_w && vr_h == win_h);   /* 视图没给过 / 上一个是整屏 | no view yet / the last one was the whole window */
+    win_w = w; win_h = h; safe_left = fmaxf(0,l); safe_right = fmaxf(0,r); safe_bottom = fmaxf(0,b);
+    if (whole) { vr_x = vr_y = 0; vr_w = w; vr_h = h; }
+    /* 窗口变了、视图矩形还没跟上来：先夹进新窗口，UI 线程随后用 dm_android_touch_view 覆盖（头文件约定先 resize 再 view）。
+       The window changed and the view rectangle has not caught up yet: clamp it into the new window first; the UI thread overwrites it through
+       dm_android_touch_view right after (the header asks for resize before view). */
+    else { vr_x = fminf(fmaxf(vr_x,0),w); vr_y = fminf(fmaxf(vr_y,0),h); vr_w = fminf(vr_w,w-vr_x); vr_h = fminf(vr_h,h-vr_y);
+           if (vr_w <= 0 || vr_h <= 0) { vr_x = vr_y = 0; vr_w = w; vr_h = h; } }
+    width = vr_w; height = vr_h;
     resizing = cancel = 1; head = tail = 0;
+    pthread_mutex_unlock(&lock);
+}
+void dm_android_touch_view(float x, float y, float w, float h) {
+    if (!isfinite(x) || !isfinite(y) || !isfinite(w) || !isfinite(h) || w <= 0 || h <= 0) return;
+    pthread_mutex_lock(&lock);
+    /* 游戏视图矩形（窗口 dp）：界面、自绘 HUD / 控件与界面触点都在它里面。dm_tc 的坐标空间改成它，触点在入队前减原点（见 dm_android_touch_event）。
+       Game view rectangle in window dp: the UI, the custom-drawn HUD / controls and UI touch points all live inside it. dm_tc's coordinate space
+       becomes this rectangle, and touches have its origin subtracted before they are queued (see dm_android_touch_event). */
+    if (x != vr_x || y != vr_y || w != vr_w || h != vr_h) {
+        vr_x = x; vr_y = y; vr_w = w; vr_h = h; width = w; height = h;
+        resizing = cancel = 1; head = tail = 0;
+    }
     pthread_mutex_unlock(&lock);
 }
 void dm_android_touch_tablet(int tablet) {
@@ -113,7 +141,10 @@ void dm_android_touch_event(int phase, int slot, float x, float y) {
     if (focused) {
         /* 溢出只取消，绝不遗留按住的摇杆/按键。 | Overflow cancels instead of leaving a stick/key held. */
         if (tail - head == 256) { cancel = 1; head = tail = 0; }
-        else { queue[tail++ % 256] = (touch_event){phase, slot, x, y, now_ns() / 1e9}; }
+        /* Java 给的是窗口 dp：减视图原点换成 dm_tc 的视图坐标；真全屏下 y 可为负（视图上方那条只有 3D 的区域，点怪 / 点地照常，界面与控件点不到）。
+           Java gives window dp: subtract the view origin to get dm_tc's view coordinates; in true fullscreen y may be negative -- the 3D-only
+           strip above the view, where tapping monsters / ground still works but the UI and controls cannot be hit. */
+        else { queue[tail++ % 256] = (touch_event){phase, slot, x - vr_x, y - vr_y, now_ns() / 1e9}; }
     }
     pthread_mutex_unlock(&lock);
 }
@@ -156,6 +187,19 @@ static void sync_host(void) {
     dm_tc_set_holding(&tc, info.valid && info.holding && !dm_ui_targeting());
     tc.belt_rows = dm_belt_rows(&tc.belt_open);
 }
+/* 真全屏：世界那一侧按整窗算（front_ios.m world_rect / world_norm、touch_ohos.c 同款）。world_rect 给的是「整窗在视图坐标里的矩形」：
+   视图原点在窗口里是 (vr_x, vr_y)，所以整窗左上角在视图坐标里是 (−vr_x, −vr_y)。局外（界面矩形就是整个画面）时世界与视图重合。
+   True fullscreen: the world side is computed on the whole window (as front_ios.m world_rect / world_norm and touch_ohos.c). world_rect returns
+   "the whole window as a rectangle in view coordinates": the view origin sits at (vr_x, vr_y) in the window, so the window's top-left corner is
+   (−vr_x, −vr_y) in view coordinates. Out of a run (the UI rectangle is the whole picture) the world and the view coincide. */
+static void world_rect(float r[4]) {
+    int x, y, w, h, rw = 0, rh = 0;
+    r[0] = 0; r[1] = 0; r[2] = width; r[3] = height;
+    if (!front_android_full()) return;
+    dm_ui_rect(&x, &y, &w, &h);
+    if (dm_screen_real(&rw, &rh) && h > 0 && h < rh) { r[0] = -vr_x; r[1] = -vr_y; r[2] = win_w; r[3] = win_h; }
+}
+static void world_norm(float x, float y, float *nx, float *ny) { float r[4]; world_rect(r); *nx = (x - r[0]) / r[2]; *ny = (y - r[1]) / r[3]; }
 static void requests(void) {
     if (seen_tab != tc.tab_tap_seq) { seen_tab = tc.tab_tap_seq; dm_ui_tab_go(); }
     if (seen_use != tc.use_seq) { seen_use = tc.use_seq; dm_ui_use_item(); }
@@ -165,8 +209,12 @@ static void requests(void) {
     if (seen_stack != tc.stack_take_seq) { seen_stack = tc.stack_take_seq; dm_stash_take(1); }
     if (seen_world != tc.world_tap_seq) {
         seen_world = tc.world_tap_seq;
-        float nx = tc.world_tap_x / width, ny = tc.world_tap_y / height;
-        dm_ui_world_tap(nx, ny, nx, ny);
+        /* nx,ny 仍是视图归一化（宿主 dm_ui_* 按界面矩形归一化），wx,wy 是出图画面归一化——真全屏下画面铺满整窗，靠它点世界。
+           nx,ny stay view-normalised (the host dm_ui_* paths normalise by the UI rectangle); wx,wy are picture-normalised -- in true fullscreen
+           the picture fills the whole window, and that is what tapping the world uses. */
+        float nx = tc.world_tap_x / width, ny = tc.world_tap_y / height, wx, wy;
+        world_norm(tc.world_tap_x, tc.world_tap_y, &wx, &wy);
+        dm_ui_world_tap(nx, ny, wx, wy);
     }
     if (seen_mouse != tc.mouse_click_seq) {
         seen_mouse = tc.mouse_click_seq;
@@ -221,7 +269,7 @@ static int direct_event(const touch_event *e) {
         if (!tc.navigation_mode && g->kind>0 && e->time-g->time<.6) {
             if (g->kind==1) dm_ui_bind_begin(g->key);
             else if (dm_ui_map_is_full()) dm_ui_map_full(0);
-            else if (g->kind==2) { map_world_seq=dm_world_tap(e->x/width,e->y/height); map_world_pending=1; }
+            else if (g->kind==2) { float wx, wy; world_norm(e->x,e->y,&wx,&wy); map_world_seq=dm_world_tap(wx,wy); map_world_pending=1; }
         }
         memset(g,0,sizeof *g);
     } else if (e->phase==3) memset(g,0,sizeof *g);
@@ -254,10 +302,27 @@ void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, i
     if (next_swap != swap_above) { swap_above = next_swap; resizing = cancel = 1; }
     if (cancel) { cancel_locked(); cancel = 0; }
     if (resizing) {
+        /* 安全区只算落在游戏视图里的那部分（同 touch_ohos.c layout_view）：视图上方那条 3D、视图外的边距都不挪控件。
+           Only the part of the safe area that falls inside the game view counts (as touch_ohos.c layout_view): the 3D strip above the view
+           and the margins outside it do not move the controls. */
+        float sl = fmaxf(0, safe_left - vr_x), sr = fmaxf(0, safe_right - (win_w - vr_x - vr_w)), sb = fmaxf(0, safe_bottom - (win_h - vr_y - vr_h));
+        /* 真全屏（视图矩形比整窗矮，界面是贴底的一条）：游戏把右上角小地图与地名画到画面右边缘之外（实测尾部被裁），
+           给它们一份缺省右安全区让整块内移——宽屏上这块本来就摆得下，值保持 0，行为不变。
+           True fullscreen (the view rectangle is shorter than the window, the UI is a bottom strip): the game draws the top-right minimap
+           and the area name past the picture's right edge (measured: the tail is clipped), so give them a default right safe area to move
+           the block inward -- on wide screens the block already fits, the value stays 0 and nothing changes. */
         dm_tc_set_tall_scale(tablet_layout); dm_tc_set_swap_above(swap_above);
-        dm_tc_set_safe_insets(safe_left,safe_right); dm_tc_set_edge_bottom(safe_bottom); dm_tc_set_safe_bottom(safe_bottom);
-        dm_ui_safe_left((int)lroundf(safe_left * 2160 / height));
-        dm_ui_safe_right((int)lroundf(safe_right * 2160 / height));
+        dm_tc_set_safe_insets(sl,sr); dm_tc_set_edge_bottom(sb); dm_tc_set_safe_bottom(sb);
+        /* 安全区按视图高换算成 2160 高的布局单位（界面归一化也按视图）。 | Safe area becomes 2160-high layout units via the view height (UI normalisation is by the view too). */
+        dm_ui_safe_left((int)lroundf(sl * 2160 / height));
+        /* 真全屏（界面是贴底的一条）时游戏把右上角小地图与地名画到画面右缘之外（实测尾部被裁），给游戏那侧一份缺省右安全区让它
+           整块内移；触控布局按真实安全区走，不受影响。16:9 及以上时界面矩形就是整窗，游戏本来就摆得下，值保持 0。
+           True fullscreen (the UI is a bottom strip): the game draws the top-right minimap and area name past the picture's right edge
+           (measured: the tail is clipped), so give the game's side a default right safe area to move that block inward; the touch
+           layout keeps the real insets and is untouched. On 16:9 and wider the UI rectangle is the whole window and the value stays 0. */
+        int gui_sr = (int)lroundf(sr * 2160 / height);
+        if ((vr_y > 0.5f || vr_x > 0.5f) && gui_sr < (int)lroundf(0.07f * 2160)) gui_sr = (int)lroundf(0.07f * 2160);
+        dm_ui_safe_right(gui_sr);
         dm_tc_resize(&tc,width,height); resizing = 0;
     }
     if (!focused) { pthread_mutex_unlock(&lock); return; }

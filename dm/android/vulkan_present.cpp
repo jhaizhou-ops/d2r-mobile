@@ -2,12 +2,14 @@
 // Android Vulkan presentation and window lifetimes, based on the original WSI bridge and reversible PR9/10 overlap/affinity experiments.
 #define VK_USE_PLATFORM_ANDROID_KHR
 #include "vulkan_present.h"
+#include "front_android.h"
 #include "../gfx/vulkan/nvn_vk.h"
 #include "../gfx/xtrace.h"
 #include <android/log.h>
 #include <android/native_window.h>
 #include <dlfcn.h>
 #include <algorithm>
+#include <cmath>
 #include <vector>
 #include <string>
 #include <mutex>
@@ -212,9 +214,20 @@ int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uin
     VkFormatProperties sp;vkGetPhysicalDeviceFormatProperties(physical,source_format,&sp);if(!(sp.optimalTilingFeatures&VK_FORMAT_FEATURE_BLIT_SRC_BIT))return VK_ERROR_FORMAT_NOT_SUPPORTED;
     int x=0,y=0,w=int(width),h=int(height);if(crop&&crop[2]>0&&crop[3]>0){x=std::clamp(crop[0],0,w);y=std::clamp(crop[1],0,h);w=std::min(crop[2],int(width)-x);h=std::min(crop[3],int(height)-y);}if(w<=0||h<=0)return VK_ERROR_INITIALIZATION_FAILED;
     for(;;){
-    if(present_native && surface && active && (native_w!=w || native_h!=h)){   // the next swapchain takes this size (currentExtent follows the buffer geometry)
+    // 画面比例与窗口比例一致时缓冲直接用出图尺寸（显示硬件放大到屏幕）；不一致时（真全屏的前端页 / 读取画面：画面 16:9 在窄屏里居中留边，
+    // 见 front_android.c）缓冲取窗口尺寸，由下面的留边 blit 摆位置——否则合成器会把 16:9 的画面拉满整屏（上下没有黑边、人变瘦）。
+    // Present at the output size when the picture aspect matches the window (the display hardware scales it up); when they differ (true fullscreen
+    // front-end pages / loading screen: a 16:9 picture centered with margins on a narrow screen, see front_android.c) use the window size and let the
+    // letterbox blit below place it -- otherwise the compositor stretches 16:9 to the whole screen (no bars, everything too thin).
+    int win_w=0,win_h=0;
+    bool native=present_native;
+    if(native && front_android_window_size(&win_w,&win_h) && !(fabs(double(win_w)/win_h/double(w)*h-1)<0.01))native=false;
+    if(native && surface && active && (native_w!=w || native_h!=h)){   // the next swapchain takes this size (currentExtent follows the buffer geometry)
         int g=ANativeWindow_setBuffersGeometry(active,w,h,0);native_w=w;native_h=h;swap_dirty=true;
         vlog("Present at the game's output size %dx%d result=%d (marker gfx-present-native)",w,h,g);}
+    else if(!native && win_w>0 && win_h>0 && surface && active && (native_w!=win_w || native_h!=win_h)){   // 留边路径：缓冲按窗口，blit 负责居中 | Letterbox path: buffer at the window size, the blit centers it
+        int g=ANativeWindow_setBuffersGeometry(active,win_w,win_h,0);native_w=win_w;native_h=win_h;swap_dirty=true;
+        vlog("Present at the window size %dx%d (picture %dx%d keeps its aspect; marker gfx-present-native) result=%d",win_w,win_h,w,h,g);}
     // 后台等待释放UI锁；保留同一源帧，恢复并真正呈现后才返回成功。
     // Suspend without the UI lock; keep this source frame until it is presented.
     wait_window();
@@ -262,10 +275,14 @@ int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uin
         barrier.oldLayout=barrier.newLayout;barrier.srcAccessMask=barrier.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&barrier);}
     VkImageBlit blit{};blit.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};blit.dstSubresource=blit.srcSubresource;blit.srcOffsets[0]={x,y,0};blit.srcOffsets[1]={x+w,y+h,1};blit.dstOffsets[0]={dx,dy,0};blit.dstOffsets[1]={dx+dw,dy+dh,1};
     // 最近邻不要求额外线性过滤能力。鸿蒙：游戏出图比屏幕小、要放大，格式支持时用线性，不然像素发硬、斜边锯齿。
+    // 安卓真全屏的留边路径同理（前端页 / 读取画面 16:9 在窄屏里居中：blit 要放大），1:1 时两种滤波没有差别。
     // Nearest needs no extra linear-filter support. HarmonyOS: the game image is smaller than the screen and gets upscaled; use linear when the format supports it, otherwise pixels look blocky and diagonals jagged.
+    // The Android true-fullscreen letterbox path is the same (front-end pages / loading screen: 16:9 centered on a narrow screen, so the blit upscales); at 1:1 the two filters are identical.
     VkFilter filter=VK_FILTER_NEAREST;
 #ifdef __OHOS__
     if(sp.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)filter=VK_FILTER_LINEAR;
+#else
+    if((dw!=w||dh!=h)&&(sp.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))filter=VK_FILTER_LINEAR;
 #endif
     vkCmdBlitImage(cmd,source,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,images[index],VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,filter);
     // 同队列后续写入必须等源图读取完成；即使下一次图像布局未改变也建立 WAR 执行依赖。

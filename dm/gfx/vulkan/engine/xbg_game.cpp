@@ -3364,9 +3364,24 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     }
     if(capture_begin("draw",stats.presents))capture_log("DRAW number=%llu vs=%s ps=%s prim=%d first=%d count=%d indexed=%u instances=%u baseInstance=%u baseVertex=%d",(unsigned long long)stats.draws.load(),state.shader[0]->key.c_str(),state.shader[4]?state.shader[4]->key.c_str():"none",prim,first,count,indexed!=nullptr,indexed?indexed->instances:instances,indexed?indexed->base_instance:first_instance,indexed?indexed->base_vertex:0);
     double ui_uy=0,ui_vs=1;g_ui_moff=0;g_ui_moff_addr=0;
-    if(g_ui_rect_fn && orig_count==4 && state.shader[0]->inputs.size()==2 && state.stream[0].stride==20){double uh=1;g_ui_rect_fn(&ui_uy,&uh);
-        if(uh>0 && uh<1){if(ui_cover_all(uh))ui_vs=1/uh;else if(ui_uy>0){auto u=state.ub[0][0];if(u.address && u.size>=64 && u.size<=4096){g_ui_moff=2*ui_uy;g_ui_moff_addr=u.address;}}}
-        if(ui_vs==1 && g_ui_moff==0)ui_uy=0;}
+    // 界面那趟的投影常量缓冲地址：界面绘制（4 顶点、2 属性、20 字节）认出来后记住，同一地址的后续绘制照样下移——
+    // 贴顶上提的小地图 / 地名那类控件不一定用同一套顶点签名，只按签名认会漏掉它们（不移动 = 被上提到画面外，看不见）。
+    // The UI pass's projection constant buffer address: once a recognisable UI draw (4 vertices, 2 attributes, 20-byte vertices) is seen it is remembered,
+    // and later draws binding the same address are shifted too -- widgets lifted to the top (minimap, area name) do not always use that vertex signature,
+    // and a draw the shim misses stays unshifted, i.e. lifted off the picture and invisible.
+    static uint64_t ui_cb;
+    if(g_ui_rect_fn){double uh=1;g_ui_rect_fn(&ui_uy,&uh);
+        auto u=state.ub[0][0];
+        if(uh>0 && uh<1){
+            if(orig_count==4 && state.shader[0]->inputs.size()==2 && state.stream[0].stride==20){if(ui_cover_all(uh))ui_vs=1/uh;
+                else if(ui_uy>0 && u.address && u.size>=64 && u.size<=4096){ui_cb=u.address;g_ui_moff=2*ui_uy;g_ui_moff_addr=u.address;}}
+            else if(ui_uy>0 && ui_cb && u.address==ui_cb && u.size>=64 && u.size<=4096){g_ui_moff=2*ui_uy;g_ui_moff_addr=u.address;}
+        } else ui_cb=0;
+        if(ui_vs==1 && g_ui_moff==0)ui_uy=0;
+        // 真全屏第一次真的挪了界面：记一行，玩家日志里能确认「界面按 16:9 贴底」这段接上了（没挪就是宿主没登记或界面这一趟没被认出来）。
+        // First real UI shift under true fullscreen: one line, so the player's log shows the "UI anchored at 16:9" path engaged (no shift = the host did not register or this pass was not recognised).
+        static bool once;if(!once && (ui_vs!=1 || g_ui_moff!=0)){once=true;xbg_logf("真全屏：界面下移 y=%.3f 高 %.3f 视口放大 %.3f",ui_uy,uh,ui_vs);}
+    }
     Commands c(true);Descriptors &d=acquire_descriptors();descriptors(d,c,false);Pass p;create_pass(p,c);
     static std::vector<VkVertexInputAttributeDescription> attributes;attributes.clear();VkVertexInputBindingDescription binding_slots[16];uint32_t binding_used=0;
     int zero_binding=-1;
@@ -3445,7 +3460,16 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     need(viewport.width<=properties.limits.maxViewportDimensions[0] && -viewport.height<=properties.limits.maxViewportDimensions[1] && viewport.x>=properties.limits.viewportBoundsRange[0] && viewport.x+viewport.width<=properties.limits.viewportBoundsRange[1] && viewport.y>=properties.limits.viewportBoundsRange[0] && viewport.y<=properties.limits.viewportBoundsRange[1] && viewport.y+viewport.height>=properties.limits.viewportBoundsRange[0],"NVN viewport exceeds device bounds");
     if(!bc.has_vp || memcmp(&bc.vp,&viewport,sizeof viewport)){vkCmdSetViewport(c.command,0,1,&viewport);bc.vp=viewport;bc.has_vp=true;}else ++binds_skipped;
     VkRect2D sc=scissor(p);
-    if(ui_uy>0 || ui_vs!=1){long so=g_ui_moff!=0?lround(ui_uy*p.height):0;int64_t y0=sc.offset.y<=0?0:sc.offset.y+so,y1=ui_vs!=1?int64_t(p.height):int64_t(sc.offset.y)+sc.extent.height+so;   // 剪裁跟着下移；从顶边起的不动（宿主上提的贴顶控件） | the scissor moves down with it; ones starting at the top edge stay (controls the host lifted to the top)
+    long ui_so=ui_uy>0&&g_ui_moff!=0?lround(ui_uy*p.height):0;
+    if(ui_so>0 && (sc.extent.width==0 || sc.extent.height==0)){
+        // 宿主把贴顶控件（小地图、队友栏等）上提到界面矩形上方后，游戏给它们的剪裁是空矩形（控件矩形与界面矩形相交为空），
+        // 照它裁就整块不画 —— 实测小地图在真全屏里整个消失。这类绘制的几何经界面下移后落在画面顶条 0..yoff 里，改成顶条。
+        // Once the host lifts top widgets (minimap, party bar, ...) above the UI rectangle, the game's own scissor for them is an empty
+        // rectangle (their rect no longer intersects the UI rectangle) and clipping to it drops them entirely -- measured: the minimap
+        // disappears in true fullscreen. After the UI shift their geometry lands in the picture's top strip 0..yoff, so use that strip.
+        sc.offset.x=0;sc.offset.y=0;sc.extent.width=uint32_t(p.width);sc.extent.height=uint32_t(ui_so);
+        static int n; if(n++<3) xbg_logf("真全屏：贴顶控件空剪裁 → 画面顶条 %ld 像素", ui_so);
+    } else if(ui_uy>0 || ui_vs!=1){long so=ui_so;int64_t y0=sc.offset.y<=0?0:sc.offset.y+so,y1=ui_vs!=1?int64_t(p.height):int64_t(sc.offset.y)+sc.extent.height+so;   // 剪裁跟着下移；从顶边起的不动（宿主上提的贴顶控件） | the scissor moves down with it; ones starting at the top edge stay (controls the host lifted to the top)
         if(y1>int64_t(p.height))y1=p.height;if(y1<y0)y1=y0;sc.offset.y=int32_t(y0);sc.extent.height=uint32_t(y1-y0);}
     if(!bc.has_sc || memcmp(&bc.sc,&sc,sizeof sc)){vkCmdSetScissor(c.command,0,1,&sc);bc.sc=sc;bc.has_sc=true;}else ++binds_skipped;
     for(auto &b:vertex_buffers){VkDeviceSize off=b.second->offset;if(b.first<16 && bc.vb[b.first]==b.second->buffer && bc.vbo[b.first]==off){++binds_skipped;continue;}
