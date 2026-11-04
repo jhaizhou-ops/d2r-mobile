@@ -86,8 +86,8 @@ static void default_3d_scale(unsigned short_side) {
     if (getenv("DM_3D_SCALE")) return;
     double sc = 700.0 / short_side; char v[16];
     snprintf(v, sizeof v, "%.2f", sc < 0.5 ? 0.5 : sc > 0.75 ? 0.75 : sc);
-    setenv("DM_3D_SCALE", v, 1);
-    LOG("画面：出图短边 %u，3D 比例缺省 %s（DM_3D_SCALE 覆盖）", short_side, v);
+    setenv("DM_3D_SCALE_DEFAULT", v, 1);   // 写「缺省档」不写 DM_3D_SCALE：后者压过自定义页的 3D 清晰度三档（hle_oe.c）| set the default level, not DM_3D_SCALE: that one overrides the Custom page's three 3D resolution levels (hle_oe.c)
+    LOG("画面：出图短边 %u，3D 比例缺省 %s（自定义页「均衡」档；DM_3D_SCALE 覆盖）", short_side, v);
 }
 // 真全屏的启动值（也是游戏窗口纹理上限）：屏幕比例、短边见 full_short_side。
 // The startup value under true fullscreen (also the game's window texture cap): the screen aspect with a full_short_side short side.
