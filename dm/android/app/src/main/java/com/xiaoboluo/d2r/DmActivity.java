@@ -332,6 +332,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
                 touchOverlay.setSafeInsets(safe.left, safe.right, safe.bottom);
                 return insets;
             });
+            if (BuildConfig.DEBUG && getIntent().getBooleanExtra("dmNoHud", false)) touchOverlay.setDebugNoHud(true);   // 调试包：量游戏自己的 HUD 时不画自绘层 | debug builds: no overlay drawing while measuring the game's own HUD
             gameFrame.addView(touchOverlay, new FrameLayout.LayoutParams(-1, -1));
             touchOverlay.requestApplyInsets();
         }
