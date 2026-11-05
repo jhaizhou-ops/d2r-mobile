@@ -13,6 +13,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 uint64_t now_ns(void);
 void dm_uiscreen_set_panel(int panel);
@@ -36,6 +37,13 @@ static int ready, focused = 1, cancel, resizing, ui_drag;
    dm_android_touch_view); width/height is the view size, i.e. dm_tc's coordinate space. The view is the whole window until a view rectangle arrives. */
 static float width = 800, height = 375, win_w = 800, win_h = 375, vr_x, vr_y, vr_w = 800, vr_h = 375, safe_left, safe_right, safe_bottom;
 static int tablet_layout, swap_above;
+/* Java 外框（DmActivity 的 SurfaceView）上报的左安全区，2160 布局单位；-1 = 还没报过。
+   触屏层在手柄模式下是 GONE、真全屏下 sl 也会被视图原点扣成 0，resize 那条路不能拿它把这份权威值覆盖掉，
+   否则界面重建后佣兵 / 召唤物头像栏就回到贴边（真机：切触屏模式后「安全区：头像 0 → 257」不再出现）。
+   Left safe area reported by the Java outer frame (DmActivity's SurfaceView), in 2160 layout units; -1 = not reported yet.
+   The touch layer is GONE in controller mode and sl is reduced to 0 by the view origin in true fullscreen, so the resize path must not
+   overwrite this authoritative value with it, or the mercenary / summon portrait bar returns to the screen edge after a UI rebuild. */
+static _Atomic int view_safe_left = -1;
 typedef struct { int kind; float x,y; double time; uint64_t key; } direct_gesture;
 static direct_gesture direct[DM_TC_MAX_TOUCH];
 static uint32_t selected_point;
@@ -129,6 +137,30 @@ void dm_android_touch_tablet(int tablet) {
     pthread_mutex_lock(&lock);
     tablet_layout = !!tablet; resizing = cancel = 1;
     pthread_mutex_unlock(&lock);
+}
+/* 只把安全区报给宿主（游戏界面自己内移），不碰触屏层的布局。手柄模式下 Java 侧把触屏层 setInputEnabled(false) + GONE：
+   挂在层上的 insets 回调不再派发、nativeResize 这条路也不再跑，于是左上角的佣兵 / 召唤物头像栏贴着屏幕边，让屏幕的圆角切掉一截
+   （真机日志：触屏模式有「安全区：头像 0 x 0 → 257」，换成手柄模式就没有这一行）。Java 的 insets 监听改挂在一直显示的外框上，
+   两种模式都调这里。单位照上面那条一样按「安全区 ÷ 画面高 × 2160」算，两边都是同一个长度单位就行。
+   任何线程可调（dm_ui_safe_* 是原子的，下一帧界面自己读） */
+/* Report the safe area to the host only (the game UI moves itself inward) without touching the touch layer's layout. In controller mode the Java side does
+   setInputEnabled(false) + GONE on the touch layer: the insets callback attached to it is no longer dispatched and the nativeResize path never runs again, so the
+   mercenary / summon portrait bar in the top left sits flush against the screen edge and the screen's rounded corner cuts part of it off (real-device log: touch
+   mode has "安全区：头像 0 x 0 → 257", and after switching to controller mode that line is gone). The Java insets listener now hangs on the always-visible
+   outer frame, so both modes call in here. Units as above: safe area / picture height × 2160 - both sides only have to use the same length unit.
+   Callable from any thread (dm_ui_safe_* is atomic; the UI reads it on the next frame) */
+void dm_android_ui_safe_insets(float left, float right, float height) {
+    if (!isfinite(left) || !isfinite(right) || !isfinite(height) || height <= 0) return;
+    /* 屏幕四角都是圆角，但系统的 displayCutout 只报挖孔那一侧：本机横屏（rotation=3）挖孔在右
+       （InsetsSource sideHint=RIGHT，frame=[2620,0][2772,1280]），left 恒为 0、right=152px。
+       头像栏在左上角，等的是圆角那份内移，所以取两侧较大值；只有拿到有效值才写，别把已生效的值清成 0。 */
+    /* All four screen corners are rounded, but the system's displayCutout only reports the side with the punch hole: this device in
+       landscape (rotation=3) has the hole on the right (InsetsSource sideHint=RIGHT, frame=[2620,0][2772,1280]), so left is always 0
+       and right is 152px. The portrait bar is at the top left and is waiting for that rounded-corner inset, so take the larger side;
+       write only when it is valid, so an already effective value is never cleared to 0. */
+    int lu = (int)lroundf(fmaxf(fmaxf(0,left), fmaxf(0,right)) * 2160 / height);
+    if (lu > 0) { atomic_store(&view_safe_left, lu); dm_ui_safe_left(lu); }
+    dm_ui_safe_right((int)lroundf(fmaxf(0,right) * 2160 / height));
 }
 void dm_android_touch_focus(int active) {
     pthread_mutex_lock(&lock);
@@ -314,7 +346,17 @@ void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, i
         dm_tc_set_tall_scale(tablet_layout); dm_tc_set_swap_above(swap_above);
         dm_tc_set_safe_insets(sl,sr); dm_tc_set_edge_bottom(sb); dm_tc_set_safe_bottom(sb);
         /* 安全区按视图高换算成 2160 高的布局单位（界面归一化也按视图）。 | Safe area becomes 2160-high layout units via the view height (UI normalisation is by the view too). */
-        dm_ui_safe_left((int)lroundf(sl * 2160 / height));
+        /* 触屏控件用 sl / sr（扣掉视图原点，只算落在游戏视图里的那部分），但游戏自己的 UI（左上角头像栏）按整屏定位：
+           真全屏下 vr_x 会把 sl 扣成 0；而本机横屏的 displayCutout 只报右侧挖孔（left 恒为 0），照 left 取就永远不让位。
+           圆角是四角都有的，所以按整屏取两侧的较大值，再与 Java 外框上报的值取大者。 */
+        /* Touch controls use sl / sr (view origin subtracted), but the game's own UI (the portrait bar at top left) is positioned
+           against the whole screen: true fullscreen reduces sl to 0, and this device in landscape reports the punch hole only on the
+           right (left is always 0), so taking left never moves it. All four corners are rounded, so take the larger of the two
+           whole-screen sides, and the larger of that and what the Java outer frame reported. */
+        int gui_sl = (int)lroundf(fmaxf(fmaxf(0,safe_left), fmaxf(0,safe_right)) * 2160 / height);
+        int view_sl = atomic_load(&view_safe_left);
+        if (view_sl > gui_sl) gui_sl = view_sl;
+        dm_ui_safe_left(gui_sl);
         /* 真全屏（界面是贴底的一条）时游戏把右上角小地图与地名画到画面右缘之外（实测尾部被裁），给游戏那侧一份缺省右安全区让它
            整块内移；触控布局按真实安全区走，不受影响。16:9 及以上时界面矩形就是整窗，游戏本来就摆得下，值保持 0。
            True fullscreen (the UI is a bottom strip): the game draws the top-right minimap and area name past the picture's right edge
