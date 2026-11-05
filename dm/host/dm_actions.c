@@ -250,6 +250,20 @@ static int a_has_state(uint64_t u, int st) {
 // The two life tiers (the same set for the character and the mercenary): below 50% drink a red potion (not while its effect is active, no chain drinking); below 30% drink a purple potion (instant, with no effect state: drink again only if still below 30% 1 second after drinking),
 // and with no purple potion drink one more red potion -- this one is not blocked by "effect still active", but only one is let through per drop below 30%; after that it goes back to "drink only once the effect is gone", and the count restarts once life is back above 30% (so the red potions are not all poured down while taking hits).
 // Both thresholds are tunable: DM_AUTOPOT_RED (default 50) / DM_AUTOPOT_REJUV (default 30), in percent. Mana is still: below 30% drink a blue potion.
+// 佣兵那一趟另加两条（ap_life_pick 的 red_cd / rejuv_cd 参数，人物都传 0 = 规则不变）：服务端那只怪物读不到状态 100（状态位在属性表的扩展段里，
+// 扩展段只有角色有），「药效还在」判断不出来 → 每一秒就又能喂一瓶，看着就是一次灌下好几瓶（真机日志：16149 拍一瓶 hp5、16174 拍又一瓶 hp5）。
+// 所以佣兵这侧改成按时间记：红药（缓慢回血）喂完记下「冷却到第几拍」，冷却没过不再喂红药，到点了仍低于阈值才再喂一瓶；
+// 复苏药水（紫药）虽然回血快，但服务端把血加上去、客户端读到新的生命值要过一会儿，照数值判就还是连灌，所以也记 2 秒冷却，冷却没过整趟不再喂药。
+// 两个长度：红药 = 生命药水的作用时间，缺省 12 秒；紫药 = 生命变化显示的延迟，缺省 2 秒（都按 25 拍/秒）。DM_MERC_POT_CD / DM_MERC_REJUV_CD=<秒> 改这两个数（0 = 不记冷却，回到只按数值判）。
+// The mercenary pass adds two rules (ap_life_pick's red_cd / rejuv_cd; the character passes 0 for both and its rules are unchanged): state 100 cannot be
+// read on the server-side monster (the state bit lives in the extended part of the stat table, and only player units have an extended table), so "the effect is
+// still active" cannot be told -> another potion could be fed every second, which looks like several bottles poured down at once (real-device log: an hp5 at
+// tick 16149 and another one at 16174). So this side counts time instead: after a red potion (slow life) until which tick the cooldown runs is recorded, no red
+// potion while it runs, and only another one when it is over and life is still below the threshold. A rejuv (purple) potion restores life quickly, but the
+// server still has to apply it and the client still has to receive the new life value, so judging by the numbers alone would keep pouring: it gets a
+// 2-second cooldown as well and nothing is fed at all while that runs.
+// The two lengths: the red potion's is the healing potion's effect duration, 12 seconds by default; the rejuv's is the life-update display delay, 2 seconds by
+// default (both at 25 ticks/second). DM_MERC_POT_CD / DM_MERC_REJUV_CD=<seconds> change them (0 = do not count a cooldown, back to judging by the numbers alone).
 static int ap_pct(int which) { static int v[2] = { -1, -1 }; static const char *const nm[2] = { "DM_AUTOPOT_RED", "DM_AUTOPOT_REJUV" }; static const int def[2] = { 50, 30 };
     if (v[which] < 0) { const char *e = getenv(nm[which]); v[which] = e && atoi(e) > 0 && atoi(e) <= 100 ? atoi(e) : def[which]; } return v[which]; }
 // 在玩家物品栏里找一瓶药：kind 0 红（hp1–hp5）/ 1 蓝（mp1–mp5）/ 2 紫（rvs / rvl）。先背包（页 0）、再腰带最下面一排（原版按腰带键喝的就是这一排）。返回物品 id，没有 = 0
@@ -264,25 +278,43 @@ static uint32_t ap_find(uint8_t *b, uint64_t pl, int kind, uint32_t *ocode, int 
         it = *(uint64_t *)(d + 0xb0); }
     *ocode = iid ? ic : bc; *in_bag = iid != 0; return iid ? iid : bid;
 }
-typedef struct { uint32_t last; int warned, extra; } ap_life;   // last：上次发出的拍；extra：这次掉到 30% 以下已经放行过那一瓶不看药效的红药 | last: the tick of the last send; extra: on this drop below 30%, the one red potion that ignores the potion effect has already been let through
-// 按生命两档挑药。v / mx 生命与上限，healing = 红药药效还在。返回要用的物品 id（0 = 这一拍不喝），*why 给日志
-// Pick a potion by the two life tiers. v / mx are life and its maximum, healing = the red potion effect is still active. Returns the id of the item to use (0 = no drink on this tick); *why is for the log
-static uint32_t ap_life_pick(uint8_t *b, uint64_t pl, ap_life *s, int v, int mx, int healing, uint32_t t, uint32_t *code, int *in_bag, const char **why) {
+typedef struct { uint32_t last, red_until, rejuv_until; int warned, extra; } ap_life;   // last：上次发出的拍；extra：这次掉到 30% 以下已经放行过那一瓶不看药效的红药；red_until / rejuv_until：红药、紫药的冷却到第几拍（都只有传了对应 cd 的那趟用） | last: the tick of the last send; extra: on this drop below 30%, the one red potion that ignores the potion effect has already been let through; red_until / rejuv_until: until which tick the red / rejuv potion's cooldown runs (used only by the pass that passes that cd)
+// 按生命两档挑药。v / mx 生命与上限，healing = 红药药效还在，red_cd = 红药冷却的拍数、rejuv_cd = 紫药（复苏）冷却的拍数（都传 0 = 人物那一趟：只按「药效还在」挡；>0 = 佣兵那一趟：那只单位的药效读不到，按时间挡）。
+// 返回要用的物品 id（0 = 这一拍不喝），*why 给日志
+// Pick a potion by the two life tiers. v / mx are life and its maximum, healing = the red potion effect is still active, red_cd / rejuv_cd = the red / rejuv potion's cooldown in ticks (both 0 = the character pass: blocked only by
+// "effect still active"; > 0 = the mercenary pass: that unit's effect cannot be read, so both are blocked by time). Returns the id of the item to use (0 = no drink on this tick); *why is for the log
+static uint32_t ap_life_pick(uint8_t *b, uint64_t pl, ap_life *s, int v, int mx, int healing, uint32_t t, uint32_t *code, int *in_bag, const char **why, uint32_t red_cd, uint32_t rejuv_cd) {
     if (mx <= 0 || v <= 0) return 0;
     int low = (long long)v * 100 < (long long)mx * ap_pct(1), mid = (long long)v * 100 < (long long)mx * ap_pct(0);
+    if (red_cd && s->red_until && t >= s->last && t < s->red_until) healing = 1;   // 按时间记的那趟：冷却没过就当药效还在；t 已越过 s->last = 换了一局（拍号归零），旧局的冷却不算 | the pass that counts by time: while the cooldown is running, treat the effect as still active; t past s->last = a new game (ticks reset), the old run's cooldown does not count
+    if (rejuv_cd && s->rejuv_until && t >= s->last && t < s->rejuv_until) return 0;   // 上一瓶是复苏药水：服务端加血、客户端收到新的生命值都要时间，这段冷却里整趟都不喂（否则照数值判还是连灌） | the last one was a rejuv potion: the server applying it and the client receiving the new life both take time, so nothing at all is fed while this runs (otherwise judging by the numbers keeps pouring)
     if (!low) s->extra = 0;
     if (!mid) { s->warned = 0; if (healing) s->last = 0; return 0; }
-    if (s->last && t >= s->last && t - s->last < 25) return 0;   // 刚发过一瓶：等 1 秒（红药等药效出现、紫药等生命跳上去） | one was just sent: wait 1 second (for a red potion, until the effect appears; for a purple potion, until life jumps up)
-    if (low) { uint32_t id = ap_find(b, pl, 2, code, in_bag); if (id) { *why = "紫药"; return id; }
-        if (healing && s->extra) return 0;   // 没有紫药、那一瓶额外的红已经喝过：等药效没了 | no purple potion and the one extra red has already been drunk: wait for the potion effect to end
-        id = ap_find(b, pl, 0, code, in_bag); if (id) { if (healing) s->extra = 1; *why = healing ? "没有紫药，再喝一瓶红药" : "没有紫药，喝红药"; return id; }
+    if (s->last && t >= s->last && t - s->last < 25) return 0;   // 刚发过一瓶：等 1 秒。这一条是「发出去到生效」的在途等待，不是药水的冷却（药水各自的冷却见上面的 red_until / rejuv_until） | one was just sent: wait 1 second. This is the in-flight wait from sending to taking effect, not a potion cooldown (the per-potion cooldowns are the red_until / rejuv_until above)
+    if (low) { uint32_t id = ap_find(b, pl, 2, code, in_bag); if (id) { if (rejuv_cd) s->rejuv_until = t + rejuv_cd; *why = "紫药"; return id; }   // 紫药（复苏）回血快，但生命值要过一会儿才显示，所以按时间记它自己的冷却 | the purple (rejuv) potion restores life quickly, but the life value only shows up a while later, so its own cooldown is counted by time
+        if (healing && (red_cd || s->extra)) return 0;   // 按时间记的那趟：红药冷却没过就不喂；人物那趟：这一档只放行过那一瓶 | the time-counted pass: no red while its cooldown runs; the character pass: only that one extra bottle has been let through
+        id = ap_find(b, pl, 0, code, in_bag); if (id) { if (healing) s->extra = 1; if (red_cd) s->red_until = t + red_cd; *why = healing ? "没有紫药，再喝一瓶红药" : "没有紫药，喝红药"; return id; }
         if (!s->warned) { s->warned = 1; *why = "没药"; } return 0; }
-    if (healing) return 0;   // 50% 档：药效还在不再喝 | 50% tier: do not drink again while the potion effect is still active
-    { uint32_t id = ap_find(b, pl, 0, code, in_bag); if (id) { *why = "红药"; return id; } if (!s->warned) { s->warned = 1; *why = "没药"; } return 0; }
+    if (healing) return 0;   // 50% 档：药效还在（或红药冷却没过）不再喝 | 50% tier: do not drink again while the potion effect is still active (or the red-potion cooldown is running)
+    { uint32_t id = ap_find(b, pl, 0, code, in_bag); if (id) { if (red_cd) s->red_until = t + red_cd; *why = "红药"; return id; } if (!s->warned) { s->warned = 1; *why = "没药"; } return 0; }
+}
+// 佣兵那趟的两个冷却长度（拍）：红药 = 生命药水的作用时间，缺省 12 秒（游戏里红药是把生命在一段时间里慢慢加满）；
+// 紫药 = 从服务端加血到客户端显示出新生命的延迟，缺省 2 秒（那只单位的状态位读不到，只能按时间挡；这段冷却里整趟都不喂）。
+// DM_MERC_POT_CD / DM_MERC_REJUV_CD=<秒> 改这两个数（0 = 不记冷却，回到只按数值判，也就是原先「一秒一瓶」那种行为）
+// The mercenary pass's two cooldown lengths (ticks): the red potion's is the healing potion's effect duration, 12 seconds by default (in the game a red potion fills life up slowly over a stretch of time);
+// the rejuv potion's is the delay from the server applying it to the client showing the new life, 2 seconds by default (that unit's state bit cannot be read, so only time can block it; nothing at all is fed while it runs).
+// DM_MERC_POT_CD / DM_MERC_REJUV_CD=<seconds> change them (0 = do not count a cooldown, back to judging by the numbers alone, i.e. the previous "one bottle a second" behavior)
+static uint32_t merc_red_cd(void) {
+    static int sec = -1; if (sec < 0) { const char *e = getenv("DM_MERC_POT_CD"); sec = e && atoi(e) >= 0 ? atoi(e) : 12; }
+    return (uint32_t)sec * 25;
+}
+static uint32_t merc_rejuv_cd(void) {
+    static int sec = -1; if (sec < 0) { const char *e = getenv("DM_MERC_REJUV_CD"); sec = e && atoi(e) >= 0 ? atoi(e) : 2; }
+    return (uint32_t)sec * 25;
 }
 static int auto_pot_life(uint8_t *b, uint64_t pl, uint32_t t) {   // 人物生命；返回 1 = 这一拍发了喝药 | character life; returns 1 = a drink was sent on this tick
     static ap_life s; int (*gs)(uint64_t, int, int) = (void *)(b + 0x5b9290); int v = gs(pl, 6, 0) >> 8, mx = gs(pl, 7, 0) >> 8, bag = 0; uint32_t code = 0; const char *why = NULL;
-    uint32_t id = ap_life_pick(b, pl, &s, v, mx, a_has_state(pl, 100), t, &code, &bag, &why);
+    uint32_t id = ap_life_pick(b, pl, &s, v, mx, a_has_state(pl, 100), t, &code, &bag, &why, 0, 0);   // 人物：药效读得到，两种药都不另记时间冷却 | the character: the effect is readable, no time cooldown for either potion
     if (!id) { if (why) LOG("自动喝药：生命 %d/%d 低于 %d%%，背包和腰带里都没有可喝的生命药水", v, mx, ap_pct(0)); return 0; }
     atomic_store(&g_use, id); s.last = t; s.warned = 0;
     LOG("自动喝药：拍 %u 生命 %d/%d（%d%%）→ %s：喝%s的 %.3s（id %u）", t, v, mx, (int)((long long)v * 100 / mx), why, bag ? "背包" : "腰带", (const char *)&code, id);
@@ -308,6 +340,13 @@ static int auto_pot_mana(uint8_t *b, uint64_t pl, uint32_t t) {   // 法力：�
 // Goes through the existing feed-mercenary path (g_use + g_use_merc, same as the belt double-tap: the original game itself judges whether this potion can be fed, target = the mercenary unit). Switch: the 「自定义」(Custom) setting merc_pot, off by default (it uses up more of the player's potions).
 // Mercenary unit id = the entry in the [0x2d33528] linked list with type 7, owner = the player, and [+0x20] == 0 (same as the feed-mercenary code below); life and potion effect are read from the true values of the server-side one (diag.c dm_diag_srv_merc) --
 // the client-side one's life is a ratio sent by the server, which has not been sent during the first two-hundred-odd ticks after joining a game and is an uninitialized value, so it must not be used to decide to consume the player's potions
+// 那只单位的「药效还在」读不到（状态位在属性表的扩展段里，只有角色有扩展段），所以两种药都改按时间记冷却（merc_red_cd / merc_rejuv_cd）：喂一瓶红药就记下冷却到第几拍，
+// 冷却没过不再喂红药，到点了仍低于阈值才再喂一瓶；喂一瓶复苏药水也记 2 秒，那段时间整趟都不喂（服务端加血、客户端收到新的生命都要时间，照数值判还是连灌）。
+// 不这样改的话佣兵一缺血就一秒一瓶地灌，几瓶下去人还没回满
+// That unit's "the effect is still active" cannot be read (the state bit lives in the extended part of the stat table, and only player units have an extended table), so both potions are blocked by time instead (merc_red_cd / merc_rejuv_cd):
+// after a red potion, until which tick the cooldown runs is recorded; no red potion while it runs, and only another one when it is over and life is still below the threshold. A rejuv potion gets a 2-second cooldown and nothing at all
+// is fed while it runs, because the server applying it and the client learning the new life both take time — judging by the numbers alone would keep pouring. Without this, as soon as the mercenary is short on life a bottle goes down
+// every second and several bottles are used before the first one has filled life up
 static int auto_merc_pot(uint8_t *b, uint64_t pl, uint32_t t) {
     static int env = -2; if (env == -2) { const char *e = getenv("DM_MERC_POT"); env = e ? e[0] != '0' : -1; }   // 测试强制：DM_MERC_POT=0 关 / 其余开，优先于自定义页 | Test override: DM_MERC_POT=0 off / anything else on, takes priority over the Custom page
     if (!(env >= 0 ? env : dm_custom_get("merc_pot"))) return 0;
@@ -316,10 +355,12 @@ static int auto_merc_pot(uint8_t *b, uint64_t pl, uint32_t t) {
     uint32_t mid = 0xffffffffu; for (uint64_t e = *(uint64_t *)(b + 0x2d33528); e; e = *(uint64_t *)(e + 0x30)) if (*(uint32_t *)(e + 4) == 7 && *(uint32_t *)(e + 0xc) == *(uint32_t *)(pl + 8) && !*(uint32_t *)(e + 0x20)) { mid = *(uint32_t *)(e + 8); break; }
     int dm_diag_srv_merc(uint32_t id, int *hp, int *mx, int *healing); int v = 0, mx = 0, healing = 0, bag = 0; uint32_t code = 0; const char *why = NULL;
     if (mid == 0xffffffffu || !dm_diag_srv_merc(mid, &v, &mx, &healing)) return 0;   // 没有佣兵 / 死了 / 服务端没有这只 | No mercenary / dead / the server has no such unit
-    uint32_t id = ap_life_pick(b, pl, &s, v, mx, healing, t, &code, &bag, &why);
+    uint32_t id = ap_life_pick(b, pl, &s, v, mx, healing, t, &code, &bag, &why, merc_red_cd(), merc_rejuv_cd());
     if (!id) { if (why) LOG("佣兵自动喂药：佣兵生命 %d%% 低于 %d%%，背包和腰带里都没有可喂的生命药水", (int)((long long)v * 100 / mx), ap_pct(0)); return 0; }
     atomic_store(&g_use_merc, 1); atomic_store(&g_use, id); s.last = t; s.warned = 0;
     LOG("佣兵自动喂药：拍 %u 佣兵（id %u）生命 %d/%d（%d%%）→ %s：喂%s的 %.3s（id %u）", t, mid, v, mx, (int)((long long)v * 100 / mx), why, bag ? "背包" : "腰带", (const char *)&code, id);
+    if (s.red_until > t) LOG("佣兵自动喂药：红药慢慢回血，%d 秒内不再喂红药（到点仍低于 %d%% 才再喂）", (int)((s.red_until - t) / 25), ap_pct(0));   // 一瓶红药一行，真机上核对冷却长度用 | one line per red potion, for checking the cooldown length on a real device
+    else if (s.rejuv_until > t) LOG("佣兵自动喂药：复苏药水要等生命变化显示出来，%d 秒内不再喂药", (int)((s.rejuv_until - t) / 25));   // 同上，核对紫药冷却用 | likewise, for checking the rejuv cooldown
     return 1;
 }
 static void auto_pot_pump(uint8_t *b, uint64_t pl) {
