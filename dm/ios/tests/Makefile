@@ -49,6 +49,7 @@ test: $(TARGET) $(BINDING_TARGETS) t_native_art t_skill_aim t_joy_travel $(METAL
 	./t_joy_travel
 	./t_native_art
 	python3 test_slowframe.py
+	python3 test_gameplay_tables.py
 	python3 test_native_art_capture.py
 	python3 test_touch_layout_options.py
 	python3 test_touch_layout_language.py
