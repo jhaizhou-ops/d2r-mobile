@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sources": {
+    "dm/ios/tools/gen_hud_v4.py": "c37dc64dfd6a3fc09cb438e7e15990affc8eab2e880041dc80d9df3f54e4be8c",
+    "web/toolchain/asset-generation-spike/src/core.py": "f43d4e6e5fb743fd58151ff495390065b6b1f4804e99efbb44da1dd18ccdfecf",
+    "web/toolchain/art-kernels/kernels.mjs": "87ec9ca1f11fb7ff6e4ae61fdec92e17dd7367b98eba80ad8264fc4c8d2b7b9c",
+    "dm/ios/tools/native_art/generate.py": "d70f88aecd049e9286ea88ff9cdce6b353b282a9b98f2eaeadc229dcbfb80f19",
+    "web/toolchain/asset-generation-spike/src/native_art.py": "b6deba4a25d4126b8de6bdc441b08850fd8932b7b13620cfb92d11317a13e24a",
+    "dm/ios/tools/gen_map_goal_art.py": "d68f9bd866034b4606b71d74af690c567187f3b9089dba682450c13038171d4b",
+    "web/toolchain/asset-generation-spike/src/map_goal.py": "54c13c13726e3d10f4647756b20fa8afa5c54097518cb3e1b2c71da4cf202f3b",
+    "dm/ios/tools/native_art/implementation.c.inc": "3bf1a58f9189d7857c4fc666e7044a958eff27cf1b594fd9d1b6c47d381db4b1",
+    "dm/ios/Sources/TouchArt/native_art_manifest.json": "334ed8adfa6d21feea33946692a1d5088b5ed39edb36545241ee543414382a5e",
+    "dm/ios/docs/native_art_v1_geometry.json": "7332bf327af662259cde973d5ed6ba80af472e4f0c232ea4dfe3fcf0a17a4799",
+    "dm/ios/docs/touch_layout_spec_native_binding_v5.json": "e0e649d9c0a6cb6861f166db0e705be196f69a20c40993116f591b13cdcfec1f"
+  }
+}

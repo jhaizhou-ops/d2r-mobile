@@ -1,0 +1,9 @@
+{
+  "dm/ios/tools/gen_hud_v4.py": "c37dc64dfd6a3fc09cb438e7e15990affc8eab2e880041dc80d9df3f54e4be8c",
+  "dm/ios/tools/hud_v4_design.py": "6f9852ac3fc17e54bb6e6f4d490966faf5bbfbaaa86e5153bb4734561186c772",
+  "dm/ios/tools/layout_patch.py": "a4ca908c93c1ff563cacd506d242a94833731e5629c7e543ecb6c123bdddee9b",
+  "dm/ios/tools/dm_i18n.py": "ab379e0656d13b9830ed88f528bd1dc407225c996650453f37bc0cfc258b796b",
+  "dm/ios/tools/touchrectv1_patch.json": "631bdf2195978f24f44804176a21345dd16fd9a924e6a8c8d0bfe84eae83fa2e",
+  "dm/i18n/ui_text.tsv": "4e099481929406e10597a14cf9704de0e49d840c4c63bb1ab67f4eb524d4f4b4",
+  "dm/ios/Sources/TouchArt/native_art_manifest.json": "334ed8adfa6d21feea33946692a1d5088b5ed39edb36545241ee543414382a5e"
+}

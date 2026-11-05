@@ -1,0 +1,14 @@
+{
+  "casc-overlay": {
+    "dm/tools/casc_overlay.py": "b4b7cf11926ba570532373baa095b9fe623a33fe3fda8497d6ccd8c07770ccf3"
+  },
+  "map-goal": {
+    "dm/ios/tools/gen_map_goal_art.py": "d68f9bd866034b4606b71d74af690c567187f3b9089dba682450c13038171d4b"
+  },
+  "mercenary": {
+    "dm/ios/tools/gen_merc_art.py": "0d65f6f3bf3a9328ea947ca91d7c625bc364c75e09a74192155b16d7c7b7b179"
+  },
+  "vault": {
+    "dm/ios/tools/gen_vault_table.py": "a9ed6567e4b7a0f76c2b31eb2932f085f8c3120df791526f973e39d47c810555"
+  }
+}

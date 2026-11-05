@@ -1,0 +1,18 @@
+{
+  "src/libImaging/ZipEncode.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/ZipEncode.c",
+    "sha256": "43615fd1f4fd7246b2d77dffbb026e118a98e37793dba92773b5bcba553c20c4"
+  },
+  "src/PIL/PngImagePlugin.py": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/PIL/PngImagePlugin.py",
+    "sha256": "b59af94124586de66632e1c65bb6741d9e2d8ffece83639858f58a164f34df26"
+  },
+  "src/PIL/ImageFile.py": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/PIL/ImageFile.py",
+    "sha256": "147580efcdab42a6db3a3a0da38b96f2adc503a1cbae26aba59a40b8406d00be"
+  },
+  "LICENSE": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/LICENSE",
+    "sha256": "e706384c6f299d1b6fa782ae657740b372b4bd7938a1a318bf94ac249114758a"
+  }
+}

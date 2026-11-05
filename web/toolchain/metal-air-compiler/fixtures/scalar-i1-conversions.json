@@ -1,0 +1,132 @@
+{
+  "kind": "hand-authored-symbolic-shapes",
+  "compilerExecuted": false,
+  "llvmVerified": false,
+  "cases": [
+    {
+      "name": "signed_half",
+      "purpose": "dynamic scalar i1 to half",
+      "expectation": "select with -1.000000e+00 true arm and positive zero false arm"
+    },
+    {
+      "name": "signed_float",
+      "purpose": "dynamic scalar i1 to float",
+      "expectation": "select with -1.000000e+00 true arm and positive zero false arm"
+    },
+    {
+      "name": "signed_double",
+      "purpose": "dynamic scalar i1 to double",
+      "expectation": "select with -1.000000e+00 true arm and positive zero false arm"
+    },
+    {
+      "name": "signed_true",
+      "purpose": "true constant folding and non-Instruction replacement",
+      "expectation": "return float -1.000000e+00; no debug-location access on a Constant"
+    },
+    {
+      "name": "signed_false",
+      "purpose": "false constant folding and non-Instruction replacement",
+      "expectation": "return float 0.000000e+00; no debug-location access on a Constant"
+    },
+    {
+      "name": "signed_poison",
+      "purpose": "poison constant folding and non-Instruction replacement",
+      "expectation": "return float poison; no debug-location access on a Constant"
+    },
+    {
+      "name": "signed_undef",
+      "purpose": "undef constant folding and non-Instruction replacement",
+      "expectation": "return float 0.000000e+00; no debug-location access on a Constant"
+    },
+    {
+      "name": "unsigned_half",
+      "purpose": "dynamic scalar i1 to half",
+      "expectation": "select with 1.000000e+00 true arm and positive zero false arm"
+    },
+    {
+      "name": "unsigned_float",
+      "purpose": "dynamic scalar i1 to float",
+      "expectation": "select with 1.000000e+00 true arm and positive zero false arm"
+    },
+    {
+      "name": "unsigned_double",
+      "purpose": "dynamic scalar i1 to double",
+      "expectation": "select with 1.000000e+00 true arm and positive zero false arm"
+    },
+    {
+      "name": "unsigned_true",
+      "purpose": "true constant folding and non-Instruction replacement",
+      "expectation": "return float 1.000000e+00; no debug-location access on a Constant"
+    },
+    {
+      "name": "unsigned_false",
+      "purpose": "false constant folding and non-Instruction replacement",
+      "expectation": "return float 0.000000e+00; no debug-location access on a Constant"
+    },
+    {
+      "name": "unsigned_poison",
+      "purpose": "poison constant folding and non-Instruction replacement",
+      "expectation": "return float poison; no debug-location access on a Constant"
+    },
+    {
+      "name": "unsigned_undef",
+      "purpose": "undef constant folding and non-Instruction replacement",
+      "expectation": "return float 0.000000e+00; no debug-location access on a Constant"
+    },
+    {
+      "name": "frozen_input",
+      "purpose": "existing freeze preserves one shared frozen condition",
+      "expectation": "do not introduce or remove freeze; both selects use %f once"
+    },
+    {
+      "name": "adjacent_debug_multiuse",
+      "purpose": "adjacent casts, all-use replacement, instruction debug locations",
+      "expectation": "both casts handled; both signed uses replaced; original distinct !dbg copied"
+    },
+    {
+      "name": "vector_signed",
+      "purpose": "outside new scalar-i1 specialization",
+      "expectation": "existing air.convert fallback, unchanged by this candidate"
+    },
+    {
+      "name": "vector_unsigned",
+      "purpose": "outside new scalar-i1 specialization",
+      "expectation": "existing air.convert fallback, unchanged by this candidate"
+    },
+    {
+      "name": "vector_one_signed",
+      "purpose": "outside new scalar-i1 specialization",
+      "expectation": "existing air.convert fallback, unchanged by this candidate"
+    },
+    {
+      "name": "signed_i8",
+      "purpose": "outside new scalar-i1 specialization",
+      "expectation": "existing air.convert fallback, unchanged by this candidate"
+    },
+    {
+      "name": "unsigned_i64",
+      "purpose": "outside new scalar-i1 specialization",
+      "expectation": "existing air.convert fallback, unchanged by this candidate"
+    },
+    {
+      "name": "unsupported_bfloat",
+      "purpose": "unsupported floating type",
+      "expectation": "existing helper returns null; original cast remains"
+    },
+    {
+      "name": "unsupported_fp128",
+      "purpose": "unsupported floating type",
+      "expectation": "existing helper returns null; original cast remains"
+    },
+    {
+      "name": "reverse_signed",
+      "purpose": "opcodes excluded by constexpr guard",
+      "expectation": "existing air.convert fallback, unchanged by this candidate"
+    },
+    {
+      "name": "reverse_unsigned",
+      "purpose": "opcodes excluded by constexpr guard",
+      "expectation": "existing air.convert fallback, unchanged by this candidate"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+; Authored synthetic compute shader: void main() {} with local size (1,1,1).
+; No vendor/game bytes. Assemble using spirv-as --target-env spv1.0.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpSource GLSL 450
+OpName %main "main"
+%void = OpTypeVoid
+%function = OpTypeFunction %void
+%main = OpFunction %void None %function
+%entry = OpLabel
+OpReturn
+OpFunctionEnd

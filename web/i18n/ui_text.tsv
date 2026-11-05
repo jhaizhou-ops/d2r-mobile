@@ -1,0 +1,349 @@
+键	中文	English
+dmWebReasonsProdKeysMissing	缺少 prod.keys。	prod.keys is missing.
+dmWebReasonsProdKeysUnreadable	无法读取 prod.keys。请检查本地文件访问权限。	prod.keys could not be read. Check local file access.
+dmWebReasonsProdKeysTooLarge	prod.keys 超过 1 MiB 限制。	prod.keys exceeds the 1 MiB limit.
+dmWebReasonsProdKeysEmpty	prod.keys 不包含密钥条目。	prod.keys contains no key entries.
+dmWebReasonsProdKeysMalformed	prod.keys 中存在不支持或格式错误的密钥行。	prod.keys has an unsupported or malformed key line.
+dmWebReasonsTitleKeyRequired	支持的 NSP 票据及 title.keys 中均无匹配的标题密钥。请将你自己的匹配 title.keys 放入所选文件夹。	No matching title key was available from supported NSP tickets or title.keys. Add your own matching title.keys to the selected folder.
+dmWebReasonsTitleKeysMissing	缺少 title.keys。不需要标题密钥时允许使用空文件。	title.keys is missing. An empty file is allowed when no title keys are needed.
+dmWebReasonsTitleKeysUnreadable	无法读取 title.keys。请检查本地文件访问权限。	title.keys could not be read. Check local file access.
+dmWebReasonsTitleKeysTooLarge	title.keys 超过 1 MiB 限制。	title.keys exceeds the 1 MiB limit.
+dmWebReasonsTitleKeysMalformed	title.keys 中存在不支持或格式错误的密钥行。	title.keys has an unsupported or malformed key line.
+dmWebReasonsKeysRuntimeFailed	隔离的软件包读取器无法载入密钥文件。	The isolated package reader could not load the key files.
+dmWebReasonsPackageIndexInvalid	NSP 索引无法读取、已损坏或不受支持。	An NSP index is unreadable, damaged, or unsupported.
+dmWebReasonsTicketUnsupported	无法读取内嵌票据格式。只有验证票据的权限 ID 后才能使用匹配的 title.keys 条目。	An embedded ticket format cannot be read. A matching title.keys entry can be used only when the ticket rights ID can be verified.
+dmWebReasonsTicketInvalid	内嵌票据格式错误、被截断或无法读取。	An embedded ticket is malformed, truncated, or unreadable.
+dmWebReasonsTicketRightsIdMismatch	内嵌票据名称与其权限 ID 不匹配。	An embedded ticket name does not match its rights ID.
+dmWebReasonsTicketKeyConflict	内嵌票据为同一权限 ID 提供了冲突的密钥。	Embedded tickets contain conflicting keys for the same rights ID.
+dmWebReasonsTicketLimitExceeded	所选软件包超出内嵌票据数量限制。	The selected packages exceed the embedded-ticket limit.
+dmWebReasonsContentReadFailed	无法完整读取软件包内容。	Package content could not be read completely.
+dmWebReasonsContentAuthenticationFailed	内容验证失败。密钥可能与软件包不匹配，或软件包已损坏或不受支持。	Content verification failed. The keys may not match the packages, or a package may be damaged or unsupported.
+dmWebReasonsContentMetadataInvalid	软件包元数据无效或不一致。	Package metadata is invalid or inconsistent.
+dmWebReasonsExtractionWorkerUnavailable	隔离的软件包读取器不可用。	The isolated package reader is unavailable.
+dmWebReasonsExtractionTransportFailed	浏览器无法将本地输入传递给软件包读取器。	The browser could not pass local inputs to the package reader.
+dmWebReasonsExtractionProtocolFailed	软件包读取器返回了意外响应。	The package reader returned an unexpected response.
+dmWebReasonsExtractionWorkerFailed	隔离的软件包读取器意外停止。	The isolated package reader stopped unexpectedly.
+dmWebReasonsExtractionTimeout	软件包验证超时。	Package verification exceeded its time limit.
+dmWebReasonsExtractionFailed	本地软件包验证未完成。	Local package verification did not complete.
+dmWebStagesCapabilities	检查功能支持	Checking capabilities
+dmWebStagesDiscovery	查找本地输入	Finding local inputs
+dmWebStagesSecrets	验证本地密钥和软件包	Verifying local keys and packages
+dmWebStagesInspection	检查软件包标识	Inspecting package identities
+dmWebStagesSelection	选择软件包内容	Selecting package content
+dmWebStagesExtraction	提取所选内容	Extracting selected content
+dmWebStagesDisposal	关闭隔离的密钥会话	Closing the isolated key session
+dmWebStagesProgram	生成应用程序	Generating the application
+dmWebStagesAssets	生成资源	Generating assets
+dmWebStagesShaders	生成着色器	Generating shaders
+dmWebStagesShell	验证应用程序外壳	Validating the application shell
+dmWebStagesValidation	验证生成的内容	Validating generated content
+dmWebStagesAssembly	检查组装结果	Checking the assembly
+dmWebStagesOutput	写入归档	Writing the archive
+dmWebStagesResources	在本地保存游戏资源	Saving game resources locally
+dmWebStagesArchive	验证归档	Validating the archive
+dmWebStagesCleanup	释放临时资源	Releasing temporary resources
+dmWebStagesCommit	完成归档	Finalizing the archive
+dmWebProgresslabelsProdKeysRead	在本地读取 prod.keys	Reading prod.keys locally
+dmWebProgresslabelsTitleKeysRead	在本地读取 title.keys	Reading title.keys locally
+dmWebProgresslabelsKeysLoad	将密钥载入隔离的读取器	Loading keys into the isolated reader
+dmWebProgresslabelsPackageIndex	读取 NSP 索引	Reading NSP indexes
+dmWebProgresslabelsTicketFound	找到内嵌票据	Embedded tickets found
+dmWebProgresslabelsTicketKeyAdded	已从票据添加标题密钥	Title keys added from tickets
+dmWebProgresslabelsTicketKeyReused	已复用现有标题密钥	Existing title keys reused
+dmWebProgresslabelsContentHash	计算软件包内容哈希	Hashing package content
+dmWebProgresslabelsContentHeader	验证加密内容头	Verifying encrypted content headers
+dmWebProgresslabelsContentMetadata	验证软件包元数据	Verifying package metadata
+dmWebProgresslabelsRomfsRead	读取 RomFS 以进行验证	Reading RomFS for verification
+dmWebProgresslabelsRomfsBase	验证基础 RomFS	Verifying base RomFS
+dmWebProgresslabelsRomfsMerged	验证合并更新后的 RomFS	Verifying merged update RomFS
+dmWebStageState	%s：%s	%s: %s
+dmWebRunning	进行中	running
+dmWebComplete	完成	complete
+dmWebFailed	失败	failed
+dmWebCancelled	已取消。	Cancelled.
+dmWebLocalPackaging	本地打包	Local packaging
+dmWebFailureSummary	%s失败%s。%s没有可用的完整 IPA。	%s failed%s. %sNo completed IPA is available.
+dmWebOutputPossible	 资源可能已保存到所选文件夹内的 data 文件夹。	 Resources may have been saved in the data folder inside the selected folder.
+dmWebOutputNone	 本次尝试未导出资源。	 No resources were exported by this attempt.
+dmWebOutputComplete	 完整游戏资源保留在所选文件夹内的 %s 中，但没有可用的完整 IPA。	 Complete game resources remain in %s inside the selected folder, but no completed IPA is available.
+dmWebOutputRemoved	 已删除未完成的资源导出；本次尝试未留下资源文件夹。	 The incomplete resource export was removed; no resource folder from this attempt remains.
+dmWebOutputIncomplete	 未完成的资源可能保留在所选文件夹内的 %s 中。不要将其用作完整资源集。重试前请检查该文件夹。%s	 Incomplete resources may remain in %s inside the selected folder. Do not use this as a finished resource set. Check the folder before retrying.%s
+dmWebMarkerPresent	 未完成导出的警告标记仍然存在。	 An incomplete-export warning marker remains.
+dmWebMarkerUnknown	 无法确认未完成导出的警告标记。	 An incomplete-export warning marker could not be confirmed.
+dmWebFailureRetry	 请重新载入后重试。密钥文件应保留在本设备上；活动日志不包含密钥或文件名。	 Reload to try again. Keep key files on this device; the activity log contains no keys or filenames.
+dmWebRomfsVerified	%s：%s%%（已验证 %s MB）	%s: %s%% (%s MB verified)
+dmWebLoading	正在载入应用文件…	Loading application files…
+dmWebUnsupported	此版本尚未就绪，或当前浏览器不受支持。请使用桌面版 Chrome 或 Edge。	This build is not ready, or this browser is unsupported. Use desktop Chrome or Edge.
+dmWebLoadingVerified	正在载入已验证的应用文件	Loading verified application files
+dmWebDownloading	正在下载应用文件	Downloading application files
+dmWebPreparing	正在准备隔离的应用运行时	Preparing isolated application runtimes
+dmWebReady	已就绪。文件始终保留在本设备上。	Ready. Files stay on this device.
+dmWebApplicationReady	应用已就绪	Application ready
+dmWebSetupFailed	应用准备失败，尚未打开本地输入	Application setup failed before local inputs were opened
+dmWebWaitingFolder	等待选择文件夹…	Waiting for folder selection…
+dmWebCancelledReload	已取消。请重新载入以再次开始。	Cancelled. Reload to start again.
+dmWebFolderFailed	文件夹检查失败；请查看状态消息	Folder check failed; check the status message
+dmWebMissingInput	请将 NSP/XCI 软件包和 prod.keys 直接放入此文件夹，而非子文件夹。	Put NSP/XCI packages and prod.keys directly inside this folder, not in a subfolder.
+dmWebFolderPermission	请重新选择文件夹，并允许读取输入及保存资源子文件夹。	Choose the folder again and allow access to read inputs and save the resource subfolder.
+dmWebFolderUnreadable	无法读取该文件夹。请检查访问权限并重新选择。	The folder could not be read. Check access and choose it again.
+dmWebStarting	正在开始生成 IPA…	Starting IPA generation…
+dmWebGenerationStarted	已开始生成；私密输入仍保留在本地	Generation started; private inputs remain local
+dmWebFastMode	快速模式：软件包哈希匹配后将跳过完整 RomFS 扫描	Fast mode: full RomFS scan will be skipped after package hashes match
+dmWebVerifyHashOption	验证完整内容哈希（较慢）	Verify full content hashes (slower)
+dmWebVerifyHashHelp	默认关闭以加快生成；仍会检查签名头部和软件包结构。开启后会读取并验证所有软件包内容。	Off by default for faster generation; signed headers and package structure are still checked. Turn on to hash all package content.
+dmWebSkipHashActive	快速模式：跳过完整内容哈希及 RomFS 扫描；仍会检查签名头部和结构	Fast mode: skipping full content hashes and RomFS scan; signed headers and structure are still checked
+dmWebProgresslabelsExefsOpen	打开选定的可执行内容	Opening selected executable content
+dmWebProgresslabelsExefsRead	读取可执行模块	Reading executable modules
+dmWebProgresslabelsRomfsOpen	打开选定的 RomFS	Opening selected RomFS
+dmWebProgresslabelsRomfsIndex	索引 RomFS 文件	Indexing RomFS files
+dmWebProgresslabelsLogicalIndex	索引游戏资源	Indexing game assets
+dmWebUnsignedReady	未签名 IPA 已就绪；资源已保存到本地	Unsigned IPA ready; resources saved locally
+dmWebGenerating	正在生成 IPA…	Generating IPA…
+dmWebGenerate	生成 IPA	Generate IPA
+dmWebCancellingWait	正在取消… 等待当前操作停止。	Cancelling… Waiting for the current operation to stop.
+dmWebCancellationRequested	已请求取消	Cancellation requested
+dmWebCancelling	正在取消…	Cancelling…
+dmWebCancel	取消	Cancel
+dmWebStopping	正在停止生成	Stopping generation
+dmWebInProgress	正在生成	Generation in progress
+dmWebStoppingAria	正在停止生成 IPA	Stopping IPA generation
+dmWebProgressAria	正在生成 IPA	IPA generation in progress
+dmWebWaitCleanup	等待取消和清理完成。	Waiting for cancellation and cleanup to finish.
+dmWebLargePackages	大型软件包验证可能需要数分钟，即使活动日志暂时没有新内容也属正常。	Large packages can take several minutes to verify, even when the activity log is quiet.
+dmWebCopied	已复制日志。	Log copied.
+dmWebCopiedNew	已复制日志。有新记录到达；请再次复制以获取最新日志。	Log copied. New entries have arrived; copy again for the latest log.
+dmWebCopyFailed	复制失败。请选中日志文字并手动复制。	Copy failed. Select the log text and copy it manually.
+dmWebReloadRetry	重新载入并重试	Reload and retry
+dmWebReload	重新载入以再次开始	Reload to start again
+dmWebTitle	D2R Mobile	D2R Mobile
+dmWebChoose	选择文件夹	Choose folder
+dmWebPackages	要使用的软件包	Packages to use
+dmWebDownload	下载 IPA	Download IPA
+dmWebCopy	复制日志	Copy log
+dmWebInstructions	将 NSP/XCI 软件包和 prod.keys 放在同一文件夹。部分软件包还需要 title.keys。	Put your NSP/XCI packages and prod.keys in one folder. Some packages also need title.keys.
+dmWebSelectionHelp	当文件名能识别出一个基础包及其更新时，会预先选中这些文件；否则将选中全部软件包。请检查所选内容。要使用术士内容，请包含 DLC；未选中的文件不会被改动。	Base and updates are preselected when filenames identify one base and its updates; otherwise all packages are selected. Review your selection. Include DLC for Warlock content; excluded files stay untouched.
+dmWebDownloadHelp	IPA 的保存位置由浏览器决定。如果下载未开始，请使用此按钮。	Your browser controls where the IPA is saved. If the download did not start, use this button.
+dmWebLogHelp	记录阶段、计数、错误代码和已过滤的着色器诊断，不含密钥内容或所选文件名。日志保留在当前标签页，不会上传。时间采用浏览器本地时间。	Stages, counts, error codes and filtered shader diagnostics. No key contents or selected filenames. Kept in this tab, not uploaded. Times use your browser's local time.
+dmWebPrivacy	IPA 将正常下载。大型游戏资源会流式写入所选文件夹内的新子文件夹。现有 NSP 和密钥不会被改动。文件不会离开本设备。	The IPA downloads normally. Large game resources stream to a new subfolder inside your selected folder. Existing NSPs and keys are not changed. Files never leave this device.
+dmWebFound	已找到	found
+dmWebMissing	缺失	missing
+dmWebFoundOptional	已找到（可选）	found (optional)
+dmWebNotProvided	未提供（可选）	not provided (optional)
+dmWebProvided	已提供	provided
+dmWebFolderSummary	%s 个软件包；prod.keys %s；title.keys %s。	%s package(s); prod.keys %s; title.keys %s.
+dmWebManifest	运行时清单：%s	Runtime manifest: %s
+dmWebSetupError	应用准备失败：%s。请重新载入后重试。尚未打开任何游戏文件。	Application setup failed: %s. Reload to retry. No game files have been opened.
+dmWebChecking	正在检查 %s…	Checking %s…
+dmWebCheckingProgress	正在检查 %s… %s	Checking %s… %s
+dmWebFolderChecked	文件夹检查完成：%s 个软件包；已找到 prod.keys；title.keys %s	Folder checked: %s packages; prod.keys found; title.keys %s
+dmWebReviewSelection	%s：%s 请在生成前检查所选软件包。	%s: %s Review the package selection before generating.
+dmWebDownloadReady	IPA 已可下载。资源已保存到 %s/%s。签名并安装 IPA 后，请将该资源文件夹复制到应用的“文件”文件夹中。游戏兼容性尚未验证。	IPA ready to download. Resources saved in %s/%s. Copy that resource folder into the app’s Files folder after signing and installing the IPA. Game compatibility is not yet verified.
+dmWebSelectedCount	已选择 %s 个软件包，共 %s 个。	%s of %s package(s) selected.
+dmWebSelectOne	 请至少选择一个软件包以生成 IPA。	 Select at least one package to generate an IPA.
+dmWebBase	基础	Base
+dmWebMerged	合并更新	Merged update
+dmWebVerification	%s RomFS 验证	%s RomFS verification
+dmWebVerificationPercent	%s RomFS：已验证 %s%%。	%s RomFS: %s%% verified.
+dmWebLogCount	活动日志（%s）	Activity log (%s)
+dmWebLog	活动日志	Activity log
+dmWebFilesLoaded	已载入应用文件	Application files loaded
+dmWebFilesReady	%s / %s · %s / %s 个文件已就绪	%s / %s · %s / %s files ready
+dmWebDownloaded	已下载 %s	%s downloaded
+dmWebCached	 · %s 来自缓存	 · %s from cache
+dmWebMegabytes	%s MB	%s MB
+dmWebProgressCount	：%s	: %s
+dmWebProgressFraction	（%s/%s）	 (%s/%s)
+dmWebCompilerWorkers	 · 编译工作线程：%s	 · compiler workers: %s
+dmWebProgressSize	；%s MB	; %s MB
+dmWebResourceProgress	正在保存游戏资源：%s/%s 个文件；%s/%s MB	Saving game resources: %s/%s files; %s/%s MB
+dmWebCompatibility	IPA 目标：iOS 26 或更新版本；默认需要 GPU 支持 BC 纹理。签名需另行完成。	IPA target: iOS 26+. Default output requires BC texture support. Signing is separate.
+dmWebTarget	IPA 目标	IPA target
+dmWebTarget26	iOS 26 或更新版本	iOS 26+
+dmWebTarget18	iOS 18 或更新版本	iOS 18+
+dmWebTargetReload	更改将在生成时生效；已选文件夹会保留。	Changes apply when you generate; your selected folder is kept.
+dmWebCompatibility18	IPA 目标：iOS 18 或更新版本；默认需要 GPU 支持 BC 纹理。不代表所有设备均可运行；签名需另行完成。	IPA target: iOS 18+. Default output requires BC texture support. Not a guarantee for every device. Signing is separate.
+dmWebLegacyOption	较旧 GPU 选项（实验性）	Older-GPU option (experimental)
+dmWebLegacyHelp	将另行导出 Legacy Device Pack。设备兼容性尚未验证。	Exports a separate Legacy Device Pack. Device compatibility is not verified.
+dmWebLegacyPreparing	Legacy Device Pack：正在准备；与 IPA 分开导出。	Legacy Device Pack: preparing; exported separately from the IPA.
+dmWebLegacySaving	Legacy Device Pack：正在保存 %s / %s。	Legacy Device Pack: saving %s / %s.
+dmWebLegacyComplete	Legacy Device Pack 已保存到 %s。请与游戏资源一同复制到应用的文件夹；这不代表 IPA 已完成。	Legacy Device Pack saved to %s. Copy it alongside the game resources into the app’s Files folder; this does not mean the IPA is complete.
+dmWebLegacyIncomplete	Legacy Device Pack 未完成。请勿使用不完整的文件夹；重新加载后重试。	Legacy Device Pack is not complete. Do not use a partial folder; reload to retry.
+dmWebLegacyConverting	Legacy Device Pack：已处理 %d 个块；处理工作量 %s MB（含多轮处理）。	Legacy Device Pack: processed %d blocks; %s MB of work (multiple passes).
+dmWebSkipResources	跳过资源导出（设备上已有）	Skip resource export (already on device)
+dmWebSkipResourcesHelp	仅适用于相同的游戏、更新和 DLC。不会验证设备上已有的文件。	Only for the same game, update and DLC. Existing device files are not verified.
+dmWebSkipKeepsLegacy	仍会导出 Legacy Device Pack。	Legacy Device Pack still exports.
+dmWebResourcesSkipped	已跳过游戏资源导出；未检查设备上的文件。	Game resource export skipped; device files were not checked.
+dmWebStorageEstimate	浏览器暂存空间估计：可用 %s；不是目标磁盘空间，也不是预留空间。	Estimated browser staging space available: %s. Not destination disk space or a reservation.
+dmWebStorageUnknown	浏览器暂存空间估计不可用；仍可继续。目标磁盘空间未检查。	Browser staging space estimate unavailable; you can continue. Destination disk space was not checked.
+dmWebAstcPreset	ASTC 编码预设	ASTC encoding preset
+dmWebAstcThorough	精细（默认）	Thorough (default)
+dmWebAstcFast	快速	Fast
+dmWebAstcPresetHelp	快速模式耗时较短，但可能降低图像质量。更改将在生成时生效。	Fast takes less processing time but may reduce image quality. Changes apply when you generate.
+dmWebDownloadPreparationFailed	IPA 已生成，但无法准备下载链接。已完成的资源导出不受影响；请重试下载，无需重新转换。	The IPA was generated, but its download link could not be prepared. Completed resource exports are unchanged; retry the download without converting again.
+dmWebRetryDownloadPreparation	重试准备 IPA 下载	Retry IPA download preparation
+dmWebCommittedCleanupWarning	未签名 IPA 已完成并可保存，但清理失败。请先保存 IPA，再重新载入后进行下一次尝试。	The unsigned IPA is complete and available to save, but cleanup failed. Save the IPA, then reload before another attempt.
+dmWebResourcesSaved	游戏资源已保存到所选文件夹内的 %s 中。	Game resources saved in %s inside the selected folder.
+dmWebSigningOption	可选：在本地签名 IPA	Optional: sign the IPA locally
+dmWebSigningHelp	默认输出未签名 IPA。可在生成前启用本地签名；P12 与密码仅在本地处理，不会上传。	Unsigned IPA by default. Enable local signing before generating. Your P12 and password are processed locally, not uploaded.
+dmWebSigningCredentials	本地签名凭据	Local signing credentials
+dmWebSigningIdentity	P12 证书	P12 certificate
+dmWebSigningPassword	证书密码（可留空）	Identity password (may be empty)
+dmWebSigningProfile	描述文件（.mobileprovision）	Provisioning profile (.mobileprovision)
+dmWebSigningWorking	未签名 IPA 已保留；正在本地签名并检查归档。	Unsigned IPA retained; signing and checking the archive locally.
+dmWebSigningComplete	已签名 IPA 已创建并可下载；这不保证设备可安装或运行。	Signed IPA created and ready to download; device installation or execution is not guaranteed.
+dmWebSigningFailed	签名失败。未签名 IPA 和已导出的资源仍可使用；可重新选择凭据后重试签名，无需重新转换。	Signing failed. The unsigned IPA and exported resources remain available; select credentials again to retry signing without reconverting.
+dmWebSigningCancelled	签名已取消。未签名 IPA 和已导出的资源仍可使用；可重新选择凭据后重试签名。	Signing cancelled. The unsigned IPA and exported resources remain available; select credentials again to retry signing.
+dmWebSignedDownload	下载已签名 IPA	Download signed IPA
+dmWebSignedHelp	设备资格、安装和游戏兼容性仍需在设备上检查。	Device eligibility, installation and game compatibility still require device checks.
+dmWebCleanupWarning	清理失败。请保存可用的 IPA 后再重新载入。	Cleanup failed. Save any available IPA before reloading.
+dmWebSigningProfileMismatch	证书或描述文件不匹配、已过期，或此签名工具不支持该描述文件。未签名 IPA 已保留；请选择兼容凭据后重试签名。	The identity or profile is mismatched or expired, or this signing tool does not support the profile. Unsigned IPA retained; select compatible credentials to retry signing.
+dmWebRetrySigning	重试签名	Retry signing
+dmWebShaderFailureContext	着色器诊断：%s	Shader details: %s
+dmWebShaderSourceDigest	源摘要：%s	Source digest: %s
+dmWebInputMode	游戏输入	Game input
+dmWebInputPackages	NSP / XCI 软件包	NSP / XCI packages
+dmWebInputExtracted	已提取的 ExeFS / RomFS	Extracted ExeFS / RomFS
+dmWebExtractedInstructions	已识别合并的 ExeFS 和 RomFS，无需密钥。仅支持基础游戏与更新；不支持扩展内容，DLC 元数据未经认证。	Merged ExeFS and RomFS detected. No keys needed. Base/update only; expansion input is unsupported and DLC metadata is not authenticated.
+dmWebExtractedSummary	已找到 %s 个提取文件；无需密钥。	%s extracted file(s) found; no keys needed.
+dmWebExtractedChecked	已选择合并的基础游戏与更新文件夹；DLC 元数据未经认证。	Merged base/update folder selected; DLC metadata is not authenticated.
+dmWebExtractedReady	%s：%s 已找到提取后的文件。	%s: %s Extracted files found.
+dmWebExtractedMissingInput	请选择包含 ExeFS/main、ExeFS/sdk 和 RomFS/data/build_manifest.psv 的文件夹。	Choose a folder containing ExeFS/main, ExeFS/sdk, and RomFS/data/build_manifest.psv.
+dmWebExtractedInvalidName	已提取文件夹包含无效或重复路径。请检查文件夹后重试。	The extracted folder contains invalid or duplicate paths. Check the folder and try again.
+dmWebExtractedLimit	已提取文件夹超出文件数量或路径长度限制。	The extracted folder exceeds file-count or path-length limits.
+dmWebSupportedVersions	游戏版本：仅 %s。其他版本暂不支持。	Game version: %s only. Other versions are not supported.
+dmWebProgramUnsupportedVersion	此游戏程序版本尚不支持。请使用上方列出的版本。	This game executable version is not supported. Use a version listed above.
+dmWebProgramModuleMismatch	ExeFS 模块来自不同游戏版本。请使用同一版本的完整文件。	The ExeFS modules are from different releases. Use a complete set from one release.
+dmWebProgramShellMismatch	此游戏版本与所选 iOS 目标不兼容。	This game release is not compatible with the selected iOS target.
+dmWebProgramInvalidModules	ExeFS 缺少必需模块或包含额外模块。	ExeFS is missing required modules or contains extra modules.
+dmWebProgramDigestMismatch	游戏程序与支持版本不匹配。请检查源文件。	The game executable does not match a supported release. Check the source files.
+dmWebProgramBuildIdMismatch	游戏程序构建标识与支持版本不匹配。	The game executable build ID does not match a supported release.
+dmWebCustomizeApp	自定义应用（可选）	Customize app (optional)
+dmWebCustomHelp	已显示所选外壳的默认值。可直接编辑；清空或重置以恢复默认值。文件和设置仅在本设备使用，不上传。	The selected shell’s defaults are shown. Edit any value; clear it or reset to restore the default. Files and settings stay on this device and are not uploaded.
+dmWebCustomName	应用名称	App name
+dmWebCustomBundle	应用标识符	Bundle ID
+dmWebCustomBundleHelp	签名描述文件必须匹配新的应用标识符。更改标识符会被视为另一个应用。	Your signing profile must match the new bundle ID. Changing it creates a separate app identity.
+dmWebCustomVersion	版本号（如 1.0.0）	Version (e.g. 1.0.0)
+dmWebCustomBuild	构建号（如 1 或 1.0）	Build number (e.g. 1 or 1.0)
+dmWebCustomIcon	应用图标（PNG）	App icon (PNG)
+dmWebCustomIconHelp	不透明正方形 PNG，256–1024 像素，最多 4 MiB；8 位 RGB/RGBA，非交错。自定义图标可能不会显示在所有 iOS 界面，实际效果尚未验证。	Opaque square PNG, 256–1024 px, up to 4 MiB; 8-bit RGB/RGBA, not interlaced. Custom icons may not appear in every iOS view; appearance is unverified.
+dmWebCustomRemoveIcon	移除自定义图标	Remove custom icon
+dmWebCustomNameInvalid	应用名称最多 80 个字符，不能包含控制字符或首尾空格。	Use an app name of up to 80 characters without control characters or leading/trailing spaces.
+dmWebCustomBundleInvalid	应用标识符最多 255 个字符，仅使用由句点分隔的字母、数字或连字符，如 com.example.game。	Use a bundle ID of up to 255 characters with dot-separated letters, digits, or hyphens, such as com.example.game.
+dmWebCustomVersionInvalid	版本号必须是三个由句点分隔的数字，如 1.0.0，不能包含前导零。	Use three dot-separated version numbers, such as 1.0.0, without leading zeros.
+dmWebCustomBuildInvalid	构建号首段为 1–9999，可再加最多两段 0–99 的数字，不能包含前导零。	Use a build number starting with 1–9999, optionally followed by up to two numbers from 0–99, without leading zeros.
+dmWebCustomIconInvalid	请选择有效的不透明正方形 PNG，256–1024 像素，最多 4 MiB，8 位 RGB/RGBA 且非交错。	Choose a valid opaque square PNG, 256–1024 px, up to 4 MiB, with 8-bit RGB/RGBA and no interlacing.
+dmWebCustomInvalid	无法应用这些自定义设置。请检查设置后重试。	These app customizations could not be applied. Check the settings and try again.
+dmWebCustomChecking	正在检查应用设置…	Checking app settings…
+dmWebCustomCorrect	请更正应用自定义设置后重试。	Correct the app customization and try again.
+dmWebCustomOriginalRetained	自定义未应用。保留的未签名 IPA 使用原始应用名称、标识符、版本和图标；未自动签名。	Customization was not applied. The retained unsigned IPA has the original app name, bundle ID, version, and icon; it was not automatically signed.
+dmWebCustomOriginalDownload	下载原始未签名 IPA	Download original unsigned IPA
+dmWebStagesCustomization	自定义应用	Customizing app
+dmWebExtractedInputInvalid	无法验证已提取的输入。请检查已合并的 ExeFS 和 RomFS 文件夹。	The extracted input could not be validated. Check the merged ExeFS and RomFS folders.
+dmWebExtractedDlcUnsupported	已提取文件夹不支持扩展内容输入。请使用已合并的基础游戏与更新文件，或改选 NSP/XCI 输入。	Expansion input is not supported for extracted folders. Use merged base/update files or switch to NSP/XCI input.
+dmWebExtractedResourceLayout	此提取文件夹的资源布局不受支持。请使用已合并的基础游戏与更新资源。	The extracted resource layout is not supported. Use already-merged base/update resources.
+dmWebExtractedSkipResourcesHelp	仅在设备上已有此合并文件夹对应的资源时跳过。不会验证设备上已有的文件。	Skip only if the device already has resources from this exact merged folder. Existing device files are not verified.
+dmWebAutoInstructions	选择游戏文件夹，自动识别 NSP/XCI（需 prod.keys）或已合并的 ExeFS/RomFS。	Choose your game folder: NSP/XCI with prod.keys, or already-merged ExeFS/RomFS. The format is detected automatically.
+dmWebOutputCompatibility	默认 iOS 26+；高级选项中可选 iOS 18+ 兼容模式。当前选择：%s。%s	iOS 26+ by default; iOS 18+ compatibility in Advanced. Selected: %s. %s
+dmWebBcTextures	需要 GPU 支持 BC 纹理。	BC texture support required.
+dmWebLegacyTextures	实验性旧 GPU 纹理；设备兼容性未经验证。	Experimental older-GPU textures; device compatibility unverified.
+dmWebOptionsBeforeFolder	生成前可随时调整下方选项，无需重新载入或重新选择文件夹。	Change the options below before generating, without reloading or reselecting your folder.
+dmWebAdvancedOptions	高级选项	Advanced
+dmWebSigningOptions	本地签名（可选）	Local signing (optional)
+dmWebDetectingInput	正在识别游戏文件…	Detecting game files…
+dmWebIncludedPackages	包含全部 %s 个软件包	All %s packages included
+dmWebPackagesReady	%s：%s 全部软件包已包含。	%s: %s All packages included.
+dmWebSigningApplicationIdTooLong	描述文件前缀加应用标识超过此签名工具的 255 字符上限。未签名 IPA 已保留；请使用其他签名工具，或重新载入并以较短应用标识生成。	The profile prefix plus bundle ID exceeds this signer's 255-character limit. Unsigned IPA retained; use it with another signer, or reload and generate with a shorter bundle ID.
+dmWebCustomDefaultIcon	使用所选外壳的默认图标。选择 PNG 以替换。	Using the selected shell’s default icon. Choose a PNG to replace it.
+dmWebCustomReset	恢复外壳默认值	Reset to shell defaults
+dmWebGuideTitle	开始前的准备	Before you start
+dmWebGuidePrepare	准备一个游戏文件夹	Prepare one game folder
+dmWebGuidePackages	将支持的基础游戏与兼容更新 NSP/XCI、prod.keys 放在同一文件夹根目录。仅在需要外部匹配密钥时添加 title.keys；兼容的已知 DLC 为可选内容。	Put supported base and compatible update NSP/XCI files with prod.keys at the root of one folder. Add title.keys only if a matching external title key is needed; compatible known DLC is optional.
+dmWebGuideExtracted	也可使用已合并的 ExeFS/RomFS 文件夹，无需密钥，仅支持基础游戏及更新，不支持扩展内容。输入格式会自动识别。	Already-merged ExeFS/RomFS folders also work without keys, for base/update only, not expansion content. The format is detected automatically.
+dmWebGuideFolderAccess	使用桌面版 Chrome 或 Edge，允许读写所选文件夹，并预留资源导出与临时文件所需空间。	Use desktop Chrome or Edge, allow read/write access to the folder, and leave space for exported resources and temporary files.
+dmWebGuideExport	首次安装请勿勾选“跳过资源导出”。仅在设备上已有完全匹配的资源时跳过；浏览器无法检查设备上的资源。	For a first install, leave “Skip resource export” off. Skip only when matching resources are already on the device; the browser cannot check them.
+dmWebGuideOutputs	生成后可下载 IPA；资源另存到所选输入文件夹内，不在 IPA 中。完成后，请按显示的实际文件名安装应用，并复制已完整导出的资源。	You will download an IPA; resources are saved separately inside the selected input folder, not inside the IPA. After generation, follow the instructions with your actual output names to install the app and copy the completed resources.
+dmWebGuideLegacy	旧 GPU 选项还会导出单独的补充文件夹。结果显示已完成时，将其与完整资源一同复制。	The older-GPU option also exports a separate supplemental folder. Copy it alongside the completed resources when the result says it is ready.
+dmWebGuideFirstLaunch	第一次打开时，在尚未复制资源的情况下出现“暂无游戏资源”提示是正常的。安装包本身不含完整游戏资源。	On first launch, “No game resources yet” is expected until the separate resources are copied. The install package does not contain the full game resources.
+dmWebGuideDestination	打开“文件”→“我的 iPhone / iPad”→应用文件夹（D2R Mobile 或自定义应用名）。	Open Files → On My iPhone / iPad → the app’s folder (D2R Mobile, or your custom app name).
+dmWebGuideCopyWhole	请整体复制已完成的资源文件夹，保留名称及内部 data 文件夹结构。已完成的旧设备补充包也应复制到同一应用文件夹；不要使用未完成的导出。	Copy the entire completed resource folder, preserving its name and inner data folder. Copy any completed older-device pack to the same app folder too. Do not use an incomplete export.
+dmWebGuideRetry	等待复制完成，然后返回应用点“重试”。手机上不需要 NSP/XCI 或密钥文件。	Wait for copying to finish, then return to the app and tap Retry. The phone does not need NSP/XCI or key files.
+dmWebOverallTitle	生成总进度	Overall generation
+dmWebOverallEstimate	按已完成阶段估算，并非剩余时间；各阶段耗时可能差异很大。	Stage-based estimate, not time remaining. Stages can take very different amounts of time.
+dmWebOverallCount	%s%% · 已完成 %s/%s 个阶段	%s%% · %s/%s stages complete
+dmWebOverallUnmeasured	此阶段没有可量化的总量，完成后总进度才会前进。	This stage has no measurable total; progress advances when it finishes.
+dmWebOverallPreparing	正在准备本次生成	Preparing this generation job
+dmWebOverallInput	正在检查并提取游戏输入	Checking and extracting game input
+dmWebOverallFinalize	正在完成 IPA 与应用选项	Finalizing the IPA and app options
+dmWebOverallLegacy	正在保存 ASTC 补充包	Saving the ASTC supplemental pack
+dmWebOverallSigning	正在签名所需的 IPA	Signing the requested IPA
+dmWebOverallDownload	正在准备 IPA 下载链接	Preparing the IPA download link
+dmWebOverallReady	所需的 IPA 已可下载。安装与复制资源仍需手动完成。	Requested IPA ready to download. Installation and resource copying are separate manual steps.
+dmWebOverallFailed	生成未完成。请查看下方状态。	Generation did not finish. See the status below.
+dmWebOverallCancelled	生成已取消，所需的输出尚未完成。	Generation cancelled; the requested output is not complete.
+dmWebOverallSigningIncomplete	签名输出尚未完成。未签名 IPA 已保留，可在下方重试签名。	Signed output is not complete. The unsigned IPA is available; retry signing below.
+dmWebOverallDownloadPending	IPA 已保留，但下载链接尚未就绪。请在下方重试准备下载。	The IPA is retained, but its download link is not ready. Retry download preparation below.
+dmWebOverallSigningStage	签名步骤 %s/%s	Signing step %s/%s
+dmWebGuideTargets	默认目标为 iOS 26+，也支持选择 iOS 18+ 兼容模式。标准输出需要 GPU 支持 BC 纹理；旧 GPU 选项仍为实验性功能，设备兼容性未经验证。	The default target is iOS 26+; iOS 18+ compatibility is also available. Standard output requires BC texture support. The older-GPU option is experimental, with device compatibility unverified.
+dmWebGuideTrust	若提示启用开发者模式：设置 → 隐私与安全性 → 开发者模式，然后重新启动并确认。若提示开发者不受信任：设置 → 通用 → VPN 与设备管理，信任用于签名的账户。	If requested, enable Settings → Privacy & Security → Developer Mode, restart and confirm. For Untrusted Developer, trust your signing account in Settings → General → VPN & Device Management.
+dmWebGuideRefresh	签名凭据到期后，请沿用同一团队和 Bundle ID 更新签名，并备份存档。不要仅为更新签名而删除应用，否则其中的存档与资源可能一并删除。	Renew expired signing credentials using the same team and bundle ID, and back up saves. Do not delete the app just to renew its signature: its saves and resources can be removed.
+dmWebGuideSigned	已签名 IPA 的签名与描述文件必须适用于该设备。Mac 可连接设备，使用 Apple Configurator → 添加 → App → 从我的 Mac 中选取 → 选择 IPA。签名本身不会安装应用。	For a signed IPA, the signature and profile must cover your device. On Mac, connect your device and use Apple Configurator → Add → Apps → Choose from my Mac → select the IPA. Signing alone does not install it.
+dmWebGuideTransfer	Mac：用 USB 连接设备，在 Finder 中选择设备 → 文件，将完整资源文件夹拖到应用名上。Windows：在 Apple Devices → 设备 → 文件中选择应用；若不接受文件夹，可使用 ZIP 方式。文件共享用于传资源，不会为未签名 IPA 签名安装。	Mac: connect by USB, select your device in Finder → Files, and drag the whole resource folder onto the app name. Windows: choose the app in Apple Devices → device → Files; use the ZIP method if folders are not accepted. File sharing transfers resources, not signing/installing an unsigned IPA.
+dmWebGuideZip	若不能直接传整个文件夹，可将完整文件夹压成 ZIP，拖入上述应用文件共享区，再到手机的应用文件夹中点 ZIP 解压。将资源文件夹移出多余的 ZIP 外层目录，保持其直接位于应用文件夹内；预留 ZIP 与解压文件所需空间。	If whole-folder transfer is unavailable, zip the complete folder, drag the ZIP into the app’s file-sharing area, then tap it in the app folder in Files to extract. Move the resource folder out of any extra ZIP wrapper so it sits directly in the app folder. Allow space for both ZIP and extracted files.
+dmWebGuideConfiguratorLink	已签名 IPA 安装说明	Signed IPA installation
+dmWebGuideMacTransferLink	Mac 传文件说明	Mac file sharing
+dmWebGuideWindowsTransferLink	Windows 传文件说明	Windows file sharing
+dmWebGuideUnzipLink	在“文件”中解压 ZIP	Unzip in Files
+dmWebBrowserOnly	直接在浏览器中生成 IPA，无需安装 Xcode、Python 或 .NET，也不用操作命令行。	Build your IPA entirely in your browser. No Xcode, Python, .NET installation, or command-line tools required.
+dmWebGuideOptionalSigning	若要在此签名，再准备签名文件	Prepare signing files, only if you want to sign here
+dmWebGuideSigningIntro	签名为可选功能，默认生成未签名 IPA。若已有自己的 P12/PFX 及匹配的描述文件，可直接选择签名文件。	Signing is optional; unsigned IPA output is the default. If you already have your own P12/PFX and matching profile, go straight to the signing inputs.
+dmWebGuideIdentity	签名需要证书及其私钥，只有 .cer 文件不够。Mac 可在“钥匙串访问”中选中两者，通过“文件”→“导出项目”保存为设有密码的 P12。	Use a signing certificate with its private key, not a .cer file alone. On Mac, select both in Keychain Access → File → Export Items and save as a password-protected P12.
+dmWebGuideNewCertificate	若需新建身份，请使用 Apple Developer Program 团队的持有人或管理员权限：在本地创建私钥与 CSR，仅向 Apple 提交 CSR 以申请 Apple Distribution 证书，再将证书与原私钥导出为 P12。没有 Mac 时，可使用 OpenSSL 完成这项准备。	For a new identity, use your Apple Developer Program team with Account Holder/Admin access: create a private key and CSR locally, submit only the CSR for an Apple Distribution certificate, then export the certificate with that same key as P12. Without a Mac, this preparation can use OpenSSL.
+dmWebGuideProfile	在该团队下注册设备 UDID 与 App ID。在 Profiles → + → Ad Hoc 中选择该 App ID、同一证书及设备，下载 .mobileprovision。自定义设置中的应用 Bundle ID 必须与描述文件的 App ID 匹配。	Register your device’s UDID and an App ID under that team. In Profiles → + → Ad Hoc, select that App ID, the same certificate and your device, then download .mobileprovision. Match the app’s Bundle ID in customization to the profile’s App ID.
+dmWebGuideSigningInputs	启用本地签名，选择 P12/PFX 与描述文件，并输入 P12 导出密码，而非 Apple 账户密码。仅无密码的身份文件可留空。浏览器无法验证设备是否获准安装。	Enable local signing, choose the P12/PFX and profile, and enter the P12 export password, not your Apple Account password. Leave it empty only for a passwordless identity. The browser cannot verify device eligibility.
+dmWebGuidePrivateKey	请将私钥与导出密码保留在本地，不要上传到在线证书转换或签名服务。	Keep your private key and export password local. Do not upload them to online certificate converters or signing services.
+dmWebGuideExpect	生成后再安装并复制资源	Generate, then install and copy
+dmWebGuideCertificateLink	Apple：创建 CSR	Apple: create a CSR
+dmWebGuideP12Link	Mac：导出 P12	Mac: export a P12
+dmWebGuideOpenSslLink	OpenSSL：导出 P12	OpenSSL: P12 export
+dmWebGuideProfileLink	Apple：Ad Hoc 描述文件	Apple: Ad Hoc profile
+dmWebFaqTitle	常见问题	FAQ
+dmWebFaqSigningQuestion	必须在这里为 IPA 签名吗？	Do I have to sign the IPA here?
+dmWebFaqSigningAnswer	不必，默认生成未签名 IPA。可选本地签名使用自带的 zsign，配合你自己的 P12/PFX、导出密码与描述文件。已签名 IPA 仍需安装；签名成功并不保证设备一定接受。	No. Unsigned output is the default. Optional local signing uses your own P12/PFX, export password and provisioning profile through the bundled zsign signer. A signed IPA still needs installation; signing does not guarantee your device will accept it.
+dmWebFaqInputsQuestion	支持哪些游戏文件与密钥？	Which game files and keys are supported?
+dmWebFaqInputsAnswer	可使用支持的基础游戏及更新 NSP/XCI，配合 prod.keys；仅需外部匹配标题密钥时才提供 title.keys。兼容的已知 DLC 为可选内容。已合并的 ExeFS/RomFS 无需密钥，但仅支持基础游戏及更新。	Use supported base/update NSP/XCI with prod.keys; title.keys is needed only when a matching external title key is required. Compatible known DLC is optional. Already-merged ExeFS/RomFS needs no keys but supports base/update only.
+dmWebFaqIosQuestion	也支持 iOS 18 吗？	Is iOS 18 supported too?
+dmWebFaqAssetsQuestion	资源在哪里，什么时候复制？	Where are the resources, and when do I copy them?
+dmWebFaqAssetsAnswer	资源与 IPA 分开，保存在所选输入文件夹内。先安装并打开应用，再将已完成的文件夹复制到“文件”中的应用目录。结果区域会显示实际名称，包括已完成的旧设备补充包。手机不需要原始 NSP/XCI 或密钥。	Resources are separate from the IPA, inside your selected input folder. Install and open the app first, then copy the completed folders into its Files app folder. The result panel shows the actual names, including any completed older-device pack. Your phone does not need the original NSP/XCI or keys.
+dmWebFaqPrivacyQuestion	文件或签名凭据会上传吗？	Are my files or signing credentials uploaded?
+dmWebFaqPrivacyAnswer	不会。网页会下载公开运行组件，但游戏文件、密钥和签名输入均在浏览器本地处理。P12 与密码不会上传，也不会写入 IPA；描述文件会嵌入已签名 IPA，因此分享 IPA 时请留意。	No. Public runtime files are downloaded, but game files, keys and signing inputs are processed locally in your browser. The P12 and password are not uploaded or included in the IPA. The provisioning profile is embedded in the signed IPA, so be careful when sharing it.
+dmWebResultTitle	下一步：安装并复制文件	Next: install and copy files
+dmWebResultInstall	将 %s 安装到设备。签名与安装是分开的操作。	Install %s on your device. Signing and installation are separate.
+dmWebResultUnsigned	此 IPA 尚未签名。安装前请使用自己的证书与描述文件签名；也可在此启用本地签名。	This IPA is unsigned. Sign it with your own certificate and provisioning profile before installing; you can enable local signing here.
+dmWebResultLaunch	打开 %s 一次，然后关闭。它的文件夹应出现在“文件”→“我的 iPhone / iPad”中。	Open %s once, then close it. Its folder should appear in Files → On My iPhone / iPad.
+dmWebResultCopy	将整个 %s 文件夹复制到 %s 的应用文件夹中，保留原有名称和内容。	Copy the whole %s folder into %s’s app folder. Keep its name and contents unchanged.
+dmWebResultSkipped	此次未导出新的资源文件夹，请保留设备上已有的完整匹配资源。	No new resource folder was exported. Keep the complete matching resources already on your device.
+dmWebResultIncomplete	资源导出未完成，请勿复制或使用不完整的文件夹；请先完成资源导出。	The resource export is incomplete. Do not copy or use its partial folder; generate a complete export first.
+dmWebResultLegacyIncomplete	旧设备补充包未完成，请勿复制其中不完整的文件夹。	The older-device pack did not finish. Do not copy its partial folder.
+dmWebGenerateSigningFilesNeeded	若要在本地签名后生成，请在“签名”中选择 .p12/.pfx 证书与 .mobileprovision 描述文件；也可关闭本地签名，生成未签名 IPA。	To generate with local signing, choose a .p12/.pfx certificate and a .mobileprovision profile in Signing, or turn local signing off to generate an unsigned IPA.
+dmWebGenerateSigningIdentityNeeded	请在“签名”中选择 .p12/.pfx 证书；也可关闭本地签名，生成未签名 IPA。	Choose a .p12/.pfx certificate in Signing, or turn local signing off to generate an unsigned IPA.
+dmWebGenerateSigningProfileNeeded	请在“签名”中选择 .mobileprovision 描述文件；也可关闭本地签名，生成未签名 IPA。	Choose a .mobileprovision profile in Signing, or turn local signing off to generate an unsigned IPA.
+dmWebGenerateSigningUnavailable	本地签名不可用。请在“签名”中将其关闭，以生成未签名 IPA。	Local signing is not available. Turn it off in Signing to generate an unsigned IPA.
+dmWebGenerateChooseFolder	请先选择有效的游戏文件夹。	Choose a valid game folder first.
+dmWebGenerateReady	可以生成。	Ready to generate.
+dmWebIgnoreCache	忽略已保存的生成缓存	Ignore saved build cache
+dmWebIgnoreCacheHelp	重新生成文件，不复用已保存的结果。不会删除现有文件；新通过校验的结果可能更新缓存。已验证的公开运行组件下载缓存不受影响。	Rebuild generated files instead of reusing saved results. Existing files are not deleted; new accepted results may update the cache. Verified public runtime downloads are unaffected.
+dmWebIgnoreCacheActive	本次生成不复用已保存的生成缓存；通过校验的新结果仍可更新缓存。	This run will not reuse saved build results; accepted new results may still update the cache.
+dmWebFaqCacheQuestion	重复生成遇到问题，如何处理缓存？	How do I troubleshoot cached build results?
+dmWebFaqCacheAnswer	先尝试在“高级选项”中勾选“忽略已保存的生成缓存”。如仍需清理，请先停止生成并关闭其他打包页面，然后仅删除所选游戏文件夹内的 D2R-cache 文件夹，再重试。不要删除 data、旧的 D2R-resources-* 导出目录、Legacy Device Pack 文件夹、原始游戏文件、密钥或存档。此操作与浏览器中已验证的公开运行组件下载缓存无关。	First try Ignore saved build cache in Advanced. If cleanup is still needed, stop generation and close other packager tabs, then delete only the D2R-cache folder inside your selected game folder and retry. Do not delete data, older D2R-resources-* exports, Legacy Device Pack folders, original game files, keys, or saves. Verified public runtime downloads in the browser are separate.
+dmWebCacheUnavailable	已保存的生成缓存不可用，将继续生成而不使用缓存。	Saved build cache is unavailable; continuing without it.
+dmWebGenerationExpectation	请在生成期间保持此标签页处于前台。首次生成可能需要 30 分钟或更长时间，具体取决于你的电脑。	Keep this tab in the foreground while generating. The first build may take 30 minutes or longer, depending on your computer.
+dmWebUnsignedFallbackDownload	改为下载未签名 IPA	Download unsigned IPA instead
+dmWebUnsignedFallbackHelp	本地签名尚未完成。请在上方重试签名，或下载此未签名 IPA 后使用其他工具签名。它尚不能直接安装。	Local signing did not finish. Retry signing above, or download this unsigned IPA to sign with another tool. It is not ready to install.
+dmWebResourceVerifyProgress	正在检查已有资源：%s/%s 个文件；%s/%s MB	Checking existing resources: %s/%s files; %s/%s MB
+dmWebExistingDataUnverified	 现有 data 文件夹无法通过与本次输入的比对，其中的文件未被更改。请先将它移到其他位置再导出；如果已有完整匹配的资源，也可勾选“跳过资源导出（设备上已有）”。	 The existing data folder could not be verified against this input. Its files were not changed. Move it aside before exporting again, or select Skip resource export (already on device) if you already have a complete matching copy.
+dmWebResourceExportBusy	 另一个标签页正在导出资源。本次没有改动资源文件，请等待该导出结束后重试。	 Another tab is exporting resources. This attempt did not change resource files; wait for that export to finish and retry.
+dmWebResourceExportLockUnavailable	 当前浏览器无法安全锁定资源导出，因此没有改动资源文件。请使用支持 Web Locks 的桌面 Chromium 浏览器。	 This browser cannot safely lock resource export, so resource files were not changed. Use a desktop Chromium browser with Web Locks support.
+dmWebLanguageLabel	语言	Language
+dmWebLanguageEnglish	英语	English
+dmWebLanguageChinese	简体中文	Simplified Chinese
+dmWebFolderAccessUnsupported	当前浏览器无法读写所选游戏文件夹，因此无法在这里生成 IPA。请在 Windows 或 macOS 的桌面版 Chrome 或 Edge 中打开此页面。你仍可切换语言、阅读指南和常见问题。	This browser cannot read and write the selected game folder, so IPA generation is unavailable here. Open this page in desktop Chrome or Edge on Windows or macOS. You can still change the language and read the guide and FAQ.
