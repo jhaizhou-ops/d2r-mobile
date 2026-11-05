@@ -41,6 +41,18 @@ public final class TouchOverlay extends View {
     // 16:9 outside it, the whole window without true fullscreen.
     private static native void nativeViewRect(int widthPx, int heightPx, int[] out);
     private static native void nativeView(float x, float y, float width, float height);
+    private static native void nativeUiSafeInsets(float left, float right, float height);
+
+    /** 把屏幕安全区报给宿主：游戏界面自己（左上角佣兵 / 召唤物头像栏、右上角小地图与区域名）按它让开圆角与挖孔。
+     *  不走 setSafeInsets→nativeResize 那条：手柄模式下本层是 GONE、inputEnabled=false，那条不跑，头像栏就没人让位。
+     *  传的都是像素，宿主按「安全区 ÷ 高 × 2160」换算，两个数同一个单位即可。 */
+    /** Report the screen's safe area to the host: the game's own UI (the mercenary / summon portrait bar in the top left, the minimap and area name in the top
+     *  right) gives way to the rounded corners and the cutout by it. This does not go through setSafeInsets→nativeResize: in controller mode this view is GONE
+     *  and inputEnabled=false, so that path never runs and nobody moves the portrait bar. Everything passed in is pixels; the host converts by
+     *  "safe area / height × 2160", so the two numbers only have to use the same unit. */
+    public static void feedUiSafeInsets(int leftPx, int rightPx, int heightPx) {
+        if (heightPx > 0) nativeUiSafeInsets(leftPx, rightPx, heightPx);
+    }
     private final float density;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final int GLYPHS=119, HUD=167, DRAW_FLOATS=185;

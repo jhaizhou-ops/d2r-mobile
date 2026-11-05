@@ -15,6 +15,12 @@ void dm_android_touch_resize(float width_dp, float height_dp, float left_dp, flo
    without true fullscreen = the whole screen. On a window size change call resize before view. */
 void dm_android_touch_view(float x_dp, float y_dp, float width_dp, float height_dp);
 void dm_android_touch_tablet(int tablet);
+/* 只报安全区，不摆触屏控件：手柄模式下触屏层不画也不布局（GONE），上面那条不会跑，而游戏界面自己（左上角佣兵 / 召唤物头像栏、
+   右上角小地图与区域名）照样要让开屏幕圆角与挖孔。两种模式都要调，单位取比例（px 与 px，或 dp 与 dp 都行）。 */
+/* Report the safe area only, without laying out the touch controls: in controller mode the touch layer is neither drawn nor laid out (GONE), so the call
+   above never runs, while the game's own UI (the mercenary / summon portrait bar in the top left, the minimap and area name in the top right) still has to
+   give way to the screen's rounded corners and cutout. Called in both modes; the values are a ratio (px with px, or dp with dp). */
+void dm_android_ui_safe_insets(float left, float right, float height);
 /* phase: 0 down, 1 move, 2 up, 3 cancel; slot: stable 0..15; coordinates in dp. | 阶段：按下/移动/抬起/取消；槽固定0..15；坐标dp。 */
 void dm_android_touch_event(int phase, int slot, float x, float y);
 void dm_android_touch_focus(int active);
