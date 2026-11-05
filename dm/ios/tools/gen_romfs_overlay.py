@@ -19,6 +19,10 @@ REPL={'data/hd/global/ui/panel/hud_02/bugbtn.sprite':'base.sprite',            #
       'data/hd/global/ui/panel/hud_02/front_panel.sprite':'close.sprite',       # 借用路径：局内面板外框右上角的关闭按钮图（NativeHUD/touch/close.png，gen_close_btn.py） | Borrowed path: the close button image at the top-right corner of the in-game panel outer frame (NativeHUD/touch/close.png, gen_close_btn.py)
       'data/global/ui/layouts/controller/hudpanelhd.json':os.path.join(V4,'hud.json')}
 with tempfile.TemporaryDirectory() as t:
+    # 普通宝箱免钥匙、移除三种普通消耗品掉落；所有覆盖层变体共用。
+    # Keyless ordinary chests and removal of three consumable drops, shared by every overlay variant.
+    import gameplay_tables
+    REPL.update(gameplay_tables.build(romfs, t))
     # 系统通知框（如改难度后的「游戏难度设为 N…」）：左边 = 七格行最左格（难度格）左外沿，右边 = 最右格（红十字）右外沿，停留 5 秒；高度不动，纵向比原版上移 100 单位（原位 y=-500 压住底栏上方「Lv · 经验」那行）
     # （原版宽 1200 单位居中屏幕、停 10 秒）。几何从 hud_v4_ui/ui.json 的七格算，不手写：布局 1 单位 = 屏高/2160（gen_hud_v4.py 实测），框锚点在屏幕水平中心。
     # 落点按真机量（界面按游戏内部分辨率画，落到 2868 宽屏幕上约 1.8 px 一格取整）：边框亮线两侧各有 1 px 暗边，宽度两边各放 1 px；

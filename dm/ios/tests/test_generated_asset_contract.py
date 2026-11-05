@@ -162,18 +162,36 @@ class ModeCache(unittest.TestCase):
             self.assertFalse(gen_assets.ensure(str(self.romfs), overlay_only=True))
         self.assertEqual(self.calls, [True])
 
-    def test_each_mode_switch_regenerates_but_same_mode_reuses_cache(self):
+    def test_overlay_reuses_full_cache_and_preserves_skill_images(self):
         with mock.patch.object(gen_assets, 'run_steps', side_effect=self.fake_generate):
             self.assertTrue(gen_assets.ensure(str(self.romfs)))
             self.assertFalse(gen_assets.ensure(str(self.romfs)))
             full_stamp = (self.output / '.stamp').read_text()
+            images = [self.tools.parent / 'Sources/TouchArt/dm_native_skill_0.png',
+                      self.output / 'NativeHUD/v4/hud_v4_ui/sil_dm_native_skill_0.png']
+            # 用不同内容检测缓存复用时发生的删除或重写。
+            # Distinct contents detect deletion or rewriting during cache reuse.
+            for i, path in enumerate(images):
+                path.write_bytes(f'preserved skill image {i}'.encode())
+            expected = [path.read_bytes() for path in images]
+            self.assertFalse(gen_assets.ensure(str(self.romfs), overlay_only=True))
+            self.assertFalse(gen_assets.ensure(str(self.romfs), overlay_only=True))
+            self.assertEqual((self.output / '.stamp').read_text(), full_stamp)
+            self.assertEqual([path.read_bytes() for path in images], expected)
+            self.assertFalse(gen_assets.ensure(str(self.romfs)))
+        self.assertEqual(self.calls, [False])
+
+    def test_full_request_upgrades_overlay_cache_then_reuses_it(self):
+        with mock.patch.object(gen_assets, 'run_steps', side_effect=self.fake_generate):
             self.assertTrue(gen_assets.ensure(str(self.romfs), overlay_only=True))
             overlay_stamp = (self.output / '.stamp').read_text()
-            self.assertNotEqual(full_stamp, overlay_stamp)
             self.assertFalse(gen_assets.ensure(str(self.romfs), overlay_only=True))
             self.assertTrue(gen_assets.ensure(str(self.romfs)))
+            self.assertNotEqual((self.output / '.stamp').read_text(), overlay_stamp)
+            self.assertTrue((self.tools.parent / 'Sources/TouchArt/dm_native_skill_0.png').is_file())
+            self.assertTrue((self.output / 'NativeHUD/v4/hud_v4_ui/sil_dm_native_skill_0.png').is_file())
             self.assertFalse(gen_assets.ensure(str(self.romfs)))
-        self.assertEqual(self.calls, [False, True, False])
+        self.assertEqual(self.calls, [True, False])
 
     def test_missing_full_silhouette_invalidates_full_cache(self):
         with mock.patch.object(gen_assets, 'run_steps', side_effect=self.fake_generate):
