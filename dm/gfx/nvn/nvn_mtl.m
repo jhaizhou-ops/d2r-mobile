@@ -57,6 +57,8 @@
 #include "nvn_cover.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN：本源码树期望的 B 着色器库翻译链版本 | DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree
 #include "nvn_hmap.h"
+#include "nvn_pkg_cache.h"
+#include "nvn_astc_copy.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>
@@ -853,12 +855,16 @@ int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) {
     return *t1 >= *t0 && *t1;
 }
 static void rp_flush(void);
+static void pkg_cache_trim(void);
+static void pkg_gpu_written(const tex_t *t);
+static id<MTLTexture> astc_array_expand(const tex_t *t, id<MTLTexture> texture);
 static const char *cctx_snap(void);   // 这次提交里有什么（出错时打进红行；定义在 mtl_exec 之前） | What is in this submission (printed into the failure line on error; defined before mtl_exec)
 uint64_t mtl_sub_commit(void) {
     defer_fallback();   // 推迟合并通道：提交结束仍有未回放的 P 绘制（正常路径不会到这里） | Deferred merged pass: at the end of the submission there are still P draws not replayed (the normal path never gets here)
     rp_flush();
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     up_flush();
+    pkg_cache_trim(); // 编码结束后回收冷缓存；在途引用仍按 fence 保留 | Trim after encoding; fence-retained objects remain alive in flight.
     uint64_t fence = ++g_fence;
     if (g_vis_ring_i >= 0) g_vis_ring[g_vis_ring_i].fence = fence;
     // 完成后的 CPU 可见效果：拷贝一份操作表进回调
@@ -973,7 +979,7 @@ static void serial_put(uint64_t k, id o) { pthread_mutex_lock(&g_smu); id old = 
 static void serial_del(uint64_t k) { pthread_mutex_lock(&g_smu); id old = hm_get_id(&g_by_serial, &k); if (old) defer_obj_release(old); hm_del_id(&g_by_serial, &k); g_ser_gen++; pthread_mutex_unlock(&g_smu); }
 // 预排布贴图的宿主记录：当前 MTLTexture、上传戳、上次检查时的全局写代号
 // Host record of a packaged texture: the current MTLTexture, the upload stamp, and the global write generation at the last check
-@interface NvPkg : NSObject { @public id<MTLTexture> tex; uint64_t stamp, seen, hash; } @end   // hash：DM_NVN_DIRTYCHECK 时上传内容的全量哈希 | hash: full hash of the uploaded content under DM_NVN_DIRTYCHECK
+@interface NvPkg : NSObject { @public id<MTLTexture> tex; uint64_t stamp, seen, hash, last_use; BOOL gpu_written; } @end   // hash：DM_NVN_DIRTYCHECK 时上传内容的全量哈希 | hash: full hash of the uploaded content under DM_NVN_DIRTYCHECK
 @implementation NvPkg
 - (void)dealloc { res_remove(tex); }
 @end
@@ -1393,6 +1399,7 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
     id have = serial_get(t->serial);
     if (packaged) {
         NvPkg *pk = have;
+        if (pk) pk->last_use = atomic_load(&g_cur_frame);
         if (pk) {   // 已上传：自上次检查后有过客体写才查覆盖页 | Already uploaded: check the covered pages only if there has been a guest write since the last check
             uint64_t now = nvn_dirty_now();
             int tracked = nvn_dirty_tracked(t->mem, t->L.size);
@@ -1409,6 +1416,8 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
             return pk->tex;
         }
         pk = [NvPkg new];
+        pk->last_use = atomic_load(&g_cur_frame);
+        pk->gpu_written = (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) != 0;
         pk->tex = pkg_upload(t, &pk->stamp);
         if (!pk->tex) return nil;
         pk->seen = nvn_dirty_now(); g_pkg_uploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size);
@@ -1456,6 +1465,18 @@ static void res_census(unsigned long long frame, unsigned long long rss_mb) {
         pthread_mutex_unlock(&g_res_mu);
         MLOG("驻留普查 至帧 %llu：常驻 %llu MB，显卡已分配 %llu MB；驻留集里 贴图 %lu 个 %llu MB、缓冲 %lu 个 %llu MB；已退役未销毁 贴图 %lu 个 %llu MB、缓冲 %lu 个 %llu MB", frame, rss_mb, (unsigned long long)(g_dev.currentAllocatedSize >> 20),
              nl[0], bl[0] >> 20, nl[1], bl[1] >> 20, nr[0], br[0] >> 20, nr[1], br[1] >> 20);
+        if (getenv("DM_TV_MEM_TRACE")) {
+            uint64_t bytes[512] = {0}; unsigned textures[512] = {0};
+            pthread_mutex_lock(&g_res_mu);
+            for (id o in g_res_objects.allObjects) if ([o conformsToProtocol:@protocol(MTLTexture)]) {
+                id<MTLTexture> t = o;
+                if (t.parentTexture || t.buffer || t.pixelFormat >= 512) continue;
+                bytes[t.pixelFormat] += t.allocatedSize; textures[t.pixelFormat]++;
+            }
+            pthread_mutex_unlock(&g_res_mu);
+            for (int pf = 0; pf < 512; pf++) if (bytes[pf] >= (16ull << 20))
+                MLOG("纹理内存分组：格式 %d，%u 张，%llu MB", pf, textures[pf], bytes[pf] >> 20);
+        }
     }
 }
 unsigned long long mtl_gpu_allocated_mb(void) { id<MTLDevice> d = g_dev; return d ? (unsigned long long)(d.currentAllocatedSize >> 20) : 0; }   // 显卡已分配（图形层还没起时 0）；任何线程可调 | GPU allocated (0 before the graphics layer starts); callable from any thread
@@ -1478,7 +1499,6 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_
 }
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads) { *uploads = g_pkg_uploads; *reuploads = g_pkg_reuploads; }
 uint64_t mtl_pkg_miss(void) { return g_pkg_miss; }
-void mtl_tex_release(tex_t *t) { if (t->serial) serial_del(t->serial); }
 
 // ---------- 渲染通道：SetRenderTargets 开新通道；通道里第一条命令之前的清除并进 load 动作 ----------
 // ---------- Render passes: SetRenderTargets opens a new pass; clears before the first command in the pass are folded into the load action ----------
@@ -1980,7 +2000,7 @@ static MTLPixelFormat rt_color_fmt(id<MTLTexture> base, const view_t *v, int has
 // and attaching only the base texture drops the sRGB encoding entirely, making the picture too dark (public repository #36, measured by seedds on another game); the pipeline colour formats take the attached texture's format (g_pass.cfmt), so they follow.
 // The view lives only until this submission completes (Metal 4 does not retain resources; the view shares storage with the base texture and is not made resident separately). Depth / stencil attachments do not change format
 static void attach(MTLRenderPassAttachmentDescriptor *a, const tex_t *t, const view_t *v, int has_v, int color) {
-    id<MTLTexture> base = tex_mtl(t); a.texture = base;
+    id<MTLTexture> base = astc_array_expand(t, tex_mtl(t)); a.texture = base; pkg_gpu_written(t);
     if (has_v && v->set_levels) a.level = v->base_level;
     if (has_v && v->set_layers) { if (t->d.target == 2) a.depthPlane = v->min_layer; else a.slice = v->min_layer; }
     if (!color || !base) return;
@@ -2457,8 +2477,32 @@ void mtl_prog_release(prog_t *p) { if (p->serial) serial_del(p->serial); }
 // 登记时快照整个贴图对象（NVN 语义：描述符已写进池）；view：该号对应的 MTLTexture（视图或基贴图，CFBridgingRetain 持有）及取得时的序号表 / 客体写代号
 // ---------- Descriptor pool: texture ID / sampler ID → object ----------
 // At registration the whole texture object is snapshotted (NVN semantics: the descriptor has been written into the pool); view: the MTLTexture for that ID (a view or the base texture, held via CFBridgingRetain) and the serial-table / guest-write generations at the time it was obtained
-typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty; } treg_t;
+typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty, last_use; } treg_t;
 static treg_t *g_treg; static int g_ntreg;
+// TextureFinalize 也要撤下描述符缓存持有的别名。只删序号表会让旧场景的纹理
+// 活到同一个描述符槽再次被注册，重开/换图时便与新场景同时占内存。
+// TextureFinalize must retire descriptor-cache aliases too. Removing only the serial entry
+// leaves old scene textures alive until descriptor slots are reused, overlapping the next load.
+void mtl_tex_release(tex_t *t) {
+    if (!t || !t->serial) return;
+    uint64_t serial = t->serial;
+    @autoreleasepool {
+        pthread_mutex_lock(&g_rmu);
+        int changed = 0;
+        for (int i = 0; i < g_ntreg; i++) {
+            treg_t *r = &g_treg[i];
+            if (r->t.serial != serial || !r->view) continue;
+            // 描述符快照不变；只退役宿主缓存。GPU 在途引用照原来的 fence 保留。
+            // Keep the guest descriptor snapshot; retire only the host cache after the existing GPU fence.
+            defer_obj_unref((__bridge id)r->view); CFRelease(r->view);
+            r->view = NULL; r->view_id = r->view_rid = r->view_ser = r->view_dirty = 0;
+            changed = 1;
+        }
+        if (changed) g_reg_gen++; // 参数块不能继续复用已退役的 GPU 句柄 | Invalidate argument buffers holding retired GPU handles.
+        serial_del(serial);
+        pthread_mutex_unlock(&g_rmu);
+    }
+}
 // 贴图号 → 序号的无锁副本（回放热路径只要序号：写回前瞻索引、纯清除前提的绑定集合）：贴图号 20 位，固定 1M 项（BSS，只占碰过的页），
 // 登记时 release 写、读端 relaxed 原子读，不进 g_rmu（原 h_ser 每次查表加解锁，营地每帧数千次）
 // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
@@ -2501,6 +2545,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // 调用方持 g_rmu | Caller hold
     if (g_tpool_n && tid >= g_tpool_n) { if (!g_stat_tex_oob++) MLOG("池外贴图号 %d（池容量 %d）按空槽处理：读出 0", tid, g_tpool_n); return nil; }
     if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) { RED_ONCE(10, "贴图号 %d 未登记", tid); return nil; }
     treg_t *rp = &g_treg[tid];
+    rp->last_use = atomic_load(&g_cur_frame);
     uint64_t sg = g_ser_gen, dg = nvn_dirty_now();   // 先取代号再查：期间若有变更，下次必走慢路 | Take the generations first and then look up: if a change happens in between, the next time must take the slow path
     if (rp->view && rp->view_ser == sg && rp->view_dirty == dg) return (__bridge id<MTLTexture>)rp->view;
     id<MTLTexture> v = (__bridge id<MTLTexture>)rp->view;
@@ -2516,7 +2561,17 @@ static id<MTLTexture> tex_by_id(int tid) {   // 调用方持 g_rmu | Caller hold
     if (r.has_v && (r.v.set_format || r.v.set_levels || r.v.set_layers || r.v.set_target)) {
         uint32_t pf = (uint32_t)base.pixelFormat; uint8_t swz[4];
         if (r.v.set_format && !(nvn_fmt_to_mtl(r.v.format, &pf, swz) && pf)) pf = (uint32_t)base.pixelFormat;
-        { uint32_t upf; int ubpp; if (r.v.set_format && bc_unpack(r.v.format, &upf, &ubpp)) pf = upf; }   // 无 BC：BC 视图跟底图一样换成解压后的格式 | No BC: a BC view is switched to the decompressed format just like the base texture
+        { uint32_t upf; int ubpp; if (r.v.set_format && bc_unpack(r.v.format, &upf, &ubpp)) {
+            pf = upf;
+#if TARGET_OS_TV
+            // 保留 ASTC 的数组，其 BC3 视图也使用对应的压缩格式。
+            // A BC3 view of an ASTC-backed array keeps the compressed format.
+            if ((base.pixelFormat == MTLPixelFormatASTC_4x4_LDR || base.pixelFormat == MTLPixelFormatASTC_4x4_sRGB) && (r.t.d.format == 0x44 || r.t.d.format == 0x48)) {
+                if (r.v.format == 0x44 || r.v.format == 0x48) pf = r.v.format == 0x48 ? MTLPixelFormatASTC_4x4_sRGB : MTLPixelFormatASTC_4x4_LDR;
+                else base = astc_array_expand(&rp->t, base);
+            }
+#endif
+        } }   // 无 BC：其他 BC 视图跟底图一样换成解压格式 | Other BC views use the decompressed format.
         if (r.v.set_format && tex_need_pfv(base.pixelFormat, (MTLPixelFormat)pf) && !(base.usage & MTLTextureUsagePixelFormatView)) {
             base = tex_upgrade_pfv(&rp->t, base, (MTLPixelFormat)pf);
             sg = g_ser_gen;
@@ -2535,12 +2590,110 @@ static id<MTLTexture> tex_by_id(int tid) {   // 调用方持 g_rmu | Caller hold
 // 热路径取对象：表里有效就直接返回表持有的指针（不经 ARC 的 retain / autorelease），否则走慢路建 / 校验。调用方持 g_rmu。
 // Hot-path object fetch: if the table entry is valid, return the table-held pointer directly (without ARC retain / autorelease), otherwise take the slow path to build / validate. Caller holds g_rmu.
 static inline __attribute__((always_inline)) void *tex_fast(int tid) {
+#if TARGET_OS_TV
+    if (tid > 0 && tid < g_ntreg) g_treg[tid].last_use = atomic_load(&g_cur_frame);
+#endif
     if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && g_treg[tid].view_dirty == nvn_dirty_now()) return g_treg[tid].view;
     return (__bridge void *)tex_by_id(tid);
 }
 static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
+#if TARGET_OS_TV
+    if (tid > 0 && tid < g_ntreg) g_treg[tid].last_use = atomic_load(&g_cur_frame);
+#endif
     if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && g_treg[tid].view_dirty == nvn_dirty_now()) { if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
     id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? t.gpuResourceID._impl : 0;
+}
+// 仅回收可由客体池重建的只读贴图。GPU 写过的贴图必须保留，不能用旧的池内容重建。
+// Only evict read-only uploads reconstructible from guest memory. GPU-written textures must remain intact.
+static void pkg_gpu_written(const tex_t *t) {
+#if TARGET_OS_TV
+    if (!t || !t->has_layout || !t->mem) return;
+    pthread_mutex_lock(&g_smu);
+    NvPkg *pk = hm_get_id(&g_by_serial, &t->serial);
+    if (pk) pk->gpu_written = YES;
+    pthread_mutex_unlock(&g_smu);
+#else
+    (void)t;
+#endif
+}
+#if TARGET_OS_TV
+typedef struct { uint64_t serial, last_use, bytes; } pkg_cold;
+static int pkg_oldest(const void *a, const void *b) {
+    const pkg_cold *x = a, *y = b;
+    return x->last_use < y->last_use ? -1 : x->last_use > y->last_use;
+}
+#endif
+static void pkg_cache_trim(void) {
+#if TARGET_OS_TV
+    // 普通回收至少间隔 3 秒，危急时 1 秒；检查余量不需要扫缓存表。
+    // Scan at most every 3 seconds, or 1 second when critical; headroom checks need no cache scan.
+    static uint64_t checked, scanned_ns;
+    static int pressure;
+    uint64_t frame = atomic_load(&g_cur_frame);
+    if (frame - checked < 60) return;
+    checked = frame;
+    static long budget_mb = -1;
+    if (budget_mb < 0) { const char *e = getenv("DM_TV_TEXTURE_CACHE_MB"); budget_mb = e ? strtol(e, NULL, 10) : 384; }
+    if (budget_mb <= 0) return; // =0：用于对照原行为 | =0: baseline comparison.
+    uint64_t available = os_proc_available_memory();
+    pressure = nvn_pkg_cache_pressure(pressure, available);
+    int critical = nvn_pkg_cache_critical(available);
+    uint64_t now_ns = bp_now();
+    if (now_ns - scanned_ns < (critical ? 1000000000ull : 3000000000ull)) return;
+    scanned_ns = now_ns;
+    @autoreleasepool {
+        pthread_mutex_lock(&g_rmu);
+        pthread_mutex_lock(&g_smu);
+        // 快路也记使用帧，避免把一直命中视图缓存的贴图误判为冷数据。
+        // Fold in view-cache hits, so frequently used textures are not mistaken for cold data.
+        for (int i = 0; i < g_ntreg; i++) if (g_treg[i].ok && g_treg[i].view) {
+            id o = hm_get_id(&g_by_serial, &g_treg[i].t.serial);
+            if ([o isKindOfClass:NvPkg.class]) { NvPkg *pk = o; if (g_treg[i].last_use > pk->last_use) pk->last_use = g_treg[i].last_use; }
+        }
+        pkg_cold *cold = calloc(g_by_serial.n ? g_by_serial.n : 1, sizeof *cold);
+        uint64_t total = 0, pinned = 0, cold_bytes = 0; unsigned n = 0;
+        if (!cold) { pthread_mutex_unlock(&g_smu); pthread_mutex_unlock(&g_rmu); return; }
+        for (uint32_t i = 0; i < g_by_serial.cap; i++) if (g_by_serial.vals[i]) {
+            id o = (__bridge id)g_by_serial.vals[i];
+            if (![o isKindOfClass:NvPkg.class]) continue;
+            NvPkg *pk = o; uint64_t bytes = pk->tex.allocatedSize; total += bytes;
+            if (pk->gpu_written) pinned += bytes;
+            if (!nvn_pkg_cache_cold(frame, pk->last_use, pk->gpu_written, critical)) continue;
+            memcpy(&cold[n].serial, g_by_serial.keys + (size_t)i * 8, 8);
+            cold[n].last_use = pk->last_use; cold[n++].bytes = bytes;
+            cold_bytes += bytes;
+        }
+        uint64_t budget = (uint64_t)budget_mb << 20;
+        uint64_t target = nvn_pkg_cache_target(total, available, budget, pressure);
+        // 几百 KB 的小回收不值得使视图/参数块缓存全部失效；危急时不跳过。
+        // Tiny trims are not worth invalidating view/argument caches; retain the emergency path.
+        if (!critical && cold_bytes < (4ull << 20)) target = 0;
+        if (target) qsort(cold, n, sizeof *cold, pkg_oldest);
+        uint64_t freed = 0; unsigned removed = 0;
+        nvn_hmap victims = {.klen = 8};
+        for (unsigned i = 0; i < n && freed < target; i++) {
+            uint64_t serial = cold[i].serial;
+            NvPkg *pk = hm_get_id(&g_by_serial, &serial);
+            if (!pk) continue;
+            nvn_hm_put(&victims, &serial, (void *)1);
+            defer_obj_unref(pk); hm_del_id(&g_by_serial, &serial);
+            freed += cold[i].bytes; removed++;
+        }
+        // 别名表只扫一次；引用按当前提交的 fence 延迟释放。
+        // Scan aliases once; retain references until this submission's fence completes.
+        if (removed) for (int j = 0; j < g_ntreg; j++) if (g_treg[j].view && nvn_hm_get(&victims, &g_treg[j].t.serial)) {
+            defer_obj_unref((__bridge id)g_treg[j].view); CFRelease(g_treg[j].view);
+            g_treg[j].view = NULL; g_treg[j].view_rid = g_treg[j].view_id = 0;
+        }
+        free(victims.keys); free(victims.vals);
+        if (removed) { g_ser_gen++; g_reg_gen++; } // 参数块也要重建，不能沿用旧 GPU 句柄 | Invalidate argument buffers containing old GPU handles.
+        free(cold);
+        pthread_mutex_unlock(&g_smu); pthread_mutex_unlock(&g_rmu);
+        static uint64_t reported;
+        if (frame - reported >= 300) { reported = frame; MLOG("tvOS 贴图缓存统计：总量 %llu MB，GPU 写入保护 %llu MB，冷数据 %u 张 %llu MB", total >> 20, pinned >> 20, n, cold_bytes >> 20); }
+        if (removed) MLOG("tvOS 贴图缓存：回收 %u 张 %llu MB（等待 GPU fence），缓存 %llu → %llu MB，系统余量 %llu MB，模式 %s", removed, freed >> 20, total >> 20, (total - freed) >> 20, available >> 20, critical ? "危急" : "均衡");
+    }
+#endif
 }
 static MTLSamplerAddressMode wrapm(int w) {
     switch (w) { case 0: case 7: return MTLSamplerAddressModeClampToEdge; case 1: return MTLSamplerAddressModeRepeat;
@@ -5208,7 +5361,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
 }
 static void copy_b2t(const p_copy_b2t *c) {
     if (c->tex) zskip_del(c->tex->serial);
-    id<MTLTexture> t = tex_mtl(c->tex);
+    id<MTLTexture> t = astc_array_expand(c->tex, tex_mtl(c->tex)); pkg_gpu_written(c->tex);
     PD("C ser=%llu", c->tex->serial);
     if (!t) return;
     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
@@ -5284,6 +5437,72 @@ static int copy_t2t_astc(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsign
     defer_obj_unref(sv); defer_obj_unref(dv); defer_obj_release(pb);   // 本次提交跑完再放（视图不单独驻留，参数块撤驻留） | Release after this submit has finished running (views are not made resident separately; the parameter block is removed from residency)
     return 1;
 }
+// ASTC 数据整块搬进新建的 BC3 数组时，直接保留 ASTC；原实现展开成 RGBA8，多占约三倍空间。
+// Preserve ASTC when copying whole blocks into a new BC3 array. Expanding to RGBA8 costs roughly 3x extra storage.
+static int astc_array_backed(const tex_t *t, id<MTLTexture> texture) {
+    return t && (t->d.format == 0x44 || t->d.format == 0x48) && !t->has_layout &&
+        (texture.pixelFormat == MTLPixelFormatASTC_4x4_LDR || texture.pixelFormat == MTLPixelFormatASTC_4x4_sRGB);
+}
+static int astc_array_copy_ok(const p_copy_t2t *c, id<MTLTexture> source) {
+    unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0;
+    unsigned dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
+    if (!source || !c->dst || sl >= source.mipmapLevelCount || dl >= c->dst->d.levels || c->src->d.target == 2) return 0;
+    return c->sr.width == c->dr.width && c->sr.height == c->dr.height &&
+        (c->sr.depth ?: 1) == (c->dr.depth ?: 1) &&
+        !(c->flags & ~NVN_COPY_FLAGS_ENGINE_2D_BIT & ~NVN_COPY_FLAGS_LINEAR_FILTER_BIT) &&
+        nvn_astc_copy_axis(c->sr.xoffset, c->dr.xoffset, c->sr.width, (uint32_t)MAX(source.width >> sl, 1u), MAX(c->dst->d.width >> dl, 1u)) &&
+        nvn_astc_copy_axis(c->sr.yoffset, c->dr.yoffset, c->sr.height, (uint32_t)MAX(source.height >> sl, 1u), MAX(c->dst->d.height >> dl, 1u));
+}
+static id<MTLTexture> astc_array_expand(const tex_t *t, id<MTLTexture> texture) {
+#if TARGET_OS_TV
+    if (!astc_array_backed(t, texture)) return texture;
+    MTLTextureDescriptor *desc = tex_desc(t, 0);
+    id<MTLTexture> rgba = desc ? [g_dev newTextureWithDescriptor:desc] : nil;
+    if (!rgba) { RED_ONCE(49, "ASTC 数组回退：RGBA 分配失败"); return nil; }
+    res_add(rgba);
+    // 遇到普通 BC 写入前，逐级逐层保留已有像素，随后永久使用原来的 RGBA 路径。
+    // Before a non-ASTC write, preserve every mip/slice and permanently return to the original RGBA path.
+    for (NSUInteger slice = 0; slice < texture.arrayLength; slice++)
+        for (NSUInteger level = 0; level < texture.mipmapLevelCount; level++)
+            if (!copy_t2t_astc(texture, rgba, (unsigned)level, (unsigned)slice, (unsigned)level, (unsigned)slice, 0, 0, 0, 0,
+                              (int)MAX(texture.width >> level, 1u), (int)MAX(texture.height >> level, 1u))) {
+                defer_obj_release(rgba); return nil;
+            }
+    serial_put(t->serial, rgba); g_reg_gen++;
+    MLOG("tvOS ASTC 数组回退 RGBA：ser=%llu，%llu → %llu KB", t->serial, (uint64_t)texture.allocatedSize >> 10, (uint64_t)rgba.allocatedSize >> 10);
+    return rgba;
+#else
+    (void)t; return texture;
+#endif
+}
+static id<MTLTexture> astc_array_destination(const p_copy_t2t *c, id<MTLTexture> source) {
+#if TARGET_OS_TV
+    static int enabled = -1;
+    if (enabled < 0) { const char *e = getenv("DM_TV_ASTC_ARRAYS"); enabled = !e || strcmp(e, "0"); }
+    const tex_t *t = c->dst;
+    // 只处理首次写入、原本就是压缩格式的 2D/数组；已存在的内容绝不直接丢弃。
+    // Only initialize a previously unallocated compressed 2D/array texture; never discard existing contents.
+    if (enabled && t && !t->has_layout && !(t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && (t->d.target == 1 || t->d.target == 4)
+        && ((t->d.format == 0x44 && source.pixelFormat == MTLPixelFormatASTC_4x4_LDR) ||
+            (t->d.format == 0x48 && source.pixelFormat == MTLPixelFormatASTC_4x4_sRGB))
+        && astc_array_copy_ok(c, source) && !serial_get(t->serial)) {
+        MTLTextureDescriptor *desc = tex_desc(t, 0);
+        if (!desc) return nil;
+        desc.pixelFormat = source.pixelFormat;
+        desc.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+        id<MTLTexture> compressed = [g_dev newTextureWithDescriptor:desc];
+        if (compressed) {
+            res_add(compressed); serial_put(t->serial, compressed); g_reg_gen++;
+            MLOG("tvOS ASTC 数组：ser=%llu %ux%u 层%u，分配 %llu KB", t->serial, t->d.width, t->d.height, t->d.depth, (uint64_t)compressed.allocatedSize >> 10);
+            return compressed;
+        }
+    }
+#endif
+    id<MTLTexture> destination = tex_mtl(c->dst);
+    if (astc_array_backed(c->dst, destination) && (source.pixelFormat != destination.pixelFormat || !astc_array_copy_ok(c, source)))
+        destination = astc_array_expand(c->dst, destination);
+    return destination;
+}
 // GPU：贴图 → 贴图（原先误列为空操作，选角页每帧 3 次）。等尺寸、不镜像、同格式 → 逐层 blit；其余语义（缩放带过滤、镜像、换格式）blit 表达不了，报红待实现
 // GPU: texture -> texture (previously mislisted as a no-op, 3 times per frame on the character select page). Same size, not mirrored, same format -> blit layer by layer; the other semantics (scaling with filtering, mirroring, format change) cannot be expressed by blit: report a failure, to be implemented
 static void copy_t2t(const p_copy_t2t *c) {
@@ -5296,7 +5515,7 @@ static void copy_t2t(const p_copy_t2t *c) {
         int ss = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, ds = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;
         if (zskip_has(c->src->serial, sl, ss)) zskip_add(c->dst->serial, dl, ds);
     }
-    id<MTLTexture> s = tex_mtl(c->src), d = tex_mtl(c->dst);
+    id<MTLTexture> s = tex_mtl(c->src), d = astc_array_destination(c, s); pkg_gpu_written(c->dst);
     PD("T src=%llu dst=%llu %dx%dx%d→%dx%dx%d flags=%#x", c->src->serial, c->dst->serial, c->sr.width, c->sr.height, c->sr.depth, c->dr.width, c->dr.height, c->dr.depth, c->flags);
     if (!s || !d) return;
     unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
@@ -5332,7 +5551,7 @@ static void copy_t2t(const p_copy_t2t *c) {
 // view with changed format: clear on a view of that format; partial region, partial channels, compressed / packaged textures (no render target usage): report a failure, to be implemented
 static void clear_tex(const p_clear_tex *c) {
     if (c->tex) zskip_del(c->tex->serial);
-    id<MTLTexture> t = tex_mtl(c->tex);
+    id<MTLTexture> t = astc_array_expand(c->tex, tex_mtl(c->tex)); pkg_gpu_written(c->tex);
     PD("X ser=%llu 视图格式 %#x 区域 %d,%d,%d %dx%dx%d 掩码 %#x %s %g,%g,%g,%g", c->tex->serial, c->has_view && c->view.set_format ? c->view.format : -1, c->r.xoffset, c->r.yoffset, c->r.zoffset, c->r.width, c->r.height, c->r.depth, c->mask,
        c->is_uint ? "ui" : "f", c->is_uint ? (double)c->c.u[0] : c->c.f[0], c->is_uint ? (double)c->c.u[1] : c->c.f[1], c->is_uint ? (double)c->c.u[2] : c->c.f[2], c->is_uint ? (double)c->c.u[3] : c->c.f[3]);
     if (!t) return;
