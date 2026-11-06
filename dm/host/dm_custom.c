@@ -115,6 +115,16 @@ void dm_custom_init(const char *dir) { if (dir) strlcpy(g_dir, dir, sizeof g_dir
 static int file_path(char *p, size_t n) {
     if (g_dir[0]) { snprintf(p, n, "%s/sw_custom.txt", g_dir); return 1; }
     const char *c = dm_save_commitdir(); if (!c) return 0; snprintf(p, n, "%s/../sw_custom.txt", c); return 1; }
+// 自定义目录里另一个文本文件的整数键（一行一项 key=值，# 起是注释）：文件不在 / 没这个键 / 不是数 → def。目录同 sw_custom.txt（iOS 给的 Documents，否则存档目录的上一级）。
+// 不进 sw_custom.txt：那份按自定义页的行表整份重写，表外的键点「应用」就没了。用法：stash_pages.txt 的 personal_pages（dm_pages.c）
+// Integer key of another text file in the custom directory (one key=value per line, # starts a comment): missing file / key / not a number -> def. Same directory as sw_custom.txt (the Documents given by iOS, else the parent of the save directory).
+// Not in sw_custom.txt: that file is rewritten whole from the Custom page's row table, so a key outside the table would be gone after Apply. Used for personal_pages in stash_pages.txt (dm_pages.c)
+int dm_custom_num(const char *file, const char *key, int def) {
+    char p[1100], ln[160]; if (g_dir[0]) snprintf(p, sizeof p, "%s/%s", g_dir, file); else { const char *c = dm_save_commitdir(); if (!c) c = getenv("DM_SAVE"); if (!c) return def; snprintf(p, sizeof p, "%s/../%s", c, file); }   // 存档还没挂上（如启动期问共享页数）：DM_SAVE 就是要挂的那份 | Save not mounted yet (e.g. the shared page count asked during startup): DM_SAVE is the one to be mounted
+    FILE *f = fopen(p, "r"); int v = def; size_t kn = strlen(key);
+    while (f && fgets(ln, sizeof ln, f)) { char *s = ln; while (*s == ' ' || *s == '\t') s++; if (*s == '#' || strncmp(s, key, kn)) continue; s += kn; while (*s == ' ' || *s == '\t') s++;
+        if (*s != '=') continue; char *e; long x = strtol(s + 1, &e, 10); if (e != s + 1) v = (int)x; }
+    if (f) fclose(f); return v; }
 
 static void load_once(void) {
     if (atomic_load(&g_loaded)) return;

@@ -250,9 +250,9 @@ static char g_char[64];
 int dm_save_blobs(const char *wd, const char *stash, dm_blob *out, int max); void dm_blobs_free(dm_blob *bl, int nb);
 int dm_blobs_have(const dm_blob *bl, int nb, const uint8_t *bits, int len); int dm_bits_simple(const uint8_t *bits, int len);
 // 一件还回背包后它可能去的所有地方：所有角色档、共享仓库档、本角色的个人仓库侧文件（.swpage）与百宝囊侧文件（.swpouch）、编年史仓库侧文件（.swvault）。
-// 原先只看本角色的 .d2s：玩家在下一次存盘前就把它拖进共享仓库 / 个人仓库 2–5 页 / 编年史仓库，清单永远划不掉、每次进局再还一份（复制，随后个人仓库同字节的件被去重删掉）
+// 原先只看本角色的 .d2s：玩家在下一次存盘前就把它拖进共享仓库 / 个人仓库 2–10 页 / 编年史仓库，清单永远划不掉、每次进局再还一份（复制，随后个人仓库同字节的件被去重删掉）
 // Every place an item returned to the inventory may end up: all character files, the shared stash file, this character's personal stash side file (.swpage), pouch side file (.swpouch) and Chronicle vault side file (.swvault).
-// Previously only this character's .d2s was checked: if the player dragged the item into the shared stash / personal stash pages 2–5 / the Chronicle vault before the next save, the list was never crossed off and another copy was returned on every entry (duplication; later the personal stash dedup removed the item with the same bytes)
+// Previously only this character's .d2s was checked: if the player dragged the item into the shared stash / personal stash pages 2–10 / the Chronicle vault before the next save, the list was never crossed off and another copy was returned on every entry (duplication; later the personal stash dedup removed the item with the same bytes)
 static uint64_t char_h(const char *wd) { char p[1400]; uint8_t *d; size_t n; snprintf(p, sizeof p, "%s/%s/%s.d2s", wd, g_char, g_char); uint64_t h = file_blob(p, &d, &n) ? dm_fnv64(d, n) : 0; free(d); return h; }   // 本角色档整份指纹，读不到 0 | Fingerprint of this character's whole file; 0 if it cannot be read
 static int proof_blobs(const char *wd, dm_blob *bl, int max) {
     int nb = dm_save_blobs(wd, g_stash, bl, max - 3); char p[1400]; uint8_t *d; size_t n;
