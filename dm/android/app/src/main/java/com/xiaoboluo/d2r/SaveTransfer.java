@@ -24,6 +24,8 @@ import java.util.UUID;
 //   已经有了就并：备份那份打成包放进局内并回的收件箱 files/save/_cloudinbox/<毫秒>-import/mine.pack（格式同 dm_cloudsync.c pack_write，不带基准 base.pack），
 //   进局打开储藏箱时由 dm_cloudmerge.c 把「现在仓库里没有的」物品逐件放进背包（同一件不重复给）、金币加进共享仓库——和 iOS 上 iCloud 两份仓库分叉的并回同一条路。
 //   同一份共享仓库（内容摘要相同，记在条目里的 import.sha256）只并一次，免得重复导入把金币加两遍。
+//   编年史仓库存的物品在存档根的侧文件 <共享仓库名>.swvault 里（不在仓库文件夹里，dm_vault.c）：手机上没有就拷进来（进局读入时已在存档里的件会被去掉，
+//   不会多出一份）；已有且内容不同就随共享仓库一起进并回收件箱（包里路径 <共享仓库名>.swvault，dm_cloudmerge.c 照读），缺的件进局还到背包。
 //   这台手机自己导出的备份（导出时写进 export-source.txt 的安装标识与本机 files/save-transfer-id 相同）导回来时共享仓库不并：
 //   金币会再加一遍，备份之后拿出仓库的物品也会再给一份；别的手机的备份照常并。卸载重装后标识是新的（那时手机上也没有共享仓库了）。
 //   导完把 save-import 改名为 save-import.done-<日期-时间>，下次不会再导；里面认不出存档就一个字节不动、改名为 save-import.rejected-<日期-时间>。
@@ -39,7 +41,11 @@ import java.util.UUID;
 //   merge inbox files/save/_cloudinbox/<millis>-import/mine.pack (the format of dm_cloudsync.c pack_write, without a base.pack), and when the
 //   stash is opened in game dm_cloudmerge.c puts the items the current stash does not have into the inventory one by one (the same item is not
 //   given twice) and adds the gold to the shared stash -- the same path as merging a forked iCloud stash on iOS. The same shared stash (same
-//   content digest, kept in the entry as import.sha256) is merged only once, so importing it again does not add its gold twice. A backup this
+//   content digest, kept in the entry as import.sha256) is merged only once, so importing it again does not add its gold twice. The items stored in
+//   the Chronicle stash live in a side file at the saves root, <shared stash name>.swvault (not in the stash folder, dm_vault.c): one the phone lacks
+//   is copied in (on load the game drops any of its items already in a save, so nothing is doubled); one the phone already has with different
+//   contents goes into the merge inbox with the shared stash (path <shared stash name>.swvault in the pack, which dm_cloudmerge.c reads), and the
+//   missing items come back to the inventory in game. A backup this
 //   phone exported itself (the install id written to export-source.txt on export equals this phone's files/save-transfer-id) is not merged into
 //   the shared stash when imported back: its gold would be added again, and items taken out of the stash since the backup would be given a second
 //   time; backups from other phones are merged as usual. After an uninstall and reinstall the id is new (and the phone has no shared stash then). Afterwards save-import is renamed to save-import.done-<date-time>, so it is not imported again; when no
@@ -101,12 +107,12 @@ final class SaveTransfer {
         return EXPORT_DIR + "/" + target.getName();
     }
 
-    // 逐项加：角色文件夹、共享仓库文件夹、Settings；手机上已有同名的跳过（已有的共享仓库改走并回收件箱）。每项先拷进 files/save.import.part/<名字>（存档目录旁边，不在里面），拷完再改名到位，
+    // 逐项加：角色文件夹、共享仓库文件夹、Settings、编年史仓库侧文件；手机上已有同名的跳过（已有的共享仓库、内容不同的编年史仓库侧文件改走并回收件箱）。每项先拷进 files/save.import.part/<名字>（存档目录旁边，不在里面），拷完再改名到位，
     // 中途失败不留半个角色；别的文件（说明、系统生成的小文件）不导。按名字顺序导。
     // 中途失败时，这一次已经加进来的几项再删掉，存档回到导入之前（提示里「原存档没动」才是真的），save-import 不改名、下次打开再导；
     // 删不掉（极少见）就报 IMPORT_PARTIAL，提示里列出已经加进来的名字
-    // Add item by item: character folders, shared stash folders, Settings; anything whose name the phone already has is skipped (a shared stash the
-    // phone already has goes to the merge inbox instead). Each item is copied into files/save.import.part/<name> first (next to the save directory, not
+    // Add item by item: character folders, shared stash folders, Settings, the Chronicle stash side file; anything whose name the phone already has is
+    // skipped (a shared stash the phone already has, and a Chronicle stash side file with different contents, go to the merge inbox instead). Each item is copied into files/save.import.part/<name> first (next to the save directory, not
     // inside it) and renamed into place once complete, so a failure halfway leaves no half character; other files (notes, small files the system makes)
     // are not imported. Items are imported in name order. When it fails halfway, the items this run already added are deleted again, so the saves are as
     // before the import (and the message's "your saves are unchanged" is true); save-import is not renamed and is imported again at the next start. If
@@ -119,12 +125,24 @@ final class SaveTransfer {
         File part = new File(save.getAbsoluteFile().getParentFile(), save.getName() + ".import.part");
         deleteTree(part);
         StringBuilder added = new StringBuilder(), skipped = new StringBuilder();
-        List<File> stashes = new ArrayList<>(), placed = new ArrayList<>();
+        List<File> stashes = new ArrayList<>(), vaults = new ArrayList<>(), placed = new ArrayList<>();
         byte[] buffer = new byte[1 << 16];
         int merge;
         try {
             try {
                 for (File c : list) {
+                    // 编年史仓库侧文件（存档根的单个文件，#241：原先只导文件夹，它被漏掉，存进编年史的物品全没了）
+                    // The Chronicle stash side file (a single file at the saves root, #241: only folders used to be imported, so it was left behind and every item stored in the Chronicle was lost)
+                    if (isVault(c)) {
+                        File dst = new File(save, c.getName());
+                        if (dst.exists()) { if (!sameBytes(c, dst)) vaults.add(c); continue; }
+                        if (!part.isDirectory() && !part.mkdirs()) throw new IOException("mkdir " + part.getName());
+                        File tmp = new File(part, c.getName());
+                        copyTree(c, tmp, buffer);
+                        if (!tmp.renameTo(dst)) throw new IOException("rename " + c.getName());
+                        placed.add(dst); append(added, c.getName());
+                        continue;
+                    }
                     if (!c.isDirectory() || !(isCharacter(c) || isStash(c) || c.getName().equals("Settings"))) continue;
                     File dst = new File(save, c.getName());
                     if (dst.exists() && isStash(c)) { stashes.add(c); continue; }
@@ -135,7 +153,7 @@ final class SaveTransfer {
                     placed.add(dst); append(added, c.getName());
                 }
             } finally { deleteTree(part); }
-            merge = stashes.isEmpty() ? MERGE_NONE : fromThisPhone(root, save) ? MERGE_SAME_PHONE : queueMerge(save, stashes);
+            merge = stashes.isEmpty() && vaults.isEmpty() ? MERGE_NONE : fromThisPhone(root, save) ? MERGE_SAME_PHONE : queueMerge(save, stashes, vaults);
         } catch (IOException e) {
             // 撤回这一次已经加进来的（都是手机上原来没有的，删掉就回到导入之前）
             // Take back what this run already added (none of it was on the phone before, so deleting it restores the state before the import)
@@ -158,9 +176,10 @@ final class SaveTransfer {
     // renamed once complete (the inbox only ever sees whole entries). Pack: magic "SWPK1\n\0\0" | timestamp u64 | flags u32 (0) | file count u32 | per file:
     // path length u16, path (relative to the save directory), modification time u64 (ms), length u32, contents, little endian (dm_cloudsync.c). Not
     // added again when the inbox already has an entry with the same digest
-    private static int queueMerge(File save, List<File> stashes) throws IOException {
+    private static int queueMerge(File save, List<File> stashes, List<File> vaults) throws IOException {
         List<File> files = new ArrayList<>(); List<String> rels = new ArrayList<>();
         for (File d : stashes) collect(d, d.getName(), files, rels);
+        for (File v : vaults) { files.add(v); rels.add(v.getName()); }
         if (files.size() > 64) throw new IOException("stash files " + files.size());
         Integer[] order = new Integer[files.size()];
         for (int i = 0; i < order.length; i++) order[i] = i;
@@ -238,16 +257,25 @@ final class SaveTransfer {
 
     private static boolean isCharacter(File dir) { return new File(dir, dir.getName() + ".d2s").isFile(); }
 
+    // 编年史仓库侧文件：<共享仓库名>.swvault，名字同 dm_vault.c vault_name（ModernSharedStash… / SharedStash…）
+    // The Chronicle stash side file: <shared stash name>.swvault, named as in dm_vault.c vault_name (ModernSharedStash... / SharedStash...)
+    private static boolean isVault(File f) {
+        String n = f.getName();
+        return f.isFile() && n.endsWith(".swvault") && (n.startsWith("ModernSharedStash") || n.startsWith("SharedStash"));
+    }
+
+    private static boolean sameBytes(File a, File b) throws IOException { return Arrays.equals(Files.readAllBytes(a.toPath()), Files.readAllBytes(b.toPath())); }
+
     private static boolean isStash(File dir) {
         File[] inner = dir.getName().startsWith("ModernSharedStash") ? dir.listFiles() : null;
         if (inner != null) for (File f : inner) if (f.isFile() && f.getName().endsWith(".d2i")) return true;
         return false;
     }
 
-    // 存档根：一个角色一个文件夹（<名字>/<名字>.d2s）、共享仓库文件夹（ModernSharedStash…/*.d2i）或游戏设置 Settings/，有一样就算；
+    // 存档根：一个角色一个文件夹（<名字>/<名字>.d2s）、共享仓库文件夹（ModernSharedStash…/*.d2i）、游戏设置 Settings/ 或编年史仓库侧文件（*.swvault），有一样就算；
     // 导出那一层 <日期-时间>/ 往下找一层。只有 Settings/ 的也算存档（照「只在手机上还没有时才导」处理），不当成认不出
-    // The saves root: one folder per character (<name>/<name>.d2s), a shared stash folder (ModernSharedStash.../*.d2i) or the game settings Settings/,
-    // any one of them is enough; one level further down for the <date-time>/ level of an export. A folder with only Settings/ counts as saves too
+    // The saves root: one folder per character (<name>/<name>.d2s), a shared stash folder (ModernSharedStash.../*.d2i), the game settings Settings/ or a
+    // Chronicle stash side file (*.swvault), any one of them is enough; one level further down for the <date-time>/ level of an export. A folder with only Settings/ counts as saves too
     // (handled by "only imported while the phone has none"), not as unrecognised
     static File savesRoot(File dir) {
         if (looksLikeSaves(dir)) return dir;
@@ -261,7 +289,7 @@ final class SaveTransfer {
     private static boolean looksLikeSaves(File dir) {
         File[] list = dir.listFiles();
         if (list == null) return false;
-        for (File c : list) if (c.isDirectory() && (isCharacter(c) || isStash(c) || c.getName().equals("Settings"))) return true;
+        for (File c : list) if (isVault(c) || c.isDirectory() && (isCharacter(c) || isStash(c) || c.getName().equals("Settings"))) return true;
         return false;
     }
 
