@@ -2294,10 +2294,10 @@ static void ui_mercpg_pump(module_t *m, uint64_t root, uint64_t fr) {
     if (tries) { uint64_t dt = fr - pressed; int moved = dm && cur >= 0 && cur != page; if (!((moved && dt >= 7) || dt >= 24)) return; }
     page = cur; pressed = fr; dm_ui_key_pulse(dm ? DM_BTN_R : DM_BTN_PLUS, 4); tries++;
 }
-// 个人仓库页码（个人仓库 2–5 页，dm_pages.c）：写在自己的文字控件 TouchPgPage_Text 里（布局 wide_stash.py），文字照原版共享页页码的写法：
+// 个人仓库页码（个人仓库 2–10 页，dm_pages.c）：写在自己的文字控件 TouchPgPage_Text 里（布局 wide_stash.py），文字照原版共享页页码的写法：
 // 原版写共享页页码（0x3963e4 内 0x397098–0x39714c）= 格式串 0x7f5630({"SharedStashPage", 15}) → 0x399130(缓冲, 格式, 第几页, 共几页) → 0x136e5c(文字控件 +0x88, 缓冲, 长) → 0xadc434(文字控件) 重排；
 // 原先借原版共享页那块（SharedStashTabContainer）并强制它可见、改它的字——违反「我们的功能不改原版控件状态」，已改
-// Personal stash page number (personal stash pages 2–5, dm_pages.c): written in our own text widget TouchPgPage_Text (layout wide_stash.py); the text is written the way the original game writes the shared-page page number:
+// Personal stash page number (personal stash pages 2–10, dm_pages.c): written in our own text widget TouchPgPage_Text (layout wide_stash.py); the text is written the way the original game writes the shared-page page number:
 // the original game writes the shared-page page number (0x397098–0x39714c inside 0x3963e4) = format string 0x7f5630({"SharedStashPage", 15}) → 0x399130(buffer, format, page index, page count) → 0x136e5c(text widget +0x88, buffer, length) → 0xadc434(text widget) re-layout;
 // it used to borrow the original game's shared-page block (SharedStashTabContainer), force it visible and change its text - a violation of "our features do not change the state of the original game's widgets"; changed
 static void pages_text(uint8_t *b, uint64_t tb, int page, int total) {
@@ -2307,7 +2307,7 @@ static void pages_text(uint8_t *b, uint64_t tb, int page, int total) {
 }
 static int g_bank_tab_keep = -1; static uint64_t g_bank_tab_until;   // 切换前储藏箱停在哪个页签（-1 = 没记）；过了这一帧就不再恢复 | Which tab the stash was on before the switch (-1 = not recorded); no restore once past this frame
 static int ui_touch_or_pad_ready(void) { int dm_padmode_busy(void); return !dm_padmode_busy(); }
-static void ui_pages_pump(module_t *m, uint64_t root) {   // 个人页上把自己的页码控件 TouchPgPage 挪进来写「第 n/5 页」，别的页签挪回屏外；原版共享页那块页码一律不碰（独立页面原则） | On the personal page, move our own page-number widget TouchPgPage in and write 「第 n/5 页」(Page n/5); on other tabs move it back off screen; the original game's shared-page page number is never touched (independent-page principle)
+static void ui_pages_pump(module_t *m, uint64_t root) {   // 个人页上把自己的页码控件 TouchPgPage 挪进来写「第 n/10 页」，别的页签挪回屏外；原版共享页那块页码一律不碰（独立页面原则） | On the personal page, move our own page-number widget TouchPgPage in and write 「第 n/10 页」(Page n/10); on other tabs move it back off screen; the original game's shared-page page number is never touched (independent-page principle)
     static int lt = -1, lp = -1; uint64_t bk = ui_panel(root, "BankExpansionLayout");
     if (!bk || !*(uint8_t *)(bk + 0x50)) { lt = lp = -1; return; }
     uint64_t tabs = ui_find(bk, "BankTabs", 0), pg = ui_find(bk, "TouchPgPage", 0), tb = pg ? ui_find(pg, "TouchPgPage_Text", 0) : 0;
@@ -2319,6 +2319,20 @@ static void ui_pages_pump(module_t *m, uint64_t root) {   // 个人页上把自�
         int was = TAB_SEL(tabs); if (dm_guest_frame() <= g_bank_tab_until && was != keep) { ((void (*)(uint64_t, int, int))(m->base + 0xad9b80))(tabs, keep, 0); LOG("储藏箱：切换布局后页签从第 %d 个选回第 %d 个（现为 %d）", was, keep, TAB_SEL(tabs)); } }
     if (!tabs || !pg || !tb) return;
     int tab = TAB_SEL(tabs), cur; int dm_pages_cur(void), dm_pages_count(void); cur = dm_pages_cur(); uint8_t *b = (uint8_t *)m->base;
+    // 翻页后手上物品的光标图：翻到空页时客户端只收到「从容器取走」，光标图缓存 [main+0x2d12920] 被清成 0（实测：光标物品还在、模式 [+0x928] 仍是 7），
+    // 光标图就没了（格子高亮照常，它直接读物品栏 +0x40）；翻到有件的页，原版「放进容器」处理末尾会按光标物品重设缓存，图又回来。
+    // 翻页后 120 帧内：手上有物品、缓存却是 0 → 照原版那段（0x46a798–0x46a7d4）重设：缓存 = 光标物品、模式 7、[+0x938] = 0，换光标 0x2b47dc(0x2acecc(), 本机玩家槽, 7, -1)，重画 0x2aa5f0
+    // Cursor picture of the held item after a page turn: turning to an empty page the client only receives 'taken from container', and the cursor picture cache [main+0x2d12920] is cleared to 0 (measured: the cursor item is still there, mode [+0x928] is still 7),
+    // so the cursor picture is gone (the cell highlight still works, it reads inventory +0x40 directly); turning to a page with items, the original 'put into container' handler resets the cache from the cursor item at its end, and the picture comes back.
+    // Within 120 frames after a turn: item in hand but the cache is 0 -> reset it like the original code (0x46a798-0x46a7d4): cache = cursor item, mode 7, [+0x938] = 0, switch the cursor with 0x2b47dc(0x2acecc(), local player slot, 7, -1), redraw with 0x2aa5f0
+    { static int seen; static uint64_t until; int dm_pages_flips(void), f = dm_pages_flips(); uint64_t fr = dm_guest_frame();
+      if (f != seen) { seen = f; until = fr + 120; }
+      if (fr <= until) { uint32_t slot = *(uint32_t *)(b + 0x2d20e4c); uint64_t pl = ((uint64_t (*)(uint32_t))(b + 0x45f9d0))(slot), inv = pl ? *(uint64_t *)(pl + 0x90) : 0,
+              held = inv && *(uint32_t *)inv == 0x01020304 ? *(uint64_t *)(inv + 0x40) : 0;
+          if (held && *(uint32_t *)held == 4 && !*(volatile uint64_t *)(b + 0x2d12920)) {
+              *(volatile uint64_t *)(b + 0x2d12920) = held; *(volatile uint32_t *)(b + 0x2d12928) = 7; *(volatile uint32_t *)(b + 0x2d12938) = 0;
+              uint64_t cs = ((uint64_t (*)(void))(b + 0x2acecc))(); ((void (*)(uint64_t, uint32_t, int, int))(b + 0x2b47dc))(cs, slot, 7, -1); ((void (*)(void))(b + 0x2aa5f0))();
+              LOG("个人仓库：翻页后光标图缓存空了、手上还有物品（id %u）→ 照原版重设光标图", *(uint32_t *)(held + 8)); } } }
     ui_move_ours(pg, tab == 0 ? 0 : 99999);   // 矩形 +0x70，改完虚表 +0x10 重排 | Rect +0x70; after changing, vtable +0x10 re-layout
     if (tab == 0 && (lt != 0 || lp != cur)) { pages_text(b, tb, cur + 1, dm_pages_count()); lp = cur; LOG("个人仓库：页码写成第 %d/%d 页", cur + 1, dm_pages_count()); }
     if (tab != 0) lp = -1;
