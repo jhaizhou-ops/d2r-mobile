@@ -31,7 +31,17 @@ int main(void) {
     // Verify cancellation on production queues: the next world pump precedes the mouse hook, so clearing only mouse-local state is insufficient.
     dm_world_click(.7f, .4f); dm_world_walk(.8f, .5f); w_mouse_cancel_pending();
     CHECK(atomic_load(&g_tap) != 0 && atomic_load(&g_walk) != 0);
+    // A consumed click already owns a route: clearing only the pending queue
+    // lets w_ground_step issue another run command after YouDiedModal opens.
+    g_go.on = 1; g_go.type = W_GROUND;
+    w_mouse_cancel_pending(); CHECK(g_go.on);
     mouse_world_active = 0; w_mouse_cancel_pending();
+    CHECK(!g_go.on);
+    mouse_world_active = 1; w_mouse_cancel_pending(); CHECK(!g_go.on);
+    mouse_world_active = 0;
+    // Non-ground approaches belong to the shared touch/interaction path.
+    g_go.on = 1; g_go.type = 2; w_mouse_cancel_pending(); CHECK(g_go.on);
+    g_go.on = 0;
     CHECK(atomic_load(&g_tap) == 0 && atomic_load(&g_walk) == 0 && atomic_load(&g_tap_mouse) == 0);
     unsigned seq = dm_world_tap(.2f, .3f); w_mouse_cancel_pending();
     CHECK((unsigned)(atomic_load(&g_tap) >> 32) == seq);
