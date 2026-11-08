@@ -988,6 +988,41 @@ if RULE_RUN:
         0x52800062, 0x51000849, B(a+20,0x6c6584)],
         'touch-run-v4：原通用合法移动仅player0请求Walk2规范为Run3，非player与其它请求保原，w8/原资格不改')
 
+# effect.age_pCtxI 从 ParticleContextI +0x18 取 float 数组，+0x20 是元素数，+0x24 是容量（见 0x12d3440–0x12d34cc）。
+# 换图后多个线程在 0x144f43c 用浮点形态的值（如 0x3eb2580f）当索引。两条读取路径都核对元素数，缺失时写年龄 0。
+# effect.age_pCtxI reads floats at ParticleContextI +0x18. +0x20 is the element count and +0x24 is the capacity (see 0x12d3440–0x12d34cc).
+# After an area change, several threads used float-shaped values such as 0x3eb2580f as indices at 0x144f43c. Bound both reads and output age zero for a missing entry.
+if BUILD_ID == 'db0507f36b84200ac05f75d76ed5026f':
+    def effect_age_cut(off, old, new, why):
+        assert struct.unpack_from('<I', IMG, off)[0] == old, f'effect.age 剪口原字节不符 {off:#x}'
+        struct.pack_into('<I', IMG, off, new)
+        cuts.append((off, struct.pack('<I', old).hex(), struct.pack('<I', new).hex(), why, '仅宿主'))
+
+    # 逐项路径：每个索引独立核对，原写回与循环继续推进。 | Per-lane path: check each index and reuse the original store and loop.
+    start = here()
+    emit(0x6b11021f)  # cmp w16, w17
+    emit(0x54000082)  # b.hs missing
+    emit(0xb400006c)  # cbz x12, missing
+    emit(0xbc707981)  # ldr s1, [x12, x16, lsl #2]
+    emit(B(here(), 0x144f440))
+    emit(0x1e2703e1)  # missing: fmov s1, wzr
+    emit(B(here(), 0x144f448))
+    effect_age_cut(0x144f418, 0xf9400dac, LDP(12, 17, 13, 0x18), 'effect.age 逐项读取：同时加载元素数')
+    effect_age_cut(0x144f43c, 0xbc707981, B(0x144f43c, start), 'effect.age 逐项读取：越界或缺失输出 0')
+
+    # 常量路径：失效时用原来的填充循环写零。 | Constant path: use the original fill loop to write zero for an invalid index.
+    start = here()
+    emit(0x6b09021f)  # cmp w16, w9
+    emit(0x54000082)  # b.hs missing
+    emit(0xb4000071)  # cbz x17, missing
+    emit(0xbc707a20)  # ldr s0, [x17, x16, lsl #2]
+    emit(B(here(), 0x144f2fc))
+    emit(0x1e2703e0)  # missing: fmov s0, wzr
+    emit(ADDR(9, 8, 15))  # x9 = 输出末尾 | end of output
+    emit(B(here(), 0x144f4f0))
+    effect_age_cut(0x144f2dc, 0xf9400d11, LDP(17, 9, 8, 0x18), 'effect.age 常量读取：同时加载元素数')
+    effect_age_cut(0x144f2f8, 0xbc707a20, B(0x144f2f8, start), 'effect.age 常量读取：越界或缺失填零')
+
 os.makedirs(outdir, exist_ok=True)
 P = lambda ext: os.path.join(outdir, f'{NAME}.{ext}')
 open(P('patched.bin'), 'wb').write(IMG + bytearray(PATCH_OFF - len(IMG)) + patch)
