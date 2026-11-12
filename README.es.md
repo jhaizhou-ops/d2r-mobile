@@ -279,7 +279,7 @@ La cuenta de Apple usada para firmar: una cuenta de desarrollador de pago te da 
 2. Añade a S2Arm tu paquete del juego (.xci / .nsp, con la actualización 1.0.34.0) y tu prod.keys.
 3. En la página Export marca iPhone / iPad y pulsa «Export»; cuando aparezca la página de confirmación, elige «Use D2R-Mobile»; al terminar pulsa «Install on iPhone» (la interfaz de S2Arm está en inglés y en chino). Tu teléfono tendrá una app D2R Mobile aparte, S2Arm le envía los recursos del juego y se abre directamente en el menú principal.
 
-Estado: iPhone / iPad funciona de principio a fin (empaquetado en un Mac, instalado en un iPhone por Wi-Fi, dentro de la partida). Android, HarmonyOS, la versión nativa para Mac y S2Arm en Windows aún no están conectados; usa las secciones siguientes. S2Arm usa el `D2RMobile-s2arm-bundle.zip` adjunto a cada versión de este repositorio; el acuerdo entre ambos está en [docs/S2ARM.md](docs/S2ARM.md) (en inglés).
+Estado: iPhone / iPad con iOS 26 o posterior funciona de principio a fin (empaquetado en un Mac, instalado en un iPhone por Wi-Fi, dentro de la partida); la versión con la API antigua para iOS 18 – 25 aún no está en S2Arm. Android, HarmonyOS, la versión nativa para Mac y S2Arm en Windows aún no están conectados; usa las secciones siguientes. S2Arm usa el `D2RMobile-s2arm-bundle.zip` adjunto a cada versión de este repositorio; el acuerdo entre ambos está en [docs/S2ARM.md](docs/S2ARM.md) (en inglés).
 
 ### Con un Mac: tres pasos
 

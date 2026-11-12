@@ -279,7 +279,7 @@ iPhone / iPad 的两种做法对比：
 2. 把你的游戏包（.xci / .nsp，含 1.0.34.0 更新）和 prod.keys 放进 S2Arm。
 3. 在「导出」页勾 iPhone / iPad、点「开始导出」，弹出确认页时选「用 D2R-Mobile 方案」；做完点「装到 iPhone」。手机上会多一个 D2R Mobile App，游戏资源由 S2Arm 推进去，打开直接进主菜单。
 
-现状：iPhone / iPad 已走通（Mac 上出包，Wi-Fi 装到 iPhone 进局）。安卓、鸿蒙、Mac 原生版和 Windows 版 S2Arm 还没接上，走下面各节。S2Arm 用的是本仓库每个发布版附带的 `D2RMobile-s2arm-bundle.zip`，两边的约定见 [docs/S2ARM.zh-CN.md](docs/S2ARM.zh-CN.md)。
+现状：iPhone / iPad（iOS 26 及以上）已走通（Mac 上出包，Wi-Fi 装到 iPhone 进局）；iOS 18 – 25 的旧接口版还没接进 S2Arm。安卓、鸿蒙、Mac 原生版和 Windows 版 S2Arm 还没接上，走下面各节。S2Arm 用的是本仓库每个发布版附带的 `D2RMobile-s2arm-bundle.zip`，两边的约定见 [docs/S2ARM.zh-CN.md](docs/S2ARM.zh-CN.md)。
 
 ### 有 Mac：三步
 

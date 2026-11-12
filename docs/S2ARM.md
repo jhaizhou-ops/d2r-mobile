@@ -64,4 +64,4 @@ The wording of the log lines is part of the contract; S2Arm reads progress, comp
 
 ## 7. Not connected yet
 
-Android (`d2rm_android.py` + APK), HarmonyOS, the native Mac version and S2Arm on Windows are not connected yet; players follow the README sections for those.
+The older-API shell for iOS 18 – 25 (the bundle carries only the iOS 26 shell for now), Android (`d2rm_android.py` + APK), HarmonyOS, the native Mac version and S2Arm on Windows are not connected yet; players follow the README sections for those.

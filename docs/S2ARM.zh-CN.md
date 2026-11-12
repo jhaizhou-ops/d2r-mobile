@@ -64,4 +64,4 @@ S2Arm 装好 App 后按自己的推送把资源推进去：每批不超过 1 GB�
 
 ## 七、还没接的
 
-安卓（`d2rm_android.py` + APK）、鸿蒙、Mac 原生版，以及 Windows 上的 S2Arm 都还没接，玩家暂时按 README 各节走。
+iOS 18 – 25 的旧接口壳（包件里现在只有 iOS 26 的壳）、安卓（`d2rm_android.py` + APK）、鸿蒙、Mac 原生版，以及 Windows 上的 S2Arm 都还没接，玩家暂时按 README 各节走。
