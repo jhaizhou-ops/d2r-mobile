@@ -69,6 +69,12 @@ static _Atomic int g_sort = -1, g_rname;
 static _Atomic int g_held_equip = -1;
 void dm_held_equip(int bodyloc) { if ((bodyloc & 0xff) > 0 && (bodyloc & 0xff) < 16) atomic_store(&g_held_equip, bodyloc); }   // 低 8 位 = 身体栏位；0x100 = 落点是佣兵面板里的格 | Low 8 bits = body location; 0x100 = the drop point is a cell in the mercenary panel
 void dm_inv_sort(int page) { if (page == 0 || page == 3 || page == 4) atomic_store(&g_sort, page); }
+// 一个请求打成一个 64 位：位 63 = 有请求，位 40–47 属主类型，位 32–39 页，低 32 位属主单位号 | One request packed in 64 bits: bit 63 = pending, bits 40-47 owner type, bits 32-39 page, low 32 bits owner unit id
+static _Atomic uint64_t g_sort_grid;
+void dm_inv_sort_grid(uint32_t owner_id, uint32_t owner_type, int page) {
+    if (page < 0 || page > 255 || owner_type > 255) return;
+    atomic_store(&g_sort_grid, 1ull << 63 | (uint64_t)owner_type << 40 | (uint64_t)page << 32 | owner_id);
+}
 void dm_name_random(void) { atomic_store(&g_rname, 12); }
 int dm_name_taken(const char *name) {   // 一个角色一个目录（存档工作目录 / 角色名） | one directory per character (save working directory / character name)
     const char *dm_save_workdir(void); const char *wd = dm_save_workdir(); char pth[1200];
@@ -592,6 +598,15 @@ void dm_actions_pump(void) {
     // First pass the original availability check main+0x3c213c(owner unit, page) (nothing held in hand, etc.); if it fails, do not call. When already sorted it sends no packet by itself
     { int sp = atomic_exchange(&g_sort, -1); if (sp >= 0 && pl) { int ok = ((int (*)(uint64_t, int))(b + 0x3c213c))(pl, sp) & 1; if (ok) ((void (*)(uint32_t, int))(b + 0x3c2320))(*(uint32_t *)(pl + 8), sp);
         LOG("整理：页 %d %s", sp, ok ? "已调原版整理" : "原版判定此刻不能整理（手上拿着物品等），没调"); } }
+    // 整理某个物品格（dm_inv_sort_grid）：同原版 0x3b2e58–0x3b2ea0——属主单位号 -1 且类型 6 时单位为空，否则按类型的单位桶表 main+0x2d603a0 + 类型 × 0x400
+    // 查单位（0x45f5f0(桶表, 号 & 0x7f, 号, 类型)），过可用判断 0x3c213c(单位, 页)，再调 0x3c2320(属主单位号, 页)
+    // Sort a given item grid (dm_inv_sort_grid): as the original 0x3b2e58–0x3b2ea0 -- with owner id -1 and type 6 the unit is null,
+    // otherwise the unit is looked up in the per-type unit bucket table main+0x2d603a0 + type × 0x400 (0x45f5f0(buckets, id & 0x7f, id,
+    // type)); then the availability check 0x3c213c(unit, page), then 0x3c2320(owner id, page)
+    { uint64_t r = atomic_exchange(&g_sort_grid, 0); if (r >> 63) { uint32_t id = (uint32_t)r, ty = (uint32_t)(r >> 40 & 0xff); int pg = (int)(r >> 32 & 0xff);
+        uint64_t unit = id == 0xffffffffu && ty == 6 ? 0 : ((uint64_t (*)(uint64_t, int, uint32_t, uint32_t))(b + 0x45f5f0))((uint64_t)(uintptr_t)b + 0x2d603a0 + ((uint64_t)ty << 10), (int)(id & 0x7f), id, ty);
+        int ok = ((int (*)(uint64_t, int))(b + 0x3c213c))(unit, pg) & 1; if (ok) ((void (*)(uint32_t, int))(b + 0x3c2320))(id, pg);
+        LOG("整理：物品格 属主 %u 类型 %u 页 %d（%s）%s", id, ty, pg, unit ? "找到单位" : "单位为空", ok ? "已调原版整理" : "原版判定此刻不能整理（手上拿着物品等），没调"); } }
     // 装备 / 卸下。装备：main+0x3cf394(_, 物品)——物品格手柄「按住确认键」分流里的自动装备（0x3cfc34 → 0x3cf394），它用 0x583b60 选栏位、调 0x3bb24c 发一个直达包（空位 0x56、与已装备的交换 0x59 等）。
     // 先照原版过两步判断：0x583b60(玩家, 物品, &栏位, 1, 0) 与 0x565950(玩家, 栏位, 物品, 1, 0)，不过就只播错误音（0x35f120(3,…)，原版同）。雇佣兵面板开着且他能穿（0x3be960）时改给雇佣兵（0x3bed60），同原版顺序。
     // 卸下：main+0x3bb24c(0, 栏位, 1, -1, 0)——装备栏控件「按住确认键」的终点（0x3d6b80），发 0x58 包；栏位号 = 物品数据 +0x54。原版外层的共同前提：手上没拿物品、物品没有待确认的操作（0x474990）、交易中（界面开关 0x2d5ff5e）不做
