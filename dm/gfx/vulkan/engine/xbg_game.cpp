@@ -29,6 +29,7 @@ extern "C" int xbg_completion_wait_selftest(char *report,size_t bytes);
 #include "xbg_spirv_warp.h"
 #include "xbg_spirv_ldc.h"
 #include "xbg_spirv_temps.h"
+#include "xbg_spirv_dispatch.h"
 #include "xbg_spirv_raster.h"
 #include "xbg_cam.h"
 #include "../../nvn/nvn_cover.h"
@@ -666,7 +667,7 @@ bool slot_pools_enabled=true,readback_cached=false;
 // samples_report_seen: the game has recorded a samples-passed report (D2R never does: its ~8 pending reports a frame are
 // all timestamps).
 bool heavy_timestamps=false;extern uint64_t pass_fast_hits;   // gfx-heavy-timestamps = '1': timestamp reports end the pass with full barriers, as before
-bool no_occlusion_queries=false,samples_report_seen=false;uint64_t samples_reports=0,samples_reported=0,counter_ops[3]={};extern uint64_t pipeline_fast_hits;extern bool pipe_memo;extern uint64_t pipe_memo_hits,pipe_memo_misses;extern uint64_t snap_front_hits,snap_map_hits,snap_invalidations,snap_invalidated;extern std::atomic<uint64_t> quad_rewrites,warp_rewrites,ldc_folds,temps_forwarded,nan_minmax_swaps;namespace vcache{extern bool enabled;extern uint64_t hits,hit_bytes,fills,fill_bytes,refills,volatiles,untracked,flushes;size_t live();VkDeviceSize arena_bytes();}   // counter_ops: resets, timestamp reports, samples reports recorded
+bool no_occlusion_queries=false,samples_report_seen=false;uint64_t samples_reports=0,samples_reported=0,counter_ops[3]={};extern uint64_t pipeline_fast_hits;extern bool pipe_memo;extern uint64_t pipe_memo_hits,pipe_memo_misses;extern uint64_t snap_front_hits,snap_map_hits,snap_invalidations,snap_invalidated;extern std::atomic<uint64_t> quad_rewrites,warp_rewrites,ldc_folds,temps_forwarded,nan_minmax_swaps,dispatch_guards;namespace vcache{extern bool enabled;extern uint64_t hits,hit_bytes,fills,fill_bytes,refills,volatiles,untracked,flushes;size_t live();VkDeviceSize arena_bytes();}   // counter_ops: resets, timestamp reports, samples reports recorded
 // Resident uniform texel copies (texel_acquire, before descriptors()).
 struct TexelKey{uint64_t base,bytes;uint32_t format;bool operator==(const TexelKey &o)const{return base==o.base&&bytes==o.bytes&&format==o.format;}};
 struct TexelKeyHash{size_t operator()(const TexelKey &k)const{uint64_t x=k.base*0x9E3779B97F4A7C15ull^k.bytes*0xC2B2AE3D27D4EB4Full^k.format;x^=x>>29;return size_t(x*0xBF58476D1CE4E5B9ull);}};
@@ -979,7 +980,7 @@ void perf_frame(){
     xbg_logf("NVN PERF storage_snapshots_per_frame=%.1f union_mb_per_frame=%.2f",storage_snap_count/f,storage_pages.size()*4096.0/1048576.0/tf);storage_pages.clear();storage_snap_count=0;
     xbg_logf("NVN PERF wtrack copied_kb_per_frame=%.1f dirty_pages_per_frame=%.1f mismatches=%llu fallbacks=%llu",wtrack::copied_bytes/1024.0/f,wtrack::dirty_pages/f,(unsigned long long)wtrack::mismatches,(unsigned long long)wtrack::fallbacks);wtrack::copied_bytes=wtrack::dirty_pages=0;
     xbg_logf("NVN PERF uniform_trimmed_bindings=%llu snap_mb_per_frame other=%.2f vertex=%.2f index=%.2f storage=%.2f texel=%.2f uniform=%.2f requested vertex=%.2f index=%.2f storage=%.2f",(unsigned long long)uniform_trimmed,snap_site_bytes[0]/1048576.0/f,snap_site_bytes[1]/1048576.0/f,snap_site_bytes[2]/1048576.0/f,snap_site_bytes[3]/1048576.0/f,snap_site_bytes[4]/1048576.0/f,snap_site_bytes[5]/1048576.0/f,snap_site_req[1]/1048576.0/f,snap_site_req[2]/1048576.0/f,snap_site_req[3]/1048576.0/f);for(auto &b:snap_site_bytes)b=0;for(auto &b:snap_site_req)b=0;
-    xbg_logf("NVN PERF quad_rewrites=%llu warp_rewrites=%llu ldc_folds=%llu temps_forwarded=%llu nan_minmax=%llu",(unsigned long long)quad_rewrites.load(std::memory_order_relaxed),(unsigned long long)warp_rewrites.load(std::memory_order_relaxed),(unsigned long long)ldc_folds.load(std::memory_order_relaxed),(unsigned long long)temps_forwarded.load(std::memory_order_relaxed),(unsigned long long)nan_minmax_swaps.load(std::memory_order_relaxed));
+    xbg_logf("NVN PERF quad_rewrites=%llu warp_rewrites=%llu ldc_folds=%llu temps_forwarded=%llu nan_minmax=%llu dispatch_guards=%llu",(unsigned long long)quad_rewrites.load(std::memory_order_relaxed),(unsigned long long)warp_rewrites.load(std::memory_order_relaxed),(unsigned long long)ldc_folds.load(std::memory_order_relaxed),(unsigned long long)temps_forwarded.load(std::memory_order_relaxed),(unsigned long long)nan_minmax_swaps.load(std::memory_order_relaxed),(unsigned long long)dispatch_guards.load(std::memory_order_relaxed));
     xbg_logf("NVN PERF snapfront front_hits=%.1f map_hits=%.1f invalidations=%.1f erased=%.1f",snap_front_hits/f,snap_map_hits/f,snap_invalidations/f,snap_invalidated/f);xbg_logf("NVN PERF textures bc_native=%llu bc_decoded=%llu live_images=%.1fMB bc_images=%.1fMB bc_payload=%.1fMB",(unsigned long long)native_bc_images,(unsigned long long)decoded_bc_images,image_bytes_live/1048576.0,bc_image_bytes_live/1048576.0,bc_data_bytes_live/1048576.0);snap_front_hits=snap_map_hits=snap_invalidations=snap_invalidated=0;
     if(bright::enabled){xbg_logf("NVN PERF bright applied=%.2f k=%.2f",bright::applied/f,bright::last_k);bright::applied=0;}
     if(tex_dirty){xbg_logf("NVN PERF texdirty tracked=%.1f checks=%.1f changed=%.1f",tex_dirty_tracked/f,tex_dirty_checks/f,tex_dirty_changed/f);tex_dirty_tracked=tex_dirty_checks=tex_dirty_changed=0;}
@@ -2090,6 +2091,18 @@ void tidy_rewrite(std::vector<uint32_t> &words){
     if(ldc_fold){size_t k=xbg_spirv_ldc_fold(words.data(),words.size(),out);if(k){words.swap(out);ldc_folds.fetch_add(k,std::memory_order_relaxed);}}
     if(forward_temps){size_t k=xbg_spirv_forward_temps(words.data(),words.size(),out);if(k){words.swap(out);temps_forwarded.fetch_add(k,std::memory_order_relaxed);}}
 }
+// 计算着色器入口的派发范围检查（#256，见 xbg_spirv_dispatch.cpp）：Adreno 8xx 缺省开（xbg_adreno_policy.h），标记 gfx-dispatch-guard
+// （1 / 0）优先。两个载入器都做，排在其它改写之后。认不得的计算模块原样载入并记一行日志。
+// The dispatch-range check at the entry of compute shaders (#256, see xbg_spirv_dispatch.cpp): on by default on Adreno 8xx
+// (xbg_adreno_policy.h), the marker gfx-dispatch-guard (1 / 0) wins. Both module loaders apply it, after the other rewrites. A
+// compute module in a form it does not know loads as it is, with a log line.
+bool dispatch_guard=false;std::atomic<uint64_t> dispatch_guards{0};
+void guard_rewrite(std::vector<uint32_t> &words,uint32_t stage,const char *key,const char *loader){
+    if(!dispatch_guard || stage!=5)return;
+    std::vector<uint32_t> out;
+    if(xbg_spirv_dispatch_guard(words.data(),words.size(),out)){words.swap(out);dispatch_guards.fetch_add(1,std::memory_order_relaxed);}
+    else xbg_logf("NVN dispatch guard: compute shader %s is not in the expected form and loads as it is (loader=%s)",key,loader);
+}
 // gfx-inline：子组指令写在被调用的辅助函数里的着色器（导入包里 187 个），载入时把辅助函数全部内联进入口（SPIRV-Tools 的
 // merge-return、inline-entry-points-exhaustive、eliminate-dead-functions，与 spirv-opt 同名三步，结果逐字节相同）；
 // Adreno 750 族缺省打开，见 xbg_adreno_policy.h。SPIRV-Tools 只编进安卓包（XBG_HAVE_SPIRV_OPT），别的平台这一步不存在。
@@ -2142,7 +2155,7 @@ Shader *load_shader(const void *control){
     // What the warm-up hands over is already inlined (the same step in load_module); inline only when rewriting here, so the
     // graphics thread does not redo it (40-90 ms on the large shaders).
     bool inlined=have_reused && shader_reuse!=2 && inline_helpers && helper_has_subgroup(words);
-    if(!have_reused || shader_reuse==2){inlined=inline_rewrite(words,key);quad_rewrite(words,h.stage,key.c_str(),"runtime");warp_rewrite(words,h.stage,key.c_str(),"runtime");tidy_rewrite(words);
+    if(!have_reused || shader_reuse==2){inlined=inline_rewrite(words,key);quad_rewrite(words,h.stage,key.c_str(),"runtime");warp_rewrite(words,h.stage,key.c_str(),"runtime");tidy_rewrite(words);guard_rewrite(words,h.stage,key.c_str(),"runtime");
         if(have_reused && reused!=words){++shader_reuse_mismatches;xbg_logf("NVN shader reuse MISMATCH %s stage=%u words=%zu/%zu",key.c_str(),h.stage,reused.size(),words.size());}}
     else words.swap(reused);
     if(have_reused)++shaders_reused;
@@ -2265,7 +2278,7 @@ VkShaderModule load_module(const std::string &key){
     fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);if(n<32 || n>16*1024*1024){fclose(f);return VK_NULL_HANDLE;}std::vector<uint8_t> b(static_cast<size_t>(n));bool ok=fread(b.data(),1,b.size(),f)==b.size();fclose(f);if(!ok)return VK_NULL_HANDLE;
     xbg_shader_header h;memcpy(&h,b.data(),sizeof(h));if(h.magic!=0x31534758 || h.version!=1 || h.spirv_bytes%4)return VK_NULL_HANDLE;
     size_t off=sizeof(h)+size_t(h.binding_count)*sizeof(xbg_shader_binding)+size_t(h.input_count)*4+h.c1_bytes;if(off+h.spirv_bytes!=b.size())return VK_NULL_HANDLE;
-    std::vector<uint32_t> w(h.spirv_bytes/4);memcpy(w.data(),b.data()+off,h.spirv_bytes);spv_override(key,w);inline_rewrite(w,key);quad_rewrite(w,h.stage,key.c_str(),"warm");warp_rewrite(w,h.stage,key.c_str(),"warm");tidy_rewrite(w);
+    std::vector<uint32_t> w(h.spirv_bytes/4);memcpy(w.data(),b.data()+off,h.spirv_bytes);spv_override(key,w);inline_rewrite(w,key);quad_rewrite(w,h.stage,key.c_str(),"warm");warp_rewrite(w,h.stage,key.c_str(),"warm");tidy_rewrite(w);guard_rewrite(w,h.stage,key.c_str(),"warm");
     if(keep_rewritten){std::lock_guard<std::mutex> l(mu);rewritten.emplace(key,w);}
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=w.size()*4;ci.pCode=w.data();VkShaderModule m;if(vkCreateShaderModule(cfg.device,&ci,nullptr,&m)!=VK_SUCCESS)return VK_NULL_HANDLE;
     std::lock_guard<std::mutex> l(mu);auto ins=modules.emplace(key,m);if(!ins.second){vkDestroyShaderModule(cfg.device,m,nullptr);return ins.first->second;}return m;
@@ -4161,7 +4174,10 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
 #ifndef XBG_HAVE_SPIRV_OPT
       if(inline_helpers)xbg_logf("NVN helper inlining is not built into this package; shaders load as they are");inline_helpers=false;
 #endif
-      xbg_logf("NVN shaders with subgroup helpers are inlined at load=%d (marker gfx-inline)",int(inline_helpers));}}
+      xbg_logf("NVN shaders with subgroup helpers are inlined at load=%d (marker gfx-inline)",int(inline_helpers));}
+     {FILE *q=fopen((base+"/gfx-dispatch-guard").c_str(),"rb");const bool present=q!=nullptr;int c=-1;if(q){c=fgetc(q);fclose(q);}
+      dispatch_guard=xbg_adreno_dispatch_guard_option(present,c,getenv("DM_GFX_DISPATCH_GUARD"),xbg_adreno_dispatch_overruns(properties.vendorID,properties.deviceName));
+      xbg_logf("NVN compute shaders return at once outside the dispatched range=%d (marker gfx-dispatch-guard)",int(dispatch_guard));}}
     {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');std::string base=cut==std::string::npos?dir:dir.substr(0,cut);
      auto dm=[&](const char *marker,const char *env){FILE *q=fopen((base+marker).c_str(),"rb");bool on=false;if(q){on=fgetc(q)!='0';fclose(q);}else if(const char *e=getenv(env))on=atoi(e)!=0;return on;};
      ldc_fold=dm("/gfx-ldc-fold","DM_GFX_LDC_FOLD");forward_temps=dm("/gfx-forward-temps","DM_GFX_FORWARD_TEMPS");nan_minmax=dm("/gfx-nan-minmax","DM_GFX_NAN_MINMAX");
