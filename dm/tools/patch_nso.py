@@ -175,7 +175,11 @@ RULE_BUILD = 'db0507f36b84200ac05f75d76ed5026f'
 RULE_RUN = RULESET == 'touch-run-v4' and NAME == 'main'
 if RULE_RUN:
     import hashlib
-    assert BUILD_ID == RULE_BUILD, f'Run规则构建号不符 {BUILD_ID}'
+    # 改写规则按这一版程序的构建号登记、逐处核原字节：别的版本一条规则都对不上，做出来的包会停在联网验证。直说哪一版、要哪一版，不出这个包
+    # The rewrite rules are registered by this build's build ID and check the original bytes at every site: no rule fits any other version, and a package made from it would stop at the online check. Say which version this is and which one is needed, and do not make the package
+    if BUILD_ID != RULE_BUILD:
+        sys.exit(f'这一版游戏程序（构建号 {BUILD_ID}）D2R Mobile 还没适配：现在只支持 1.0.34.0（构建号 {RULE_BUILD}）。'
+                 f' | This game program (build ID {BUILD_ID}) is not supported by D2R Mobile yet: only 1.0.34.0 (build ID {RULE_BUILD}) is.')
     RULE_ORIG_SHA = hashlib.sha256(IMG).hexdigest()
 cuts = list(CUTS.get(BUILD_ID, []))
 # 触屏版规则域默认同时带宿主私有门；规则闸门可显式关闭，保留同一出包入口和规则域。

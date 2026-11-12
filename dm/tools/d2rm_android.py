@@ -9,7 +9,7 @@
 #   --warm-seed <文件>：把预热种子放进包里的 shaders/（不给就不带；种子放在仓库外，免得被提交）。首次启动、还没有自己的管线列表时，引擎按种子先建好
 #     别的设备见过的管线，第一次进战斗不卡；见 dm/android/README.zh-CN.md「着色器包」一节。种子在读参数时就先核一遍（在不在、格式对不对）
 # 之后：把 android 文件夹整个拷到手机的 Download/S2X/D2R Mobile/ 下（和放游戏资源的 data 文件夹并排），打开 App 就会导入；导入完可以删掉这份。
-# 需要：Python 3.9+ 与 pillow numpy lz4 capstone unicorn；.NET SDK（编着色器翻译工具）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
+# 需要：Python 3.9+ 与 pillow numpy lz4 capstone；.NET SDK（编着色器翻译工具）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
 #   （Mac：brew install spirv-tools shaderc；Windows / Linux：LunarG Vulkan SDK；glslc 也可以用安卓 NDK 里的）。缺什么本工具开头会逐项报。
 # 它做的事与 d2rm_pack.py（iOS 壳）同一套：改写游戏程序换成安卓目标，着色器翻成 Vulkan 用的包（dm/gfx/tools/dmsh_vk.py）而不是 Metal 库。
 # 鸿蒙：d2rm_android.py --target ohos <游戏文件目录> <输出目录>，写出 <输出目录>/harmony/dm/：改写目标换成鸿蒙（out/ 与安卓不能共用），着色器包与安卓同一份，
@@ -25,7 +25,7 @@
 #     before the engine has a pipeline list of its own, it builds the pipelines other devices saw from the seed, so the first fight does not stutter; see "Shader bundles" in
 #     dm/android/README.md. The seed is checked as soon as the arguments are read (that it exists and parses)
 # Then: copy the whole android folder to Download/S2X/D2R Mobile/ on the phone (next to the data folder with the game resources); opening the App imports it, and afterwards this copy can be deleted.
-# Needs: Python 3.9+ with pillow numpy lz4 capstone unicorn; the .NET SDK (to build the shader translation tool); spirv-opt, spirv-val and glslc from the Vulkan SDK
+# Needs: Python 3.9+ with pillow numpy lz4 capstone; the .NET SDK (to build the shader translation tool); spirv-opt, spirv-val and glslc from the Vulkan SDK
 #   (Mac: brew install spirv-tools shaderc; Windows / Linux: the LunarG Vulkan SDK; glslc can also come from the Android NDK). The tool lists anything missing at the start.
 # It does the same as d2rm_pack.py (the iOS shell): the game program is rewritten for the Android target, and the shaders become the bundles Vulkan uses (dm/gfx/tools/dmsh_vk.py) instead of a Metal library.
 # HarmonyOS: d2rm_android.py --target ohos <game files directory> <output directory> writes <output directory>/harmony/dm/: the game program is rewritten for HarmonyOS (out/ cannot be shared with Android), the shader bundles are the same as Android's,
@@ -33,14 +33,14 @@
 import hashlib, os, shutil, struct, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__)); DM = os.path.dirname(HERE); IOS = os.path.join(DM, 'ios'); GT = os.path.join(DM, 'gfx', 'tools')
-sys.path.insert(0, HERE); from d2rm_pack import ROOT, PY, MODS, say, die, run, step   # 共用 iOS 壳工具的执行与跳步框架（含 Windows 换行处理） | the run-and-skip framework shared with the iOS shell tool (including the Windows line-ending handling)
+sys.path.insert(0, HERE); from d2rm_pack import ROOT, PY, MODS, say, die, run, step, game_layout, place_xlate   # 共用 iOS 壳工具的执行与跳步框架（含 Windows 换行处理） | the run-and-skip framework shared with the iOS shell tool (including the Windows line-ending handling)
 
 
 def check_env(game):
     bad = []
-    for m in ('PIL', 'numpy', 'lz4', 'capstone', 'unicorn'):
+    for m in ('PIL', 'numpy', 'lz4', 'capstone'):
         try: __import__(m)
-        except Exception: bad.append('Python 包 %s：%s -m pip install pillow numpy lz4 capstone unicorn' % (m, PY))
+        except Exception: bad.append('Python 包 %s：%s -m pip install pillow numpy lz4 capstone' % (m, PY))
     dotnet = shutil.which('dotnet') or (os.path.expanduser('~/.dotnet/dotnet') if os.path.exists(os.path.expanduser('~/.dotnet/dotnet')) else None)
     if not dotnet: bad.append('.NET SDK（dotnet）：https://dotnet.microsoft.com/download')
     for t in ('spirv-opt', 'spirv-val'):
@@ -125,6 +125,7 @@ def main():
         try: st.reconfigure(errors='replace')
         except Exception: pass
     if not os.path.isdir(game): die('没有这个游戏文件目录：%s' % game)
+    game = game_layout(game)
     dotnet = check_env(game)
     P = open(os.path.join(DM, 'PRODUCT')).readline().strip()
     romfs = os.path.join(game, 'RomFS'); stage = os.path.join(ROOT, 'build', 'pack', T); shutil.rmtree(stage, ignore_errors=True); os.makedirs(stage)
@@ -186,7 +187,7 @@ def main():
     step('取着色器包（162 个）', lambda: os.path.isdir(packs) and len(os.listdir(packs)) == 162, get_packs)
     xl = os.path.join(ROOT, 'build', 'gfx', 'dmsh_xlate'); exe = os.path.join(xl, 'dmsh_xlate.exe' if os.name == 'nt' else 'dmsh_xlate')
     step('编译着色器翻译工具', lambda: os.path.isfile(exe),
-         lambda: run([dotnet, 'publish', os.path.join(GT, 'dmsh_xlate'), '-c', 'Release', '-o', xl, '-v', 'quiet'], what='编译着色器翻译工具'))
+         lambda: place_xlate(xl) or run([dotnet, 'publish', os.path.join(GT, 'dmsh_xlate'), '-c', 'Release', '-o', xl, '-v', 'quiet'], what='编译着色器翻译工具'))
     sh = os.path.join(stage, 'shaders'); t0 = time.time(); say('翻译全部着色器（约 2 分钟）')
     run([PY, os.path.join(GT, 'dmsh_vk.py'), packs, sh], env={'XLATE': exe, 'MAIN': os.path.join(game, 'ExeFS', 'main'), 'WORK': stage}, log=os.path.join(stage, 'shaders.log'), what='翻译着色器')
     q = os.path.join(stage, 'queries'); run([PY, os.path.join(GT, 'pack_builtin_queries.py'), '--output', q], what='编查询核')
