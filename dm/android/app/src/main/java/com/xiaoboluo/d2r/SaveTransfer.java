@@ -9,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -26,6 +27,8 @@ import java.util.UUID;
 //   同一份共享仓库（内容摘要相同，记在条目里的 import.sha256）只并一次，免得重复导入把金币加两遍。
 //   编年史仓库存的物品在存档根的侧文件 <共享仓库名>.swvault 里（不在仓库文件夹里，dm_vault.c）：手机上没有就拷进来（进局读入时已在存档里的件会被去掉，
 //   不会多出一份）；已有且内容不同就随共享仓库一起进并回收件箱（包里路径 <共享仓库名>.swvault，dm_cloudmerge.c 照读），缺的件进局还到背包。
+//   极乐世界角色的名单在存档根的 sw_elysium.txt（一行一个角色名，dm_elysium.c）：只对这一次导进来的角色照备份设——备份名单里有就加进手机名单，
+//   没有就从手机名单去掉（手机上删掉的同名旧角色可能还留在名单里）；手机上别的名字不动。不然导进来的极乐世界角色会变成普通角色。
 //   这台手机自己导出的备份（导出时写进 export-source.txt 的安装标识与本机 files/save-transfer-id 相同）导回来时共享仓库不并：
 //   金币会再加一遍，备份之后拿出仓库的物品也会再给一份；别的手机的备份照常并。卸载重装后标识是新的（那时手机上也没有共享仓库了）。
 //   导完把 save-import 改名为 save-import.done-<日期-时间>，下次不会再导；里面认不出存档就一个字节不动、改名为 save-import.rejected-<日期-时间>。
@@ -45,7 +48,10 @@ import java.util.UUID;
 //   the Chronicle stash live in a side file at the saves root, <shared stash name>.swvault (not in the stash folder, dm_vault.c): one the phone lacks
 //   is copied in (on load the game drops any of its items already in a save, so nothing is doubled); one the phone already has with different
 //   contents goes into the merge inbox with the shared stash (path <shared stash name>.swvault in the pack, which dm_cloudmerge.c reads), and the
-//   missing items come back to the inventory in game. A backup this
+//   missing items come back to the inventory in game. The list of Elysium characters is sw_elysium.txt at the saves root (one character name
+//   per line, dm_elysium.c): it is set from the backup for the characters this import adds, and only for them -- a name in the backup's list is
+//   added to the phone's list, a name that is not there is removed from it (the phone's list may still hold an earlier character of the same name
+//   that was deleted); the phone's other names stay. Otherwise an imported Elysium character would turn into a normal one. A backup this
 //   phone exported itself (the install id written to export-source.txt on export equals this phone's files/save-transfer-id) is not merged into
 //   the shared stash when imported back: its gold would be added again, and items taken out of the stash since the backup would be given a second
 //   time; backups from other phones are merged as usual. After an uninstall and reinstall the id is new (and the phone has no shared stash then). Afterwards save-import is renamed to save-import.done-<date-time>, so it is not imported again; when no
@@ -58,7 +64,7 @@ final class SaveTransfer {
 
     static final int EXPORTED = 1, EXPORT_EMPTY = 2, IMPORTED = 3, IMPORT_REJECTED = 4, FAILED = 5, IMPORT_PARTIAL = 6;
     static final String EXPORT_MARKER = "export", EXPORT_DIR = "save-export", IMPORT_DIR = "save-import", INBOX = "_cloudinbox";
-    static final String SOURCE_FILE = "export-source.txt", ID_FILE = "save-transfer-id";
+    static final String SOURCE_FILE = "export-source.txt", ID_FILE = "save-transfer-id", ELYSIUM = "sw_elysium.txt";
     static final int MERGE_NONE = 0, MERGE_QUEUED = 1, MERGE_ALREADY = 2, MERGE_SAME_PHONE = 3;
 
     // kind = 上面的结果之一；path = 相对游戏文件夹的路径（导出到哪 / 认不出时改成的名字）或导进来的名字（逗号隔开），失败时是原因；
@@ -126,6 +132,8 @@ final class SaveTransfer {
         deleteTree(part);
         StringBuilder added = new StringBuilder(), skipped = new StringBuilder();
         List<File> stashes = new ArrayList<>(), vaults = new ArrayList<>(), placed = new ArrayList<>();
+        List<String> characters = new ArrayList<>();
+        ListBefore elysium = null;
         byte[] buffer = new byte[1 << 16];
         int merge;
         try {
@@ -151,14 +159,17 @@ final class SaveTransfer {
                     copyTree(c, tmp, buffer);
                     if (!tmp.renameTo(dst)) throw new IOException("rename " + c.getName());
                     placed.add(dst); append(added, c.getName());
+                    if (isCharacter(c)) characters.add(c.getName());
                 }
             } finally { deleteTree(part); }
+            elysium = elysium(root, save, characters);
             merge = stashes.isEmpty() && vaults.isEmpty() ? MERGE_NONE : fromThisPhone(root, save) ? MERGE_SAME_PHONE : queueMerge(save, stashes, vaults);
         } catch (IOException e) {
             // 撤回这一次已经加进来的（都是手机上原来没有的，删掉就回到导入之前）
             // Take back what this run already added (none of it was on the phone before, so deleting it restores the state before the import)
             StringBuilder kept = new StringBuilder();
             for (File p : placed) { try { deleteTree(p); } catch (IOException ignored) { } if (p.exists()) append(kept, p.getName()); }
+            if (elysium != null) { try { elysium.restore(); } catch (IOException x) { append(kept, ELYSIUM); } }
             if (kept.length() == 0) throw e;
             return new Result(IMPORT_PARTIAL, reason(e), kept.toString(), MERGE_NONE);
         }
@@ -216,6 +227,51 @@ final class SaveTransfer {
         Files.write(new File(part, "import.sha256").toPath(), (digest + "\n").getBytes(StandardCharsets.US_ASCII));
         if (!part.renameTo(entry)) { deleteTree(part); throw new IOException("rename " + entry.getName()); }
         return MERGE_QUEUED;
+    }
+
+    // 极乐世界名单：对这一次导进来的角色（characters）照备份名单设，手机名单里别的名字照旧、顺序不变；名单空了就删掉文件（同 dm_elysium.c list_set）。
+    // 先写 .tmp 再改名，不会留下半份。返回改之前的样子，导入失败时用来还原；没有改动时返回 null
+    // The Elysium list: set from the backup's list for the characters this import adds (characters); the phone's other names stay, in their order;
+    // an empty list deletes the file (as dm_elysium.c list_set does). Written to .tmp and renamed, so no half list is left. Returns how it was before,
+    // to restore it when the import fails; null when nothing changed
+    private static ListBefore elysium(File root, File save, List<String> characters) throws IOException {
+        if (characters.isEmpty()) return null;
+        List<String> backup = readList(new File(root, ELYSIUM));
+        File list = new File(save, ELYSIUM);
+        List<String> phone = readList(list), out = new ArrayList<>();
+        for (String n : phone) if (!characters.contains(n)) out.add(n);
+        for (String n : characters) if (backup.contains(n)) out.add(n);
+        if (out.equals(phone)) return null;
+        ListBefore before = new ListBefore(list, list.isFile() ? Files.readAllBytes(list.toPath()) : null);
+        if (out.isEmpty()) { Files.deleteIfExists(list.toPath()); return before; }
+        StringBuilder text = new StringBuilder();
+        for (String n : out) text.append(n).append('\n');
+        File tmp = new File(list.getPath() + ".tmp");
+        try {
+            Files.write(tmp.toPath(), text.toString().getBytes(StandardCharsets.UTF_8));
+            Files.move(tmp.toPath(), list.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        } finally { Files.deleteIfExists(tmp.toPath()); }
+        return before;
+    }
+
+    // 名单文件逐行读（UTF-8，去掉行尾 \r，跳过空行）；没有文件就是空名单
+    // A list file read line by line (UTF-8, a trailing \r removed, empty lines skipped); no file is an empty list
+    private static List<String> readList(File f) throws IOException {
+        List<String> out = new ArrayList<>();
+        if (!f.isFile()) return out;
+        for (String line : new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8).split("\n")) {
+            if (line.endsWith("\r")) line = line.substring(0, line.length() - 1);
+            if (!line.isEmpty()) out.add(line);
+        }
+        return out;
+    }
+
+    // 名单改之前的内容（null = 原来没有这个文件）
+    // The list's contents before the change (null = the file did not exist)
+    private static final class ListBefore {
+        final File file; final byte[] bytes;
+        ListBefore(File file, byte[] bytes) { this.file = file; this.bytes = bytes; }
+        void restore() throws IOException { if (bytes == null) Files.deleteIfExists(file.toPath()); else Files.write(file.toPath(), bytes); }
     }
 
     // 这次安装的标识：files/save-transfer-id，第一次导出时生成（只在导出时写，平时不多出文件）；卸载时随 App 数据一起没了

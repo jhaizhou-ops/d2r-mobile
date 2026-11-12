@@ -239,6 +239,59 @@ public final class SaveTransferTest {
               check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED && !new File(save, VAULT).exists() && !new File(save, "Zed").exists(), "halfway failure: the copied vault is taken back");
               bad.setReadable(true, false);
           } else System.out.println("SaveTransferTest: running as root, the vault halfway-failure case is skipped"); }
+        // 极乐世界名单：只对这一次导进来的角色照备份设。Ann（备份名单里有）加上；Bob（没有）从手机名单去掉（手机上删掉的同名旧角色留下的）；
+        // yyc 手机上已有、没导，名单不动；手机上的 Old 照旧；备份名单的 \r\n 与空行照读
+        // The Elysium list: set from the backup only for the characters this import adds. Ann (in the backup's list) is added; Bob (not in it) is
+        // removed from the phone's list (left there by a deleted character of the same name); yyc is already on the phone and not imported, so its
+        // entry stays as it is; the phone's Old stays; the backup's \r\n and empty lines are read fine
+        { File d = fresh(base, "elysium"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          character(save, "yyc", "phone"); write(new File(save, "sw_elysium.txt"), "Old\nBob\n");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); character(in, "Bob", "b"); character(in, "yyc", "other");
+          write(new File(in, "sw_elysium.txt"), "Ann\r\n\r\nyyc\r\n");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && "Ann, Bob".equals(r.get(0).path) && "yyc".equals(r.get(0).skipped), "elysium: Ann and Bob imported, yyc skipped");
+          check(read(new File(save, "sw_elysium.txt")).equals("Old\nAnn\n"), "elysium: Ann added, Bob's old entry removed, Old kept, yyc not added");
+          check(!new File(save, "sw_elysium.txt.tmp").exists(), "elysium: no temporary file left"); }
+        // 手机上没有名单：导进来的极乐世界角色新建一份；备份没有名单、手机上也没有：不多出文件；只剩被去掉的名字：文件删掉
+        // No list on the phone: one is created for an imported Elysium character; no list in the backup or on the phone: no file appears; only
+        // removed names left: the file is deleted
+        { File d = fresh(base, "elysium-new"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); write(new File(in, "sw_elysium.txt"), "Ann\n");
+          SaveTransfer.run(game, save, "20261113-120000");
+          check(read(new File(save, "sw_elysium.txt")).equals("Ann\n"), "elysium: list created for the imported character"); }
+        { File d = fresh(base, "elysium-none"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); character(in, "Ann", "a");
+          SaveTransfer.run(game, save, "20261113-120000");
+          check(new File(save, "Ann/Ann.d2s").isFile() && !new File(save, "sw_elysium.txt").exists(), "elysium: no list anywhere, none created"); }
+        { File d = fresh(base, "elysium-empty"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); write(new File(save, "sw_elysium.txt"), "Bob\n");
+          File in = new File(game, "save-import"); character(in, "Bob", "b");
+          SaveTransfer.run(game, save, "20261113-120000");
+          check(new File(save, "Bob/Bob.d2s").isFile() && !new File(save, "sw_elysium.txt").exists(), "elysium: list left empty is deleted"); }
+        // 导出再导回（同一台手机删掉角色后恢复）：名单跟着回来
+        // Export and import back (a character deleted on this phone and restored): the list comes back with it
+        { File d = fresh(base, "elysium-roundtrip"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          character(save, "Ann", "a"); write(new File(save, "sw_elysium.txt"), "Ann\n"); write(new File(game, "export"), "");
+          SaveTransfer.run(game, save, "20261113-120000");
+          File exp = new File(game, "save-export/20261113-120000");
+          check(read(new File(exp, "sw_elysium.txt")).equals("Ann\n"), "elysium: the export carries the list");
+          for (File f : new File(save, "Ann").listFiles()) f.delete();
+          new File(save, "Ann").delete(); new File(save, "sw_elysium.txt").delete();
+          copyDir(exp, new File(game, "save-import"));
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-130000");
+          check(r.size() == 1 && "Ann".equals(r.get(0).path) && read(new File(save, "sw_elysium.txt")).equals("Ann\n"), "elysium: restored character is Elysium again"); }
+        // 名单改过之后导入失败（并回收件箱写不进去）：角色撤回，名单还原成原来的样子
+        // The import fails after the list was changed (the merge inbox cannot be written): the character is taken back and the list is restored
+        { File d = fresh(base, "elysium-fail"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          stash(save, "phone stash"); write(new File(save, "sw_elysium.txt"), "Old\n"); write(new File(save, "_cloudinbox"), "not a folder");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); stash(in, "other stash"); write(new File(in, "sw_elysium.txt"), "Ann\n");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED, "elysium: failure after the list change reported as failed");
+          check(!new File(save, "Ann").exists() && read(new File(save, "sw_elysium.txt")).equals("Old\n") && in.isDirectory(), "elysium: character taken back, list restored, save-import kept"); }
+        { File d = fresh(base, "elysium-fail-new"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          stash(save, "phone stash"); write(new File(save, "_cloudinbox"), "not a folder");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); stash(in, "other stash"); write(new File(in, "sw_elysium.txt"), "Ann\n");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED && !new File(save, "sw_elysium.txt").exists(), "elysium: a list created by the failed import is removed again"); }
         System.out.println("SaveTransferTest OK, checks=" + checks);
     }
 }
