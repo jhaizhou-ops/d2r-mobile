@@ -253,6 +253,7 @@ flowchart LR
 
 | 你的设备 | 怎么做 | 步骤 |
 |---|---|---|
+| iPhone / iPad，手上有 Apple 芯片的 Mac（最省事） | 用 S2Arm 一键出包、装机 | 下面「最省事：用 S2Arm 一键出包」 |
 | iPhone / iPad，手上有 Apple 芯片的 Mac | 从源码完整构建 | 下面「有 Mac：三步」 |
 | iPhone / iPad，没有 Mac | 下载不含游戏内容的壳，在 Windows / Linux 上把游戏内容做进去 | 下面「没有 Mac：壳 + 做包工具」与 [docs/NO_XCODE.zh-CN.md](docs/NO_XCODE.zh-CN.md) |
 | Mac（Apple 芯片） | 出一个原生 macOS App | 下面「在 Mac 上直接玩」与 [docs/MAC.zh-CN.md](docs/MAC.zh-CN.md) |
@@ -269,6 +270,16 @@ iPhone / iPad 的两种做法对比：
 | 说明 | 下面三步 | [docs/NO_XCODE.zh-CN.md](docs/NO_XCODE.zh-CN.md) |
 
 签名用的 Apple 账号：付费的开发者账号功能最全；免费的 Apple ID 也可以（没有 iCloud 存档同步，每 7 天要重新签名重装）。完整的依赖清单见 [docs/DEPENDENCIES.zh-CN.md](docs/DEPENDENCIES.zh-CN.md)。
+
+### 最省事：用 S2Arm 一键出包（推荐）
+
+[S2Arm](https://github.com/jhaizhou-ops/S2Arm) 是我们的通用 Switch 移植启动器，D2R Mobile 是它登记的第一个「下游深度方案」：在 S2Arm 里导出这款游戏时，它会问你用不用 D2R Mobile 方案；选了之后出包的底层就是本仓库，导入、出包、装机、推游戏资源都在 S2Arm 里点按钮完成，不用开终端，也不用自己装做包工具。
+
+1. 在 Apple 芯片的 Mac 上装 S2Arm（[s2arm.com](https://s2arm.com)），按它的环境检查装好缺的组件；在 Xcode 里登录你的 Apple ID（签名用）。
+2. 把你的游戏包（.xci / .nsp，含 1.0.34.0 更新）和 prod.keys 放进 S2Arm。
+3. 在「导出」页勾 iPhone / iPad、点「开始导出」，弹出确认页时选「用 D2R-Mobile 方案」；做完点「装到 iPhone」。手机上会多一个 D2R Mobile App，游戏资源由 S2Arm 推进去，打开直接进主菜单。
+
+现状：iPhone / iPad 已走通（Mac 上出包，Wi-Fi 装到 iPhone 进局）。安卓、鸿蒙、Mac 原生版和 Windows 版 S2Arm 还没接上，走下面各节。S2Arm 用的是本仓库每个发布版附带的 `D2RMobile-s2arm-bundle.zip`，两边的约定见 [docs/S2ARM.zh-CN.md](docs/S2ARM.zh-CN.md)。
 
 ### 有 Mac：三步
 

@@ -253,6 +253,7 @@ Este proyecto está implementado y verificado sobre la edición de Switch 1.0.34
 
 | Tu dispositivo | Cómo | Pasos |
 |---|---|---|
+| iPhone / iPad, con un Mac con Apple silicon (lo más sencillo) | Empaquetar e instalar con un clic en S2Arm | «Lo más sencillo: un clic con S2Arm», más abajo |
 | iPhone / iPad, con un Mac con Apple silicon | Una compilación completa desde el código fuente | «Con un Mac: tres pasos», más abajo |
 | iPhone / iPad, sin Mac | Descarga un contenedor sin contenido del juego y añade tu contenido en Windows / Linux | «Sin un Mac», más abajo, y [docs/NO_XCODE.md](docs/NO_XCODE.md) (en inglés) |
 | Mac (Apple silicon) | Compila una App nativa de macOS | «Jugar directamente en un Mac», más abajo, y [docs/MAC.md](docs/MAC.md) (en inglés) |
@@ -269,6 +270,16 @@ Las dos rutas para iPhone / iPad, comparadas:
 | Instrucciones | Los tres pasos de abajo | [docs/NO_XCODE.md](docs/NO_XCODE.md) (en inglés) |
 
 La cuenta de Apple usada para firmar: una cuenta de desarrollador de pago te da todo; un Apple ID gratuito también sirve (sin sincronización de partidas guardadas por iCloud, y la app tiene que volver a firmarse y reinstalarse cada 7 días). La lista completa de dependencias está en [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (en inglés).
+
+### Lo más sencillo: un clic con S2Arm (recomendado)
+
+[S2Arm](https://github.com/jhaizhou-ops/S2Arm) es nuestro lanzador general para portar juegos de Switch, y D2R Mobile es el primer «port profundo derivado» registrado en él: al exportar este juego en S2Arm, te pregunta si quieres usar la vía de D2R Mobile; si la eliges, el empaquetado por debajo es este repositorio, y la importación, el empaquetado, la instalación y el envío de los recursos del juego son botones en S2Arm, sin terminal ni herramientas que instalar.
+
+1. Instala S2Arm en un Mac con Apple silicon ([s2arm.com](https://s2arm.com)) y deja que su comprobación del entorno instale lo que falte; inicia sesión con tu Apple ID en Xcode (para firmar).
+2. Añade a S2Arm tu paquete del juego (.xci / .nsp, con la actualización 1.0.34.0) y tu prod.keys.
+3. En la página Export marca iPhone / iPad y pulsa «Export»; cuando aparezca la página de confirmación, elige «Use D2R-Mobile»; al terminar pulsa «Install on iPhone» (la interfaz de S2Arm está en inglés y en chino). Tu teléfono tendrá una app D2R Mobile aparte, S2Arm le envía los recursos del juego y se abre directamente en el menú principal.
+
+Estado: iPhone / iPad funciona de principio a fin (empaquetado en un Mac, instalado en un iPhone por Wi-Fi, dentro de la partida). Android, HarmonyOS, la versión nativa para Mac y S2Arm en Windows aún no están conectados; usa las secciones siguientes. S2Arm usa el `D2RMobile-s2arm-bundle.zip` adjunto a cada versión de este repositorio; el acuerdo entre ambos está en [docs/S2ARM.md](docs/S2ARM.md) (en inglés).
 
 ### Con un Mac: tres pasos
 

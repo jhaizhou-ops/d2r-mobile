@@ -17,6 +17,10 @@ about: 构建不过、装不上、进不了游戏、游戏里的毛病 / Build f
 <!-- 准备游戏文件 / ./setup.sh / ./run.sh build / 不用 Xcode 的工具 / 装机 / 启动 / 游戏里 -->
 <!-- preparing game files / ./setup.sh / ./run.sh build / the no-Xcode tool / installing / launching / in game -->
 
+**用什么出的包 / How the package was made**
+<!-- S2Arm 一键出包（写 S2Arm 版本号）/ 从源码 Xcode 构建 / 壳 + 做包工具 / 安卓导入包 / 鸿蒙运行包 -->
+<!-- S2Arm one-click (with the S2Arm version) / Xcode build from source / shell + packing tool / Android import pack / HarmonyOS run pack -->
+
 **你的环境 / Your setup**
 - 电脑与系统 / Computer and OS:
 - Xcode 版本（如果用了）/ Xcode version (if used):
