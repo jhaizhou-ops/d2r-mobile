@@ -800,6 +800,11 @@ static void run_mode(void) {
     else if (!strcmp(m, "tsd")) probe_tsd();
     else if (!strcmp(m, "msl")) probe_msl();
     else if (!strcmp(m, "blank")) { plog("blank：空白 Metal 60 帧清屏（发热负对照）"); return; }   // 一直跑到被停 | Runs until stopped
+    else if (!strcmp(m, "s2a-pack")) {   // 只解 S2Arm 推来的资源包，解完退出（结果在 Documents/unpack.log，推送端读它） | only unpack the resource pack S2Arm pushed, then exit (result in Documents/unpack.log, read by the pusher)
+        int dm_s2a_pack_apply(const char *docs);
+        int rc = dm_s2a_pack_apply(NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0].fileSystemRepresentation);
+        plog("s2a-pack：%s", rc ? "解包失败（原因见 unpack.log）" : "解开了"); exit(rc ? 1 : 0);
+    }
     else plog("未知模式 %s", m);
     plog("DONE");
 }
@@ -1249,6 +1254,9 @@ int main(int argc, char *argv[]) {
         if (was < want) { rl.rlim_cur = want; int rc = setrlimit(RLIMIT_NOFILE, &rl); fprintf(stderr, "boot: 文件描述符软上限 %llu → %llu（%s）\n", (unsigned long long)was, (unsigned long long)want, rc ? "失败" : "已设"); g_nofile_was = (int)was; g_nofile_now = rc ? (int)was : (int)want; } else g_nofile_was = g_nofile_now = (int)was; } }
     g_mode = @"boot";   // 缺省 = 玩家点图标 = 起游戏。原缺省是早期探针 anon（匿名页写后执行），TestFlight 版点图标即被代码签名杀掉（崩溃日志 CODESIGNING Invalid Page）；探针须显式 -mode anon | Default = player taps the icon = start the game. The old default was the early probe anon (write to an anonymous page then execute); in the TestFlight build tapping the icon got it killed by code signing right away (crash log CODESIGNING Invalid Page); the probe now requires an explicit -mode anon
     for (int i = 1; i + 1 < argc; i++) if (!strcmp(argv[i], "-mode")) g_mode = @(argv[i + 1]);
+    // S2Arm 启动器推完资源包起一次 App 只解包（S2A_PACK_APPLY_ONLY=1，约定见 s2a_pack_apply.c）：走探针模式那条路——屏上只标一行、不起宿主，后台解完即退
+    // The S2Arm launcher launches the App once to unpack the pushed resource pack only (S2A_PACK_APPLY_ONLY=1, convention in s2a_pack_apply.c): it takes the probe-mode path -- one line on screen, no host, exits once unpacked in the background
+    { const char *pa = getenv("S2A_PACK_APPLY_ONLY"); if (pa && !strcmp(pa, "1")) g_mode = @"s2a-pack"; }
     // -mode thermal：轻探温——只读系统温控档位写一行就退出，不起宿主、不建窗口 / Metal 层（原先探温要拉起主菜单 60 帧渲染 20 s，探温本身在给手机加热）。
     // 输出到标准输出（devicectl launch --console 可见）并落 Documents/thermal.txt（整份原子替换，一行：档位 + 本次时刻）
     // -mode thermal: lightweight thermal probe; only reads the system thermal state, writes one line and exits, without starting the host or creating a window / Metal layer (the probe used to bring up the main menu rendering at 60 fps for 20 s, so the probe itself was heating the phone).
