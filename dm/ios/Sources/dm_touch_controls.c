@@ -1,6 +1,7 @@
 #include "dm_touch_controls.h"
 #include "../../host/dm_input.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <stdatomic.h>
@@ -160,6 +161,19 @@ static void update_aim(dm_tc_state *s) {
     s->ry = (int32_t)lroundf(fmaxf(-1, fminf(1, dy))*DM_STICK_MAX);
 }
 
+/* 摇杆满偏需要的手指行程（点）。用 DM_TOUCH_STICK_TRAVEL 可以在不重编的情况下试手感：写进 files/dm/env 再重启 App。
+   Default travel (points) for full stick deflection. DM_TOUCH_STICK_TRAVEL lets the feel be tried without rebuilding:
+   put it in files/dm/env and restart the app. */
+static float stick_travel(void) {
+    static float v = -1;
+    if (v < 0) {
+        const char *e = getenv("DM_TOUCH_STICK_TRAVEL");
+        v = e ? (float)atof(e) : 30.0f;
+        if (!(v >= 12.0f && v <= 60.0f)) v = 30.0f;
+    }
+    return v;
+}
+
 static void update(dm_tc_state *s) {
     s->buttons = 0;
     for (int i = 0; i < DM_TC_MAX_TOUCH; ++i) {
@@ -224,6 +238,7 @@ static void update(dm_tc_state *s) {
     }
     update_aim(s);
     s->lx = s->ly = 0;
+    s->joy_px = s->joy_py = 0;   /* 没推摇杆：摇杆头回底盘中心 | no stick: the thumb sits back at the base centre */
     if (s->joy_slot < 0) return;
     dm_tc_finger *f = &s->finger[s->joy_slot];
     float dx = f->x-s->joy_touch_x, dy = s->joy_touch_y-f->y;   /* 相对落点，不相对底盘圆心：夹回只影响底盘画在哪，不进算法（贴角落指时圆心在手指右上方，按圆心算会出现手指往右、人往下） | relative to the touch point, not the base centre: clamping only affects where the base is drawn and does not enter the computation (touching down in a corner puts the centre to the upper right of the finger, and computing from the centre would make the character move down while the finger moves right) */
@@ -232,10 +247,19 @@ static void update(dm_tc_state *s) {
        Input travel does not follow the visual enlargement on large screens: the thumb does not grow with the screen. Full deflection 60 points, dead zone 6 points, same on phone and iPad
               (it used to be multiplied by the visual factor, so a 12.9-inch iPad needed a 105-point ≈ 20 mm push for full deflection, twice the phone's). The size of the base and the stick head is still drawn by the visual factor. */
     float in_k = fminf(1.0f, scale_for(&s->layout));
-    float distance = hypotf(dx, dy), radius = 60 * in_k;
+    float distance = hypotf(dx, dy), radius = stick_travel() * in_k;
     float dead = 6 * in_k;
     if (distance <= dead || radius <= dead) return;
-    float strength = fminf(1, (distance-dead)/(radius-dead));
+    /* A 档手感（用户拍板 2026-11-13）：满偏行程从 60 点缩到 30 点（DM_TOUCH_STICK_TRAVEL 可调），
+       再走开方曲线——手指推一两毫米人物就开始走，30 点内就到满速，反向也只要跨 60 点，微操不用抬手重按。
+       底盘与摇杆头的视觉大小不变，摇杆头另行按手指真实位置画（joy_px/joy_py），所以不会出现头跑到手指前面。
+       Feel profile A (user's call, 2026-11-13): full deflection now takes 30 points of travel instead of 60 (tunable via
+       DM_TOUCH_STICK_TRAVEL), with a square-root curve on top: a couple of millimetres already moves the character and
+       30 points reaches full speed, so reversing needs only a 60-point sweep and micro-control does not need lifting the
+       finger. The base and thumb keep their visual size; the thumb is drawn from the real finger position (joy_px/joy_py),
+       so it never runs ahead of the finger. */
+    float t = fminf(1, (distance-dead)/(radius-dead));
+    float strength = sqrtf(t);
     /* 斜向预修正：原版把摇杆做纯 45° 旋转成世界方向、不补偿等距画面的 2:1，人实际走的屏幕角 = atan(tan(摇杆角) / 2)（推 45° 走 26.6°）。
        手柄玩家看不见摇杆和画面的对应，触屏上手指画的就是屏幕方向，所以送值前把纵向放大 2 倍再缩回原幅度：屏幕角 = 手指角，推多深不变。
        只动游戏态的移动摇杆（导航态没有摇杆值；技能方向走右轴，不经这里）
@@ -246,6 +270,11 @@ static void update(dm_tc_state *s) {
     if (g_iso_fix) { float n = hypotf(ex, 2*ey); ex /= n; ey = 2*ey/n; }
     s->lx = (int32_t)lroundf(ex * strength * DM_STICK_MAX);
     s->ly = (int32_t)lroundf(ey * strength * DM_STICK_MAX);
+    /* 摇杆头按手指真实位置画：行程缩短后如果仍用 lx/ly，头会跑到手指前面（30 点就贴边）。
+       The thumb follows the real finger position: with the shortened travel, drawing from lx/ly would put the thumb
+       at the rim while the finger is still well inside. */
+    float dv = fminf(1.f, distance / (60 * in_k));
+    s->joy_px = ex * dv; s->joy_py = ey * dv;
 }
 
 static int pointer_finger(const dm_tc_state *s, const dm_tc_finger *f) {

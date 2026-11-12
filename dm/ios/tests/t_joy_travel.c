@@ -1,4 +1,4 @@
-/* 移动摇杆：输入行程不跟大屏视觉放大走；iPad 屏幕底边归系统的那一条不起摇杆。期望值按公式手算：幅度 = (位移 − 6) / (60 − 6)，满幅 32767。 | Movement stick: the input travel does not follow the visual scale-up on large screens; the strip at the iPad screen bottom edge that belongs to the system does not start the stick. Expected values are hand-computed from the formula: magnitude = (displacement − 6) / (60 − 6), full scale 32767. */
+/* 移动摇杆：输入行程不跟大屏视觉放大走；iPad 屏幕底边归系统的那一条不起摇杆。期望值按公式手算：幅度 = sqrt((位移 − 6) / (30 − 6))（满偏行程 30 点 + 开方曲线），满幅 32767。 | Movement stick: the input travel does not follow the visual scale-up on large screens; the strip at the iPad screen bottom edge that belongs to the system does not start the stick. Expected values are hand-computed from the formula: magnitude = sqrt((displacement − 6) / (30 − 6)) (30-point travel with a square-root curve), full scale 32767. */
 #include "dm_touch_controls.h"
 #include "../../host/dm_input.h"
 #include <stdio.h>
@@ -15,9 +15,9 @@ int main(void) {
     for (int i = 0; i < 3; ++i) {
         float w = size[i][0], h = size[i][1];
         CHECK(push(&s, w, h, 6) == 0);                                   /* 死区 6 点 | Dead zone 6 points */
-        CHECK(abs(push(&s, w, h, 20) - 8495) <= 1);                      /* 14 / 54 × 32767 = 8495.1 */
+        CHECK(abs(push(&s, w, h, 20) - 25032) <= 2);                     /* sqrt(14 / 24) × 32767 = 25032 */
         CHECK(abs(push(&s, w, h, 33) - 16384) <= 1);                     /* 27 / 54 = 一半 | 27 / 54 = half */
-        CHECK(push(&s, w, h, 60) == DM_STICK_MAX);                       /* 60 点满偏 | 60 points for full deflection */
+        CHECK(push(&s, w, h, 60) == DM_STICK_MAX);                       /* 30 点满偏（推过也仍是满幅） | 30 points for full deflection (pushing further stays at full scale) */
         CHECK(push(&s, w, h, 105) == DM_STICK_MAX);
         CHECK(abs(push(&s, w, h, -20) + 8495) <= 1);
     }
