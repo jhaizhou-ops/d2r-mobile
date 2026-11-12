@@ -14,7 +14,8 @@ def generate(output):
     table = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(table)
     shared = {"dmInputTitle", "dmNameTitle", "dmNameRule", "dmQtyTitle", "dmNameBlankRandom",
-              "dmNamePickIme", "dmNameTooShort", "dmNameEdge", "dmCancel", "dmConfirm", "dmTcCancel", "dmHudLife", "dmHudMana"}
+              "dmNamePickIme", "dmNameTooShort", "dmNameEdge", "dmCancel", "dmConfirm", "dmTcCancel", "dmHudLife", "dmHudMana",
+              "dmPauseShareLog", "dmShareLogFile"}
     rows = [r for r in table.rows() if r[0].startswith("dmAndroid") or r[0] in shared]
     # 葡语用 values-pt（系统 pt-BR / pt-PT 都会落到这一份；项目把 pt 统一映射到原版 ptBR）
     # Portuguese goes to values-pt (both pt-BR and pt-PT systems fall back to it; the project maps every pt to the original ptBR)
@@ -24,7 +25,9 @@ def generate(output):
             value = escape(row[column]).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n")
             # 多参数C格式由Java显式格式化，避免资源编译器误判非位置参数。
             # Java formats shared multi-argument C strings explicitly; skip Android's positional-format check.
-            attribute = ' formatted="false"' if row[0] in {"dmHudLife", "dmHudMana", "dmAndroidHudLevel"} else ''
+            # dmShareLogFile 的两个 %@ 是 iOS 的占位符，DmActivity 按顺序换成版本与时间。
+            # dmShareLogFile's two %@ are iOS placeholders; DmActivity replaces them in order with the version and the time.
+            attribute = ' formatted="false"' if row[0] in {"dmHudLife", "dmHudMana", "dmAndroidHudLevel", "dmShareLogFile"} else ''
             lines.append(f'    <string name="{row[0]}"{attribute}>{value}</string>')
         lines.append('</resources>')
         directory = output / folder

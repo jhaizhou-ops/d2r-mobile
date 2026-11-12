@@ -8,7 +8,7 @@
 
 static JavaVM *vm;
 static jclass activity_class;
-static jmethodID show_input, report_failure;
+static jmethodID show_input, report_failure, share_log;
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t input_done = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t work_ready = PTHREAD_COND_INITIALIZER;
@@ -20,6 +20,7 @@ typedef struct input_job {
     jlong id;
     char *strings[4];
     int max_chars, name_rule, numeric_max, failure_code;
+    int share;   // 1 = 分享诊断日志，strings[0] 是 boot.log 路径 | 1 = share diagnostics, strings[0] is the boot.log path
 } input_job;
 static input_job *jobs_head, *jobs_tail;
 
@@ -82,7 +83,11 @@ static void *input_worker(void *unused) {
         pthread_mutex_unlock(&input_lock);
         // 不持锁调用 Java：无 Activity 时 Java 会同步回调取消，持锁会死锁。
         // Never call Java while locked: the no-Activity path cancels synchronously.
-        if (!job->id) {
+        if (job->share) {
+            jstring path = utf8_string(env, job->strings[0]);
+            if (path && !(*env)->ExceptionCheck(env)) (*env)->CallStaticVoidMethod(env, activity_class, share_log, path);
+            if (path) (*env)->DeleteLocalRef(env, path);
+        } else if (!job->id) {
             (*env)->CallStaticVoidMethod(env, activity_class, report_failure, job->failure_code);
         } else {
             jstring strings[4] = {0};
@@ -117,6 +122,14 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *java_vm, void *reserved) {
         "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;III)V");
     report_failure = (*env)->GetStaticMethodID(env, activity_class, "showNativeFailure", "(I)V");
     if (!show_input || !report_failure) return JNI_ERR;
+    // 分享诊断日志可有可无：找不到这个方法（例如以后开了代码精简把它当没人用的删了）时 App 照常启动，只是按钮没反应
+    // Share Diagnostics is optional: when the method is not found (for example if code shrinking is ever turned on and drops it as unused)
+    // the App starts as usual and only the button does nothing
+    share_log = (*env)->GetStaticMethodID(env, activity_class, "shareDiagnostics", "(Ljava/lang/String;)V");
+    if (!share_log) {
+        (*env)->ExceptionClear(env);
+        __android_log_print(ANDROID_LOG_ERROR, "dm-input", "DmActivity.shareDiagnostics not found: Share Diagnostics is off");
+    }
     vm = java_vm;
     pthread_t worker;
     if (pthread_create(&worker, NULL, input_worker, NULL)) worker_state = -1;
@@ -133,6 +146,22 @@ void front_android_boot_failed(int code) {
     if (worker_state > 0) { enqueue(job); job = NULL; }
     pthread_mutex_unlock(&input_lock);
     if (job) free_job(job);
+}
+
+// 分享诊断日志：交给工作线程去调 Java，自己不等（在游戏主线程上被调，见 jni_android.c share_log）。工作线程起不来时只记一行
+// Share diagnostics: hand it to the worker thread to call Java, without waiting (called on the game main thread, see jni_android.c
+// share_log). When the worker thread failed to start, only a log line is written
+void front_android_share_log(const char *log_path) {
+    if (!share_log) { __android_log_print(ANDROID_LOG_ERROR, "dm-input", "share diagnostics: no Java method"); return; }
+    input_job *job = calloc(1, sizeof *job);
+    if (!job) return;
+    job->share = 1;
+    job->strings[0] = strdup(log_path ? log_path : "");
+    if (!job->strings[0]) { free_job(job); return; }
+    pthread_mutex_lock(&input_lock);
+    if (worker_state >= 0) { enqueue(job); job = NULL; }
+    pthread_mutex_unlock(&input_lock);
+    if (job) { __android_log_print(ANDROID_LOG_ERROR, "dm-input", "share diagnostics: no worker thread"); free_job(job); }
 }
 
 int front_android_text_input(const char *title, const char *sub, const char *guide,
