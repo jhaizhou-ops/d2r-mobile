@@ -121,6 +121,39 @@ def place_xlate(xl, z=None):
 XLATE_IN_SHELL = 'Tools/dmsh_xlate/'
 
 
+# 手机上要的游戏资源档案：与宿主 host/romfs_validate.c 的 need[] 同一份（dm/tools/tests/test_s2arm_pack.py 核两处一致）
+# The game resource archives the phone needs: the same list as need[] in host/romfs_validate.c (dm/tools/tests/test_s2arm_pack.py checks the two agree)
+PHONE_ARCHIVES = ['00-00000001.data', '00-00000002.data', '00-00000003.data', '00-00000004.data', '00-00000005.data', '00-00000006.data',
+                  '01-00000001.data', '01-00000002.data', '02-00000001.data', '02-00000002.data', '03-00000001.data', '03-00000002.data',
+                  '04-00000001.data', '04-00000002.data', '05-00000001.data', '05-00000002.data', '17-00000001.data', '17-00000002.data']
+
+
+def s2arm_pack(romfs, dst):
+    """S2Arm 资源包（S2Arm 启动器照它推进手机，App 按 S2A_PACK_APPLY_ONLY 解开，见 ios/Sources/s2a_pack_apply.c）：
+    <dst>/data/<档名>（APFS 克隆，不占新空间；跨卷 / 别的系统退回普通拷贝）+ index.tsv（路径 \t 字节数 \t SHA-256）+ manifest.json（version 2、index_sha256 = index.tsv 文本的 SHA-256），清单最后写
+    | An S2Arm resource pack (the S2Arm launcher pushes it to the phone as is, and the App unpacks it under S2A_PACK_APPLY_ONLY, see ios/Sources/s2a_pack_apply.c):
+    <dst>/data/<archive> (APFS clone, no new space; a plain copy across volumes / on other systems) + index.tsv (path \t bytes \t SHA-256) + manifest.json (version 2, index_sha256 = SHA-256 of the index.tsv text), manifest written last"""
+    os.makedirs(os.path.join(dst, 'data'), exist_ok=True)
+    m = os.path.join(dst, 'manifest.json')
+    if os.path.exists(m): os.remove(m)   # 更新期间标成不完整 | marked incomplete while updating
+    rows, total = [], 0
+    for n in PHONE_ARCHIVES:
+        src, out = os.path.join(romfs, 'data', n), os.path.join(dst, 'data', n)
+        if not os.path.isfile(src): die('游戏资源里缺 %s（%s）' % (n, src))
+        if not (os.path.isfile(out) and os.path.getsize(out) == os.path.getsize(src)):
+            if os.path.exists(out): os.remove(out)
+            if not (sys.platform == 'darwin' and subprocess.run(['cp', '-c', src, out], stderr=subprocess.DEVNULL).returncode == 0): shutil.copyfile(src, out)
+        h = hashlib.sha256()
+        with open(out, 'rb') as f:
+            for b in iter(lambda: f.read(8 << 20), b''): h.update(b)
+        size = os.path.getsize(out); total += size; rows.append('data/%s\t%d\t%s\n' % (n, size, h.hexdigest()))
+    index = ''.join(rows)
+    with open(os.path.join(dst, 'index.tsv'), 'w', encoding='utf-8', newline='\n') as f: f.write(index)
+    with open(m + '.tmp', 'w', encoding='utf-8') as f: json.dump({'version': 2, 'files': len(rows), 'total': total, 'index_sha256': hashlib.sha256(index.encode()).hexdigest()}, f, indent=1)
+    os.replace(m + '.tmp', m)
+    return len(rows), total
+
+
 def have_metal():   # 这台机器上有没有苹果的 Metal 着色器编译器（只有装了 Xcode 的 Mac 有） | whether this machine has Apple's Metal shader compiler (only a Mac with Xcode installed has it)
     if sys.platform != 'darwin': return False
     try: return subprocess.run(['xcrun', '-sdk', 'iphoneos', 'metal', '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
@@ -292,6 +325,10 @@ def main():
                 zi.external_attr = (0o755 if os.path.basename(f) == 'Guest' else 0o644) << 16; o.writestr(zi, open(f, 'rb').read()); added += 1
     os.replace(tmp, out_ipa)
     say('好了：%s（%.0f MB，放进去 %d 个文件）。下一步：用自签工具给它签名装机（见 docs 里的说明）；这个安装包里有游戏内容，请只自己用' % (out_ipa, os.path.getsize(out_ipa) / 1048576, added))
+    # S2Arm 启动器出包时顺带出 S2Arm 资源包（D2RM_S2ARM_PACK=<目录>），它装机后按自己的推送把资源放进手机 | when the S2Arm launcher packs, also write an S2Arm resource pack (D2RM_S2ARM_PACK=<dir>) that it pushes to the phone after installing
+    sp = os.environ.get('D2RM_S2ARM_PACK', '').strip()
+    if sp:
+        n, total = s2arm_pack(romfs, os.path.abspath(sp)); say('S2Arm 资源包：%s（%d 个档案，%.2f GB）' % (sp, n, total / 1e9))
 
 
 if __name__ == '__main__': main()
