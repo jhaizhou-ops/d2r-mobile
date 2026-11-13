@@ -281,6 +281,26 @@ static void absorb_push(uint32_t id) { unsigned w = atomic_load(&g_absw); if (w 
 // ---- Auto stow: record the ids of runes / gems on the ground -> auto pick up (runes up to No. 18, all gems, within PICK_R tiles) -> any recorded id that enters the inventory is handed to the server to stow
 typedef struct { uint32_t id, code; uint64_t fr; int st; } pick;   // st 1 = 发了捡起包，2 = 交服务端收了 | st 1 = pick-up packet sent, 2 = handed to the server to stow
 static pick g_pk[16];
+// 高级仓库里这种符文那一叠已经叠满（99）：不自动捡（#262：叠满之后捡起来的进不了仓库，只会在百宝囊里越攒越多）。宝石照捡（提需求的玩家要留着）。
+// 客户端读：玩家的高级仓库单位（adv_stash_unit）在客户端单位表 main+0x2d603a0 里按类型 0 的桶找（+8 单位号、+0 类型、+0x158 下一个），
+// 它的物品栏链表同 bag_item，叠数 = 物品数据 +0x9c（同服务端 adv_stack_full）。找不到单位或物品栏时照常捡
+// The stack of this rune in the advanced stash is already full (99): do not auto-pick it (#262: once the stack is full, picked-up runes cannot
+// go into the stash and only pile up in the pouch). Gems are still picked up (the player who asked wants to keep them).
+// Read on the client: the player's advanced stash unit (adv_stash_unit) is found in the client unit table main+0x2d603a0 in the type 0 buckets
+// (+8 unit id, +0 type, +0x158 next); its item list is walked as in bag_item, and the stack count is item data +0x9c (as in the server's
+// adv_stack_full). When the unit or its item container is not found, the rune is picked up as usual
+static int rune_stack_full(uint64_t pl, uint64_t it) {
+    if (!((int (*)(uint64_t, int))(B + 0x574bc0))(it, T_RUNE)) return 0;
+    uint32_t sid = adv_stash_unit(pl), code = item_code(it); if (!sid) return 0;
+    for (uint64_t u = *(uint64_t *)(B + 0x2d603a0 + 8 * (sid & 0x7f)); u; u = *(uint64_t *)(u + 0x158)) {
+        if (*(uint32_t *)(u + 8) != sid || *(uint32_t *)u != 0) continue;
+        uint64_t iv = *(uint64_t *)(u + 0x90); if (!iv || *(uint32_t *)iv != 0x01020304) return 0;
+        for (uint64_t x = *(uint64_t *)(iv + 0x10), k = 0; x && k < 2048; k++) { uint64_t d = *(uint64_t *)(x + 0x10); if (!d) break;
+            if (item_code(x) == code && *(uint8_t *)(d + 0x9c) >= 99) return 1; x = *(uint64_t *)(d + 0xb0); }
+        return 0;
+    }
+    return 0;
+}
 static uint32_t g_gnd[128]; static int g_ngnd;   // 在地上见过的符文 / 宝石 id（环形）：玩家自己捡起来的也认；从仓库取出来的不在这里，不收 | Ids of runes / gems seen on the ground (ring buffer): those the player picks up themselves are recognized too; those taken out of the stash are not in here and are not stowed
 static int gnd_has(uint32_t id) { for (int i = 0; i < 128; i++) if (g_gnd[i] == id) return 1; return 0; }
 static void gnd_add(uint32_t id) { if (!gnd_has(id)) g_gnd[g_ngnd++ % 128] = id; }
@@ -314,6 +334,12 @@ static void auto_pick(uint64_t pl, uint64_t fr) {
         uint32_t id = *(uint32_t *)(it + 8); gnd_add(id);
         uint64_t ip = *(uint64_t *)(it + 0x38); if (want || !ip) continue; int x = *(int32_t *)(ip + 0x10), y = *(int32_t *)(ip + 0x14);
         if (abs(x - px) > PICK_R || abs(y - py) > PICK_R || !auto_ok(it)) continue;
+        // 每件只记一行（地上躺着几件时轮流命中，只记上一件会每 10 帧刷一行）
+        // One log line per item (with several on the ground they alternate; remembering only the last one logged a line every 10 frames)
+        if (rune_stack_full(pl, it)) {
+            static uint32_t told[32]; static int nt; int seen_full = 0; for (int i = 0; i < 32; i++) if (told[i] == id) seen_full = 1;
+            if (!seen_full) { told[nt++ % 32] = id; LOG("百宝囊：地上 %.3s（id %u）高级仓库那一叠已满 99 → 不自动捡", (const char *)&(uint32_t){ item_code(it) }, id); }
+            continue; }
         { int dm_lootfilter_hidden(uint8_t *, uint64_t); if (dm_lootfilter_hidden(B, it)) continue; }   // 被原版掉落过滤藏着的不自动捡（现行规则不藏符文宝石，守的是以后改规则） | items hidden by the game's loot filter are not auto-picked (current rules do not hide runes or gems; this guards future rule changes)
         int seen = 0; for (int i = 0; i < 16; i++) if (g_pk[i].id == id && (g_pk[i].st || fr - g_pk[i].fr < 120)) seen = 1;
         if (!seen) { want = id; wx = x; wy = y; wcode = item_code(it); }
