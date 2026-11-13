@@ -9,6 +9,7 @@ import java.util.List;
 /** 只在临时目录里造假存档，不碰玩家目录。 | Builds fake saves in a temporary directory only; never touches a player's directory. */
 public final class SaveTransferTest {
     private static int checks;
+    private static final String VAULT = "ModernSharedStashSoftCoreV2.swvault";
     private static void check(boolean value, String label) { ++checks; if (!value) throw new AssertionError(label); }
     private static void write(File f, String text) throws IOException { f.getParentFile().mkdirs(); Files.write(f.toPath(), text.getBytes(StandardCharsets.UTF_8)); }
     private static String read(File f) throws IOException { return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }
@@ -130,6 +131,167 @@ public final class SaveTransferTest {
           File[] inbox = new File(save2, "_cloudinbox").listFiles();
           check(r.size() == 1 && r.get(0).merge == SaveTransfer.MERGE_QUEUED && inbox != null && inbox.length == 1, "another phone: stash merged");
           check(!new File(d2, "files/save-transfer-id").exists() && read(new File(save2, "yyc/yyc.d2s")).equals("v"), "importing writes no id; the character is added"); }
+        // 只有游戏设置的 save-import：算存档，手机上没有设置就导进来，有了就报「已在手机上」，不当成认不出改名 rejected
+        // A save-import holding only the game settings: counts as saves; imported when the phone has no settings, reported as already on the phone otherwise, not renamed to rejected
+        { File d = fresh(base, "settings-new"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          write(new File(game, "save-import/Settings/Settings.json"), "{\"lang\":1}");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261104-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && "Settings".equals(r.get(0).path) && read(new File(save, "Settings/Settings.json")).equals("{\"lang\":1}"), "settings-only import onto a phone without settings");
+          check(new File(game, "save-import.done-20261104-120000").isDirectory() && !new File(game, "save-import.rejected-20261104-120000").exists(), "settings-only import renamed done"); }
+        { File d = fresh(base, "settings-have"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); write(new File(save, "Settings/Settings.json"), "phone");
+          write(new File(game, "save-import/Settings/Settings.json"), "backup");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261104-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && r.get(0).path == null && "Settings".equals(r.get(0).skipped) && read(new File(save, "Settings/Settings.json")).equals("phone"), "settings-only import onto a phone with settings: skipped, not rejected"); }
+        // 中途失败：先导的 Ann 拷好了，Bob 有个文件读不出 → Ann 撤回，存档回到导入之前，save-import 留着下次再导
+        // Failing halfway: Ann (first by name) is copied, one of Bob's files cannot be read -> Ann is taken back, the saves are as before, save-import stays for next time
+        { File d = fresh(base, "halfway"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); character(in, "Bob", "b");
+          File bad = new File(in, "Bob/Bob.key");
+          if (bad.setReadable(false, false) && !bad.canRead()) {
+              List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261104-120000");
+              check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED, "halfway failure reported as failed");
+              check(!new File(save, "Ann").exists() && !new File(save, "Bob").exists() && read(new File(save, "yyc/yyc.d2s")).equals("v"), "halfway failure: the already-added character is taken back");
+              check(in.isDirectory() && !new File(d, "files/save.import.part").exists(), "halfway failure: save-import kept, part gone");
+              bad.setReadable(true, false);
+          } else System.out.println("SaveTransferTest: running as root, the halfway-failure case is skipped"); }
+        // 编年史仓库侧文件 <共享仓库名>.swvault（存档根的单个文件，#241）：导出带上；刚装好的手机导入时拷进来
+        // The Chronicle stash side file <shared stash name>.swvault (a single file at the saves root, #241): the export carries it; importing onto a fresh phone copies it in
+        { File d = fresh(base, "vault-fresh"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          character(save, "Bob", "b"); stash(save, "s"); write(new File(save, VAULT), "vault items");
+          write(new File(game, "export"), "");
+          check(SaveTransfer.run(game, save, "20261107-120000").get(0).kind == SaveTransfer.EXPORTED, "vault: export");
+          File exp = new File(game, "save-export/20261107-120000");
+          check(read(new File(exp, VAULT)).equals("vault items"), "vault: the export carries the Chronicle stash side file");
+          File d2 = fresh(base, "vault-fresh-2"), game2 = new File(d2, "D2R Mobile"), save2 = new File(d2, "files/save");
+          copyDir(exp, new File(game2, "save-import/20261107-120000"));
+          List<SaveTransfer.Result> r = SaveTransfer.run(game2, save2, "20261107-130000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && r.get(0).merge == SaveTransfer.MERGE_NONE && r.get(0).path.contains(VAULT), "vault: fresh import result lists the vault");
+          check(read(new File(save2, VAULT)).equals("vault items") && read(new File(save2, "ModernSharedStashSoftCoreV2/ModernSharedStashSoftCoreV2.d2i")).equals("s")
+                && read(new File(save2, "Bob/Bob.d2s")).equals("b"), "vault: fresh import copies the vault next to the stash");
+          check(!new File(d2, "files/save.import.part").exists(), "vault: part gone"); }
+        // 只有侧文件的 save-import（从旧导出里只拿编年史那份补回来）：认得出、拷进来，不碰共享仓库、不进收件箱
+        // A save-import holding only the side file (restoring just the Chronicle from an older export): recognised and copied in, the shared stash untouched, nothing queued
+        { File d = fresh(base, "vault-only"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          character(save, "yyc", "v"); stash(save, "phone stash");
+          write(new File(game, "save-import/" + VAULT), "vault items");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261107-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && VAULT.equals(r.get(0).path) && r.get(0).merge == SaveTransfer.MERGE_NONE, "vault-only import accepted");
+          check(read(new File(save, VAULT)).equals("vault items") && read(new File(save, "ModernSharedStashSoftCoreV2/ModernSharedStashSoftCoreV2.d2i")).equals("phone stash")
+                && !new File(save, "_cloudinbox").exists(), "vault-only import: vault in, stash untouched, nothing queued");
+          check(new File(game, "save-import.done-20261107-120000").isDirectory(), "vault-only import renamed done"); }
+        // 手机上已有侧文件：内容一样什么都不做；不一样就进并回收件箱（包里路径 = 文件名），手机上那份不动
+        // The phone already has a side file: the same contents do nothing; different ones go to the merge inbox (path in the pack = the file name), the phone's copy untouched
+        { File d = fresh(base, "vault-have"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          stash(save, "phone stash"); write(new File(save, VAULT), "phone vault");
+          write(new File(game, "save-import/" + VAULT), "phone vault");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261107-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && r.get(0).path == null && r.get(0).merge == SaveTransfer.MERGE_NONE && !new File(save, "_cloudinbox").exists(), "same vault: nothing to do");
+          write(new File(game, "save-import/" + VAULT), "other vault");
+          r = SaveTransfer.run(game, save, "20261107-130000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && r.get(0).merge == SaveTransfer.MERGE_QUEUED, "different vault: merge queued");
+          check(read(new File(save, VAULT)).equals("phone vault"), "different vault: the phone's vault untouched");
+          File[] entries = new File(save, "_cloudinbox").listFiles();
+          check(entries != null && entries.length == 1, "different vault: one inbox entry");
+          java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(Files.readAllBytes(new File(entries[0], "mine.pack").toPath())).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+          bb.position(20); int nf = bb.getInt(); int pl = bb.getShort() & 0xffff; byte[] pth = new byte[pl]; bb.get(pth); bb.getLong(); byte[] body = new byte[bb.getInt()]; bb.get(body);
+          check(nf == 1 && new String(pth, StandardCharsets.UTF_8).equals(VAULT) && new String(body, StandardCharsets.UTF_8).equals("other vault") && !bb.hasRemaining(), "different vault: pack holds the backup's vault at the root");
+          write(new File(game, "save-import/" + VAULT), "other vault");
+          r = SaveTransfer.run(game, save, "20261107-140000");
+          check(r.get(0).merge == SaveTransfer.MERGE_ALREADY && new File(save, "_cloudinbox").listFiles().length == 1, "different vault: not queued twice"); }
+        // 共享仓库和侧文件都不同：同一个条目里两份都有（按路径排序，侧文件在前）；没有侧文件时的摘要与原先一样（旧条目照样认作已并过）
+        // Both the shared stash and the side file differ: one entry holds both (sorted by path, the side file first); without a side file the digest is the same as before (old entries are still recognised as merged)
+        { File d = fresh(base, "vault-both"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          stash(save, "phone stash"); write(new File(save, VAULT), "phone vault");
+          File in = new File(game, "save-import"); stash(in, "other stash"); write(new File(in, VAULT), "other vault");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261107-120000");
+          check(r.size() == 1 && r.get(0).merge == SaveTransfer.MERGE_QUEUED, "stash + vault: merge queued");
+          File[] entries = new File(save, "_cloudinbox").listFiles();
+          java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(Files.readAllBytes(new File(entries[0], "mine.pack").toPath())).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+          bb.position(20); int nf = bb.getInt(); String[] paths = new String[nf];
+          for (int i = 0; i < nf; i++) { byte[] pth = new byte[bb.getShort() & 0xffff]; bb.get(pth); paths[i] = new String(pth, StandardCharsets.UTF_8); bb.getLong(); int len = bb.getInt(); bb.position(bb.position() + len); }
+          check(nf == 2 && paths[0].equals(VAULT) && paths[1].equals("ModernSharedStashSoftCoreV2/ModernSharedStashSoftCoreV2.d2i"), "stash + vault: one pack, both files"); }
+        // 同一台手机导回来：侧文件不同也不并（同共享仓库）；手机上没有的照样拷进来
+        // Imported back on the same phone: a different side file is not merged (as for the stash); one the phone lacks is still copied in
+        { File d = fresh(base, "vault-same-phone"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          stash(save, "phone stash"); write(new File(save, VAULT), "before"); write(new File(game, "export"), "");
+          SaveTransfer.run(game, save, "20261107-120000");
+          File exp = new File(game, "save-export/20261107-120000");
+          write(new File(save, VAULT), "after");
+          copyDir(exp, new File(game, "save-import"));
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261107-130000");
+          check(r.size() == 1 && r.get(0).merge == SaveTransfer.MERGE_SAME_PHONE && read(new File(save, VAULT)).equals("after") && !new File(save, "_cloudinbox").exists(), "same phone: a different vault is not merged");
+          new File(save, VAULT).delete(); copyDir(exp, new File(game, "save-import"));
+          r = SaveTransfer.run(game, save, "20261107-140000");
+          check(r.size() == 1 && read(new File(save, VAULT)).equals("before"), "same phone: a missing vault is copied in"); }
+        // 名字不是共享仓库的 .swvault、侧文件之外的散文件：不导
+        // A .swvault not named after a shared stash, and loose files other than the side file: not imported
+        { File d = fresh(base, "vault-other"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); character(in, "Bob", "b"); write(new File(in, "notes.swvault"), "x"); write(new File(in, "ModernSharedStashSoftCoreV2.d2i"), "x");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261107-120000");
+          check(r.size() == 1 && "Bob".equals(r.get(0).path) && !new File(save, "notes.swvault").exists() && !new File(save, "ModernSharedStashSoftCoreV2.d2i").exists(), "other loose files not imported"); }
+        // 中途失败：先拷进来的侧文件也撤回
+        // Failing halfway: a side file already copied in is taken back too
+        { File d = fresh(base, "vault-halfway"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); write(new File(in, VAULT), "vault items"); character(in, "Zed", "z");
+          File bad = new File(in, "Zed/Zed.key");
+          if (bad.setReadable(false, false) && !bad.canRead()) {
+              List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261107-120000");
+              check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED && !new File(save, VAULT).exists() && !new File(save, "Zed").exists(), "halfway failure: the copied vault is taken back");
+              bad.setReadable(true, false);
+          } else System.out.println("SaveTransferTest: running as root, the vault halfway-failure case is skipped"); }
+        // 极乐世界名单：只对这一次导进来的角色照备份设。Ann（备份名单里有）加上；Bob（没有）从手机名单去掉（手机上删掉的同名旧角色留下的）；
+        // yyc 手机上已有、没导，名单不动；手机上的 Old 照旧；备份名单的 \r\n 与空行照读
+        // The Elysium list: set from the backup only for the characters this import adds. Ann (in the backup's list) is added; Bob (not in it) is
+        // removed from the phone's list (left there by a deleted character of the same name); yyc is already on the phone and not imported, so its
+        // entry stays as it is; the phone's Old stays; the backup's \r\n and empty lines are read fine
+        { File d = fresh(base, "elysium"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          character(save, "yyc", "phone"); write(new File(save, "sw_elysium.txt"), "Old\nBob\n");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); character(in, "Bob", "b"); character(in, "yyc", "other");
+          write(new File(in, "sw_elysium.txt"), "Ann\r\n\r\nyyc\r\n");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && "Ann, Bob".equals(r.get(0).path) && "yyc".equals(r.get(0).skipped), "elysium: Ann and Bob imported, yyc skipped");
+          check(read(new File(save, "sw_elysium.txt")).equals("Old\nAnn\n"), "elysium: Ann added, Bob's old entry removed, Old kept, yyc not added");
+          check(!new File(save, "sw_elysium.txt.tmp").exists(), "elysium: no temporary file left"); }
+        // 手机上没有名单：导进来的极乐世界角色新建一份；备份没有名单、手机上也没有：不多出文件；只剩被去掉的名字：文件删掉
+        // No list on the phone: one is created for an imported Elysium character; no list in the backup or on the phone: no file appears; only
+        // removed names left: the file is deleted
+        { File d = fresh(base, "elysium-new"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); write(new File(in, "sw_elysium.txt"), "Ann\n");
+          SaveTransfer.run(game, save, "20261113-120000");
+          check(read(new File(save, "sw_elysium.txt")).equals("Ann\n"), "elysium: list created for the imported character"); }
+        { File d = fresh(base, "elysium-none"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); character(in, "Ann", "a");
+          SaveTransfer.run(game, save, "20261113-120000");
+          check(new File(save, "Ann/Ann.d2s").isFile() && !new File(save, "sw_elysium.txt").exists(), "elysium: no list anywhere, none created"); }
+        { File d = fresh(base, "elysium-empty"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); write(new File(save, "sw_elysium.txt"), "Bob\n");
+          File in = new File(game, "save-import"); character(in, "Bob", "b");
+          SaveTransfer.run(game, save, "20261113-120000");
+          check(new File(save, "Bob/Bob.d2s").isFile() && !new File(save, "sw_elysium.txt").exists(), "elysium: list left empty is deleted"); }
+        // 导出再导回（同一台手机删掉角色后恢复）：名单跟着回来
+        // Export and import back (a character deleted on this phone and restored): the list comes back with it
+        { File d = fresh(base, "elysium-roundtrip"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          character(save, "Ann", "a"); write(new File(save, "sw_elysium.txt"), "Ann\n"); write(new File(game, "export"), "");
+          SaveTransfer.run(game, save, "20261113-120000");
+          File exp = new File(game, "save-export/20261113-120000");
+          check(read(new File(exp, "sw_elysium.txt")).equals("Ann\n"), "elysium: the export carries the list");
+          for (File f : new File(save, "Ann").listFiles()) f.delete();
+          new File(save, "Ann").delete(); new File(save, "sw_elysium.txt").delete();
+          copyDir(exp, new File(game, "save-import"));
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-130000");
+          check(r.size() == 1 && "Ann".equals(r.get(0).path) && read(new File(save, "sw_elysium.txt")).equals("Ann\n"), "elysium: restored character is Elysium again"); }
+        // 名单改过之后导入失败（并回收件箱写不进去）：角色撤回，名单还原成原来的样子
+        // The import fails after the list was changed (the merge inbox cannot be written): the character is taken back and the list is restored
+        { File d = fresh(base, "elysium-fail"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          stash(save, "phone stash"); write(new File(save, "sw_elysium.txt"), "Old\n"); write(new File(save, "_cloudinbox"), "not a folder");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); stash(in, "other stash"); write(new File(in, "sw_elysium.txt"), "Ann\n");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED, "elysium: failure after the list change reported as failed");
+          check(!new File(save, "Ann").exists() && read(new File(save, "sw_elysium.txt")).equals("Old\n") && in.isDirectory(), "elysium: character taken back, list restored, save-import kept"); }
+        { File d = fresh(base, "elysium-fail-new"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save");
+          stash(save, "phone stash"); write(new File(save, "_cloudinbox"), "not a folder");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); stash(in, "other stash"); write(new File(in, "sw_elysium.txt"), "Ann\n");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261113-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED && !new File(save, "sw_elysium.txt").exists(), "elysium: a list created by the failed import is removed again"); }
         System.out.println("SaveTransferTest OK, checks=" + checks);
     }
 }
