@@ -15,11 +15,11 @@ int main(void) {
     for (int i = 0; i < 3; ++i) {
         float w = size[i][0], h = size[i][1];
         CHECK(push(&s, w, h, 6) == 0);                                   /* 死区 6 点 | Dead zone 6 points */
-        CHECK(abs(push(&s, w, h, 20) - 25032) <= 2);                     /* sqrt(14 / 24) × 32767 = 25032 */
-        CHECK(abs(push(&s, w, h, 33) - 16384) <= 1);                     /* 27 / 54 = 一半 | 27 / 54 = half */
+        CHECK(abs(push(&s, w, h, 20) - 25026) <= 1);                     /* sqrt(14 / 24) × 32767 = 25026 */
+        CHECK(abs(push(&s, w, h, 12) - 16384) <= 1);                     /* sqrt(6 / 24) = 一半：半速落在 12 点 | sqrt(6 / 24) = half: half speed sits at 12 points */
         CHECK(push(&s, w, h, 60) == DM_STICK_MAX);                       /* 30 点满偏（推过也仍是满幅） | 30 points for full deflection (pushing further stays at full scale) */
         CHECK(push(&s, w, h, 105) == DM_STICK_MAX);
-        CHECK(abs(push(&s, w, h, -20) + 8495) <= 1);
+        CHECK(abs(push(&s, w, h, -20) + 25026) <= 1);                    /* 反向同一曲线：−25026 | the same curve mirrored: -25026 */
     }
     dm_tc_init(&s, 1366, 768); CHECK(s.layout.joy_radius > 68 && s.layout.joy_radius < 70);   /* 画出来的底盘仍按视觉倍数：60 × 1.15 | The drawn base still uses the visual scale: 60 × 1.15 */
 
