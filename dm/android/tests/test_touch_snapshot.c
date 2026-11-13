@@ -204,7 +204,8 @@ static void test_stick_deflection(void) {
     REQUIRE(tc.finger[0].active && tc.finger[0].target == DM_TC_JOYSTICK);
     dm_tc_move_at(&tc, 0, x + r, y, 100.05); read_twice(a);
     REQUIRE(tc.lx > 0);
-    REQUIRE(a[DM_ANDROID_TOUCH_HUD + 16] == tc.lx && a[DM_ANDROID_TOUCH_HUD + 17] == tc.ly);
+    /* 摇杆头按手指真实位置画（joy_px/joy_py），不再是送给游戏的推量 | the thumb follows the real finger position, not the value sent to the game */
+    REQUIRE(a[DM_ANDROID_TOUCH_HUD + 16] == (int)lroundf(tc.joy_px * DM_STICK_MAX) && a[DM_ANDROID_TOUCH_HUD + 17] == (int)lroundf(tc.joy_py * DM_STICK_MAX));
     dm_tc_end_at(&tc, 0, 100.1); read_twice(a);
     REQUIRE(tc.lx == 0 && tc.ly == 0);
     REQUIRE(a[DM_ANDROID_TOUCH_HUD + 16] == 0 && a[DM_ANDROID_TOUCH_HUD + 17] == 0);

@@ -51,6 +51,7 @@ typedef struct {
     uint32_t enabled_targets;
     uint64_t buttons;
     int32_t lx, ly, rx, ry;
+    float joy_px, joy_py;   /* 画摇杆头用：手指的真实位置（按底盘半径归一到 ±1，已做斜向预修正） | For drawing the thumb: the real finger position (normalised to ±1 by the base radius, diagonal pre-correction applied) */
     int aim_slot, navigation_mode, map_cancel_active;
     uint64_t aim_move_sequence;
     int portal_pending, portal_phase; // 0idle / 1modifier-pending / 2armed
