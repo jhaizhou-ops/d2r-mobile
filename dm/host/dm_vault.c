@@ -139,6 +139,12 @@ static void vault_desc(uint8_t *b, uint64_t G, uint64_t player, uint32_t req) {
     ((void (*)(uint64_t, uint64_t))(b + 0x658be0))(G, nu);
     if (n) atomic_store(&g_desc_ready, 1);
 }
+int dm_vault_get_bits(int kind, int idx, uint8_t *out, int cap) {   // 拷出某件的位流（主线程比较用；找不到或放不下返回 0）
+    pthread_mutex_lock(&g_vmu);
+    int i = vfind(kind, idx), n = 0;
+    if (i >= 0 && g_v[i].len > 0 && (int)g_v[i].len <= cap) { memcpy(out, g_v[i].data, g_v[i].len); n = (int)g_v[i].len; }
+    pthread_mutex_unlock(&g_vmu);
+    return n; }
 int dm_vault_has(int kind, int idx) { pthread_mutex_lock(&g_vmu); int r = g_loaded && vfind(kind, idx) >= 0; pthread_mutex_unlock(&g_vmu); return r; }   // 界面读（游戏主线程）：这一格存着没有 | UI read (game main thread): whether this cell holds a stored item
 
 // 任务物品（王者之杖、卡林的连枷、毒蛇护身符……）：游戏自己的物品表记录（步长 0x1c0，[版本表+0x15c0]，下标 [物品+4]，同 dm_cursor_item.c）+0x13a = weapons / armor / misc.txt 的 quest 列。
