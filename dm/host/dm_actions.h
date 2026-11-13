@@ -69,6 +69,8 @@ void dm_item_identify_free(uint32_t item_id);   // 免费鉴定这件（未鉴�
 // One-press casting of off-hand set skills (that section of dm_actions.c)
 uint64_t dm_swapskill_filter(uint64_t buttons);   // 取手柄状态处（hle_hid.c）：压住 / 放行要先换武器的那个键 | where the controller state is fetched (hle_hid.c): hold back / let through the button that needs a weapon swap first
 void dm_swapskill_srv_wset(int w);                // 服务端拍（diag.c hud_tick）发布当前武器组 0 / 1 | the server tick (diag.c hud_tick) publishes the current weapon set 0 / 1
-int dm_swapskill_slot(int slot, int *charges);    // 技能钮显示：1 = 技能在另一组（「II」角标），2 = 充能技能（*charges = 剩余次数） | skill button display: 1 = the skill is in the other set ("II" badge), 2 = charged skill (*charges = remaining charges)
+int dm_swapskill_wset(void);                      // 当前武器组 0 / 1（服务端拍发布，未发布 = -1） | current weapon set 0 / 1 (published by the server tick, -1 when not published yet)
+int dm_swapskill_face_slot(uint64_t button, int set);   // 手柄面 → 技能槽（0–11；读绑定表旁的面映射表，不依赖移植层那套「六面齐备」的快照） | controller face -> skill slot (0-11; reads the face mapping table next to the bindings, independent of the port's "all six faces seen" snapshot)
+int dm_swapskill_slot(int slot, int *charges);    // 技能钮显示：1 = 技能在另一组（「II」角标），2 = 画数字（充能次数或弹药），4 = 当前组也有同号技能，8 = 这个数字是弹药（≤50 变红、0 不变灰）；可叠加 | skill button display: 1 = in the other set ("II"), 2 = draw the number (charges or ammo), 4 = the current set has the same skill too, 8 = the number is ammo (red at 50 or less, no grey-out at 0); combinable
 int dm_swapskill_equipped(int32_t item_id);       // 这件物品身上穿着（含换手那组） | this item is worn on the body (including the weapon-swap set)
 int dm_swapskill_offhand_gives(int skill);         // 换手那组的装备给这个非职业技能（战争召唤等，绑定里物品 -1） | the gear in the weapon-swap set grants this non-class skill (Call to Arms and the like; item -1 in the binding)

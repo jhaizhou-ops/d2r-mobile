@@ -463,11 +463,34 @@ void dm_android_touch_layout(float out[DM_ANDROID_TOUCH_DRAW_FLOATS]) {
         float *p=out+DM_ANDROID_TOUCH_GLYPHS+i*8;
         dm_ta_glyph g=i==5 ? dm_ta_skill(359) : dm_ta_current_set(&native,tc.layout.target[i].button,now_ns(),tc.skill_set);
         dm_ta_frame frame;
-        p[0]=g.status; p[1]=g.atlas;
+        p[0]=g.status; p[1]=g.atlas; p[6]=0; p[7]=0;
         int held=out[4+i*5+4]!=0;
         if (g.status==DM_TA_GLYPH && dm_ta_frame_at(g.atlas,held?g.pressed_frame:g.normal_frame,&frame)) {
             p[2]=frame.x; p[3]=frame.y; p[4]=frame.width; p[5]=frame.height;
-            if (g.slot>=0) { int charges=0; p[6]=dm_swapskill_slot(g.slot,&charges); p[7]=charges; }
+        }
+        {   // 移植层那套「六面齐备」的快照没就绪时 slot 是 -1（技能钮有空槽就永远凑不齐）：改用绑定表旁的面映射自己查
+            // When the port's "all six faces seen" snapshot is not ready the slot is -1 (any empty skill button keeps the six
+            // from ever completing): look it up in the face mapping table instead
+            int slot=g.slot;
+            if(slot<0) slot=dm_swapskill_face_slot(tc.layout.target[i].button,tc.skill_set);
+            // 最后的兜底：面索引直接当槽位。移植层那张「面→槽」映射表在本机读不到（全是 0），
+            // 而用户实测的槽位与屏幕按钮顺序一一对应（钮 1–4 = 槽 1–4：多重箭 / 魔法箭 / 引导箭 / 女武神）。
+            // tc.skill_set 在本机恒被读成 1（第二套），加 6 会全跑进空槽，所以两套都试、挑有内容的那套。
+            // Last-resort fallback: the face index is the slot. The port's face->slot table reads back all zeros on this device,
+            // while the measured slots line up with the on-screen order (buttons 1-4 = slots 1-4). tc.skill_set reads as 1
+            // (second set) on this device, and adding 6 would land on empty slots, so both sets are tried and the one with
+            // content wins.
+            if(slot<0 && i<=5) { int a=0, b2=0; slot=i; if(!dm_swapskill_slot(i,&a) && dm_swapskill_slot(i+6,&b2)) slot=i+6; }
+            // 绑定表在游戏更新背包时会短暂读到无效值，kind 会在 10 和 0 之间跳（日志里 k10 q44 出现 34 ms 后变回 k0 q0），
+            // 而屏幕每帧重绘多半落在 0 那帧。抹平：非 0 的值记下来，读到 0 时最多沿用 30 帧。
+            // The binding table briefly reads invalid while the game updates the inventory, so kind jumps between 10 and 0
+            // (the log shows k10 q44 turning back into k0 q0 34 ms later) and the per-frame redraw usually lands on the zero
+            // frame. Smoothed out: remember a non-zero value and reuse it for up to 30 frames when a zero comes back.
+            { static int pk[6], pq[6], pmiss[6]; int k=0, q=0;
+              if(slot>=0) k=dm_swapskill_slot(slot,&q);
+              if(k>0) { pk[i]=k; pq[i]=q; pmiss[i]=0; }
+              else if(pmiss[i]<30 && pk[i]>0) { k=pk[i]; q=pq[i]; pmiss[i]++; }
+              p[6]=k; p[7]=q; }
         }
     }
     dm_hud_info h; dm_hud_get(&h);

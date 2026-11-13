@@ -81,6 +81,8 @@ public final class TouchOverlay extends View {
     private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final String lifeFormat, manaFormat, levelFormat, cancelLabel;
     private JSONObject hudUi;
+    private int ammoDbg;   // 弹药数字的绘制日志只打前几次（logcat -s dmammo） | the ammo digit draw log only prints the first few times (logcat -s dmammo)
+    private int hudDbg;
     private float safeLeft, safeRight, safeBottom;
     private boolean running, inputEnabled;
 
@@ -376,15 +378,18 @@ public final class TouchOverlay extends View {
         // socket (the binding entry); an unknown slot draws the socket with its F label image (as iOS lbl_*.png).
         boolean empty=g==null && (i==0 || status==1);
         button(c,x,y,r,held,empty,i==0);
-        if(empty) return;
+        if(empty) { skillDigits(c,i,p,x,y,r); return; }
         if(g==null) {
             Bitmap lbl=image("hud_v4_ui/"+(i==0?"lbl_main.png":"lbl_f"+(i+(layout[3]!=0?4:0))+".png"));
             if(lbl!=null) { float lh=r*(i==0?.30f:.36f),lw=lbl.getWidth()*lh/lbl.getHeight(); c.drawBitmap(lbl,null,new RectF(x-lw/2,y+r*.50f-lh/2,x+lw/2,y+r*.50f+lh/2),bitmapPaint); }
+            skillDigits(c,i,p,x,y,r);   // 没有图标也把弹药数字画出来（普通攻击钮常常就落在这个分支） | draw the ammo digits even without an icon (the normal-attack button often lands here)
             return;
         }
         float size=2*r*.76f, fit=size/Math.max(g.getWidth(),g.getHeight());
         RectF ir=new RectF(x-g.getWidth()*fit/2,y-g.getHeight()*fit/2,x+g.getWidth()*fit/2,y+g.getHeight()*fit/2);
-        boolean spent=((int)layout[p+6]&2)!=0 && layout[p+7]<=0;
+        int kind0=(int)layout[p+6];
+        // 弹药打光不变灰：只是要换一袋，技能本身没废（用户 2026-11-13 定） | ammo at 0 does not grey out: it only needs a new quiver, the skill itself is not spent
+        boolean spent=(kind0&2)!=0 && (kind0&8)==0 && layout[p+7]<=0;
         c.save(); Path clip=new Path(); clip.addCircle(x,y,r*.82f,Path.Direction.CW); c.clipPath(clip);
         Paint ip=new Paint(bitmapPaint);
         if(spent) {   // 充能用完：灰底上按亮度贴图标（去色）再压一层暗 | out of charges: luminosity-blend the icon on grey, then darken
@@ -398,8 +403,15 @@ public final class TouchOverlay extends View {
             ip.setAlpha(held?255:240); c.drawBitmap(g,null,ir,ip);
         }
         c.restore();
-        // 副手组角标「Ⅱ」（暗底金边小圆）与充能剩余次数（腰带件数那套数字图）。 | Off-hand set badge "Ⅱ" (small dark disc with a gold ring)
-        // and charges left (the belt-count digit images).
+        skillDigits(c,i,p,x,y,r);
+    }
+
+    // 副手组角标「Ⅱ」与数字（充能次数 / 弹药）。抽成单独方法：没有图标时（移植层技能钮读取没就绪）也得把弹药数字画出来，
+    // 否则一个字都看不到——技能钮空槽一多，那套「六面齐备」的快照就不 ready，图标和数字会一起消失。
+    // The "Ⅱ" badge and the number (charges / ammo), pulled into its own method: when there is no icon (the port's
+    // skill-button readout is not ready) the ammo digits still have to be drawn or nothing shows at all -- with enough empty
+    // skill buttons the "all six faces seen" snapshot is never ready and both the icon and the digits disappear together.
+    private void skillDigits(Canvas c,int i,int p,float x,float y,float r) {
         int kind=(int)layout[p+6];
         if((kind&1)!=0) {
             float br=r*.30f,bx=x+r*.74f,by=y-r*.74f; Paint f=new Paint(Paint.ANTI_ALIAS_FLAG); f.setColor(rgba(.11,.094,.078,.95)); c.drawCircle(bx,by,br,f);
@@ -408,7 +420,11 @@ public final class TouchOverlay extends View {
         }
         if((kind&2)!=0 && hudUi!=null) {
             float u=viewH()/1320, W=viewW();
-            try { JSONObject bd=hudUi.getJSONObject("badge"); hudText(c,Integer.toString(Math.max(0,(int)layout[p+7])),bd.getJSONObject("glyphs"),(x+r*.66f-W/2)/u+1434,(y+r*.42f)/u,true,u); }
+            // 弹药：>50 绿色（技能图标是白的，白字不好分辨）；≤50 红色（用户 2026-11-13 定）。充能次数仍用白字
+            // Ammo: green above 50 (the skill icons are white, so white digits are hard to read); red at 50 or less (the
+            // user's call, 2026-11-13). Charge counts stay white.
+            int col=((kind&8)!=0) ? (layout[p+7]<=50 ? rgba(1f,.26f,.26f,1) : rgba(.36f,.90f,.44f,1)) : Color.WHITE;
+            try { JSONObject bd=hudUi.getJSONObject("badge"); hudText(c,Integer.toString(Math.max(0,(int)layout[p+7])),bd.getJSONObject("glyphs"),(x+r*.66f-W/2)/u+1434,(y+r*.42f)/u,true,u,col); }
             catch(Exception ignored) { }
         }
     }
@@ -419,20 +435,35 @@ public final class TouchOverlay extends View {
     // is enough; that offset is derived from the current resolution ("HUD centreline = 1920 layout units from the UI rectangle's
     // left edge").
     private float hudX(double x,float u) { return viewW()/2f+((float)x-1434f)*u; }
-    private void hudImage(Canvas c,String name,double x,double y,float u) {
+    private void hudImage(Canvas c,String name,double x,double y,float u) { hudImage(c,name,x,y,u,Color.WHITE); }
+    // 白色数字图（hud_v4_ui 里的 glyph）要换色只能靠 ColorFilter：Paint.setColor 对 ARGB 位图不起作用
+    // A white glyph bitmap can only be recoloured through a ColorFilter: Paint.setColor does nothing to an ARGB bitmap
+    private static ColorMatrixColorFilter tintFilter(int color) {
+        float r=Color.red(color),g=Color.green(color),b=Color.blue(color);
+        return new ColorMatrixColorFilter(new ColorMatrix(new float[]{
+                0,0,0,0,r,
+                0,0,0,0,g,
+                0,0,0,0,b,
+                0,0,0,1,0}));
+    }
+    private void hudImage(Canvas c,String name,double x,double y,float u,int color) {
         Bitmap b=image("hud_v4_ui/"+name); if(b==null)return;
         float left=hudX(x,u),top=(float)y*u;
-        paint.setColor(Color.WHITE);c.drawBitmap(b,null,new RectF(left,top,left+b.getWidth()*u,top+b.getHeight()*u),paint);
+        paint.setColor(Color.WHITE);
+        paint.setColorFilter(color==Color.WHITE ? null : tintFilter(color));
+        c.drawBitmap(b,null,new RectF(left,top,left+b.getWidth()*u,top+b.getHeight()*u),paint);
+        paint.setColorFilter(null);
     }
     // 字形位置、底图和数值基线来自与iOS相同的生成器，游戏层仍负责药水与球液。
     // Glyph placement, base art and baselines come from the iOS generator; the game still owns potions and orb liquid.
-    private void hudText(Canvas c,String value,JSONObject glyphs,double x,double baseline,boolean right,float u) throws Exception {
+    private void hudText(Canvas c,String value,JSONObject glyphs,double x,double baseline,boolean right,float u) throws Exception { hudText(c,value,glyphs,x,baseline,right,u,Color.WHITE); }
+    private void hudText(Canvas c,String value,JSONObject glyphs,double x,double baseline,boolean right,float u,int color) throws Exception {
         double advance=0;
         for(int i=0;i<value.length();i++) { JSONObject g=glyphs.optJSONObject(value.substring(i,i+1)); if(g!=null)advance+=g.optDouble("adv"); }
         double pen=x-(right?advance:advance/2);
         for(int i=0;i<value.length();i++) {
             JSONObject g=glyphs.optJSONObject(value.substring(i,i+1));if(g==null)continue;
-            if(!g.isNull("file")) hudImage(c,g.getString("file"),pen+g.optDouble("dx"),baseline+g.optDouble("dy"),u);
+            if(!g.isNull("file")) hudImage(c,g.getString("file"),pen+g.optDouble("dx"),baseline+g.optDouble("dy"),u,color);
             pen+=g.optDouble("adv");
         }
     }
