@@ -1,0 +1,176 @@
+[
+  {
+    "file": "fixtures/msl-buffer-reflection-mixed.metal",
+    "sha256": "aa008f242806c8e5625db92b364fe87216df3695ebfb1528d393b053ebb4267a",
+    "entry": "reflection_mixed",
+    "stage": "kernel",
+    "expected": "compiled",
+    "buffer": {
+      "name": "source",
+      "binding": 0,
+      "addressSpace": 2,
+      "size": 224,
+      "align": 16,
+      "fields": [
+        {
+          "name": "token",
+          "offset": 0,
+          "size": 4,
+          "count": 0
+        },
+        {
+          "name": "table",
+          "offset": 16,
+          "size": 16,
+          "count": 3
+        },
+        {
+          "name": "origin",
+          "offset": 64,
+          "size": 16,
+          "count": 0
+        },
+        {
+          "name": "scale",
+          "offset": 80,
+          "size": 16,
+          "count": 0
+        },
+        {
+          "name": "mode",
+          "offset": 96,
+          "size": 4,
+          "count": 0
+        },
+        {
+          "name": "weights",
+          "offset": 112,
+          "size": 16,
+          "count": 5
+        },
+        {
+          "name": "ranges",
+          "offset": 192,
+          "size": 16,
+          "count": 0
+        },
+        {
+          "name": "end",
+          "offset": 208,
+          "size": 4,
+          "count": 0
+        }
+      ]
+    }
+  },
+  {
+    "file": "fixtures/msl-buffer-reflection-array.metal",
+    "sha256": "1f43fb6b0d15115e1cbe8ea624c64a6a4eb6f785a9c852a4e5428f7c1491c20f",
+    "entry": "reflection_array",
+    "stage": "kernel",
+    "expected": "compiled",
+    "buffer": {
+      "name": "source",
+      "binding": 0,
+      "addressSpace": 2,
+      "size": 144,
+      "align": 16,
+      "fields": [
+        {
+          "name": "values",
+          "offset": 0,
+          "size": 16,
+          "count": 9
+        }
+      ]
+    }
+  },
+  {
+    "file": "fixtures/msl-buffer-reflection-float3.metal",
+    "sha256": "f883a9c3d6f0e73681f1c95f6539597ddf31f2f8c4703d9590c9b81e4dfa7733",
+    "entry": "reflection_float3",
+    "stage": "kernel",
+    "expected": "compiled",
+    "buffer": {
+      "name": "source",
+      "binding": 0,
+      "addressSpace": 2,
+      "size": 80,
+      "align": 16,
+      "fields": [
+        {
+          "name": "state",
+          "offset": 0,
+          "size": 4,
+          "count": 0
+        },
+        {
+          "name": "direction",
+          "offset": 16,
+          "size": 16,
+          "count": 0
+        },
+        {
+          "name": "path",
+          "offset": 32,
+          "size": 16,
+          "count": 2
+        },
+        {
+          "name": "tail",
+          "offset": 64,
+          "size": 4,
+          "count": 0
+        }
+      ]
+    }
+  },
+  {
+    "file": "fixtures/msl-buffer-reflection-nested.metal",
+    "sha256": "357404a163024f6102503ee483cba9e2e6bc51963ae1f13e930e424ffe1ea82b",
+    "entry": "reflection_nested",
+    "stage": "kernel",
+    "expected": "compiled",
+    "buffer": {
+      "name": "source",
+      "binding": 0,
+      "addressSpace": 2,
+      "size": 96,
+      "align": 16,
+      "fields": [
+        {
+          "name": "tag",
+          "offset": 0,
+          "size": 4,
+          "count": 0
+        },
+        {
+          "name": "items",
+          "offset": 16,
+          "size": 32,
+          "count": 2,
+          "children": [
+            {
+              "name": "payload",
+              "offset": 0,
+              "size": 16,
+              "count": 0
+            },
+            {
+              "name": "code",
+              "offset": 16,
+              "size": 4,
+              "count": 0
+            }
+          ]
+        },
+        {
+          "name": "footer",
+          "offset": 80,
+          "size": 4,
+          "count": 0
+        }
+      ]
+    }
+  }
+]

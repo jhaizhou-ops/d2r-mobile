@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "scope": "apple-only-static-source-equivalence",
+  "baselineCommit": "53e7c5bb9ca3ea53e2160005be8fbe920cd9cb53",
+  "baselineSourceSha256": "d0bee134202bcc7c976c2713ffec2881f77b43bbfc24f4ebde17f0886c3dc22e",
+  "baselineAstSha256": "8ba043240da9d6f15c7a63604c0ca26aa32b9a71155d061de9ee17d5f67a0702",
+  "sourceSha256": "f23802979ceeeab8267b724b2d7f1a568b900777eb8718a0471a41317dc744ee",
+  "sourceCommit": "e3756f8942b40eba6c851e881828a5b1bda17fd6",
+  "reviewedTargetNodes": {
+    "function:MRS_TPIDR": "af521443bb7761cff9bae841dc2343069b24f104b388f99434d154f2f5650dc5",
+    "global:TARGET": "f41db2c641754f1ff8819f19aa5197236b65d18d5c0cb078118c507a5abb44db",
+    "assert:TARGET": "3e242b09e644de2d05e365765d3c5e45aea3669ecd76122ef8a206cf17964fe5",
+    "global:OHOS_TSD_OFF": "12bb4b9e91b25ed10bf56bc8f927a8d9f9650b8b9fc94f84eb3f327c14569ed9",
+    "function:emit_tp": "3ed10b5ac7856aabfd4430e2f5a9de175295468e7730e7e50164bb755097c0ad",
+    "global:NOREDZONE": "7e542ff065d09bca0366682bfa9052b5e311ae2bb56ecd157e6e11ffe99e93c2",
+    "function:STR_PRE": "2b56b9948e09ae0e6ca4a1f3147244f715d0fa8cd6fdb64854e38880f47c2c7e",
+    "function:LDR_POST": "312f22043df755e7cf74980644b46f9b84a1241bfe8805bf53482a5751c8a168",
+    "function:stash": "e36662c15f35350a16560bf510059f8877189f6ddcc75b348a131bca862c84d5",
+    "function:unstash": "bf29f350b8429464efd7cdbd2be235e91cf48035e3550461026df4966f6290f5",
+    "function:uses_sp": "6414cfa9597b10a8066fbb88e1dc4fb5690eae1e93609778dc885c075280a2fa",
+    "global:SPOP": "e2e40e4169c0d722e5bade3b11d5fb903b83d37b4e28e3e2bb3c0506a0bf54f1",
+    "function:sp_frame": "e35b5f2173bea85eed7031d462acb3b28e066226b33e35de090d3665cb152482",
+    "output:TARGET": "2dfbc0e9199db4e5a68b51c801e28e0645443bf6f4dabf9254ecc462323099c7",
+    "motion:site_tpidr_write.tmp": "c61db0e60f211cf8c872e0a7691c3c2e9677c89dde169719fbdc03a4da1d5873"
+  },
+  "outputFormatAddition": "# TARGET\t0x0\n",
+  "reviewedCodeMotion": "site_tpidr_write computes tmp before first emit; pick returns0..15, so next over16/17 cannot fail. This pure assignment commutes with emit, which does not read tmp.",
+  "claimLimits": [
+    "Static source structure only; no compiler, native, WASM, game, browser or device execution.",
+    "Existing Apple relocation JS is retained; Android and HarmonyOS are not supported."
+  ]
+}

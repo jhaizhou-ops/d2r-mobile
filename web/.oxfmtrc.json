@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "semi": true,
+  "singleQuote": false,
+  "trailingComma": "all",
+  "printWidth": 100,
+  "sortImports": false,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "node_modules/",
+    "dist/",
+    "coverage/",
+    "**/bin/",
+    "**/obj/",
+    "**/_framework/",
+    "SHADCN_LICENSE.md",
+    "toolchain/**/dist/",
+    "toolchain/**/.build/",
+    "toolchain/zsign-wasm/bounded-map.inc",
+    "toolchain/zsign-wasm/stream-sha.inc",
+    "toolchain/zsign-wasm/profile-compatibility.inc",
+    "toolchain/program-rewrite-spike/deps/",
+    "toolchain/asset-generation-spike/public/generated/",
+    "toolchain/asset-generation-spike/public/vendor/",
+    "toolchain/spirv-cross-spike/wwwroot/spirv-cross.mjs",
+    "bun.lock",
+    "toolchain/**/package-lock.json",
+    "runtime-build/.build/**",
+    "runtime-build/out/**",
+    "i18n-catalog.mjs"
+  ]
+}
