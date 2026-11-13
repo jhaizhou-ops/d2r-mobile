@@ -394,6 +394,20 @@ static BOOL ba_configured(void) {
 // iOS 26.0–26.3 has no synchronous "available locally" query; only system confirmation (status query says downloaded / download-finished callback) sets this flag, read and written only on the main thread.
 static BOOL g_pack_legacy_available;
 
+// S2Arm 推来、还没解开的资源包（Documents/资源包/.incoming/*.tar，约定见 s2a_pack_apply.c）有几批。推送端推完会带 S2A_PACK_APPLY_ONLY=1 起一次 App 解开；
+//   那一下没起成（免费 Apple ID 第一次装、开发者还没在设置里信任，电脑拉不起 App）时包就留在这里——玩家信任后点图标正常打开，资源界面就地解开（AssetVC importPack），
+//   不用再靠电脑拉起一次。推来的是更新（旧资源还在）也先解开再起游戏，免得用旧资源起
+// How many batches of resource pack S2Arm pushed but has not unpacked yet (Documents/资源包/.incoming/*.tar, convention in s2a_pack_apply.c). After pushing, the pusher
+//   launches the App once with S2A_PACK_APPLY_ONLY=1 to unpack them; when that launch fails (first install with a free Apple ID, developer not yet trusted in Settings,
+//   so the computer cannot launch the App) the batches stay here -- once the player trusts it and opens the App normally, the resource screen unpacks them in place
+//   (AssetVC importPack), with no second launch from the computer. If the push is an update (old resources still present) it is also unpacked before the game starts
+int dm_s2a_pack_apply(const char *docs);
+static int s2a_pack_pending(void) {
+    NSString *inc = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"资源包/.incoming"];
+    int n = 0; for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:inc error:nil]) if ([f hasSuffix:@".tar"]) n++;
+    return n;
+}
+
 static NSString *romfs_locate(char *why, size_t n) {
     g_doc_bad = 0; g_doc_stray = 0;
     NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0];
@@ -873,6 +887,29 @@ static void run_boot(void);
     for (UIButton *x in row) { CGFloat bw = MAX(120, x.bounds.size.width + 24); x.frame = CGRectMake(x0, b.size.height / 2 + 50, bw, 44); x0 += bw + 16; }
 }
 - (void)showBtn:(UIButton *)x { dispatch_async(dispatch_get_main_queue(), ^{ x.hidden = NO; [self.view setNeedsLayout]; }); }
+- (void)importPack:(int)total {   // 解 S2Arm 推来的资源包（后台线程，s2a_pack_apply.c）；屏上按剩几批标进度，解完重走 start（→ romfs_locate → ready 就地起游戏） | unpack the pack S2Arm pushed (background thread); progress on screen by batches left; when done, run start again
+    static int busy; if (busy) return; busy = 1;
+    plog("assets: 「D2R Mobile」里有 S2Arm 推来没解开的资源包 %d 批，就地解开", total);
+    [self say:[NSString stringWithFormat:T("dmImportPack"), 0, total]]; self.bar.progress = 0;
+    dispatch_source_t tm = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(tm, DISPATCH_TIME_NOW, NSEC_PER_SEC / 2, NSEC_PER_SEC / 10);
+    dispatch_source_set_event_handler(tm, ^{ int done = total - s2a_pack_pending(); if (done < 0) done = 0;
+        [self say:[NSString stringWithFormat:T("dmImportPack"), done, total]]; self.bar.progress = (float)done / total; });
+    dispatch_resume(tm);
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        int rc = dm_s2a_pack_apply(docs.fileSystemRepresentation);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            dispatch_source_cancel(tm); busy = 0;
+            if (!rc) { plog("assets: 推来的资源包解开了，接着找资源"); self.bar.progress = 1; [self start]; return; }
+            NSString *lg = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:@"unpack.log"] encoding:NSUTF8StringEncoding error:nil] ?: @"";
+            NSString *last = [[lg stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsSeparatedByString:@"\n"].lastObject ?: @"";
+            NSRange r = [last rangeOfString:@"解包失败："]; NSString *why = r.location == NSNotFound ? last : [last substringFromIndex:NSMaxRange(r)];
+            plog("assets: 推来的资源包解不开（返回 %d）：%s", rc, why.UTF8String);
+            [self say:[NSString stringWithFormat:T("dmImportFail"), why]]; [self showBtn:self.retry]; [self showBtn:self.share];
+        });
+    });
+}
 - (void)shareTap { plog("assets: 玩家点了分享诊断日志"); void dm_sharelog_share(void); dm_sharelog_share(); }
 - (void)useDirectTap {
     plog("assets: 玩家点了改用直接下载（托管已等 %.0f 秒，进度 %.2f / %.2f GB%s）", CFAbsoluteTimeGetCurrent() - self.packT, self.packDone / 1e9, self.packBytes / 1e9, self.packFull ? "，已到 100%" : "");
@@ -988,6 +1025,7 @@ static int64_t free_bytes(void) {   // 给 App 用的可用空间（系统「重
     self.retry.hidden = YES; self.stopped = 0; self.last = 0; self.lastT = CFAbsoluteTimeGetCurrent(); self.packStop = 0; self.textKind = 0;
     char why[2048];
     if (getenv("DM_TEST_BA") && !self.gone) { if (@available(iOS 26.0, *)) [self fakeBA:@(getenv("DM_TEST_BA"))]; return; }   // 测试：造托管下载现场（fakeBA） | test: stage a hosted download scene (fakeBA)
+    { int np = s2a_pack_pending(); if (np) { [self importPack:np]; return; } }   // S2Arm 推来还没解开的资源包：先就地解开，解完重走这里 | resource pack S2Arm pushed but not yet unpacked: unpack in place first, then come back here
     if (!getenv("DM_ASSETS_TEST") && romfs_locate(why, sizeof why)) { [self ready]; return; }   // 重试时资源已到（如刚在「文件」里拷完） | Assets have already arrived on retry (e.g. just finished copying in the Files app)
     if (!getenv("DM_ASSETS_TEST") && g_doc_bad) { [self direct:@(why)]; return; }   // 有文件夹但不完整（拷到一半 / 下到一半）：不试托管下载，直接从下载站补齐；下载站走不通才报原因 | A folder exists but is incomplete (half copied / half downloaded): do not try the hosted download, fill in the rest straight from the download site; report the reason only if the download site is unreachable
     if (self.gone) { [self direct:nil]; return; }   // 玩家已选「改用直接下载」：重试仍走这条（托管的回调此后不接，回到托管会停在「正在下载」） | the player chose "Use direct download": retries keep going this way (callbacks from the hosted download are not taken from now on; going back to hosted would stay stuck at "Downloading")
@@ -1324,6 +1362,7 @@ int main(int argc, char *argv[]) {
         if (g_block_title) {}   // 起不了游戏：不起宿主，场景里弹框（BlockVC） | The game cannot start: do not start the host; show a message in the scene (BlockVC)
         else if (g_no_bc) {}
         else if (getenv("DM_ASSETS_TEST") || getenv("DM_TEST_BA")) { g_need_assets = 1; plog("boot: DM_ASSETS_TEST——强制走资源下载界面再就地起宿主（测这条路径）"); }
+        else if (s2a_pack_pending()) { g_need_assets = 1; plog("boot: 有 S2Arm 推来没解开的资源包 %d 批，先在资源界面解开", s2a_pack_pending()); }
         else if (romfs_locate(why, sizeof why)) plog("boot: 游戏资源就绪，宿主等场景到前台再装载");
         else { g_need_assets = 1; plog("boot: 游戏资源还没到（%s），先显示资源下载界面", why); }
     } else metal_cache_report_and_clean();
