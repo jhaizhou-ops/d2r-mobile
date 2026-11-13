@@ -130,6 +130,29 @@ public final class SaveTransferTest {
           File[] inbox = new File(save2, "_cloudinbox").listFiles();
           check(r.size() == 1 && r.get(0).merge == SaveTransfer.MERGE_QUEUED && inbox != null && inbox.length == 1, "another phone: stash merged");
           check(!new File(d2, "files/save-transfer-id").exists() && read(new File(save2, "yyc/yyc.d2s")).equals("v"), "importing writes no id; the character is added"); }
+        // 只有游戏设置的 save-import：算存档，手机上没有设置就导进来，有了就报「已在手机上」，不当成认不出改名 rejected
+        // A save-import holding only the game settings: counts as saves; imported when the phone has no settings, reported as already on the phone otherwise, not renamed to rejected
+        { File d = fresh(base, "settings-new"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          write(new File(game, "save-import/Settings/Settings.json"), "{\"lang\":1}");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261104-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && "Settings".equals(r.get(0).path) && read(new File(save, "Settings/Settings.json")).equals("{\"lang\":1}"), "settings-only import onto a phone without settings");
+          check(new File(game, "save-import.done-20261104-120000").isDirectory() && !new File(game, "save-import.rejected-20261104-120000").exists(), "settings-only import renamed done"); }
+        { File d = fresh(base, "settings-have"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); write(new File(save, "Settings/Settings.json"), "phone");
+          write(new File(game, "save-import/Settings/Settings.json"), "backup");
+          List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261104-120000");
+          check(r.size() == 1 && r.get(0).kind == SaveTransfer.IMPORTED && r.get(0).path == null && "Settings".equals(r.get(0).skipped) && read(new File(save, "Settings/Settings.json")).equals("phone"), "settings-only import onto a phone with settings: skipped, not rejected"); }
+        // 中途失败：先导的 Ann 拷好了，Bob 有个文件读不出 → Ann 撤回，存档回到导入之前，save-import 留着下次再导
+        // Failing halfway: Ann (first by name) is copied, one of Bob's files cannot be read -> Ann is taken back, the saves are as before, save-import stays for next time
+        { File d = fresh(base, "halfway"), game = new File(d, "D2R Mobile"), save = new File(d, "files/save"); character(save, "yyc", "v");
+          File in = new File(game, "save-import"); character(in, "Ann", "a"); character(in, "Bob", "b");
+          File bad = new File(in, "Bob/Bob.key");
+          if (bad.setReadable(false, false) && !bad.canRead()) {
+              List<SaveTransfer.Result> r = SaveTransfer.run(game, save, "20261104-120000");
+              check(r.size() == 1 && r.get(0).kind == SaveTransfer.FAILED, "halfway failure reported as failed");
+              check(!new File(save, "Ann").exists() && !new File(save, "Bob").exists() && read(new File(save, "yyc/yyc.d2s")).equals("v"), "halfway failure: the already-added character is taken back");
+              check(in.isDirectory() && !new File(d, "files/save.import.part").exists(), "halfway failure: save-import kept, part gone");
+              bad.setReadable(true, false);
+          } else System.out.println("SaveTransferTest: running as root, the halfway-failure case is skipped"); }
         System.out.println("SaveTransferTest OK, checks=" + checks);
     }
 }
