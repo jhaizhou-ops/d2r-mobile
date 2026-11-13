@@ -207,7 +207,7 @@ def vault_tab(s):
     # 个人仓库页码（dm_pages.c）：自己的文字控件，不再借原版共享页那块页码（SharedStashTabContainer / CurrentSharedStashText）。缺省在屏外，宿主在个人页挪进来
     # Personal stash page number (dm_pages.c): our own text widget, no longer borrowing the original game's shared page number block (SharedStashTabContainer / CurrentSharedStashText). Off screen by default; the host moves it in on personal pages
     pg = {'type': 'Widget', 'name': 'TouchPgPage', 'fields': {'rect': {'x': 99999, 'y': 0, 'width': 1730, 'height': 1300}}, 'children': [
-        _vt_text('TouchPgPage_Text', 675, 1159, 322, 64, '$FontColorGoldYellow', '$MediumFontSize', 'center')]}
+        _vt_text('TouchPgPage_Text', 586, 1159, 500, 64, '$FontColorGoldYellow', '$MediumFontSize', 'center')]}   # 宽 500（中心同原先 322 宽那块 = 836）：10 页的「Page 10 / 10」放得下，322 宽截成「Page 1 / …」 | 500 wide (same center 836 as the former 322-wide box): the 10-page 'Page 10 / 10' fits; 322 wide cut it to 'Page 1 / …'
     end = s.rstrip().rstrip('}').rstrip(); assert end.endswith(']'); at = len(end) - 1
     return s[:at].rstrip().rstrip(',') + ',\n        ' + json.dumps(pg, ensure_ascii=False) + ',\n        ' + json.dumps(vault_widgets(), ensure_ascii=False) + '\n    ' + s[at:]
 

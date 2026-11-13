@@ -127,7 +127,7 @@ Enter through the red portal in Harrogath after completing Hell. There are 100 l
 ### Storage: a collector's paradise
 
 - **Chronicle stash**: every identified Unique and Set item has its own fixed slot, shared by all characters, searchable, with deposit and withdraw; the Deposit button sends the Unique and Set items in your inventory and Horadric Cube there in one tap.
-- **Stash**: widened to 14 columns, with 5 personal pages and 5 shared pages.
+- **Stash**: widened to 14 columns, with 5 personal pages and 5 shared pages; up to 64 personal and 99 shared with `stash_pages.txt` (see [docs/STASH_PAGES.md](docs/STASH_PAGES.md)).
 - **Trove**: the gem, rune and material pages merged into one, with the Horadric Cube's crafting grid in the middle, so finding things and crafting no longer means flipping between pages. Runes, gems and materials you put into the personal or shared pages are filed here automatically.
 - **Pouch**: an extended inventory. Runes and gems found in the field go into it automatically and take up no inventory space.
 
