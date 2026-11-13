@@ -1521,7 +1521,17 @@ static void ui_long_pump(void) {   // 主线程：按游戏自己的悬停对象
             for (uint64_t w = dm_wref_get(&g_slot); w && strlen(chain) < 120; w = *(uint64_t *)(w + 0x30)) { const char *n = *(uint64_t *)(w + 8) ? (const char *)*(uint64_t *)(w + 8) : "?"; strlcat(chain, n, sizeof chain); strlcat(chain, "<", sizeof chain);
                 if (page == 0 && (strcasestr(n, "stash") || strcasestr(n, "bank")) && strcmp(n, "BankExpansionLayout") && strcmp(n, "BankOriginalLayout")) page = 4;
                 if (page == 0 && strcasestr(n, "cube")) page = 3; } }
-        if (page >= 0) { void dm_inv_sort(int); dm_inv_sort(page); }
+        // 命中的是物品格控件（虚表 main+0x2089ab8）就照原版手柄「按住排序」取格子自己的属主与页（共享仓库各页的属主不是玩家）；
+        // 认不出控件类时照旧按页号、属主取玩家
+        // When the hit widget is an item grid (vtable main+0x2089ab8), take the grid's own owner and page as the original controller's
+        // "hold to sort" does (the shared stash pages are not owned by the player); when the widget class is not recognized, fall back
+        // to the page number with the player as owner
+        uint64_t gw = dm_wref_get(&g_slot);
+        if (page >= 0 && gw && g_iw_base && *(uint64_t *)gw - g_iw_base == 0x2089ab8) {
+            uint32_t oid = *(uint32_t *)(gw + 0x5c4), oty = *(uint32_t *)(gw + 0x5c8); int pg = *(uint8_t *)(gw + 0x630);
+            void dm_inv_sort_grid(uint32_t, uint32_t, int); dm_inv_sort_grid(oid, oty, pg);
+            LOG("界面长按：物品格自己的属主 %u 类型 %u 页 %d（原先按页 %d、属主玩家）", oid, oty, pg, page);
+        } else if (page >= 0) { void dm_inv_sort(int); dm_inv_sort(page); }
         LOG("界面长按：空格（控件链 %s，面板 %s）→ %s", chain[0] ? chain : (nm ? nm : "?"), pn ? pn : "?", page < 0 ? "不动" : page == 0 ? "整理背包" : page == 3 ? "整理方块" : "整理储藏箱");
         return; }
     if (ci.container == DM_ITEM_AT_STASH && ci.stack > 0) { void dm_stash_take(int); dm_stash_take(3); LOG("界面长按：高级仓库里的一叠 %s（%d 件）→ 取 3 件到背包", ci.code, ci.stack); return; }   // 原版手柄「按住 = 移动 3 个」，件数不变 | The original controller's "hold = move 3"; the count is unchanged
