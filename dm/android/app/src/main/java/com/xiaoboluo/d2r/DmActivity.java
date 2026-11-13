@@ -93,6 +93,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     private boolean importing, savesTransferred;
     private boolean libraryLoaded;
     private boolean resumed;
+    private boolean sharingLog;
     private DisplayManager displays;
     private CamSensor camSensor;
     private CamButtons camButtons;
@@ -425,6 +426,74 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     private void showBootFailure() {
         releaseTouches();
         showStartError(getString(bootFailure == -6 ? R.string.dmAndroidGraphicsFailed : R.string.dmAndroidHostStopped));
+    }
+
+    // 暂停菜单「分享诊断日志」（#216）：宿主收到按钮消息后经原生工作线程调来（jni_android.c share_log → text_input_jni.c），这里只投递到主线程
+    // The pause menu's Share Diagnostics (#216): called through the native worker thread once the host gets the button's message
+    // (jni_android.c share_log -> text_input_jni.c); this only posts to the UI thread.
+    // 只有原生代码调它：发布版不做代码精简（build.gradle minifyEnabled false）；以后要开，得给它与 showNativeInput / showNativeFailure 加 keep 规则
+    // Only native code calls it: the release build does no code shrinking (build.gradle minifyEnabled false); if that is ever turned on, it
+    // needs a keep rule, as do showNativeInput / showNativeFailure
+    private static void shareDiagnostics(String logPath) {
+        DmActivity activity = current.get();
+        if (activity != null) activity.runOnUiThread(() -> activity.startShareLog(logPath));
+    }
+
+    // 后台线程打文件（ShareLog），好了在主线程弹系统分享面板；打包中再点不叠第二个。头部同 iOS dm_sharelog.m：版本、机型、系统、温控 / 电量、
+    // 内存 / 存储、本次运行时长；不取设备名、账号、位置之类
+    // The file is built on a background thread (ShareLog) and the system share sheet is shown on the UI thread; a tap while building does not
+    // start a second one. The header is as in iOS dm_sharelog.m: version, device, system, thermal / battery, memory / storage, time running; no
+    // device name, account, location or the like
+    private void startShareLog(String logPath) {
+        if (sharingLog || isFinishing() || isDestroyed()) return;
+        sharingLog = true;
+        String version = "?"; long code = 0;
+        try { android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0); version = pi.versionName; code = pi.getLongVersionCode(); }
+        catch (android.content.pm.PackageManager.NameNotFoundException ignored) { }
+        String header = shareLogHeader(version, code);
+        String name = getString(R.string.dmShareLogFile).replaceFirst("%@", java.util.regex.Matcher.quoteReplacement(version))
+            .replaceFirst("%@", new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()));
+        File dir = ShareLogProvider.directory(this);
+        new Thread(() -> {
+            File out = null; String error = null;
+            try { out = ShareLog.write(new File(logPath), dir, name, header); }
+            catch (IOException | RuntimeException e) { error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(); }
+            File done = out; String failure = error;
+            runOnUiThread(() -> {
+                sharingLog = false;
+                if (done == null) { android.util.Log.e("dm", "share diagnostics: " + failure); return; }
+                if (isFinishing() || isDestroyed()) return;
+                android.util.Log.i("dm", "share diagnostics: " + done.getName() + " " + done.length() + " bytes");
+                Uri uri = ShareLogProvider.uri(this, done);
+                Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                send.setClipData(android.content.ClipData.newRawUri(done.getName(), uri));
+                try { startActivity(Intent.createChooser(send, getString(R.string.dmPauseShareLog))); }
+                catch (android.content.ActivityNotFoundException e) { android.util.Log.e("dm", "share diagnostics: no share target"); }
+            });
+        }, "dm-sharelog").start();
+    }
+
+    private String shareLogHeader(String version, long code) {
+        StringBuilder h = new StringBuilder("D2R Mobile Diagnostics\n");
+        h.append("导出时间 ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(new Date())).append('\n');
+        h.append("版本 ").append(version).append(" 构建 ").append(code).append('\n');
+        h.append("机型 ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL)
+         .append(" SoC ").append(android.os.Build.SOC_MANUFACTURER).append(' ').append(android.os.Build.SOC_MODEL)
+         .append(" 系统 Android ").append(android.os.Build.VERSION.RELEASE).append(" (SDK ").append(android.os.Build.VERSION.SDK_INT).append(")\n");
+        android.os.PowerManager pm = getSystemService(android.os.PowerManager.class);
+        android.os.BatteryManager bm = getSystemService(android.os.BatteryManager.class);
+        h.append("温控档位 ").append(pm != null ? pm.getCurrentThermalStatus() : -1)
+         .append(" 省电模式 ").append(pm != null && pm.isPowerSaveMode() ? "开" : "关")
+         .append(" 电量 ").append(bm != null ? bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) : -1).append('%')
+         .append(bm != null && bm.isCharging() ? " 充电中" : "").append('\n');
+        android.app.ActivityManager am = getSystemService(android.app.ActivityManager.class);
+        android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+        if (am != null) am.getMemoryInfo(mi);
+        android.os.StatFs fs = new android.os.StatFs(getFilesDir().getPath());
+        long minutes = (android.os.SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis()) / 60000;
+        h.append(String.format(Locale.US, "物理内存 %.1f GB 可用内存 %.1f GB 可用存储 %.1f GB 本次已运行 %d 分钟\n",
+            mi.totalMem / 1073741824.0, mi.availMem / 1073741824.0, fs.getAvailableBytes() / 1073741824.0, minutes));
+        return h.toString();
     }
 
     private static void showNativeInput(long id, String title, String sub, String guide, String initial,

@@ -26,6 +26,12 @@ int front_android_window_size(int *w, int *h);
    below 1% means the whole window). Same rule as front_ios.m's letterbox_rect and front_ohos_view_rect.
    任意线程可调（UI 线程每帧调一次）。 | Callable from any thread (the UI thread calls it once per frame). */
 void front_android_view_rect(int win_w, int win_h, int out[4]);
+/* 暂停菜单「分享诊断日志」（#216）：把 boot.log 的路径交给 Java（DmActivity.shareDiagnostics）打文件、弹系统分享面板。
+   只入队、不等（text_input_jni.c 的工作线程去调 Java）；游戏主线程可调。
+   The pause menu's Share Diagnostics (#216): hands the boot.log path to Java (DmActivity.shareDiagnostics), which builds the file and
+   shows the system share sheet. It only queues the request and does not wait (the worker thread in text_input_jni.c calls Java);
+   callable on the game main thread. */
+void front_android_share_log(const char *log_path);
 #ifdef __cplusplus
 }
 #endif
