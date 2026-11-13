@@ -58,3 +58,24 @@ inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *devi
     const int model=xbg_adreno_model(device_name);
     return model>=750 && model<800;
 }
+
+// Adreno 8xx：计算派发会多跑范围之外的调用（#256：830 上局部尺寸 8×4×1、y 方向工作组数为奇数时多一行工作组；#261 的 825 症状
+// 相同），计算着色器载入时在入口加派发范围检查（xbg_spirv_dispatch.cpp）。标记文件 gfx-dispatch-guard 可显式开关（1 / 0）。
+// Adreno 8xx: a compute dispatch also runs invocations outside its range (#256: on the 830, one extra row of work groups for
+// local size 8x4x1 and an odd y group count; the 825 in #261 shows the same symptom), so compute shaders get the dispatch-range
+// check at their entry when they load (xbg_spirv_dispatch.cpp). The marker file gfx-dispatch-guard turns it on or off
+// explicitly (1 / 0).
+inline bool xbg_adreno_dispatch_overruns(uint32_t vendor_id,const char *device_name){
+    if(vendor_id!=0x5143)return false;
+    const int model=xbg_adreno_model(device_name);
+    return model>=800 && model<900;
+}
+
+// 优先顺序：标记文件（只有明确的 0 关闭），其次机型判断（这一族缺省开），最后环境变量 DM_GFX_DISPATCH_GUARD（别的机型想开时用）。
+// Precedence: an existing marker (only an explicit 0 turns it off), then the device family (on by default there), and the
+// environment variable DM_GFX_DISPATCH_GUARD last (for turning it on elsewhere).
+inline bool xbg_adreno_dispatch_guard_option(bool marker_present,int marker,const char *environment,bool driver_overruns){
+    if(marker_present)return marker!='0';
+    if(driver_overruns)return true;
+    return environment && atoi(environment)!=0;
+}
