@@ -968,6 +968,10 @@ static void hud_tick(uint64_t G) {        // 每拍：受控玩家等级 / 本�
     // 副手组技能（dm_actions.c）：发布服务端记的当前武器组 [[玩家+0x10]+0xf0]+0x5a0（换武器包尾要带它，服务端 0x6de790 比对）
     // Off-hand set skills (dm_actions.c): publish the current weapon set as recorded by the server [[player+0x10]+0xf0]+0x5a0 (the weapon swap packet must carry it at the end; the server's 0x6de790 compares it)
     { void dm_swapskill_srv_wset(int); uint64_t pd = 0, q = 0; uint8_t w = 0; if (player && tk_rd(player + 0x10, &pd, 8) && pd && tk_rd(pd + 0xf0, &q, 8) && q && tk_rd(q + 0x5a0, &w, 1)) dm_swapskill_srv_wset(w); }
+    // 弹药源（箭袋 / 投掷武器）：只在服务端玩家上读得到，客户端那份背包没有装备页数组——每拍在这里发布一份给前端
+    // Ammo source (quiver / throwing weapon): only readable off the server player (the client copy has no equipment-page
+    // array), so it is published here every tick for the front end
+    { void dm_ammo_publish(uint8_t *, uint64_t); module_t *m2 = main_mod(); if (m2 && player) dm_ammo_publish((uint8_t *)m2->base, player); }
     // 免费鉴定（未鉴定物品双击，触摸层 → dm_actions.c dm_item_identify_free 记下物品 id）：在服务端拍里调游戏自己的鉴定函数
     // main+0x78acf0(游戏, 服务端玩家, 服务端物品)——鉴定卷轴 / 书在服务端走的那个（misc.txt pSpell 表 0x20ad7e8 第 1 项），凯恩「鉴定全部」最后也调它：
     // 已鉴定返回 0；否则经 0x64c5f0 置 [物品数据+0x18] |= 0x10 并自己广播物品更新（0x9c / 0x9d）。不扣卷轴（扣数是外层 0x786410 的事）、不查位置、不要 NPC

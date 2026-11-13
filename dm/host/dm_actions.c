@@ -18,6 +18,7 @@
 //            whether a point can be added = main+0xc368b0(skill id).
 #include "dm_prof.h"
 #include "dm_actions.h"
+#include "dm_ammo.h"
 #include "dm_cursor_item.h"
 #include "dm_elysium.h"
 #include "dm_custom.h"
@@ -360,6 +361,22 @@ static _Atomic uint64_t g_ss_map[6];       // 6 个面：手柄位 | 普通格 <
 static _Atomic uint32_t g_ss_equipped[16]; static _Atomic int g_ss_neq;   // 身上穿着的物品 id（两组都算） | Ids of the items being worn (both sets counted)
 void dm_swapskill_srv_wset(int w) { atomic_store(&g_ss_srv_wset, w); }
 int dm_swapskill_wset(void) { return atomic_load(&g_ss_srv_wset); }
+// 手柄面 → 技能槽：直接用绑定表旁那张面映射表（main+0x2d13cbc，6 × {逻辑键, 普通格, 替代格}，swapskill_pump 每帧填）。
+// 移植层自己的技能钮读取走一套「六个面都观测到」的快照（dm_tg_group_observe 里 seen==63），
+// 技能钮有空槽时游戏不会去查那一面，六面永远凑不齐、快照不 ready，前端拿到的 slot 就是 -1。
+// Face -> skill slot, straight from the face mapping table next to the bindings (main+0x2d13cbc, 6 x {logical button,
+// normal cell, alternate cell}, filled every frame by swapskill_pump). The port's own readout needs an "all six faces
+// observed" snapshot (seen==63); with empty skill buttons the six never complete and the front end gets slot = -1.
+int dm_swapskill_face_slot(uint64_t button, int set) {
+    if (!button) return -1;
+    for (int i = 0; i < 6; i++) {
+        uint64_t m = atomic_load(&g_ss_map[i]);
+        if (!m || (m & 0xffffffffull) != (button & 0xffffffffull)) continue;
+        int slot = (int)(set ? ((m >> 40) & 0xff) : ((m >> 32) & 0xff));
+        return (slot >= 0 && slot < 12) ? slot : -1;
+    }
+    return -1;
+}
 int dm_swapskill_busy(void) { return atomic_load(&g_ss_phase) != SS_IDLE; }   // 副手组技能的连招在进行（增益自动补 dm_autobuff.c 这时不自己换武器） | an off-hand-set skill combo is in progress (buff auto-recast dm_autobuff.c does not swap weapons itself meanwhile)
 static _Atomic uint32_t g_ss_itemsig; uint32_t dm_swapskill_itemsig(void) { return atomic_load(&g_ss_itemsig); }   // 客户端技能链表里物品给的技能（技能号、物品 id）的指纹 | Fingerprint of the item-granted skills (skill id, item id) in the client skill linked list
 int dm_swapskill_slot(int slot, int *charges) {   // 1 = 技能在另一组（画「II」），2 = 充能技能（画次数），4 = 当前组也有同号技能（按下用当前组那个，不换武器）；可叠加 | 1 = the skill is in the other set (draw "II"), 2 = charged skill (draw the count), 4 = the current set also has a skill with the same id (a press uses the one in the current set, no weapon swap); can be combined
@@ -409,6 +426,7 @@ static void swapskill_pump(uint8_t *b, uint64_t pl) {
     { uint32_t h = 2166136261u; uint64_t l = *(uint64_t *)(pl + 0x100), n = l ? *(uint64_t *)l : 0;
       for (int k = 0; n && k < 1024; k++, n = *(uint64_t *)(n + 8)) { uint64_t r = *(uint64_t *)n; int32_t itm = *(int32_t *)(n + 0x44); if (r && itm != -1) { h = (h ^ (uint16_t)*(int16_t *)r) * 16777619u; h = (h ^ (uint32_t)itm) * 16777619u; } }
       atomic_store(&g_ss_itemsig, h); }
+    dm_ammo_src asrc; if (!dm_ammo_get(&asrc)) memset(&asrc, 0, sizeof asrc);   // 弹药源由服务端每拍发布（客户端背包没有装备页，见 dm_ammo.c） | the ammo source is published by the server tick (the client inventory has no equipment page, see dm_ammo.c)
     for (int s = 0; s < 12; s++) { int id = *(int32_t *)(b + 0x2d5f0c0 + 28 * s), item = *(int32_t *)(b + 0x2d5f0c0 + 28 * s + 4), kind = 0, ch = -1;
         if (id >= 0 && item != -1) { uint64_t owner = 0; for (int e = 0; e < neq; e++) if (*(int32_t *)(eqit[e] + 8) == item) owner = eqit[e];
             if (owner) { ch = ss_item_charges(owner, id); if (ch >= 0) kind |= 2;
@@ -417,6 +435,7 @@ static void swapskill_pump(uint8_t *b, uint64_t pl) {
                         for (int e = 0; e < neq && alt != -1; e++) if (*(int32_t *)(eqit[e] + 8) == alt) { ch = ss_item_charges(eqit[e], id); if (ch >= 0) kind |= 2; } }
                     else kind |= 1; } } }
         else if (id >= 0 && item == -1 && ss_node_any(pl, id) == -2 && dm_swapskill_offhand_gives(id)) kind = 1;   // 战争召唤这类（物品 -1）：当前组没有、换手那组给 = 在另一组，按下换武器放 | Call to Arms style (item -1): absent from the current set, granted by the swap set = in the other set; a press swaps weapons and casts
+        if (id >= 0 && ch < 0) { int aq = dm_ammo_for_skill(b, pl, &asrc, id); if (aq >= 0) { kind |= 2 | 8; ch = aq; } }   // 弹药：bit1 让前端画数字，bit3 说明这是弹药（≤50 变红、0 不变灰） | ammo: bit1 makes the front end draw the number, bit3 marks it as ammo (red at 50 or less, no grey-out at 0)
         atomic_store(&g_ss_kind[s], kind); atomic_store(&g_ss_charges[s], ch < 0 ? 0 : ch); }
     // 测试开关 DM_TEST_SS_ALT=1（造现场）：把「在另一组」的那格绑定抄到同一个面的第二套（按住 ZL 那套）格里，验第二套技能上的副手组技能。
     // 每拍对齐一次：进局头几拍绑定里的物品 id 还是存档里的旧号，游戏随后才改成本局的号（先 14 后 13），只抄一次会抄到旧号
