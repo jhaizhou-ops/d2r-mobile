@@ -114,9 +114,24 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         getWindow().getAttributes().layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         view = new SurfaceView(this);
         view.getHolder().addCallback(this);
+        // 屏幕安全区挂在「游戏画面」上报，不挂在触屏层上：手柄模式下触屏层是 GONE，系统不再往它派发 insets，
+        // 挂在它身上的回调不跑，左上角的佣兵 / 召唤生物头像栏就没人让位，被屏幕左上角的圆角切掉
+        // （真机日志：触屏模式有「安全区：头像 0 x 0 → 257」，手柄模式里没有这一行）。
+        // 游戏画面在两种模式下都在屏上，这份两种模式都报得到；触屏层自己那份（摆控件用的）照旧挂在层上，不动。
+        // The screen's safe area is reported from the game picture instead of from the touch layer: in controller mode the touch layer is GONE and the system
+        // stops dispatching insets to it, so the callback attached to it never runs and nobody moves the mercenary / summon portrait bar in the top left - the
+        // screen's rounded corner cuts it off (real-device log: touch mode has "安全区：头像 0 x 0 → 257", controller mode has no such line).
+        // The game picture is on screen in both modes, so this reaches the host in both; the touch layer's own copy (for laying out its controls) stays on the layer, untouched.
+        view.setOnApplyWindowInsetsListener((v, insets) -> {
+            android.graphics.Insets safe = insets.getInsets(WindowInsets.Type.displayCutout());
+            int h = v.getHeight() > 0 ? v.getHeight() : getWindow().getDecorView().getHeight();
+            TouchOverlay.feedUiSafeInsets(safe.left, safe.right, h);
+            return insets;
+        });
         gameFrame = new FrameLayout(this);
         gameFrame.addView(view, new FrameLayout.LayoutParams(-1, -1));
         setContentView(gameFrame);
+        view.requestApplyInsets();
         immersive();
     }
 
@@ -534,6 +549,9 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     @Override public void surfaceCreated(SurfaceHolder h) {}
     @Override public void surfaceChanged(SurfaceHolder h, int format, int w, int ht) {
         if (libraryLoaded) nativeSurface(h.getSurface(), w, ht);
+        // 画面尺寸落定（第一次进全屏、转屏）后再要一次 insets：这条时刻 v.getHeight() 才是真值，安全区那份报得准
+        // Ask for the insets once the picture size is settled (first time going fullscreen, rotation): only at this moment is v.getHeight() the real value, so the safe area is reported accurately
+        view.requestApplyInsets();
         updateRefresh();
         startHost();
     }
