@@ -480,6 +480,12 @@ static void w_mouse_cancel_pending(void) {
     if (dm_touch_host_world_active()) return;
     if (atomic_exchange(&g_tap_mouse, 0)) atomic_store(&g_tap, 0);
     atomic_store(&g_walk, 0);
+    // 点地移动已经消费成路线后也必须取消。死亡弹窗打开后继续发跑步令，
+    // 会把客户端的死亡动作改成跑步，导致「继续」无法走复活流程。
+    // Also cancel a ground route that has already consumed its queued click.
+    // Sending run commands after YouDiedModal opens replaces the client's death
+    // animation with running and prevents Continue from completing resurrection.
+    if (g_go.on && g_go.type == W_GROUND) g_go.on = 0;
 }
 #endif
 static void w_tap_step(uint8_t *b) {
