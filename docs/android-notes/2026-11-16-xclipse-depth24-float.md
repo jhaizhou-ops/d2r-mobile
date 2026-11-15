@@ -35,4 +35,5 @@
 ## Not covered
 
 - Needs a test on an Xclipse phone (the #250 reporters will be asked).
+- Shadows on Xclipse: the game samples its D16 shadow maps (and the scene depth) with linear filtering plus depth compare, and Xclipse can linearly filter no depth format. The existing sampler fallback switches those samplers to NEAREST, so expect hard, stair-stepped shadow edges where Snapdragon shows soft ones. The Redmi runs don't show this for shadow maps: there D16 uses the X8_D24 stand-in, which filters linearly. If it looks too rough, the follow-up is filtering in the shader (several point-sampled compares blended). Keep #250 open until a reporter has checked shadows too.
 - If the reporters' logs show depth bias on the stand-ins and shadow acne or z-fighting, `VK_EXT_depth_bias_control` (where offered) can request the D24 unit exactly.
