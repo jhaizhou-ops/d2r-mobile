@@ -2016,7 +2016,7 @@ void pipe_memo_fill(PipeMemoKey &k,const void *layout,const void *pass_def,VkRen
 void validate_capabilities(const std::vector<uint32_t> &w,uint32_t stage){
     need(w.size()>=5 && w[0]==0x07230203,"Invalid packaged SPIR-V");bool group_operations=false;VkSubgroupFeatureFlags groups=0;
     for(size_t i=5;i<w.size();){uint32_t count=w[i]>>16,op=w[i]&65535;need(count && i+count<=w.size(),"Invalid SPIR-V instruction bounds");if(op>=333 && op<=366)group_operations=true;
-        if(op==17){uint32_t cap=w[i+1];bool ok=true;switch(cap){case 1:case 46:case 47:case 50:break;case 2:ok=cfg.enabled_core.geometryShader;break;case 3:ok=cfg.enabled_core.tessellationShader;break;case 10:ok=cfg.enabled_core.shaderFloat64;break;case 11:ok=cfg.enabled_core.shaderInt64;break;case 22:ok=cfg.enabled_core.shaderInt16;break;case 25:ok=cfg.enabled_core.shaderImageGatherExtended;break;case 32:ok=cfg.enabled_core.shaderClipDistance;break;case 33:ok=cfg.enabled_core.shaderCullDistance;break;case 35:ok=cfg.enabled_core.sampleRateShading;break;case 49:ok=cfg.enabled_core.shaderStorageImageExtendedFormats;break;case 55:ok=cfg.enabled_core.shaderStorageImageReadWithoutFormat;break;case 56:ok=cfg.enabled_core.shaderStorageImageWriteWithoutFormat;break;case 61:groups|=VK_SUBGROUP_FEATURE_BASIC_BIT;break;case 62:groups|=VK_SUBGROUP_FEATURE_VOTE_BIT;break;case 63:groups|=VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;break;case 64:groups|=VK_SUBGROUP_FEATURE_BALLOT_BIT;break;case 65:groups|=VK_SUBGROUP_FEATURE_SHUFFLE_BIT;break;case 66:groups|=VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;break;case 4427:ok=cfg.enabled_shader_draw_parameters;break;default:xbg_fatalf("Shader stage %u has unhandled capability %u",stage,cap);}if(!ok)xbg_fatalf("Shader stage %u requires disabled capability %u",stage,cap);}
+        if(op==17){uint32_t cap=w[i+1];bool ok=true;switch(cap){case 1:case 46:case 47:case 50:case 51:break;case 2:ok=cfg.enabled_core.geometryShader;break;case 3:ok=cfg.enabled_core.tessellationShader;break;case 10:ok=cfg.enabled_core.shaderFloat64;break;case 11:ok=cfg.enabled_core.shaderInt64;break;case 22:ok=cfg.enabled_core.shaderInt16;break;case 25:ok=cfg.enabled_core.shaderImageGatherExtended;break;case 32:ok=cfg.enabled_core.shaderClipDistance;break;case 33:ok=cfg.enabled_core.shaderCullDistance;break;case 35:ok=cfg.enabled_core.sampleRateShading;break;case 49:ok=cfg.enabled_core.shaderStorageImageExtendedFormats;break;case 55:ok=cfg.enabled_core.shaderStorageImageReadWithoutFormat;break;case 56:ok=cfg.enabled_core.shaderStorageImageWriteWithoutFormat;break;case 61:groups|=VK_SUBGROUP_FEATURE_BASIC_BIT;break;case 62:groups|=VK_SUBGROUP_FEATURE_VOTE_BIT;break;case 63:groups|=VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;break;case 64:groups|=VK_SUBGROUP_FEATURE_BALLOT_BIT;break;case 65:groups|=VK_SUBGROUP_FEATURE_SHUFFLE_BIT;break;case 66:groups|=VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;break;case 4427:ok=cfg.enabled_shader_draw_parameters;break;default:xbg_fatalf("Shader stage %u has unhandled capability %u",stage,cap);}if(!ok)xbg_fatalf("Shader stage %u requires disabled capability %u",stage,cap);}
         if(op==10)xbg_fatalf("Shader stage %u declares extension requiring explicit backend support",stage);i+=count;
     }
     need((subgroup.supportedOperations&groups)==groups,"Required subgroup operations unavailable");if(group_operations)need(subgroup.supportedStages&(1u<<stage),"Actual subgroup operation unsupported in shader stage");
@@ -2028,13 +2028,26 @@ void validate_capabilities(const std::vector<uint32_t> &w,uint32_t stage){
 // loaders apply it, so the warm-up builds the same modules the game binds. Off unless the host asks
 // (DM_GFX_QUAD_DERIVATIVES, which the Android app sets to 1; marker gfx-quad-derivatives = 1 / 0).
 bool quad_derivatives=false;std::atomic<uint64_t> quad_rewrites{0};
+// 片元阶段不支持子组操作的驱动（Adreno 650 旧驱动、Maleoon 910：supportedStages 只有计算阶段，#243 #155）：片元着色器的
+// shuffle 不管 gfx-quad-derivatives 怎么设都改写，用放宽模式，再去掉改写后不用的辅助函数、内置变量和能力声明；不然载入时
+// 的能力检查会中止（D2R：182 个片元着色器各有一个 shuffle 辅助函数）。标记 gfx-no-fragment-subgroups（1）或
+// DM_GFX_NO_FRAGMENT_SUBGROUPS=1 在支持的设备上假装不支持，用来测试。
+// Drivers without subgroup operations in the fragment stage (old Adreno 650 drivers, Maleoon 910: supportedStages holds only
+// compute, #243 #155): fragment shuffles are rewritten whatever gfx-quad-derivatives says, in relaxed mode, and the helper
+// functions, built-in variables and capability declarations the rewrite leaves unused are removed; otherwise the capability
+// check aborts at load (D2R: 182 fragment shaders with one shuffle helper each). The marker gfx-no-fragment-subgroups (1) or
+// DM_GFX_NO_FRAGMENT_SUBGROUPS=1 pretends a supporting device lacks it, for testing.
+bool fragment_subgroups=true;
 void quad_rewrite(std::vector<uint32_t> &words,uint32_t stage,const char *key,const char *loader){
-    if(!quad_derivatives || stage!=4)return;
+    if(stage!=4 || (!quad_derivatives && fragment_subgroups))return;
+    const bool relaxed=!fragment_subgroups;
     std::vector<uint32_t> out;xbg_spirv_quad_stats counts;
-    size_t k=xbg_spirv_quad_derivatives(words.data(),words.size(),out,&counts);
+    size_t k=xbg_spirv_quad_derivatives(words.data(),words.size(),out,&counts,relaxed);
     if(k){words.swap(out);quad_rewrites.fetch_add(k,std::memory_order_relaxed);}
+    size_t stripped=0;if(relaxed && k){stripped=xbg_spirv_strip_subgroup(words.data(),words.size(),out);if(stripped)words.swap(out);}
     if(counts.candidates || counts.calls){
         char line[768];int at=snprintf(line,sizeof(line),"NVN quad shader=%s loader=%s candidates=%zu rewritten=%zu guarded_nonfinite=%zu calls=%zu calls_rewritten=%zu",key,loader,counts.candidates,counts.rewritten,counts.guarded_nonfinite,counts.calls,counts.calls_rewritten);
+        if(relaxed)at+=snprintf(line+at,sizeof(line)-at," relaxed_float=%zu integer=%zu stripped=%zu",counts.calls_relaxed_float,counts.calls_integer,stripped);
         for(size_t r=0;r<size_t(xbg_quad_skip::count) && at<int(sizeof(line))-64;++r)if(counts.skipped[r])at+=snprintf(line+at,sizeof(line)-at," skip_%s=%zu",xbg_spirv_quad_skip_name(xbg_quad_skip(r)),counts.skipped[r]);
         for(size_t r=0;r<size_t(xbg_quad_call_skip::count) && at<int(sizeof(line))-64;++r)if(counts.call_skipped[r])at+=snprintf(line+at,sizeof(line)-at," call_skip_%s=%zu",xbg_spirv_quad_call_skip_name(xbg_quad_call_skip(r)),counts.call_skipped[r]);
         xbg_logf("%s",line);
@@ -2134,7 +2147,7 @@ Shader *load_shader(const void *control){
     // Time of each part of the load (file read, SPIR-V rewrites, analysis, module creation), for the loaded line below.
     const uint64_t load_t1=timing_clock();uint64_t load_t2=0,load_t3=0;
     auto p=std::make_unique<Shader>();p->key=key;p->stage=h.stage;p->bindings.resize(h.binding_count);memcpy(p->bindings.data(),bytes.data()+offset,h.binding_count*sizeof(xbg_shader_binding));offset+=h.binding_count*sizeof(xbg_shader_binding);p->inputs.resize(h.input_count);memcpy(p->inputs.data(),bytes.data()+offset,h.input_count*4);offset+=h.input_count*4;p->c1.assign(bytes.begin()+offset,bytes.begin()+offset+h.c1_bytes);offset+=h.c1_bytes;
-    std::vector<uint32_t> words(h.spirv_bytes/4);memcpy(words.data(),bytes.data()+offset,h.spirv_bytes);spv_override(key,words);validate_capabilities(words,h.stage);
+    std::vector<uint32_t> words(h.spirv_bytes/4);memcpy(words.data(),bytes.data()+offset,h.spirv_bytes);spv_override(key,words);
     // gfx-shader-reuse：预热线程已改写过这个着色器时直接取用；2 时照样改写，与取来的逐字比对。
     // gfx-shader-reuse: take the warm-up threads' rewrite of this shader when there is one; with 2, rewrite as well and compare word by word.
     std::vector<uint32_t> reused;const bool have_reused=shader_reuse && !ab_off("shreuse") && warm::take_rewritten(key,reused);
@@ -2145,6 +2158,10 @@ Shader *load_shader(const void *control){
     if(!have_reused || shader_reuse==2){inlined=inline_rewrite(words,key);quad_rewrite(words,h.stage,key.c_str(),"runtime");warp_rewrite(words,h.stage,key.c_str(),"runtime");tidy_rewrite(words);
         if(have_reused && reused!=words){++shader_reuse_mismatches;xbg_logf("NVN shader reuse MISMATCH %s stage=%u words=%zu/%zu",key.c_str(),h.stage,reused.size(),words.size());}}
     else words.swap(reused);
+    // 能力检查放在改写之后：片元阶段不支持子组的驱动上，改写才去掉 shuffle（#243 #155）。
+    // The capability check runs after the rewrites: on drivers without fragment subgroups the rewrite is what removes the
+    // shuffles (#243 #155).
+    validate_capabilities(words,h.stage);
     if(have_reused)++shaders_reused;
     load_t2=timing_clock();
     {auto extent=spirv_uniform_extent(words);uint32_t trimmed=0;for(auto &b:p->bindings)if(b.type==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && b.source==XBG_SOURCE_UNIFORM){auto e=extent.find(b.binding);uint32_t declared=b.bytes?b.bytes:65536;if(e!=extent.end() && e->second<declared){b.bytes=e->second;++trimmed;}}uniform_trimmed+=trimmed;}
@@ -4154,6 +4171,10 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
      if(rewrites_fault)xbg_logf("NVN Adreno 740/750 (device \"%s\"): the quad-derivative and warp32 rewrites default off; a marker file still turns either on",properties.deviceName);
      auto sw=[&](const char *marker,const char *env){FILE *q=fopen((base+marker).c_str(),"rb");const bool present=q!=nullptr;int c=-1;if(q){c=fgetc(q);fclose(q);}return xbg_adreno_rewrite_option(present,c,getenv(env),rewrites_fault);};
      quad_derivatives=sw("/gfx-quad-derivatives","DM_GFX_QUAD_DERIVATIVES");
+     {bool pretend=false;FILE *q=fopen((base+"/gfx-no-fragment-subgroups").c_str(),"rb");if(q){pretend=fgetc(q)!='0';fclose(q);}else if(const char *e=getenv("DM_GFX_NO_FRAGMENT_SUBGROUPS"))pretend=atoi(e)!=0;
+      if(pretend)subgroup.supportedStages&=~VkShaderStageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+      fragment_subgroups=(subgroup.supportedStages&VK_SHADER_STAGE_FRAGMENT_BIT)!=0;
+      xbg_logf("NVN fragment subgroups=%d stages=%#x%s: %s",int(fragment_subgroups),subgroup.supportedStages,pretend?" (marker gfx-no-fragment-subgroups)":"",fragment_subgroups?"fragment shuffles as configured":"fragment shuffles rewritten to derivatives in relaxed mode, unused helpers removed");}
      warp32=sw("/gfx-warp32","DM_GFX_WARP32");
      xbg_logf("NVN quad shuffles to fine derivatives=%d (marker gfx-quad-derivatives)",int(quad_derivatives));
      xbg_logf("NVN 32-lane warps in wider subgroups=%d subgroup=%u (marker gfx-warp32)",int(warp32),subgroup.subgroupSize);
