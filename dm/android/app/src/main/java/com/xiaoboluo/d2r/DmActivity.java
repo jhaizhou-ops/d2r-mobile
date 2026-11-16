@@ -319,6 +319,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
                 case SaveTransfer.IMPORTED -> r.path == null ? (r.skipped == null ? null : getString(R.string.dmAndroidSaveImportNothing, r.skipped))
                     : r.skipped == null ? getString(R.string.dmAndroidSaveImported, r.path) : getString(R.string.dmAndroidSaveImportedSome, r.path, r.skipped);
                 case SaveTransfer.IMPORT_REJECTED -> getString(R.string.dmAndroidSaveImportRejected, r.path);
+                case SaveTransfer.IMPORT_PARTIAL -> getString(R.string.dmAndroidSaveImportPartial, r.path, r.skipped);
                 default -> getString(R.string.dmAndroidSaveTransferFailed, r.path);
             };
             android.util.Log.i("dm", "存档导出 / 导入：结果 " + r.kind + "，" + r.path + (r.skipped == null ? "" : "，已有没导：" + r.skipped) + (r.merge == SaveTransfer.MERGE_NONE ? "" : "，共享仓库并回 " + r.merge));
