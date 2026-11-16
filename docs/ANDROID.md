@@ -112,4 +112,6 @@ A short message on the screen says what was imported and what was skipped. If no
 | This import pack does not match this version of the app | Redo step 1 with the source of the same release as the APK |
 | The import did not finish | Usually not enough free space; free about 1 GB and open the App again |
 
+To report a problem from in game, open the pause menu and tap **Share Diagnostics**: the App writes one text file with the phone model, Android version, App version and the game's log of this run and the previous one, and opens Android's share sheet so you can send it or save it. The file holds no saves, account or location. Look it over before you post it.
+
 To build the APK yourself from source, or for the layout of the Android source, see [dm/android/README.md](../dm/android/README.md).
