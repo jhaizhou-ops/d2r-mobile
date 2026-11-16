@@ -30,6 +30,8 @@ namespace Ryujinx.Common.Logging.Formatters
             }
         }
 
+        // D2R-Mobile: only formats log lines; under NativeAOT properties the trimmer removed are simply not listed (shader translation output is unaffected)
+        [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Log formatting only; missing properties are omitted from the log line")]
         public static void Format(StringBuilder sb, object? dynamicObject)
         {
             if (dynamicObject is null)
