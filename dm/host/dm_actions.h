@@ -43,6 +43,12 @@ void dm_belt_use_merc(int col, int row);   // 同上，但喂给雇佣兵（腰�
 int  dm_belt_rows(int *expanded);          // 腰带排数（1–4，取决于身上的腰带）；expanded 非空时写 1 = 现在展开着。读的是主线程每帧发布的快照 | belt row count (1–4, depending on the belt worn); when expanded is non-null, writes 1 = currently expanded. Reads the snapshot the main thread publishes every frame
 void dm_held_equip(int bodyloc);          // 把手上拿着的物品放到身上这个栏位（原版装备槽「手上有物品时按确认键」的同一个函数 main+0x3bb24c；空槽 = 装上，有物品 = 交换；原版拒绝的不动）。任意线程调 | put the held item into this body slot (the same function as the original game's equipment slot "press confirm while holding an item", main+0x3bb24c; empty slot = equip, occupied = swap; nothing happens for what the original game rejects). Callable from any thread
 void dm_inv_sort(int page);                // 整理（自动排列）：page 0 背包、3 赫拉迪克方块、4 个人储藏箱当前页。原版「按住排序」的终点函数，不等长按。任意线程调 | sort (auto-arrange): page 0 inventory, 3 Horadric Cube, 4 current page of the personal stash. The endpoint function of the original game's "hold to sort", without waiting for the long press. Callable from any thread
+// 整理触屏长按的那个物品格（共享仓库的页也行）：照原版手柄「按住排序」（main+0x3b2e58–0x3b2ea0）取格子自己的属主单位号 [格子+0x5c4]、
+// 属主类型 [格子+0x5c8] 与页 [格子+0x630]。共享仓库各页的属主不是玩家，dm_inv_sort（属主固定是玩家）整理不到它们（#241 第 2 条）。任意线程调
+// Sort the item grid that was long-pressed by touch (shared stash pages too): as the original controller's "hold to sort" does
+// (main+0x3b2e58–0x3b2ea0), take the grid's own owner unit id [grid+0x5c4], owner type [grid+0x5c8] and page [grid+0x630]. The shared
+// stash pages are not owned by the player, so dm_inv_sort (whose owner is always the player) cannot sort them (#241 item 2). Any thread
+void dm_inv_sort_grid(uint32_t owner_id, uint32_t owner_type, int page);
 void dm_name_random(void);                 // 建角起名页：给名字框填一个随机名（原版「随机名字」键的同一条消息）。名字面板开着时有效。任意线程调 | character creation naming page: fill the name box with a random name (the same message as the original game's 「随机名字」(Random Name) button). Valid while the name panel is open. Callable from any thread
 int dm_name_taken(const char *name);       // 已有这个名字的角色（存档工作目录下有同名目录）返回 1 | returns 1 if a character with this name already exists (a same-named directory exists under the save working directory)
 int dm_name_gen(char *out, int cap, int (*taken)(const char *));   // 起名页留空时用的随机名（dm_namegen.c）：音节拼接，taken 非 0 就再抽，至多 64 次；成功返回 1 | random name used when the naming page is left blank (dm_namegen.c): syllable concatenation, draws again if taken is non-zero, at most 64 times; returns 1 on success
