@@ -51,3 +51,18 @@ A survey of the import pack (4,559 fragment shaders) with the engine's own rewri
 - No Adreno 650 or Maleoon 910 here; the Redmi only fakes the missing feature.
 - Adreno 650: the fluid compute shader `098a126f92bf533a` still fails to build there (`VK_ERROR_UNKNOWN`, #155), so smoke and fire show garbage blocks. Separate change.
 - Maleoon 910: #249 reports a driver crash while drawing characters once the check is passed. Not addressed here.
+
+## Follow-up (2026-11-17): the inlining order on a real Adreno 650
+
+@kieusonlam tested #280 on a Retroid Pocket 5 (stock driver, `stages=0x20`, #243). Neither `gfx-inline` setting booted:
+- With `gfx-inline=1`, the helpers were inlined before the quad rewrite. The shuffles then sat in the entry function under divergent control flow, the rewrite replaced none of them, and the check aborted.
+- With `gfx-inline=0`, the fluid compute shader `098a126f92bf533a` crashed `libllvm-qgl.so` (addr 0x48), the Adreno 750 family's compiler crash.
+
+Change:
+- `front_rewrites`: on drivers without fragment subgroups, the quad rewrite and clean-up run before the inlining. With fragment subgroups the order is unchanged.
+- `xbg_adreno_inline_default`: inlining is on by default for the 750–799 family and for Qualcomm drivers without fragment subgroups. The marker `gfx-inline` still wins.
+
+Verification:
+- `tests/adreno_policy_test.cpp` passes with 7 new cases.
+- Offline, the Adreno 650 chain (fragment: relaxed quad + clean-up, then inlining; compute: inlining, warp32, tidy) fails the check on 0 of 6,931 shaders. No fragment shader still needs inlining, and all 187 modules with subgroup use pass spirv-val, including the 5 compute shaders that are inlined and then go through warp32.
+- Redmi (Adreno 730), camp, switch on, so inlining is on by default: no abort. 17 fragment shaders were rewritten before inlining (`stripped=4`), none of them inlined; `098a126f92bf533a` and `6a7a308d61928982` were inlined, then warp32. Warm-up 392 built, 0 failed, 178 hits, 0 created during play, GPU 14.34 ms. With the switch off: inlining stays off as before, 14.38 ms. The screenshots differ only in animated content.
