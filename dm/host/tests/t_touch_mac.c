@@ -59,6 +59,7 @@ int dm_screen_real(int *w, int *h) { *w = 1600; *h = test_real_h; return test_re
 int dm_uiscreen_ingame(void) { return test_in; }
 void dm_uiscreen_set_ingame(int on) { (void)on; }   // 界面矩形（dm_uiscreen.c）的桩：没开真全屏 | stub for the UI rectangle (dm_uiscreen.c): true full screen not enabled
 void dm_inv_sort(int page) { (void)page; }
+void dm_inv_sort_grid(uint32_t owner, uint32_t type, int page) { (void)owner; (void)type; (void)page; }   // 长按空格按物品格自己的属主排序（dm_actions.c） | long press on an empty cell sorts by the grid's own owner (dm_actions.c)
 int dm_diag_difficulty(void) { return -1; }
 uint64_t dm_fs_commit_count(void) { return 0; }
 void dm_held_equip(int bodyloc) { (void)bodyloc; }
