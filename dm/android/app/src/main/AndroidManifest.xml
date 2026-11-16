@@ -41,5 +41,9 @@
             <meta-data android:name="vivoWidgetVersion" android:value="1" />
             <meta-data android:name="vivo.widget.description" android:resource="@string/dmAndroidWidgetDescription" />
         </receiver>
+        <!-- 暂停菜单「分享诊断日志」的文件只经分享意图上的一次性授权给出去（#216，ShareLogProvider） -->
+        <!-- The pause menu's Share Diagnostics file only goes out through the share intent's one-off grant (#216, ShareLogProvider) -->
+        <provider android:name=".ShareLogProvider" android:authorities="${applicationId}.sharelog"
+            android:exported="false" android:grantUriPermissions="true" />
     </application>
 </manifest>
