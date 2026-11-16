@@ -156,6 +156,9 @@ static Quad evaluate_call(const Words &w,const Quad &input,uint32_t xor_value) {
         if(op==57)for(unsigned l=0;l<4;++l)u[p[2]][l]=memory[p[4]][l^xor_value];
         if(op==81)for(unsigned l=0;l<4;++l)u[p[2]][l]=bits(vectors[p[3]][l][p[4]]);
         if(op==109)for(unsigned l=0;l<4;++l)u[p[2]][l]=uint32_t(f(u[p[3]][l]));
+        if(op==110)for(unsigned l=0;l<4;++l)u[p[2]][l]=uint32_t(int32_t(f(u[p[3]][l])));
+        if(op==111)for(unsigned l=0;l<4;++l)u[p[2]][l]=bits(float(int32_t(u[p[3]][l])));
+        if(op==83)u[p[2]]=u[p[3]];
         if(op==199)for(unsigned l=0;l<4;++l)u[p[2]][l]=u[p[3]][l]&u[p[4]][l];
         if(op==171)for(unsigned l=0;l<4;++l)b[p[2]][l]=u[p[3]][l]!=u[p[4]][l];
         if(op==210 || op==211) {Quad q;for(unsigned l=0;l<4;++l)q[l]=f(u[p[3]][l]);
@@ -254,6 +257,57 @@ static void run_tests(const fs::path &output={}) {
         if(!output.empty())save(output/(std::string(test.name)+"-unchanged.spv"),original);
         ++cases;
     }
+    // 放宽模式（片元阶段不支持子组的驱动，#243 #155）：已证明的调用与缺省模式逐字相同；结果另有按位用途的按浮点改写，值来自
+    // 浮点转整数的转回浮点取邻居再转整数，两者都得到邻居的精确值；分叉控制流里的调用仍然不改。
+    // Relaxed mode (drivers without fragment subgroups, #243 #155): proven calls come out word for word as in the default
+    // mode; a call whose result has bit uses is rewritten as floats, and one whose value comes from a float-to-integer
+    // conversion goes back to float, takes the neighbour and converts again, both giving the neighbour's exact value; a call
+    // under divergent control flow is still left alone.
+    auto has_op=[](const Words &w,uint32_t wanted,uint32_t operand,int at){
+        for(size_t i=5;i<w.size();i+=w[i]>>16)if((w[i]&65535)==wanted && (at<0 || (int(w[i]>>16)>at && w[i+size_t(at)]==operand)))return true;return false;};
+    auto group_ops=[](const Words &w){size_t k=0;for(size_t i=5;i<w.size();i+=w[i]>>16)if((w[i]&65535)>=333 && (w[i]&65535)<=366)++k;return k;};
+    for(uint32_t x=1;x<=3;++x) {
+        auto original=call_fixture(x,0x1c03,Call::plain);Words strict,relaxed;xbg_spirv_quad_stats stats;
+        assert(xbg_spirv_quad_derivatives(original.data(),original.size(),strict,&stats)==1);
+        assert(xbg_spirv_quad_derivatives(original.data(),original.size(),relaxed,&stats,true)==1);
+        assert(strict==relaxed && stats.calls_relaxed_float==0 && stats.calls_integer==0);++cases;
+        Quad values={1,4,-7,20};
+        auto bit_use=call_fixture(x,0x1c03,Call::integer_use);
+        assert(!xbg_spirv_quad_derivatives(bit_use.data(),bit_use.size(),relaxed,&stats));
+        assert(xbg_spirv_quad_derivatives(bit_use.data(),bit_use.size(),relaxed,&stats,true)==1 && stats.calls_relaxed_float==1);
+        auto actual=evaluate_call(relaxed,values,x);
+        for(unsigned lane=0;lane<4;++lane) {uint32_t b;std::memcpy(&b,&values[lane^x],4);assert(actual[lane]==float(int32_t(b)));}
+        if(!output.empty())save(output/("relaxed-use-xor"+std::to_string(x)+".spv"),relaxed);
+        ++cases;
+        auto integer=call_fixture(x,0x1c03,Call::integer_source);
+        assert(!xbg_spirv_quad_derivatives(integer.data(),integer.size(),relaxed,&stats));
+        assert(xbg_spirv_quad_derivatives(integer.data(),integer.size(),relaxed,&stats,true)==1 && stats.calls_integer==1);
+        actual=evaluate_call(relaxed,values,x);
+        for(unsigned lane=0;lane<4;++lane) {uint32_t b;std::memcpy(&b,&actual[lane],4);assert(b==uint32_t(int32_t(values[lane^x])));}
+        if(!output.empty())save(output/("relaxed-integer-xor"+std::to_string(x)+".spv"),relaxed);
+        ++cases;
+    }
+    {auto divergent=call_fixture(1,0x1c03,Call::divergent);Words relaxed;xbg_spirv_quad_stats stats;
+        assert(!xbg_spirv_quad_derivatives(divergent.data(),divergent.size(),relaxed,&stats,true));
+        assert(stats.call_skipped[size_t(xbg_quad_call_skip::control_flow)]==1);++cases;}
+    // 清理：改写后没人调用的辅助函数（200）、不再读取的子组内置变量（10，连同注解和入口点接口里的条目）和 GroupNonUniform
+    // 能力都去掉，结果不变；辅助函数还被调用时什么都不动。
+    // Clean-up: the helper nobody calls after the rewrite (200), the subgroup built-in variable nothing reads any more (10,
+    // with its annotations and its entry in the entry point's interface) and the GroupNonUniform capabilities go, and the
+    // results stay the same; while the helper is still called nothing changes.
+    for(uint32_t x=1;x<=3;++x)for(Call mode:{Call::plain,Call::integer_source}) {
+        auto original=call_fixture(x,0x1c03,mode);Words rewritten,stripped;xbg_spirv_quad_stats stats;
+        assert(xbg_spirv_quad_derivatives(original.data(),original.size(),rewritten,&stats,true)==1);
+        assert(xbg_spirv_strip_subgroup(rewritten.data(),rewritten.size(),stripped)==4);
+        assert(!group_ops(stripped) && !has_op(stripped,54,200,2) && !has_op(stripped,59,10,2) && !has_op(stripped,71,10,1));
+        assert(!has_op(stripped,17,61,1) && !has_op(stripped,17,65,1) && has_op(stripped,17,51,1));
+        for(size_t i=5;i<stripped.size();i+=stripped[i]>>16)if((stripped[i]&65535)==15)for(size_t j=5;j<(stripped[i]>>16);++j)assert(stripped[i+j]!=10);
+        Quad values={1,4,7,20};assert(evaluate_call(stripped,values,x)==evaluate_call(rewritten,values,x));
+        if(!output.empty())save(output/("stripped-"+std::string(mode==Call::plain?"plain":"integer")+"-xor"+std::to_string(x)+".spv"),stripped);
+        ++cases;
+    }
+    {auto divergent=call_fixture(1,0x1c03,Call::divergent);Words stripped={1};
+        assert(!xbg_spirv_strip_subgroup(divergent.data(),divergent.size(),stripped) && stripped.empty());++cases;}
     auto existing=fixture(3,Mode::existing_coord);Words out;xbg_spirv_quad_stats stats;
     assert(xbg_spirv_quad_derivatives(existing.data(),existing.size(),out,&stats)==1);++cases;
     auto invalid=fixture(3);invalid[5]=0;assert(!xbg_spirv_quad_derivatives(invalid.data(),invalid.size(),out,&stats));assert(out.empty());++cases;

@@ -23,7 +23,8 @@ enum : uint32_t {
     Input=1, Output=3, Uniform=2, PushConstant=9, BuiltIn=11, FragCoord=15, Lane=41, Fragment=4,
     FunctionParameter=55, IAdd=128, ISub=130, LogicalEqual=164, LogicalNotEqual=165, LogicalAnd=167, LogicalNot=168,
     IEqual=170, ShiftRightLogical=194, ShiftRightArithmetic=195, ShiftLeftLogical=196, BitwiseOr=197, Not=200,
-    LoopMerge=246, SelectionMerge=247, TerminateInvocation=4416, UniformConstant=0, FunctionStorage=7, Block=2
+    LoopMerge=246, SelectionMerge=247, TerminateInvocation=4416, UniformConstant=0, FunctionStorage=7, Block=2,
+    ConvertFToS=110, ConvertSToF=111, ConvertUToF=112
 };
 struct Instruction { size_t offset; uint32_t op,wc,type=0,id=0,fn=0; };
 struct Type { uint32_t op=0,a=0,b=0; };
@@ -533,6 +534,63 @@ struct BitFlow {
         }
         return true;
     }
+    // 放宽模式：值是否只来自浮点转整数（经 Function 变量、CopyObject、32 位整数间的 Bitcast、Select 和整数常量）。
+    // 1 = 有符号（OpConvertFToS），2 = 无符号（OpConvertFToU），0 = 别的来源或两种都有。
+    // Relaxed mode: whether a value comes only from float-to-integer conversions (through Function variables, CopyObject,
+    // Bitcast between 32-bit integers, Select and integer constants). 1 = signed (OpConvertFToS), 2 = unsigned
+    // (OpConvertFToU), 0 = any other source, or both kinds.
+    int integer_source(uint32_t start) {
+        std::vector<uint8_t> seen(m.bound),seen_var(m.bound);std::vector<uint32_t> work={start};bool sign=false,unsign=false;
+        while(!work.empty()) {
+            uint32_t id=work.back();work.pop_back();if(!id || id>=m.bound)return 0;
+            if(seen[id])continue;seen[id]=1;
+            const auto *i=m.def(id);if(!i || !scalar32(m,i->type) || !m.int_type(i->type))return 0;
+            const auto *p=m.w+i->offset;
+            if(i->op==Constant)continue;
+            if(i->op==ConvertFToS && i->wc==4) {sign=true;continue;}
+            if(i->op==ConvertFToU && i->wc==4) {unsign=true;continue;}
+            if(i->op==Bitcast || i->op==CopyObject) {work.push_back(p[3]);continue;}
+            if(i->op==Select && i->wc==6) {work.push_back(p[4]);work.push_back(p[5]);continue;}
+            if(i->op==Load && i->wc>=4) {
+                uint32_t root=m.pointer_root(p[3]);
+                if(!root || !vars[root].local || root!=p[3])return 0;
+                for(auto call:vars[root].calls)if(call_value[call.first]!=call.second+1)return 0;
+                if(!seen_var[root]) {seen_var[root]=1;for(size_t k:vars[root].stores)work.push_back(m.w[m.instructions[k].offset+2]);}
+                continue;
+            }
+            return 0;
+        }
+        return sign==unsign?0:sign?1:2;
+    }
+    // 放宽模式：值的直接来源（越过 Bitcast、CopyObject、Select 和 Function 变量）是否都是浮点运算、浮点常量或浮点读取。
+    // 比 source() 宽：不追溯浮点运算的操作数，也不管读取来自哪种存储。
+    // Relaxed mode: whether the value's immediate producers (past Bitcast, CopyObject, Select and Function variables) are all
+    // float arithmetic, float constants or float loads. Wider than source(): the operands of float arithmetic are not traced,
+    // nor the storage a load reads.
+    bool float_producers(uint32_t start) {
+        std::vector<uint8_t> seen(m.bound),seen_var(m.bound);std::vector<uint32_t> work={start};
+        while(!work.empty()) {
+            uint32_t id=work.back();work.pop_back();if(!id || id>=m.bound)return false;
+            if(seen[id])continue;seen[id]=1;
+            const auto *i=m.def(id);if(!i || !scalar32(m,i->type))return false;
+            const auto *p=m.w+i->offset;
+            if(i->op==Bitcast || i->op==CopyObject) {work.push_back(p[3]);continue;}
+            if(i->op==Select && i->wc==6) {work.push_back(p[4]);work.push_back(p[5]);continue;}
+            if(i->op==Load && i->wc>=4) {
+                uint32_t root=m.pointer_root(p[3]);
+                if(root && vars[root].local && root==p[3]) {
+                    for(auto call:vars[root].calls)if(call_value[call.first]!=call.second+1)return false;
+                    if(!seen_var[root]) {seen_var[root]=1;for(size_t k:vars[root].stores)work.push_back(m.w[m.instructions[k].offset+2]);}
+                    continue;
+                }
+                if(m.float_type(i->type))continue;
+                return false;
+            }
+            if(m.float_type(i->type) && (i->op==Constant || numeric_op(i->op) || numeric_ext(m,*i)))continue;
+            return false;
+        }
+        return true;
+    }
     bool uses(uint32_t start) {
         std::vector<uint8_t> seen(m.bound),seen_var(m.bound);std::vector<uint32_t> work={start};
         while(!work.empty()) {
@@ -564,8 +622,12 @@ struct BitFlow {
         return true;
     }
 };
-struct CallPlan {size_t index;uint32_t value_var,mask;};
-std::vector<CallPlan> plan_calls(const Module &m,bool contract,xbg_spirv_quad_stats &s) {
+// kind：0 已证明是浮点数值；1 放宽后按浮点（结果另有按位用途，或值的直接来源是浮点运算 / 读取）；2 / 3 值来自有符号 /
+// 无符号的浮点转整数（放宽）。
+// kind: 0 proven float values; 1 relaxed, as floats (the result also has bit uses, or the value's immediate producers are
+// float arithmetic or loads); 2 / 3 the value comes from a signed / unsigned float-to-integer conversion (relaxed).
+struct CallPlan {size_t index;uint32_t value_var,mask;uint8_t kind=0;};
+std::vector<CallPlan> plan_calls(const Module &m,bool contract,xbg_spirv_quad_stats &s,bool relaxed) {
     std::vector<CallPlan> plans;std::vector<uint32_t> helper_fns;
     for(const auto &i:m.instructions)if(i.op==Shuffle && i.fn && i.fn!=m.entry_fn && std::find(helper_fns.begin(),helper_fns.end(),i.fn)==helper_fns.end())helper_fns.push_back(i.fn);
     if(helper_fns.empty())return plans;
@@ -611,9 +673,19 @@ std::vector<CallPlan> plan_calls(const Module &m,bool contract,xbg_spirv_quad_st
         if(!scalar32(m,i.type) || !v || !scalar32(m,m.types[v->type].b)) {skip(xbg_quad_call_skip::source);continue;}
         bool numeric=!vars[var].stores.empty();
         for(size_t k:vars[var].stores)if(!flow.source(m.w[m.instructions[k].offset+2])) {numeric=false;break;}
-        if(!numeric) {skip(xbg_quad_call_skip::source);continue;}
-        if(!flow.uses(i.id)) {skip(xbg_quad_call_skip::use);continue;}
-        plans.push_back({c.index,var,c.x});
+        uint8_t kind=0;
+        if(!numeric) {
+            if(!relaxed || vars[var].stores.empty()) {skip(xbg_quad_call_skip::source);continue;}
+            int integer=m.int_type(i.type)?3:0;
+            for(size_t k:vars[var].stores) {if(!integer)break;int one=flow.integer_source(m.w[m.instructions[k].offset+2]);if(!one || (integer!=3 && integer!=one))integer=0;else integer=one;}
+            bool floats=true;
+            for(size_t k:vars[var].stores)if(!flow.float_producers(m.w[m.instructions[k].offset+2])) {floats=false;break;}
+            if(integer==1 || integer==2)kind=uint8_t(integer+1);
+            else if(floats)kind=1;
+            else {skip(xbg_quad_call_skip::source);continue;}
+        }
+        if(!kind && !flow.uses(i.id)) {if(!relaxed) {skip(xbg_quad_call_skip::use);continue;}kind=1;}
+        plans.push_back({c.index,var,c.x,kind});
     }
     return plans;
 }
@@ -628,7 +700,7 @@ const char *xbg_spirv_quad_call_skip_name(xbg_quad_call_skip reason) {
     auto index=static_cast<size_t>(reason);return index<static_cast<size_t>(xbg_quad_call_skip::count)?names[index]:"invalid_reason";
 }
 
-size_t xbg_spirv_quad_derivatives(const uint32_t *in,size_t n,std::vector<uint32_t> &out,xbg_spirv_quad_stats *stats) {
+size_t xbg_spirv_quad_derivatives(const uint32_t *in,size_t n,std::vector<uint32_t> &out,xbg_spirv_quad_stats *stats,bool relaxed) {
     out.clear();xbg_spirv_quad_stats local;auto &s=stats?*stats:local;s={};
     auto skip=[&](xbg_quad_skip reason){++s.skipped[static_cast<size_t>(reason)];};
     if(!in || n<5 || in[0]!=0x07230203 || !in[3] || in[3]>(1u<<22) || n>(1u<<24)) {skip(xbg_quad_skip::malformed);return 0;}
@@ -666,7 +738,7 @@ size_t xbg_spirv_quad_derivatives(const uint32_t *in,size_t n,std::vector<uint32
         if(!index_ok || mask<1 || mask>3) {skip(xbg_quad_skip::lane_index);continue;}
         plans.push_back({index,mask});
     }
-    auto calls=plan_calls(m,contract,s);
+    auto calls=plan_calls(m,contract,s,relaxed);
     if(plans.empty() && calls.empty())return 0;
     uint32_t bound=m.bound;auto fresh=[&](){return bound++;};
     std::vector<uint32_t> declarations,decorations;
@@ -715,12 +787,21 @@ size_t xbg_spirv_quad_derivatives(const uint32_t *in,size_t n,std::vector<uint32
         if(i.offset==m.first_func)out.insert(out.end(),declarations.begin(),declarations.end());
         if(i.offset==m.entry_offset && new_coord) {out.push_back(word(EntryPoint,i.wc+1));out.insert(out.end(),p+1,p+i.wc);out.push_back(m.coord_var);continue;}
         if(next<plans.size() && plans[next].index==index) {
-            uint32_t mask=plans[next++].mask,original=fresh(),coord=fresh();
-            emit({word(Shuffle,6),p[1],original,p[3],p[4],p[5]});
-            emit({word(Load,4),m.t_vec4,coord,m.coord_var});
-            uint32_t bad=nonfinite(p[4]),value=neighbours(p[4],mask,coord,&bad);
-            emit({word(Select,6),m.t_float,p[2],bad,original,value});
-            ++s.rewritten;++s.guarded_nonfinite;
+            uint32_t mask=plans[next++].mask,coord=fresh();
+            if(relaxed) {
+                // 放宽模式不留 shuffle 回退：这个阶段根本不能用 shuffle。
+                // Relaxed mode keeps no shuffle fallback: this stage cannot use shuffles at all.
+                emit({word(Load,4),m.t_vec4,coord,m.coord_var});
+                emit({word(CopyObject,4),p[1],p[2],neighbours(p[4],mask,coord,nullptr)});
+                ++s.rewritten;
+            } else {
+                uint32_t original=fresh();
+                emit({word(Shuffle,6),p[1],original,p[3],p[4],p[5]});
+                emit({word(Load,4),m.t_vec4,coord,m.coord_var});
+                uint32_t bad=nonfinite(p[4]),value=neighbours(p[4],mask,coord,&bad);
+                emit({word(Select,6),m.t_float,p[2],bad,original,value});
+                ++s.rewritten;++s.guarded_nonfinite;
+            }
         } else if(next_call<calls.size() && calls[next_call].index==index) {
             // 调用整个换成导数求出的邻居，按位还原成调用的结果类型；不留 shuffle 回退。回退的 shuffle 正是在辅助调用上读到
             // 垃圾的那一步：Redmi K50 Ultra 罪恶洞穴打斗中，留着它黑方块照旧，GPU 18.3 ms；换掉后无黑方块，15.2 ms。原调用在
@@ -732,15 +813,96 @@ size_t xbg_spirv_quad_derivatives(const uint32_t *in,size_t n,std::vector<uint32
             // NaN; a lane whose own value is finite gets its neighbour's, nonfinite or not.
             const auto &plan=calls[next_call++];uint32_t bits=fresh(),coord=fresh(),pointee=m.types[m.def(plan.value_var)->type].b;
             emit({word(Load,4),pointee,bits,plan.value_var});
-            uint32_t value=bits;if(pointee!=m.t_float) {value=fresh();emit({word(Bitcast,4),m.t_float,value,bits});}
+            uint32_t value=bits;
+            // 整数值（放宽）：按数值转成浮点，取邻居后再转回；|v| < 2^24 时导数和加减都是精确的整数运算。
+            // Integer values (relaxed): converted to float by value and back after taking the neighbour; for |v| < 2^24 the
+            // derivative and the addition are exact integer arithmetic.
+            if(plan.kind>=2) {value=fresh();emit({word(plan.kind==2?ConvertSToF:ConvertUToF,4),m.t_float,value,bits});}
+            else if(pointee!=m.t_float) {value=fresh();emit({word(Bitcast,4),m.t_float,value,bits});}
             emit({word(Load,4),m.t_vec4,coord,m.coord_var});
             value=neighbours(value,plan.mask,coord,nullptr);
-            emit({word(p[1]!=m.t_float?Bitcast:CopyObject,4),p[1],p[2],value});
-            ++s.calls_rewritten;
+            if(plan.kind>=2)emit({word(plan.kind==2?ConvertFToS:ConvertFToU,4),p[1],p[2],value});
+            else emit({word(p[1]!=m.t_float?Bitcast:CopyObject,4),p[1],p[2],value});
+            ++s.calls_rewritten;if(plan.kind==1)++s.calls_relaxed_float;if(plan.kind>=2)++s.calls_integer;
         } else out.insert(out.end(),p,p+i.wc);
     }
     out[3]=bound;return s.rewritten+s.calls_rewritten;
 }
+size_t xbg_spirv_quad_derivatives(const uint32_t *in,size_t n,std::vector<uint32_t> &out,xbg_spirv_quad_stats *stats) {
+    return xbg_spirv_quad_derivatives(in,n,out,stats,false);
+}
 size_t xbg_spirv_quad_derivatives(const uint32_t *in,size_t n,std::vector<uint32_t> &out) {
-    return xbg_spirv_quad_derivatives(in,n,out,nullptr);
+    return xbg_spirv_quad_derivatives(in,n,out,nullptr,false);
+}
+size_t xbg_spirv_strip_subgroup(const uint32_t *in,size_t n,std::vector<uint32_t> &out) {
+    out.clear();
+    if(!in || n<5 || in[0]!=0x07230203 || !in[3] || in[3]>(1u<<22) || n>(1u<<24))return 0;
+    const uint32_t bound=in[3];
+    struct Ins {size_t off;uint32_t op,wc,fn;};std::vector<Ins> ins;
+    std::vector<uint8_t> is_type(bound),is_function(bound),reachable(bound),removed_id(bound),subgroup_var(bound),drop_var(bound);
+    std::vector<uint32_t> entries;std::vector<std::pair<uint32_t,uint32_t>> edges;
+    uint32_t fn=0;
+    for(size_t off=5;off<n;) {
+        uint32_t wc=in[off]>>16,op=in[off]&65535;if(!wc || wc>n-off)return 0;
+        const uint32_t *p=in+off;
+        // 装饰组会把注解间接挂到 id 上，这里不跟踪，遇到就不动这个模块。
+        // Decoration groups attach annotations to ids indirectly; they are not tracked, so such a module is left alone.
+        if(op==73 || op==74 || op==75)return 0;
+        if(op==Function) {if(wc!=5 || !p[2] || p[2]>=bound)return 0;fn=p[2];is_function[fn]=1;}
+        ins.push_back({off,op,wc,fn});
+        if(op==FunctionEnd)fn=0;
+        if(op>=19 && op<=39 && wc>=2 && p[1]<bound)is_type[p[1]]=1;
+        if(op==EntryPoint && wc>=3 && p[2]<bound)entries.push_back(p[2]);
+        if(op==FunctionCall && fn && wc>=4 && p[3]<bound)edges.push_back({fn,p[3]});
+        if(op==Decorate && wc>=4 && p[1]<bound && p[2]==BuiltIn && (p[3]==36 || p[3]==Lane || (p[3]>=4416 && p[3]<=4420)))subgroup_var[p[1]]=1;
+        off+=wc;
+    }
+    if(fn)return 0;
+    // 入口点能调到的函数。| Functions the entry points can reach.
+    std::vector<uint32_t> work=entries;
+    while(!work.empty()) {uint32_t f=work.back();work.pop_back();if(reachable[f])continue;reachable[f]=1;for(const auto &e:edges)if(e.first==f && !reachable[e.second])work.push_back(e.second);}
+    size_t removed=0;
+    for(uint32_t id=1;id<bound;++id)if(is_function[id] && !reachable[id])++removed;
+    // 被删函数里定义的 id（OpLabel 的 id 在第 1 个字，带结果类型的指令在第 2 个字）。
+    // Ids defined inside removed functions (OpLabel's id is word 1; an instruction with a result type has it in word 2).
+    for(const auto &i:ins) {
+        if(!i.fn || reachable[i.fn])continue;const uint32_t *p=in+i.off;
+        if(i.op==Label && i.wc>=2 && p[1]<bound)removed_id[p[1]]=1;
+        else if(i.wc>=3 && p[1]<bound && is_type[p[1]] && p[2]<bound)removed_id[p[2]]=1;
+    }
+    // 剩下的子组指令，和剩下代码里对子组内置变量的指针用法。
+    // Subgroup instructions that remain, and pointer uses of subgroup built-in variables in the remaining code.
+    size_t group_ops=0;std::vector<uint8_t> used(bound);
+    for(const auto &i:ins) {
+        if(i.fn && !reachable[i.fn])continue;const uint32_t *p=in+i.off;
+        if(i.op>=333 && i.op<=366)++group_ops;
+        auto use=[&](uint32_t id){if(id<bound)used[id]=1;};
+        if((i.op==Load || i.op==AccessChain || i.op==InBoundsAccessChain || i.op==67 || i.op==70 || i.op==CopyObject) && i.wc>=4)use(p[3]);
+        if((i.op==Store || i.op==63) && i.wc>=3) {use(p[1]);use(p[2]);}
+        if(i.op==FunctionCall)for(uint32_t j=4;j<i.wc;++j)use(p[j]);
+    }
+    bool any_var_left=false;
+    for(uint32_t id=1;id<bound;++id)if(subgroup_var[id]) {if(used[id])any_var_left=true;else {drop_var[id]=1;++removed;}}
+    const bool drop_caps=!group_ops && !any_var_left;
+    for(const auto &i:ins)if(drop_caps && i.op==Capability && i.wc==2 && in[i.off+1]>=61 && in[i.off+1]<=68)++removed;
+    if(!removed)return 0;
+    out.insert(out.end(),in,in+5);
+    for(const auto &i:ins) {
+        const uint32_t *p=in+i.off;
+        if(i.fn && !reachable[i.fn])continue;
+        if(drop_caps && i.op==Capability && i.wc==2 && p[1]>=61 && p[1]<=68)continue;
+        // 注解与名字：目标是被删的 id 或变量时一起删（OpName、OpDecorate、OpDecorateId、OpDecorateString）。
+        // Annotations and names go with a removed id or variable (OpName, OpDecorate, OpDecorateId, OpDecorateString).
+        if((i.op==5 || i.op==Decorate || i.op==332 || i.op==5632) && i.wc>=2 && p[1]<bound && (removed_id[p[1]] || drop_var[p[1]]))continue;
+        if(i.op==Variable && !i.fn && i.wc>=3 && p[2]<bound && drop_var[p[2]])continue;
+        if(i.op==EntryPoint) {
+            // 名字是以 0 结尾的字符串，占到含 0 字节的那个字为止；其后是接口变量。
+            // The name is a nul-terminated string ending in the word that holds a zero byte; the interface variables follow.
+            uint32_t j=3;while(j<i.wc) {uint32_t v=p[j++];if(!(v&0xff) || !(v&0xff00) || !(v&0xff0000) || !(v&0xff000000))break;}
+            std::vector<uint32_t> kept(p,p+j);for(;j<i.wc;++j)if(p[j]>=bound || !drop_var[p[j]])kept.push_back(p[j]);
+            kept[0]=word(EntryPoint,uint32_t(kept.size()));out.insert(out.end(),kept.begin(),kept.end());continue;
+        }
+        out.insert(out.end(),p,p+i.wc);
+    }
+    return removed;
 }
