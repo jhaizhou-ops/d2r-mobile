@@ -46,3 +46,16 @@ int xbg_depth_merge(uint32_t f,uint32_t w,uint32_t h,uint32_t z,void *p,size_t p
     size_t row,size_t image,const void *d,size_t dn,const void *s,size_t sn) {
     return transfer(f,w,h,z,p,pn,row,image,(void*)d,dn,(void*)s,sn,1);
 }
+uint32_t xbg_depth_unorm24_to_float(uint32_t v) {
+    /* 两个操作数都能精确表示为 float，一次 float 除法即正确舍入。
+     * Both operands are exact floats, so one float division rounds correctly. */
+    float f=(float)(v&0xffffffu)/16777215.0f;uint32_t bits;memcpy(&bits,&f,4);return bits;
+}
+uint32_t xbg_depth_float_to_unorm24(uint32_t bits) {
+    float f;memcpy(&f,&bits,4);
+    if(!(f>0.0f))return 0;
+    if(f>=1.0f)return 0xffffffu;
+    /* 24 位尾数乘 24 位常数在 double 里是精确的，只有加 0.5 取整这一步舍入。
+     * A 24-bit mantissa times a 24-bit constant is exact in double; only the round-half-up step rounds. */
+    return (uint32_t)((double)f*16777215.0+0.5);
+}
