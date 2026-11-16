@@ -58,6 +58,16 @@ inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *devi
     const int model=xbg_adreno_model(device_name);
     return model>=750 && model<800;
 }
+// 片元阶段不支持子组的高通驱动（Adreno 650 的旧驱动，#243 #155：supportedStages 只有计算阶段）也要内联：流体计算着色器
+// 098a126f92bf533a 不内联时，libllvm-qgl.so 在建管线时同样段错误（addr=0x48，Retroid Pocket 5 实测），内联后能编。
+// 片元着色器在这类驱动上先做 quad 改写再内联（xbg_game.cpp），所以内联不会挡住片元那边的改写。
+// Qualcomm drivers without fragment-stage subgroups (old Adreno 650 drivers, #243 #155: supportedStages holds only compute)
+// need the inlining too: without it, the fluid compute shader 098a126f92bf533a crashes libllvm-qgl.so while its pipeline is
+// built (addr=0x48, seen on a Retroid Pocket 5), and inlined it compiles. On such drivers fragment shaders get the quad rewrite
+// before the inlining (xbg_game.cpp), so the inlining does not get in the way of the fragment rewrite.
+inline bool xbg_adreno_inline_default(uint32_t vendor_id,const char *device_name,bool fragment_subgroups){
+    return xbg_adreno_compiler_needs_inline(vendor_id,device_name) || (vendor_id==0x5143 && !fragment_subgroups);
+}
 
 // Adreno 8xx：计算派发会多跑范围之外的调用（#256：830 上局部尺寸 8×4×1、y 方向工作组数为奇数时多一行工作组；#261 的 825 症状
 // 相同），计算着色器载入时在入口加派发范围检查（xbg_spirv_dispatch.cpp）。标记文件 gfx-dispatch-guard 可显式开关（1 / 0）。

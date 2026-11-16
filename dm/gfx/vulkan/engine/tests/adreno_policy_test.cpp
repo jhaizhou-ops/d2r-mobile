@@ -43,6 +43,17 @@ int main(){
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 740"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 735"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 730"));
+
+    // 内联的缺省：750–799 一族，加上片元阶段不支持子组的高通驱动（Adreno 650 旧驱动，#243）；别家不管。
+    // The inlining default: the 750-799 family, plus Qualcomm drivers without fragment-stage subgroups (old Adreno 650
+    // drivers, #243); other vendors are left alone.
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 750",true));
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 650",false));
+    CHECK(!xbg_adreno_inline_default(0x5143,"Adreno (TM) 650",true));
+    CHECK(!xbg_adreno_inline_default(0x5143,"Adreno (TM) 730",true));
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 730",false));
+    CHECK(!xbg_adreno_inline_default(0x13b5,"Mali-G925-Immortalis MC12",false));
+    CHECK(!xbg_adreno_inline_default(0x144d,"Samsung Xclipse 940",false));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 830"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,nullptr));
     CHECK(!xbg_adreno_compiler_needs_inline(0x10002,"Adreno 750"));
