@@ -1112,14 +1112,22 @@ static int ui_classify(module_t *m, uint64_t root, int x, int y, char *hit, size
     // a tap goes to dm_vault_ui_tap (cells / our own widgets / the rest swallowed), a drag goes to dm_vault_ui_drag (the vault page is handled as an independent page). While a dropdown's expanded option panel is open dm_vault_ui_over answers 0 and judging proceeds as usual
     if (dm_ui_panel_state() & DM_PS_VAULT) { int dm_vault_ui_over(int, int); if (dm_vault_ui_over(x, y)) { g_inside_owner = ""; atomic_store(&g_bd_hit, 0); snprintf(hit, hn, "编年史页"); return 0; } }
     // 设置页盖在暂停菜单上，暂停菜单的按钮却还收点击（游戏的分发不看谁在上面）：点在暂停菜单按钮上、又不在设置页的可点控件上 = 被盖住，不点（同「压着被上层面板盖住的按钮」）。
+    // 编年史（暂停菜单的「编年史」打开，暂停菜单还在底下）同理：首领页的头像、各页的底板与空处都不是可点控件，点下去游戏照样交给底下的暂停菜单按钮
+    // （#216：点首领页的头像打开了设置页）。编年史自己的页签、列表行、积分牌的勾选框 / 幕 / 下拉都是可点控件，照常
+    // The Chronicle (opened by the pause menu's 「编年史」(Chronicle), with the pause menu still underneath) is the same: the Bosses page's portraits and every page's backing and empty space are not
+    // clickable widgets, and the game hands such a tap to the pause menu button underneath (#216: tapping a boss portrait opened the settings page). The Chronicle's own tabs, list rows and the
+    // kill board's checkboxes / acts / dropdown are clickable widgets and work as usual
     // 原先设置页开着时把暂停菜单整层设成不可见、关了写回——那是写原版控件，违反不写原版控件的规则，改成这里只在命中时挡
     // The settings page covers the pause menu, yet the pause menu's buttons still receive clicks (the game's dispatch does not look at who is on top): on a pause menu button and not on a clickable widget of the settings page = covered, do not click (same as "on a button covered by an upper panel").
     // Previously, while the settings page was open the whole pause menu layer was set invisible and written back on close - that is writing to the original game's widgets, violating the no-writes-to-original-widgets rule; changed to blocking here only on a hit
     { uint64_t st = ui_panel(root, "SettingsPanel"), xy = (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32);
       uint64_t cp = ui_panel(root, "VideoOptionsPanel");   // 自定义页（借的视频页）与设置页并列、不是它的子控件：这一页上的勾选框也算「设置页自己可点的控件」（语言行的「中文」那格正落在暂停菜单按钮的位置上） | The Custom page (the borrowed video page) sits beside the settings page and is not its child: checkboxes on this page also count as "controls of the settings page itself that can be tapped" (the 「中文」 box of the language row lands exactly where the pause menu button is)
-      if (st && *(uint8_t *)(st + 0x50) && !click_walk(st, xy, 1, (uint64_t)m->base) && !(cp && *(uint8_t *)(cp + 0x50) && click_walk(cp, xy, 1, (uint64_t)m->base))) {   // 设置页自己可点的控件照常；点在它的底板 / 列表空处时，游戏会把这一下交给底下的暂停菜单按钮 | The settings page's own clickable widgets work as usual; when the tap is on its backing / empty list space, the game would hand this tap to the pause menu button underneath
+      uint64_t ch = ui_panel(root, "ChroniclePanel");
+      int over_set = st && *(uint8_t *)(st + 0x50) && !click_walk(st, xy, 1, (uint64_t)m->base) && !(cp && *(uint8_t *)(cp + 0x50) && click_walk(cp, xy, 1, (uint64_t)m->base));
+      int over_chr = !over_set && ch && *(uint8_t *)(ch + 0x50) && !click_walk(ch, xy, 1, (uint64_t)m->base);
+      if (over_set || over_chr) {   // 设置页自己可点的控件照常；点在它的底板 / 列表空处时，游戏会把这一下交给底下的暂停菜单按钮 | The settings page's own clickable widgets work as usual; when the tap is on its backing / empty list space, the game would hand this tap to the pause menu button underneath
           static const char *const pl[] = { "PauseLayoutGarden", "PauseLayout" };
-          for (int i = 0; i < 2; i++) { uint64_t pw = ui_panel(root, pl[i]); if (pw && *(uint8_t *)(pw + 0x50) && click_walk(pw, xy, 1, (uint64_t)m->base)) { snprintf(hit, hn, "设置页盖着的暂停菜单按钮（不点，可滚）"); return 11; }   /* 11：这一下不点下去，但从这里起手上下拖照常滚设置页的列表（自定义页各行的文字不是可点控件，玩家多半就在文字上滑） | 11: this tap is not pressed down, but a vertical drag starting here still scrolls the settings page list as usual (the text of the rows on the Custom page is not a clickable widget, and players mostly swipe right on the text) */ } } }
+          for (int i = 0; i < 2; i++) { uint64_t pw = ui_panel(root, pl[i]); if (pw && *(uint8_t *)(pw + 0x50) && click_walk(pw, xy, 1, (uint64_t)m->base)) { snprintf(hit, hn, over_set ? "设置页盖着的暂停菜单按钮（不点，可滚）" : "编年史盖着的暂停菜单按钮（不点，可滚）"); return 11; }   /* 11：这一下不点下去，但从这里起手上下拖照常滚设置页的列表（自定义页各行的文字不是可点控件，玩家多半就在文字上滑） | 11: this tap is not pressed down, but a vertical drag starting here still scrolls the settings page list as usual (the text of the rows on the Custom page is not a clickable widget, and players mostly swipe right on the text) */ } } }
     const char *mn = ""; uint64_t mp = modal_top(m, root, &mn);
     if (mp) { uint64_t xy = (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32), fn = *(uint64_t *)(*(uint64_t *)mp + 0x48);
         // 「在框里」：框自己有边界且点在里面，或点中它的某个可见叶子 / 可点控件（确认框的「应用 / 放弃」按钮只有后一种认得到——
