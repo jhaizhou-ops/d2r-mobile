@@ -17,6 +17,7 @@ int dm_custom_voice_explicit(void);   // 单独配音开关（键 voice）：-1 
 // q3d 3D quality (default 0 = smoothness first: automatically lowers the 3D scale on frame drops; 1 = quality first: no automatic lowering); applied on load / apply by calling hle_oe.c's dm_3d_quality_mode_set
 int dm_fps_setting(void);   // 省电模式（键 eco_fps，缺省关）：开 = 30 帧、关 = 60；nvn_mtl.m mtl_fps_target 读 | Power-saving mode (key eco_fps, off by default): on = 30 fps, off = 60; read by mtl_fps_target in nvn_mtl.m
 
+int dm_custom_num(const char *file, const char *key, int def);   // 自定义目录里 file 的整数键 key=值（没有 = def），如 stash_pages.txt 的 personal_pages | Integer key=value from file in the custom directory (def if missing), e.g. personal_pages in stash_pages.txt
 void dm_custom_init(const char *dir);   // 设置文件所在目录（iOS 外壳启动时给 Documents）；不调则用存档提交目录的上一级（Mac 宿主） | Directory holding the settings file (the iOS shell passes Documents at startup); if not called, the parent of the save commit directory is used (Mac host)
 
 // 以下只给自定义页的界面接线用

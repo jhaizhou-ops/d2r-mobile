@@ -149,6 +149,13 @@ CUTS = {'db0507f36b84200ac05f75d76ed5026f': [
     (0x5d8040, 'a005fe97', '411100d4', '玩家进局取出生点调用点 bl 0x5596c0 → svc #0x8a：宿主原样代调，进局在城镇时出生点换成小站旁（hle.h SVC_HOST_JOIN_SPAWN）', '仅宿主'),
     (0x5d8400, 'b004fe97', '611100d4', '进局给尸体取落点调用点 bl 0x5596c0 → svc #0x8b：同上，尸体与人取同一个点（hle.h SVC_HOST_JOIN_CORPSE）', '仅宿主'),
     (0x11f0914, '77100094', '811000d4', '段读取 0x11f07d0 逐块解码 bl 0x11f4af0(ctx, 块, 长度) → svc #0x84：同上（hle.h SVC_HOST_GRANNY_B）', '仅宿主'),
+    # 客户端收「物品放进容器」（收包分派 0x2ee9a0 → 0x469f00 → 0x46a490）：放进本地玩家的容器（页 ≠ 1）后，原版不管放的是哪件，光标上有物品就 0x55e430 摘掉——
+    # 原版只有「从光标放下」才会放进玩家容器，所以光标上的一定是这件。宿主放件（个人仓库翻页 dm_pages.c、编年史取出、百宝囊、iCloud 并回）不经光标：
+    # 实测翻页放回 17 件，客户端手上的物品被摘掉、服务端光标还挂着（两端不一致，重开才回来；lldb 观察点停在 0x46a77c）。改成只在光标上那件就是放进来的这件（x20）时才摘
+    # Client receiving 'item put into a container' (packet dispatch 0x2ee9a0 -> 0x469f00 -> 0x46a490): after putting into the local player's container (page != 1), the original removes whatever is on the cursor with 0x55e430, whichever item was put --
+    # in the original only 'put down from the cursor' puts into the player's containers, so the cursor item is always this one. Host placements (personal stash page turns dm_pages.c, chronicle withdraw, pouch, iCloud merge) do not go through the cursor:
+    # measured, a page turn putting back 17 items removed the item from the client's hand while the server cursor still held it (the two sides disagreed until a restart; lldb watchpoint stopped at 0x46a77c). Now removed only when the cursor item is the item just put (x20)
+    (0x46a768, '080040b91f110071', '1f0014eb01010054', '客户端放进玩家容器后摘光标物品：ldr w8,[x0]; cmp w8,#4（光标上是物品就摘）→ cmp x0,x20; b.ne 0x46a78c（光标上的就是放进来的这件才摘）', '仅宿主'),
 ]}
 # ---- 已登记观测门：{NSO 构建号: [(偏移, 编号, 原指令字, 理由)]}。编号与宿主 hle.h 的 OBS_* 一致；
 # 原指令须与位置无关（不得 PC 相对 / 分支 / 涉 x18·tpidr），离线断言；宿主未挂回调时门块进出一次即返回 ----
@@ -182,6 +189,16 @@ if RULE_RUN:
                  f' | This game program (build ID {BUILD_ID}) is not supported by D2R Mobile yet: only 1.0.34.0 (build ID {RULE_BUILD}) is.')
     RULE_ORIG_SHA = hashlib.sha256(IMG).hexdigest()
 cuts = list(CUTS.get(BUILD_ID, []))
+# 共享仓库页数门：原版页数 = 3 + 0x1d2ce0() + 2·(模式字节 [0x2127c48] == 3)，同一式子在 0x1d2ce0 的 7 个调用点：界面页码 0x394ec0 / 0x3988f0 / 0x3996ec、
+#   服务端建页表 0x55ed88（按页数分配）与遍历 0x55ee6c、读档补空页 0x6fdf60 / 0x6fdf8c、共享金币上限 0xc55a44（250 万 × 页数）。7 处都只拿它的返回值算页数，
+#   原版它恒返回 0；把入口换成 svc #0x91; ret，由宿主答「多出几页」（dm_sharedpages.c：stash_pages.txt 的 shared_pages 与存档已有页数取大、5..99，每次运行定一次）。
+#   缺省 shared_pages = 5，宿主答 0，与原版相同。只有 main 里这些字节对得上（0x394ec0 是 add w0,w8,#3），其余模块不动
+# Shared stash page count gate: original count = 3 + 0x1d2ce0() + 2·(mode byte [0x2127c48] == 3), the same expression at the 7 call sites of 0x1d2ce0: UI page number 0x394ec0 / 0x3988f0 / 0x3996ec,
+#   server page table 0x55ed88 (allocated by the count) and its walk 0x55ee6c, loading fills empty pages 0x6fdf60 / 0x6fdf8c, shared gold cap 0xc55a44 (2.5 million × count). All 7 only use its return value,
+#   which is always 0 in the original; the entry becomes svc #0x91; ret and the host answers 'how many extra pages' (dm_sharedpages.c: the larger of shared_pages in stash_pages.txt and the pages the save already has, 5..99, decided once per run).
+#   Default shared_pages = 5, the host answers 0, same as the original. Only main matches these bytes (0x394ec0 is add w0,w8,#3); other modules are untouched
+if struct.unpack_from('<I', IMG, 0x394ec0)[0] == 0x11000D00:
+    cuts.append((0x1d2ce0, 'ffc300d1f44f01a9', '211200d4c0035fd6', '共享仓库多出几页 0x1d2ce0 入口 → svc #0x91; ret：宿主按 stash_pages.txt 的 shared_pages 答（hle.h SVC_HOST_SHARED_PAGES，dm_sharedpages.c）', '仅宿主'))
 # 触屏版规则域默认同时带宿主私有门；规则闸门可显式关闭，保留同一出包入口和规则域。
 # The touchscreen rule domain by default also carries the host-private gates; the rule gate check can turn them off explicitly, keeping the same packaging entry point and rule domain.
 PRIVATE_GATES = os.environ.get("DM_PRIVATE_GATES", "1") != "0"
