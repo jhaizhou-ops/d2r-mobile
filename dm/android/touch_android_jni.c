@@ -12,6 +12,12 @@ JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_TouchOverlay_nativeResize(JNIEnv *
     dm_android_touch_tablet(tablet);
     dm_android_touch_resize(width,height,left,right,bottom);
 }
+/* 只报安全区（游戏界面自己内移），两种模式都要：手柄模式下触屏层不画也不布局，nativeResize 不会跑。 */
+/* Report the safe area only (the game's own UI moves inward), needed in both modes: in controller mode the touch layer is neither drawn nor laid out, so nativeResize never runs. */
+JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_TouchOverlay_nativeUiSafeInsets(JNIEnv *env, jclass cls, jfloat left, jfloat right, jfloat height) {
+    (void)env; (void)cls;
+    dm_android_ui_safe_insets(left,right,height);
+}
 JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_TouchOverlay_nativeLayout(JNIEnv *env, jclass cls, jfloatArray dst) {
     (void)cls;
     if (!dst || (*env)->GetArrayLength(env,dst)<DM_ANDROID_TOUCH_DRAW_FLOATS) return;
