@@ -63,7 +63,34 @@ int main(){
     CHECK(!xbg_adreno_rewrite_option(false,-1,nullptr,false));
     CHECK(xbg_adreno_rewrite_option(false,-1,"2",false));
 
+    // 派发范围检查：只有高通 8xx 缺省开。
+    // The dispatch-range check: on by default on Qualcomm's 8xx only.
+    CHECK(xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 830"));
+    CHECK(xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 800"));
+    CHECK(xbg_adreno_dispatch_overruns(0x5143,"Adreno 840"));
+    CHECK(xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 899"));
+    CHECK(!xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 730"));
+    CHECK(!xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 750"));
+    CHECK(!xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 799"));
+    CHECK(!xbg_adreno_dispatch_overruns(0x5143,"Adreno X1-85"));
+    CHECK(!xbg_adreno_dispatch_overruns(0x5143,nullptr));
+    CHECK(!xbg_adreno_dispatch_overruns(0x10002,"Adreno (TM) 830"));
+    CHECK(!xbg_adreno_dispatch_overruns(0x13b5,"Mali-G715"));
+
+    // 优先级：标记文件 > 机型判断 > 环境变量。
+    // Precedence: marker file > device family > environment.
+    CHECK(xbg_adreno_dispatch_guard_option(true,'1',nullptr,false));
+    CHECK(xbg_adreno_dispatch_guard_option(true,'1',"0",false));
+    CHECK(xbg_adreno_dispatch_guard_option(true,EOF,nullptr,false));
+    CHECK(!xbg_adreno_dispatch_guard_option(true,'0',"1",true));
+    CHECK(!xbg_adreno_dispatch_guard_option(true,'0',nullptr,true));
+    CHECK(xbg_adreno_dispatch_guard_option(false,-1,nullptr,true));
+    CHECK(xbg_adreno_dispatch_guard_option(false,-1,"0",true));
+    CHECK(xbg_adreno_dispatch_guard_option(false,-1,"1",false));
+    CHECK(!xbg_adreno_dispatch_guard_option(false,-1,"0",false));
+    CHECK(!xbg_adreno_dispatch_guard_option(false,-1,nullptr,false));
+
     if(failures){printf("FAIL %d check(s)\n",failures);return 1;}
-    printf("PASS Adreno policy: 740/750 default off, 750-799 inline helpers, 730/830 and other vendors unchanged, marker file still wins\n");
+    printf("PASS Adreno policy: 740/750 default off, 750-799 inline helpers, 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
     return 0;
 }
