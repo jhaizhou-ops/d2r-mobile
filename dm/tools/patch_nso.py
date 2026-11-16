@@ -58,6 +58,23 @@ CUTS = {'db0507f36b84200ac05f75d76ed5026f': [
     (0x8524c4, '0808a2d2', '0800a4d2', '显存分配器初始化配置：mov x8,#0x10400000（260 MB）→ mov x8,#0x20000000（512 MB），随后 movk #0xa0,lsl48 与 str [sp,#0x238] 不变；'
      '原预算下内部分辨率 > 约 345 万像素时（2736x1260 过、2864x1240 崩）渲染目标放不下，main+0x174b018 返回空、main+0x17417a4 读空崩溃；'
      '只是显存预算，不进游戏逻辑：cvd5 逐拍对拍在 1600x900 与 2868x1320 两档均一致'),
+    # 换图后的资源作业在 0x1450294 读崩。编号 0xb20 对应第 5 页的 0x120 号槽，空页指针被加上 0x900 后解引用。
+    # 0x13282bc–0x13282c8 更新 +0x1b0 的页数并向 +0x1a0 的表写入新页。查找时先核页号，再检查表、页、槽与向量地址。
+    # 缺失时写入与原无效编号相同的零向量。成功和缺失都走原来的缓存编号更新（0x14502cc）和逐项输出（0x1450250）。
+    # After an area change, a resource job faulted at 0x1450294. ID 0xb20 addresses page 5, slot 0x120, and a null page was dereferenced at offset 0x900.
+    # 0x13282bc–0x13282c8 updates the page count at +0x1b0 and inserts the page into the table at +0x1a0. Check the page index, table, page, slot, and vector pointer.
+    # A missing entry uses the same zero vector as the original invalid ID. Both paths reuse the cached-ID update at 0x14502cc and the per-entry write at 0x1450250.
+    (0x145027c,
+     '11d140f9f0fd46d3105a7d92306a70f8ee2140920e0e0e8bd00140f91f0200f1ee038e9ace0140f9'
+     'ce010c8bce2540f9ce010d8bc00140bdd01100910092400dd1210091ce3100912082404dc091404d',
+     struct.pack('<20I',
+         0x53097df0, 0xb941b111, 0x6b11021f, 0x54000202,  # 页号 = ID >> 9，小于页数 | page = ID >> 9, page < count
+         0xf940d111, 0xb40001d1, 0xf8707a30, 0xb4000190,  # 表和页 | table and page
+         0x924021ee, 0xf86e7a0e, 0xb400012e,              # 槽 = page[ID & 0x1ff] | entry = page[ID & 0x1ff]
+         0x8b0c01ce, 0xf94025ce, 0xb40000ce,              # 该字段的向量数组 | vector array for this field
+         0x8b0d01ce, 0xfd4001c0, 0x910021ce, 0x4d4081c0,  # 按原偏移读 xyz | read xyz at the original offset
+         0x14000002, 0x6f00e400,                          # 读成功时跳过补零 | success skips the zero-vector fallback
+     ).hex(), '换图资源作业：缺失的索引条目按零向量输出，正常条目照常读取', '仅宿主'),
     (0x1979bc, 'e8a79f1a', 'e8d79f1a', '离线放行窗口：读存档设置键（0x1d53e80 处字串）的上次在线时刻，'
      '「当前时刻 − 上次在线 < 0x0009356907420000 ns（= 30 天）」置位 [x20+0x2c]；lt→gt'),
     (0x5b14dc, 'e8a79f1a', 'e8d79f1a', '调 0xddab50（缓冲区 [x10+0x138]+x25、剩余长度、回调 0x527d50、表 0x209cdb8、9 项）返回值 <1 置位，'
