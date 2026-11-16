@@ -65,13 +65,62 @@ def read_shell(ipa):
     return z, base, manifest, info, exe
 
 
-def check_env(game):
+def plat():   # 预编件的平台目录名（壳 zip 顶层 Tools/deswizzle/<平台>/） | platform directory name of the prebuilt parts (top-level Tools/deswizzle/<platform>/ of the shell zip)
+    import platform
+    m = platform.machine().lower()
+    return ('win-' if os.name == 'nt' else 'macos-' if sys.platform == 'darwin' else 'linux-') + ('arm64' if m in ('arm64', 'aarch64') else 'x64')
+
+
+def place_deswizzle(z):
+    """预编的贴图解排布库（界面素材脚本 romfs_art.py / gen_widestash_art.py 用；S2Arm 的 Windows 包里没有 C 编译器）：壳 zip 顶层 Tools/deswizzle/<平台>/，
+    取出来设 DM_DESWIZZLE_LIB（子进程都继承）。已设 DM_DESWIZZLE_LIB 就用它。→ 用上了返回 True；壳里没有这个平台的返回 False（调用方要求本机有 C 编译器现编）
+    | The prebuilt texture deswizzle library (used by the interface-art scripts romfs_art.py / gen_widestash_art.py; the S2Arm Windows package has no C compiler): top-level Tools/deswizzle/<platform>/ of the shell zip,
+    taken out and set as DM_DESWIZZLE_LIB (inherited by all child processes). An already set DM_DESWIZZLE_LIB is used as is. → True when one is in use; False when the shell has none for this platform (the caller then requires a local C compiler)"""
+    if os.environ.get('DM_DESWIZZLE_LIB'): return True
+    pre = 'Tools/deswizzle/%s/' % plat(); names = [n for n in z.namelist() if n.startswith(pre) and not n.endswith('/')]
+    if not names: return False
+    d = os.path.join(ROOT, 'build', 'tools', 'deswizzle', plat()); os.makedirs(d, exist_ok=True)
+    for n in names:
+        with open(os.path.join(d, os.path.basename(n)), 'wb') as o: o.write(z.read(n))
+    lib = os.path.join(d, 'deswizzle.dll' if os.name == 'nt' else 'deswizzle.dylib' if sys.platform == 'darwin' else 'deswizzle.so')
+    if not os.path.isfile(lib): return False
+    os.environ['DM_DESWIZZLE_LIB'] = lib; say('贴图解排布库：用壳里预编的（%s）' % plat())
+    return True
+
+
+def find_spirv_cross():
+    """spirv-cross：先找 PATH，再找 S2Arm 随包的那一份（S2A_PREBUILT_TOOLS/spvc/cli/bin，S2Arm Windows 包有）；找到的目录前置进 PATH 给子进程（出库链按名字调它）。
+    版本对不对不在这里判：翻译出的着色器摘要与壳要的不同会在后面当场报出来
+    | spirv-cross: PATH first, then the copy bundled with S2Arm (S2A_PREBUILT_TOOLS/spvc/cli/bin, in the S2Arm Windows package); the directory found is put in front of PATH for child processes (the build chain calls it by name).
+    Whether the version is right is not decided here: if the translated shader digest differs from what the shell wants, that is reported on the spot later"""
+    hit = shutil.which('spirv-cross')
+    if not hit and os.environ.get('S2A_PREBUILT_TOOLS'):
+        d = os.path.join(os.environ['S2A_PREBUILT_TOOLS'], 'spvc', 'cli', 'bin')
+        hit = shutil.which('spirv-cross', path=d)
+    if hit and os.path.dirname(hit) not in os.environ.get('PATH', '').split(os.pathsep):
+        os.environ['PATH'] = os.path.dirname(hit) + os.pathsep + os.environ.get('PATH', '')
+    return hit
+
+
+def check_env(game, z=None):
+    """做包前逐项查齐（缺的一次全报，带真原因与去处）：Python 包、贴图解排布库（壳里预编的，或本机 C 编译器）、着色器翻译工具（壳里预编的 + .NET 运行时，或 .NET SDK 现编）、
+    spirv-cross、游戏文件。→ dotnet 可执行文件（没有 SDK 也没有运行时时 None）
+    | Check everything before packing (all missing items reported at once, with the real reason and where to get it): Python packages, the texture deswizzle library (prebuilt in the shell, or a local C compiler), the shader translator (prebuilt in the shell + the .NET runtime, or the .NET SDK to build it),
+    spirv-cross, the game files. → the dotnet executable (None when there is neither SDK nor runtime)"""
     bad = []
     for m in ('PIL', 'numpy', 'lz4', 'capstone'):
         try: __import__(m)
         except Exception: bad.append('Python 包 %s：%s -m pip install pillow numpy lz4 capstone' % (m, PY))
-    if not (shutil.which('clang') or shutil.which('gcc') or shutil.which('cc')): bad.append('C 编译器（clang 或 gcc）')
-    dotnet = shutil.which('dotnet') or (os.path.expanduser('~/.dotnet/dotnet') if os.path.exists(os.path.expanduser('~/.dotnet/dotnet')) else None)
+    have_dsw = place_deswizzle(z) if z else bool(os.environ.get('DM_DESWIZZLE_LIB'))
+    if not have_dsw and not (shutil.which('clang') or shutil.which('gcc') or shutil.which('cc')): bad.append('贴图解排布库：壳里没有 %s 的预编版，这台机器也没有 C 编译器（clang 或 gcc）现编' % plat())
+    prebuilt = bool(os.environ.get('DM_XLATE_PREBUILT', '').strip()) or bool(z and any(n.startswith(XLATE_IN_SHELL) for n in z.namelist()))
+    exe_in_shell = bool(z and (XLATE_IN_SHELL + ('dmsh_xlate.exe' if os.name == 'nt' else 'dmsh_xlate')) in z.namelist())
+    if prebuilt and z and not os.environ.get('DM_XLATE_PREBUILT') and not exe_in_shell:
+        bad.append('着色器翻译工具：壳里预编的那份没有这台机器能起的启动器（%s），壳太旧，请换新版壳' % ('dmsh_xlate.exe' if os.name == 'nt' else 'dmsh_xlate'))
+    dn = 'dotnet.exe' if os.name == 'nt' else 'dotnet'
+    dotnet = shutil.which('dotnet')
+    for d in ([] if dotnet else [os.environ.get('DOTNET_ROOT'), os.path.expanduser('~/.dotnet')]):   # S2Arm 的作业环境只设 DOTNET_ROOT | S2Arm's job environment only sets DOTNET_ROOT
+        if d and os.path.isfile(os.path.join(d, dn)): dotnet = os.path.join(d, dn); break
     # 编出来的翻译工具是个独立的小程序，启动时自己找 .NET 运行时：只认 DOTNET_ROOT 和几个固定位置（Homebrew、发行版自带的常不在其中），找不到就起不来，
     # 后面会被报成「翻译器不是用仓内源编的」。没设时按 dotnet 自己报的运行时位置设上，子进程都继承
     # The translation tool that gets built is a standalone program that locates the .NET runtime itself at startup: it only looks at DOTNET_ROOT and a few fixed locations (Homebrew and distribution packages are often not among them), and cannot start when it finds none,
@@ -80,8 +129,11 @@ def check_env(game):
         r = subprocess.run([dotnet, '--list-runtimes'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         m = re.search(r'^Microsoft\.NETCore\.App \S+ \[(.*)[/\\]shared[/\\]Microsoft\.NETCore\.App\]', r.stdout.decode('utf-8', 'replace'), re.M)
         if m: os.environ['DOTNET_ROOT'] = m.group(1)
-    if not dotnet: bad.append('.NET SDK（dotnet）：https://dotnet.microsoft.com/download')
-    if not shutil.which('spirv-cross'): bad.append('spirv-cross：https://github.com/KhronosGroup/SPIRV-Cross')
+    # 壳里有预编翻译工具：只要 .NET 运行时（S2Arm 设好的 DOTNET_ROOT 就是）；没有才要 SDK 现编 | prebuilt translator in the shell: only the .NET runtime is needed (the DOTNET_ROOT S2Arm sets is one); only without it is the SDK needed to build
+    if not dotnet: bad.append(('.NET 运行时（S2Arm 自带，DOTNET_ROOT 指向它）' if prebuilt else '.NET SDK（dotnet，壳里没有预编的翻译工具，要现编）') + '：https://dotnet.microsoft.com/download')
+    elif not prebuilt and not subprocess.run([dotnet, '--list-sdks'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.strip():
+        bad.append('.NET SDK：这台机器只有 .NET 运行时，壳里又没有预编的翻译工具，要 SDK 现编：https://dotnet.microsoft.com/download')
+    if not find_spirv_cross(): bad.append('spirv-cross：PATH 里没有，S2Arm 随包的（S2A_PREBUILT_TOOLS/spvc/cli/bin）也没找到：https://github.com/KhronosGroup/SPIRV-Cross')
     for f in ('ExeFS/main', 'ExeFS/sdk', 'RomFS/data/build_manifest.psv'):
         if not os.path.isfile(os.path.join(game, f)): bad.append('游戏文件 %s（在 %s 下没找到）' % (f, game))
     if bad: die('还缺 %d 项：\n  - %s' % (len(bad), '\n  - '.join(bad)))
@@ -186,7 +238,7 @@ def main():
     P = open(os.path.join(DM, 'PRODUCT')).readline().strip()
     if info.get('PRODUCT') != P: die('壳与这份源码不是同一版：壳要的产物代号是 %s，这份源码是 %s。请用与壳同一个发布版本的源码' % (info.get('PRODUCT'), P))
     chain = info.get('CHAIN') or die('壳的版本信息里没有着色器链版本')
-    dotnet = check_env(game)
+    dotnet = check_env(game, z)
     # 着色器最后一步：有苹果的编译器就在电脑上编成库；没有（Windows / Linux / 没装 Xcode 的 Mac）就把源码放进安装包，手机上用到时现编。
     # D2RM_NO_METAL=1 强制走后一种（有编译器的机器上试这条路用）
     # Last step for shaders: if Apple's compiler is present, compile them into libraries on the computer; if not (Windows / Linux / a Mac without Xcode), put the source into the install package and compile on the device when first used.

@@ -116,6 +116,14 @@ PYEOF
 # The prebuilt shader translator ships with the shell (top-level Tools/dmsh_xlate/ of the shell zip; d2rm_pack.py takes it out and uses it, it does not go into the install package): machines with only the .NET runtime and no SDK (the S2Arm launcher) can pack too.
 #   No debug symbols, source paths mapped to /_/; checked below for local paths like everything else
 rm -rf "$O/Tools" && dotnet publish ../gfx/tools/dmsh_xlate -c Release -o "$O/Tools/dmsh_xlate" -v quiet -p:DebugType=none -p:DebugSymbols=false "-p:PathMap=$(cd ../.. && pwd)=/_/" || die "预编着色器翻译工具失败"
-leak=$(LC_ALL=C grep -raoE -- "/Users/[A-Za-z0-9._-]+|$HOME" "$O/Tools" | head -3); [ -z "$leak" ] || die "预编的翻译工具里带着本机路径：$leak"
+# Windows 上起翻译工具要 dmsh_xlate.exe（.NET 的启动器，只认同目录的 dmsh_xlate.dll）：上面那份是本机（Mac）的启动器，Windows 起不来。
+#   按 win-x64 再出一次、只取 exe 放进同一目录（dll 用上面那份，翻译链锁按 dll 记指纹）；起它用 S2Arm 自带的 .NET 运行时（DOTNET_ROOT）
+# On Windows the translator is started through dmsh_xlate.exe (the .NET launcher, which only looks for dmsh_xlate.dll next to it): the one above is this Mac's launcher and cannot start on Windows.
+#   Publish once more for win-x64 and take only the exe into the same directory (the dlls are the ones above; the chain lock fingerprints the dlls); it runs on the .NET runtime bundled with S2Arm (DOTNET_ROOT)
+XW=$(mktemp -d) && dotnet publish ../gfx/tools/dmsh_xlate -c Release -r win-x64 --self-contained false -o "$XW" -v quiet -p:DebugType=none -p:DebugSymbols=false "-p:PathMap=$(cd ../.. && pwd)=/_/" \
+  && cp "$XW/dmsh_xlate.exe" "$O/Tools/dmsh_xlate/" && rm -rf "$XW" || die "出 Windows 版翻译工具启动器失败"
+# 贴图解排布库（界面素材脚本用）也随壳预编：做包的机器上不用 C 编译器 | The texture deswizzle library (used by the interface-art scripts) is prebuilt with the shell too: no C compiler on the packing machine
+bash ../tools/deswizzle_build.sh "$O/Tools/deswizzle" || die "预编贴图解排布库失败"
+leak=$(LC_ALL=C grep -raoE -- "/Users/[A-Za-z0-9._-]+|$HOME" "$O/Tools" | head -3); [ -z "$leak" ] || die "预编的工具里带着本机路径：$leak"
 ( cd "$O" && rm -rf Payload && mkdir Payload && cp -R app Payload/DmIOS.app && zip -qry D2RMobile-shell-build-input.zip Payload Tools && rm -rf Payload ) || die "打包失败"
 t "壳：$O/D2RMobile-shell-build-input.zip（$(du -h "$O/D2RMobile-shell-build-input.zip" | cut -f1)，$(wc -l < "$O/shell_files.tsv" | tr -d ' ') 个文件）；缺的内容 $(wc -l < "$O/shell_manifest.txt" | tr -d ' ') 项，清单 $O/shell_manifest.txt"
