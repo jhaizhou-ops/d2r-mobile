@@ -88,15 +88,21 @@ def place_deswizzle(z):
     return True
 
 
-def find_spirv_cross():
-    """spirv-cross：先找 PATH，再找 S2Arm 随包的那一份（S2A_PREBUILT_TOOLS/spvc/cli/bin，S2Arm Windows 包有）；找到的目录前置进 PATH 给子进程（出库链按名字调它）。
+def find_spirv_cross(z=None):
+    """spirv-cross：先用壳带的那份（壳 zip 顶层 Tools/spirv-cross/<平台>/，上游 vulkan-sdk 标签原样编，和出壳时翻译着色器用的是同一个版本），没有再找 PATH；
+    找到的目录前置进 PATH 给子进程（出库链按名字调它）。S2Arm 随包的那份（S2A_PREBUILT_TOOLS/spvc）不用：那是 S2Arm 自己改过的源码编的，翻出的源码和原版不同（11-16 实测 6927 个里 2984 个不同）。
     版本对不对不在这里判：翻译出的着色器摘要与壳要的不同会在后面当场报出来
-    | spirv-cross: PATH first, then the copy bundled with S2Arm (S2A_PREBUILT_TOOLS/spvc/cli/bin, in the S2Arm Windows package); the directory found is put in front of PATH for child processes (the build chain calls it by name).
+    | spirv-cross: the copy the shell carries first (top-level Tools/spirv-cross/<platform>/ of the shell zip, built from the upstream vulkan-sdk tag as is, the same version the shell's shaders were translated with), then PATH;
+    the directory found is put in front of PATH for child processes (the build chain calls it by name). The copy bundled with S2Arm (S2A_PREBUILT_TOOLS/spvc) is not used: it is built from S2Arm's modified source and translates differently (measured 11-16: 2984 of 6927 differ).
     Whether the version is right is not decided here: if the translated shader digest differs from what the shell wants, that is reported on the spot later"""
-    hit = shutil.which('spirv-cross')
-    if not hit and os.environ.get('S2A_PREBUILT_TOOLS'):
-        d = os.path.join(os.environ['S2A_PREBUILT_TOOLS'], 'spvc', 'cli', 'bin')
-        hit = shutil.which('spirv-cross', path=d)
+    exe = 'spirv-cross.exe' if os.name == 'nt' else 'spirv-cross'
+    hit = None
+    if z is not None and 'Tools/spirv-cross/%s/%s' % (plat(), exe) in z.namelist():
+        d = os.path.join(ROOT, 'build', 'tools', 'spirv-cross', plat()); os.makedirs(d, exist_ok=True)
+        hit = os.path.join(d, exe)
+        with open(hit, 'wb') as o: o.write(z.read('Tools/spirv-cross/%s/%s' % (plat(), exe)))
+        os.chmod(hit, 0o755); say('spirv-cross：用壳里带的（%s）' % plat())
+    hit = hit or shutil.which('spirv-cross')
     if hit and os.path.dirname(hit) not in os.environ.get('PATH', '').split(os.pathsep):
         os.environ['PATH'] = os.path.dirname(hit) + os.pathsep + os.environ.get('PATH', '')
     return hit
@@ -124,7 +130,7 @@ def check_env(game, z=None):
             r = subprocess.run([dotnet, '--list-runtimes'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             m = re.search(r'^Microsoft\.NETCore\.App \S+ \[(.*)[/\\]shared[/\\]Microsoft\.NETCore\.App\]', r.stdout.decode('utf-8', 'replace'), re.M)
             if m: os.environ['DOTNET_ROOT'] = m.group(1)
-    if not find_spirv_cross(): bad.append('spirv-cross：PATH 里没有，S2Arm 随包的（S2A_PREBUILT_TOOLS/spvc/cli/bin）也没找到：https://github.com/KhronosGroup/SPIRV-Cross')
+    if not find_spirv_cross(z): bad.append('spirv-cross：壳里没带这个平台的、PATH 里也没有（版本要和壳 dm/shell_info.txt 的 SPIRV_CROSS 一致）：https://github.com/KhronosGroup/SPIRV-Cross')
     for f in ('ExeFS/main', 'ExeFS/sdk', 'RomFS/data/build_manifest.psv'):
         if not os.path.isfile(os.path.join(game, f)): bad.append('游戏文件 %s（在 %s 下没找到）' % (f, game))
     if bad: die('还缺 %d 项：\n  - %s' % (len(bad), '\n  - '.join(bad)))

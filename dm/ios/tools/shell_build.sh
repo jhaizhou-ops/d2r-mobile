@@ -128,6 +128,16 @@ mkdir -p "$O/Tools/dmsh_xlate/win-x64" && cp "$WX/dmsh_xlate.exe" "$O/Tools/dmsh
 [ -z "${DM_XLATE_WIN_SHA:-}" ] || [ "$DM_XLATE_WIN_SHA" = "$XS" ] || die "Windows 版翻译工具的源码指纹 $DM_XLATE_WIN_SHA 和本机这份 $XS 不同：两边不是同一份源码"
 # 贴图解排布库（界面素材脚本用）也随壳预编：做包的机器上不用 C 编译器 | The texture deswizzle library (used by the interface-art scripts) is prebuilt with the shell too: no C compiler on the packing machine
 bash ../tools/deswizzle_build.sh "$O/Tools/deswizzle" || die "预编贴图解排布库失败"
+# spirv-cross 也随壳走（壳 zip 顶层 Tools/spirv-cross/<平台>/，d2rm_pack.py 优先用它）：做包的机器上不用另装，版本也和出壳时一致。
+#   由 DM_SPIRV_CROSS_DIR=<目录> 给出 macos-arm64/spirv-cross 与 win-x64/spirv-cross.exe：都用上游 vulkan-sdk-<版本> 标签源码原样编（CLI 静态链 spirv-cross 库；
+#   Windows 用 MSVC 静态 C 运行库 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded，只依赖系统 KERNEL32）。不要用 S2Arm 随包的那份：S2Arm 改过源码，翻出的着色器不同
+# spirv-cross ships with the shell too (top-level Tools/spirv-cross/<platform>/ of the shell zip; d2rm_pack.py prefers it): nothing to install on the packing machine, and the version matches the one the shell was built with.
+#   DM_SPIRV_CROSS_DIR=<dir> provides macos-arm64/spirv-cross and win-x64/spirv-cross.exe, both built as is from the upstream vulkan-sdk-<version> tag source (CLI statically linked;
+#   on Windows with the static MSVC C runtime, -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded, depending only on the system KERNEL32). Do not use the copy bundled with S2Arm: S2Arm modified the source and it translates differently
+SC=${DM_SPIRV_CROSS_DIR:?要 DM_SPIRV_CROSS_DIR=<放 macos-arm64/spirv-cross 与 win-x64/spirv-cross.exe 的目录>（见上面的说明） | needs DM_SPIRV_CROSS_DIR (see above)}
+[ "$(head -c 2 "$SC/win-x64/spirv-cross.exe")" = MZ ] || die "$SC/win-x64/spirv-cross.exe 不是 Windows 程序"
+"$SC/macos-arm64/spirv-cross" --help > /dev/null 2>&1; [ $? -le 1 ] && file "$SC/macos-arm64/spirv-cross" | grep -q "Mach-O.*arm64" || die "$SC/macos-arm64/spirv-cross 不是能跑的 macOS arm64 程序"
+mkdir -p "$O/Tools/spirv-cross/macos-arm64" "$O/Tools/spirv-cross/win-x64" && cp "$SC/macos-arm64/spirv-cross" "$O/Tools/spirv-cross/macos-arm64/" && cp "$SC/win-x64/spirv-cross.exe" "$O/Tools/spirv-cross/win-x64/" || die "放不进 spirv-cross"
 leak=$(LC_ALL=C grep -raoE -- "/Users/[A-Za-z0-9._-]+|$HOME" "$O/Tools" | head -3); [ -z "$leak" ] || die "预编的工具里带着本机路径：$leak"
 ( cd "$O" && rm -rf Payload && mkdir Payload && cp -R app Payload/DmIOS.app && zip -qry D2RMobile-shell-build-input.zip Payload Tools && rm -rf Payload ) || die "打包失败"
 t "壳：$O/D2RMobile-shell-build-input.zip（$(du -h "$O/D2RMobile-shell-build-input.zip" | cut -f1)，$(wc -l < "$O/shell_files.tsv" | tr -d ' ') 个文件）；缺的内容 $(wc -l < "$O/shell_manifest.txt" | tr -d ' ') 项，清单 $O/shell_manifest.txt"
