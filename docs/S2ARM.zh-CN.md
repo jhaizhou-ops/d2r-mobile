@@ -33,8 +33,9 @@ S2Arm 的启动器自带一套运行时，玩家机器上不另装东西。所�
 | 依赖 | S2Arm 现在带的 | 备注 |
 |---|---|---|
 | Python | 3.12，加 `capstone`、`lz4`、`numpy`、`Pillow` | 别的第三方包不能进做包路径（`unicorn` 只给测试与验证脚本用）。`dm/tools/tests/test_s2arm_deps.py` 检查 |
-| spirv-cross | S2Arm 发版时的 Homebrew 版本（现在是 1.4.363.0） | 壳里带着色器源码摘要，翻出来的对不上就停下来说清楚。S2Arm 升级 spirv-cross 后摘要若变了，就用那个版本重出壳 |
-| .NET | 只有运行时，没有 SDK | 所以壳里带预编的 `dmsh_xlate`。也可以用环境变量 `DM_XLATE_PREBUILT=<目录>` 指定 |
+| spirv-cross | 不用 S2Arm 的 | 壳里自带上游 vulkan-sdk-1.4.363.0 原样编的一份（Tools/spirv-cross/macos-arm64、win-x64），`d2rm_pack.py` 优先用它，没有才找 PATH。壳里还带着色器源码摘要，翻出来的对不上就停下来说清楚 |
+| .NET | 不需要 | 壳里带 NativeAOT 预编的 `dmsh_xlate`（Mac 与 Windows 各一份，单文件，不要 .NET 运行时）。也可以用环境变量 `DM_XLATE_PREBUILT=<目录>` 指定 |
+| C 编译器 | 不需要 | 界面素材用的贴图解排布库（deswizzle）壳里预编了 Mac 与 Windows 两份 |
 | 苹果的 Metal 着色器编译器 | 在 Xcode 里（S2Arm 的 Mac 启动器要求装 Xcode） | 没有它时着色器以源码放进安装包，手机首次启动时现编 |
 
 ## 四、游戏资源怎么上手机
@@ -57,11 +58,11 @@ S2Arm 装好 App 后按自己的推送把资源推进去：每批不超过 1 GB�
 
 ## 六、发版时多做的一步
 
-1. 出 iOS 壳：`dm/ios/tools/shell_build.sh ios`。出壳机器的 spirv-cross 与 S2Arm 随包的同版本。
+1. 出 iOS 壳：`dm/ios/tools/shell_build.sh ios`，要给 `DM_XLATE_WIN_AOT`（Windows 上 NativeAOT 出好的翻译工具目录）和 `DM_SPIRV_CROSS_DIR`（放 macos-arm64/spirv-cross 与 win-x64/spirv-cross.exe，都用上游 vulkan-sdk 标签原样编），做法见 shell_build.sh 里的说明。
 2. `python3 dm/tools/s2arm_bundle.py <壳 zip> D2RMobile-s2arm-bundle.zip <标签>`。
 3. 把包件附进发布页，同时传到 s2arm.com。
 4. 给 S2Arm 提一条改登记表的合入（标签、提交、地址、SHA-256）。
 
 ## 七、还没接的
 
-iOS 18 – 25 的旧接口壳（包件里现在只有 iOS 26 的壳）、安卓（`d2rm_android.py` + APK）、鸿蒙、Mac 原生版，以及 Windows 上的 S2Arm 都还没接，玩家暂时按 README 各节走。
+iOS 18 – 25 的旧接口壳（包件里现在只有 iOS 26 的壳）、安卓（`d2rm_android.py` + APK）、鸿蒙、Mac 原生版都还没接，玩家暂时按 README 各节走。
