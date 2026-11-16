@@ -477,6 +477,6 @@ void dm_android_touch_layout(float out[DM_ANDROID_TOUCH_DRAW_FLOATS]) {
     for (int i=0;i<4;++i) hud[3+i]=h.belt[i];
     hud[7]=h.players; hud[8]=h.hp; hud[9]=h.hp_max; hud[10]=h.mp; hud[11]=h.mp_max;
     hud[12]=h.points; hud[13]=h.quest_unread; hud[14]=h.dead; hud[15]=tc.map_cancel_active;
-    hud[16]=tc.lx; hud[17]=tc.ly;   /* 摇杆推量（−32767..32767），画摇杆头用，同 iOS DmTouchOverlay | stick deflection (−32767..32767) for drawing the thumb, as iOS DmTouchOverlay */
+    hud[16]=(int)lroundf(tc.joy_px*DM_STICK_MAX); hud[17]=(int)lroundf(tc.joy_py*DM_STICK_MAX);   /* 摇杆推量（−32767..32767），画摇杆头用，同 iOS DmTouchOverlay | stick deflection (−32767..32767) for drawing the thumb, as iOS DmTouchOverlay */
     pthread_mutex_unlock(&lock);
 }
