@@ -52,6 +52,20 @@ int main(){
     CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 732"));
     CHECK(!xbg_adreno_rewrites_fault(0x13b5,"Mali-G720"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 720"));
+
+    // 6xx 也内联（#266 的 660、#243 的 650）；这一版新打开内联的机型（6xx、735）重试没内联时记的跳过条目，750–799 不重试。
+    // The 6xx are inlined too (#266's 660, #243's 650); models whose inlining is new in this version (6xx, 735) retry skip entries
+    // recorded without inlining, the 750-799 do not.
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 660"));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 650"));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 618"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 540"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 730"));
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 660"));
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 735"));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 750"));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 730"));
+    CHECK(!xbg_adreno_inline_is_new(0x13b5,"Mali-G610"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 830"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,nullptr));
     CHECK(!xbg_adreno_compiler_needs_inline(0x10002,"Adreno 750"));
@@ -100,6 +114,6 @@ int main(){
     CHECK(!xbg_adreno_dispatch_guard_option(false,-1,nullptr,false));
 
     if(failures){printf("FAIL %d check(s)\n",failures);return 1;}
-    printf("PASS Adreno policy: 720 and 740-799 default off, 735 and 750-799 inline helpers, 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
+    printf("PASS Adreno policy: 720 and 740-799 default off, 6xx, 735 and 750-799 inline helpers (6xx and 735 retry old skips), 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
     return 0;
 }

@@ -64,10 +64,26 @@ inline bool xbg_adreno_rewrite_option(bool marker_present,int marker,const char 
 // The Snapdragon 8s Gen 3's Adreno 735 is the 750's generation (device ID 0x43030b00), and its compiler segfaults on
 // 098a126f92bf533a in the same way (addr=0x48, #169: the reporter extended the inlining to the 735 and the game ran), so the
 // 735 is inlined too.
+// Adreno 6xx 的旧驱动也有这个编译器问题：098a126f92bf533a 不内联时建管线段错误，被记进 gfx-pipe-skip，烟火处成了白色 / 彩色
+// 方块（Galaxy Z Fold 3 的 660，#266 #265；Retroid Pocket 5 的 650 实测内联后能编，#243），所以 6xx 也内联。
+// Old Adreno 6xx drivers have the same compiler problem: without inlining, 098a126f92bf533a crashes while its pipeline is built,
+// lands in gfx-pipe-skip, and fire and smoke show white / coloured squares (the Galaxy Z Fold 3's 660, #266 #265; on a Retroid
+// Pocket 5's 650 it compiles once inlined, #243), so the 6xx are inlined too.
 inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *device_name){
     if(vendor_id!=0x5143)return false;
     const int model=xbg_adreno_model(device_name);
-    return model==735 || (model>=750 && model<800);
+    return (model>=600 && model<700) || model==735 || (model>=750 && model<800);
+}
+// 内联缺省是这一版才打开的机型（6xx、735）：它们 gfx-pipe-skip 里没带内联记号的条目是在没内联时记的，读到时重试一次。
+// 750–799 自 v2.0.2 起就内联，它们的条目本来就是内联时记的，不重试（否则更新后要再崩两次才重新记上）。
+// Models whose inlining default is new in this version (6xx, 735): their gfx-pipe-skip entries without the inlining tag were
+// recorded without inlining, so they are retried once. The 750-799 have been inlined since v2.0.2, so their entries were
+// recorded with inlining anyway and are not retried (otherwise they would crash twice more after the update before being
+// recorded again).
+inline bool xbg_adreno_inline_is_new(uint32_t vendor_id,const char *device_name){
+    if(vendor_id!=0x5143)return false;
+    const int model=xbg_adreno_model(device_name);
+    return (model>=600 && model<700) || model==735;
 }
 
 // Adreno 8xx：计算派发会多跑范围之外的调用（#256：830 上局部尺寸 8×4×1、y 方向工作组数为奇数时多一行工作组；#261 的 825 症状
