@@ -22,7 +22,7 @@ dm_overlay_result dm_overlay_validate(const char *directory,
  * After full manifest verification, require Android's fixed drawing assets; read-only, never repairs files. */
 dm_overlay_result dm_overlay_require_touch_art(const char *directory, char *reason, size_t reason_capacity);
 
-/* 成功时返回经校验的「变体:基础覆盖层」路径。 */
+/* 成功时返回经校验的「变体:基础覆盖层」路径。 | On success, returns the validated variant:base overlay path. */
 int dm_overlay_variant(const char *overlay, const char *source_sha256, int (*enabled)(const char *),
                        char *out, size_t n);
 

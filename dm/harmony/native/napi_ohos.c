@@ -306,6 +306,7 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     if (ov == DM_OVERLAY_OK) ov = dm_overlay_require_touch_art(required, reason, sizeof reason);
     if (ov != DM_OVERLAY_OK) { LOG("boot: overlay rejected (%d): %s", ov, reason); return ret_int(env, ov == DM_OVERLAY_MISSING ? -9 : -10); }
     // 先按鸿蒙窗口尺寸确定均衡档，避免读取物品注释开关时提前缓存通用比例。
+    // Set the balanced profile from the HarmonyOS window before reading item notes caches the default scale.
     front_game_res(1);
     char layered[2800];
     setenv("DM_ROMFS_OVERLAY", dm_overlay_variant(required, DM_OVERLAY_SOURCE_SHA256, dm_custom_get, layered, sizeof layered) ? layered : required, 1);

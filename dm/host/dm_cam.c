@@ -41,6 +41,8 @@ int dm_cam_mode(void) {
 // half turns the camera (touch_android.c gives the touch layer cam_orbit)
 // 安卓与鸿蒙的 Vulkan 后端用拖动旋转镜头，苹果平台的 Metal 后端保留跟随摇杆。
 // DM_CAM_STYLE=0 可切回跟随摇杆。
+// Android and HarmonyOS use drag-to-turn on Vulkan. The Apple Metal backend still follows the stick.
+// DM_CAM_STYLE=0 restores stick-following.
 #if defined(__ANDROID__) || defined(__OHOS__)
 #define DM_CAM_STYLE_DEFAULT 1
 #else

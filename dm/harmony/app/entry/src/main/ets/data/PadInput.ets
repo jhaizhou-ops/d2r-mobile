@@ -1,7 +1,9 @@
+// 将鸿蒙手柄按键和摇杆事件合成为宿主手柄状态。
+// Combine HarmonyOS gamepad buttons and stick events into the host controller state.
 import { inputDevice, KeyCode } from '@kit.InputKit';
 import dm from 'libdm.so';
 
-// 位序与原生 dm_input.h 一致。
+// 位序与原生 dm_input.h 一致。 | Button bits match the native dm_input.h.
 const BUTTONS: ReadonlyMap<number, number> = new Map<number, number>([
   [KeyCode.KEYCODE_BUTTON_A, 1 << 0], [KeyCode.KEYCODE_BUTTON_B, 1 << 1],
   [KeyCode.KEYCODE_BUTTON_X, 1 << 2], [KeyCode.KEYCODE_BUTTON_Y, 1 << 3],

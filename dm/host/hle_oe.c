@@ -273,6 +273,7 @@ void dm_3d_scale_level_set(int level) {
     const float balanced = s3_phone_default();
 #if defined(__OHOS__)
     // 鸿蒙原生像素出图时，均衡档可能已经低于 60%。省电档不能提高渲染比例。
+    // Native-pixel output on HarmonyOS can put balanced below 60%. Power saver must not raise the scale.
     const float saver = balanced < 0.60f ? balanced : 0.60f;
 #else
     const float saver = 0.60f;

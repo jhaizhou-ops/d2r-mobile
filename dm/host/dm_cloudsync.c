@@ -201,6 +201,7 @@ static int pack_write(const char *path, const cs_unit *u) {
 }
 #if defined(__OHOS__)
 // 把手动导入的共享仓库交给现有的局内合并流程。同一份内容只进入收件箱一次。
+// Queue a manually imported shared stash for the existing in-game merge. Identical contents enter the inbox once.
 int dm_cloud_import_stash(const char *save, const char *source, const char *name) {
     if (!*save || !*source || !is_stash(name) || strchr(name, '/') || strstr(name, "..")) return -1;
     cs_unit unit = {0};

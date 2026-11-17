@@ -165,6 +165,7 @@ def main():
     # 3. Overlay (touch layout, UI base art) + skill atlases and small HUD images, then write the manifest (the App checks it file by file at startup)
     say('生成覆盖层')
     # 安卓和鸿蒙都没有 iCloud，自定义页无需生成这一行。
+    # Skip the iCloud row on Android and HarmonyOS.
     run([PY, os.path.join(IOS, 'tools', 'gen_romfs_overlay.py'), romfs, os.path.join(stage, 'overlay')], cwd=IOS, env={'DM_ROMFS_SRC': romfs, 'DM_OVERLAY_NO_ICLOUD': '1'}, log=os.path.join(stage, 'gen_overlay.log'), what='生成覆盖层')
     sys.path.insert(0, os.path.join(DM, 'android', 'tools')); import stage_touch_assets
     hud = os.path.join(IOS, 'Gen', 'assets', 'NativeHUD', 'v4', 'hud_v4_ui')
@@ -208,6 +209,7 @@ def main():
     for x in ('derived.tsv', 'pack_info.txt'): shutil.copyfile(os.path.join(stage, x), os.path.join(part, x))
     # 走覆盖层的自定义开关（物品注释与旧译名，#191）：gen_romfs_overlay.py 在 overlay 旁边出了各开关组合的完整覆盖层，
     # 两个平台启动时都按开关选择一份变体叠在基础覆盖层上。
+    # Both platforms select a variant to layer over the base overlay at startup.
     if os.path.isdir(os.path.join(stage, 'overlay_variants')): shutil.copytree(os.path.join(stage, 'overlay_variants'), os.path.join(part, 'overlay_variants'))
     shutil.rmtree(final, ignore_errors=True); os.replace(part, final)
     size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(final) for f in fs)

@@ -13,7 +13,7 @@ import { IosOverlay } from '../components/IosOverlay';
 import { importResources } from '../data/ResourceImport';
 import { exportSaves, importSaves, selectFolder } from '../data/SaveTransfer';
 import { PadInput } from '../data/PadInput';
-import { UI_TEXT_EN, UI_TEXT_ZH } from '../generated/UiText';
+import { ShellText, shellText } from '../data/ShellText';
 
 interface InputRequest { id: number; title: string; sub: string; guide: string; initial: string; maxChars: number; nameRule: number; numericMax: number }
 
@@ -43,7 +43,7 @@ struct Index {
   private files: string = AppStorage.get<string>('filesDir') ?? '';
   private lang: string = AppStorage.get<string>('lang') ?? 'zh';
 
-  private t(key: string): string { return (this.lang.startsWith('zh') ? UI_TEXT_ZH : UI_TEXT_EN)[key] ?? key; }
+  private t: ShellText = shellText(this.lang);
   private dataDir(): string {
     const base = this.files + '/game-data';
     try { if (fileIo.accessSync(base + '/data/.build.config') || fileIo.accessSync(base + '/data/build.config')) { return base + '/data'; } } catch (e) { }
@@ -70,7 +70,7 @@ struct Index {
       if (enabled) { fileIo.closeSync(fileIo.openSync(path, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY)); }
       else if (fileIo.accessSync(path)) { fileIo.unlinkSync(path); }
       this.showFps = enabled;
-    } catch (error) { this.notice = '无法保存帧率显示设置。'; }
+    } catch (error) { this.notice = this.t('dmHarmonyFpsSaveFailed'); }
   }
 
   private boot(): void {
@@ -87,8 +87,8 @@ struct Index {
           this.started = false;
           this.needsRestart = true;
           this.stopFps();
-          this.error = `${this.t('dmAndroidStartFailed').replace('%d', String(code))} 请退出应用后重试。`;
-          if (code === -7) { this.error += `\n可执行内存自检 ${dm.execProbe()}`; }
+          this.error = `${this.t('dmAndroidStartFailed', String(code))} ${this.t('dmHarmonyRestartApp')}`;
+          if (code === -7) { this.error += `\n${this.t('dmHarmonyExecProbe', dm.execProbe())}`; }
         });
       this.callbacksReady = true;
     }
@@ -102,16 +102,16 @@ struct Index {
         this.lastFpsAt = Date.now();
         this.fpsTimer = setInterval(() => {
           const n = dm.presentCount(), t = Date.now();
-          this.fps = `${Math.round((n - this.lastPresents) * 1000 / Math.max(1, t - this.lastFpsAt))} FPS`;
+          this.fps = this.t('dmHarmonyFpsValue', String(Math.round((n - this.lastPresents) * 1000 / Math.max(1, t - this.lastFpsAt))));
           this.lastPresents = n;
           this.lastFpsAt = t;
         }, 1000);
       }
     } else {
-      this.error = this.t('dmAndroidStartFailed').replace('%d', String(rc));
-      if ([-2, -5].includes(rc)) { this.error += '\n请导入含有 data 的游戏资源文件夹。'; }
+      this.error = this.t('dmAndroidStartFailed', String(rc));
+      if ([-2, -5].includes(rc)) { this.error += '\n' + this.t('dmHarmonyNeedData'); }
       if ([-3, -4, -9, -10, -11, -12].includes(rc)) {
-        this.error += '\n请导入与当前壳配套的鸿蒙运行组件。已有游戏数据时，只需导入新版 dm。';
+        this.error += '\n' + this.t('dmHarmonyNeedPack');
       }
     }
   }
@@ -129,7 +129,7 @@ struct Index {
     try {
       if (!fileIo.accessSync(this.files + '/dm')) { fileIo.mkdirSync(this.files + '/dm', true); }   // 已存在时 mkdirSync 抛 13900015（以前包一更新就在这里失败）| mkdirSync throws 13900015 when it exists (pack updates used to fail right here)
       try { fileIo.unlinkSync(this.files + '/dm/pack-version.txt'); } catch (e) { }   // 解压到一半被杀：下次重来 | killed halfway: unpack again next time
-      this.importing = '首次启动，正在解压游戏组件（约 1 分钟）…';
+      this.importing = this.t('dmHarmonyUnpacking');
       // 先解到临时目录再逐项替换：decompressFile 不覆盖已有文件（13900015），直接解到 files/dm 时包一更新就失败、旧包一直留着。
       // 只替换包里有的顶层项（out / shaders / overlay / ui-art / 管线种子），本机清单、缓存、env、标记文件不动
       // Unpack into a temporary folder, then replace entry by entry: decompressFile does not overwrite existing files (13900015), so unpacking straight into files/dm failed
@@ -157,20 +157,20 @@ struct Index {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
       if (action === 'export') {
-        this.notice = await exportSaves(context);
+        this.notice = await exportSaves(context, this.t);
       } else {
         const uri = await selectFolder(context);
         if (!uri) { return; }
         if (action === 'resources') {
-          this.notice = await importResources(this.files, uri, (message: string) => { this.importing = message; });
+          this.notice = await importResources(this.files, uri, this.t, (message: string) => { this.importing = message; });
           this.error = '';
         } else {
-          this.importing = '正在导入存档…';
-          this.notice = await importSaves(this.files, uri);
+          this.importing = this.t('dmHarmonySaveImporting');
+          this.notice = await importSaves(this.files, uri, this.t);
         }
       }
     } catch (error) {
-      this.notice = `操作失败（${(error as Error).message ?? String(error)}）`;
+      this.notice = this.t('dmHarmonyTransferError', (error as Error).message ?? String(error));
     } finally {
       this.importing = '';
       this.busy = false;
@@ -227,16 +227,16 @@ struct Index {
               Text(this.importing || this.notice).fontColor('#ffd8d0bc').fontSize(14)
             }
             Row({ space: 12 }) {
-              Button('开始游戏').enabled(this.ready && !this.busy && !this.needsRestart).onClick(() => this.boot())
-              Button('导入游戏资源').enabled(this.ready && !this.busy).onClick(() => { this.transfer('resources'); })
+              Button(this.t('dmHarmonyStart')).enabled(this.ready && !this.busy && !this.needsRestart).onClick(() => this.boot())
+              Button(this.t('dmHarmonyResources')).enabled(this.ready && !this.busy).onClick(() => { this.transfer('resources'); })
             }
             Row({ space: 12 }) {
-              Button('导入存档').enabled(this.ready && !this.busy).onClick(() => { this.transfer('import'); })
-              Button('导出存档').enabled(this.ready && !this.busy).onClick(() => { this.transfer('export'); })
+              Button(this.t('dmHarmonySaveImport')).enabled(this.ready && !this.busy).onClick(() => { this.transfer('import'); })
+              Button(this.t('dmHarmonySaveExport')).enabled(this.ready && !this.busy).onClick(() => { this.transfer('export'); })
               Checkbox({ name: 'fps' }).select(this.showFps).enabled(this.ready && !this.busy)
                 .onChange((enabled: boolean) => this.toggleFps(enabled))
-                .accessibilityText('显示帧率')
-              Text('显示帧率').fontColor('#ffd8d0bc').fontSize(14)
+                .accessibilityText(this.t('dmHarmonyShowFps'))
+              Text(this.t('dmHarmonyShowFps')).fontColor('#ffd8d0bc').fontSize(14)
             }
           }.padding(20).width('100%')
         }.width('82%').constraintSize({ maxWidth: 580, maxHeight: '88%' }).backgroundColor('#ee141210').borderRadius(12)

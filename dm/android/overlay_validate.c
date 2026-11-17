@@ -361,6 +361,7 @@ int dm_overlay_variant(const char *overlay, const char *source_sha256, int (*ena
     while ((e = readdir(d)) && nv < 16) if (e->d_name[0] != '.' && strlen(e->d_name) < sizeof names[0]) strcpy(names[nv++], e->d_name);
     closedir(d);
     // 变体名里出现过的键（去重）里开着几个；某份变体的键全开、个数又相等 = 键集合正好相等
+    // Count distinct enabled keys. A variant matches when all its keys are enabled and the count agrees.
     char keys[16][64]; int nk = 0, on = 0;
     for (int i = 0; i < nv; i++) { char t[64], *sp = NULL; strcpy(t, names[i]);
         for (char *k = strtok_r(t, "+", &sp); k; k = strtok_r(NULL, "+", &sp)) {
