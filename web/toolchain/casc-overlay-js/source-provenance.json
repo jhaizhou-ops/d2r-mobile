@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "method": "JavaScript port of source-pinned bounded CASC serializer, with lockfile-pinned hash-wasm MD5 and pinned native zlib byte compression",
+  "sources": {
+    "dm/tools/casc_overlay.py": "b4b7cf11926ba570532373baa095b9fe623a33fe3fda8497d6ccd8c07770ccf3",
+    "web/toolchain/asset-generation-spike/src/casc_overlay.py": "59f4f2786db2529bcae78fb4395efd19c1e7561df1aa50d88705414492fa05e0",
+    "web/node_modules/hash-wasm/dist/index.esm.js": "2d6333a619d7f64adc313a38732425fc0c6f0baaa36c1419cf05672bcd89340d"
+  }
+}

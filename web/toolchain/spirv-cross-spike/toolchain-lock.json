@@ -1,0 +1,13 @@
+{
+  "spirvCross": {
+    "repository": "https://github.com/KhronosGroup/SPIRV-Cross.git",
+    "tag": "vulkan-sdk-1.4.363.0",
+    "commit": "f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7"
+  },
+  "emsdk": {
+    "repository": "https://github.com/emscripten-core/emsdk.git",
+    "tag": "4.0.20",
+    "commit": "e4fe26ef59168ff44f4c23c466e497bf60b3411e"
+  },
+  "verification": "Official repository tag refs verified with git ls-remote on 2026-10-20; CI verifies HEAD before building."
+}

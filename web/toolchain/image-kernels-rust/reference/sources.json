@@ -1,0 +1,54 @@
+{
+  "src/libImaging/AlphaComposite.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/AlphaComposite.c",
+    "sha256": "5892a39627886902f8e47bd9440a25dc86e0a872a4daebf6180c8fd1d3dfc8ad"
+  },
+  "src/libImaging/Paste.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/Paste.c",
+    "sha256": "57e0269bf8612bf27a03df894d21a4c8a3f443eb79c799a732c2edccb0ea33bf"
+  },
+  "src/libImaging/Resample.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/Resample.c",
+    "sha256": "96d4d17d466ad0cb1f3ac31911115adacbe18d15f9abf68c53d22acebd0b0de5"
+  },
+  "src/libImaging/Convert.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/Convert.c",
+    "sha256": "640cdb7d263846d37036438fc693f9f6ad382114965536d495a0534775f6c1ce"
+  },
+  "src/libImaging/ImagingUtils.h": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/ImagingUtils.h",
+    "sha256": "3b9cf38ec70673415ec59206b5041fcabbc62f3d4d1905162a54c4d12a4eddee"
+  },
+  "src/libImaging/Crop.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/Crop.c",
+    "sha256": "7aac38141c41fa5d15dd6315458854b0f865ba739482c28fa6c9655a73fe7783"
+  },
+  "src/libImaging/RankFilter.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/RankFilter.c",
+    "sha256": "a0338f7972b53ac54b824cac11e228191ac5a37356f2623887ffa31b11ad9b81"
+  },
+  "src/PIL/Image.py": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/PIL/Image.py",
+    "sha256": "6ddaaf3db154a9fc2eca65aa9e1af8efe6c9fa191ae63a25463f09d79abd96c0"
+  },
+  "src/libImaging/GetBBox.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/GetBBox.c",
+    "sha256": "5b4d4a1346e91193d0ddcdb25fe331273a6d734c8576fedde24ce337c2568b1d"
+  },
+  "LICENSE": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/LICENSE",
+    "sha256": "e706384c6f299d1b6fa782ae657740b372b4bd7938a1a318bf94ac249114758a"
+  },
+  "src/libImaging/ZipEncode.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/libImaging/ZipEncode.c",
+    "sha256": "43615fd1f4fd7246b2d77dffbb026e118a98e37793dba92773b5bcba553c20c4"
+  },
+  "src/PIL/PngImagePlugin.py": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/PIL/PngImagePlugin.py",
+    "sha256": "b59af94124586de66632e1c65bb6741d9e2d8ffece83639858f58a164f34df26"
+  },
+  "src/_imagingft.c": {
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/10.2.0/src/_imagingft.c",
+    "sha256": "737d414c1271e1b953d004a5895a16a18317b81bd1a449b328fb9fe0a4826d51"
+  }
+}
