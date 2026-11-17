@@ -41,8 +41,22 @@ int main(){
     CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 750"));
     CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno 799"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 740"));
-    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 735"));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 735"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 730"));
+
+    // 按设备号认同一代芯片：最高字节 0x43（720、735、750）缺省关掉两个改写；730（0x07）与 830（0x44）不受影响；
+    // 不传设备号时照旧只看型号。
+    // The same chip generation by device ID: 0x43 in the top byte (720, 735, 750) defaults both rewrites off; the 730 (0x07)
+    // and 830 (0x44) are unaffected; without a device ID only the model counts, as before.
+    CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 720",0x43020000));
+    CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 735",0x43030b00));
+    CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 750",0x43051401));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 730",0x07030002));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 830",0x44050001));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 650",0x06050002));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 720"));
+    CHECK(!xbg_adreno_rewrites_fault(0x13b5,"Mali-G925-Immortalis MC12",0x43020000));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 720"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 830"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,nullptr));
     CHECK(!xbg_adreno_compiler_needs_inline(0x10002,"Adreno 750"));
@@ -91,6 +105,6 @@ int main(){
     CHECK(!xbg_adreno_dispatch_guard_option(false,-1,nullptr,false));
 
     if(failures){printf("FAIL %d check(s)\n",failures);return 1;}
-    printf("PASS Adreno policy: 740/750 default off, 750-799 inline helpers, 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
+    printf("PASS Adreno policy: 740/750 family (by model or 0x43 device ID) default off, 735 and 750-799 inline helpers, 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
     return 0;
 }
