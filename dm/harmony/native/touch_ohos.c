@@ -26,6 +26,9 @@
 uint64_t now_ns(void);
 void dm_tp_request(void);
 int dm_padmode_busy(void);
+void dm_padmode_request(int active);
+int dm_cam_mode(void), dm_cam_style(void);
+void dm_cam_turn(float radians), dm_cam_tilt(float radians);
 uint32_t dm_padmode_rebuilds(void);
 void dm_ui_key_pulse_alone(uint64_t mask, int frames);
 int dm_swapskill_slot(int slot, int *charges);
@@ -291,7 +294,12 @@ static void touches_moved(int id) {
     if (swallowed(id, 0)) return;
     if (atomic_load(&g_touch_frontend)) { ui_touch(id, 1); return; }
     if (_uiFinger == id) { ui_touch(id, 1); return; }
+    _controls.cam_on = dm_cam_mode();
+    _controls.cam_orbit = dm_cam_style() == 1;
     for (int i = 0; i < 16; i++) if (_slot[i] == id) { float px, py; loc(id, &px, &py); dm_tc_move_at(&_controls, i, px, py, media_time());
+        if (_controls.cam_pitch) dm_cam_tilt(_controls.cam_pitch);
+        if (_controls.cam_yaw) dm_cam_turn(_controls.cam_yaw);
+        _controls.cam_pitch = _controls.cam_yaw = 0;
         if (_controls.navigation_mode && _controls.pointer_slot == i && _controls.finger[i].ui_drag && BW > 0) { dm_tc_finger *f = &_controls.finger[i];
             if (!_uiDragOn) { _uiDragOn = 1; dm_ui_drag_lift(DM_TC_POINTER_LIFT_PT * dm_tc_scale_for_size(BW, BH) / BH); dm_ui_drag_begin(f->ui_drag, f->aim_origin_x / BW, f->aim_origin_y / BH, 44.0f / BH); }
             dm_ui_drag_move(px / BW, py / BH); }
@@ -372,7 +380,12 @@ void dm_ohos_touch_event(int phase, int id, float x, float y) {
     if (phase != 0 && !tfind(id)) return;
     if (!atomic_load(&g_focused)) return;
     apply_async();
-    if (phase == 0) { if (!tadd(id, x, y)) return; touches_began(id); return; }
+    if (phase == 0) {
+        dm_ohos_touch_pad_mode(0);
+        if (!tadd(id, x, y)) return;
+        touches_began(id);
+        return;
+    }
     touch_t *t = tfind(id); t->x = x; t->y = y;
     if (phase == 1) { touches_moved(id); return; }
     t->ended = 1;
@@ -382,6 +395,24 @@ void dm_ohos_touch_event(int phase, int id, float x, float y) {
 void dm_ohos_touch_focus(int active) {
     atomic_store(&g_focused, !!active);
     if (!active && g_ready) { for (int i = 0; i < 32; i++) g_t[i].live = 0; _nswallow = 0; _uiFinger = NOT; _uiFeDrag = 0; cancel_controls(); }
+}
+
+void dm_ohos_touch_pad_mode(int active) {
+    if (_padMode == active) return;
+    ensure_init();
+    _padMode = active;
+    if (active) {
+        for (int i = 0; i < 32; i++) g_t[i].live = 0;
+        _nswallow = 0;
+        if (_uiFinger != NOT && !_uiFeDrag) dm_ui_touch(3, 0, 0);
+        _uiFinger = NOT;
+        _uiFeDrag = 0;
+        cancel_controls();
+    } else {
+        dm_pad_set(0, 0, 0, 0, 0);
+    }
+    dm_padmode_request(active);
+    g_dirty = 1;
 }
 
 // ---- 每帧（tickTouchControls + refreshPortalBinding）| Every frame (tickTouchControls + refreshPortalBinding) ----

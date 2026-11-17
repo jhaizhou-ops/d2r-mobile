@@ -12,6 +12,7 @@
 # Usage: gen_bright_levels.py <original game RomFS (Update)> > dm/host/dm_bright_levels.inc
 # Called by dm/host/Makefile at build time, reading the player's own game files directly; the generated table is not committed to the repo (same as dm_vault_tab.h, dm_hud_exp.h).
 import csv, io, json, os, re, sys, collections
+from functools import lru_cache
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'ios', 'tools'))
 import touch_layout
 if len(sys.argv) != 2: sys.exit('用法：gen_bright_levels.py <原版 RomFS（Update）>')
@@ -34,6 +35,7 @@ def ls(prefix):   # 清单里直接在这个目录下的文件名（保留原大
     return out
 def tsv(name):
     r = list(csv.reader(io.StringIO(rd('data/global/excel/' + name).decode('utf-8', 'replace')), delimiter='\t')); return r[0], r[1:]
+@lru_cache(maxsize=None)
 def biome_of_json(path):
     try: return os.path.basename(json.loads(rd(path)).get('biomeFilename', '')).replace('.json', '')
     except (SystemExit, Exception): return ''
@@ -51,6 +53,7 @@ for f in ls(ENV + 'biome/'):
 def preset_json(ds1):   # Act1/Town/TownN1.ds1 → hd/env/preset/act1/town/townN1.json（目录与文件名都不分大小写） | Act1/Town/TownN1.ds1 → hd/env/preset/act1/town/townN1.json (directory and file names are both case-insensitive)
     parts = ds1.replace('\\', '/').split('/'); p = ENV + 'preset/' + '/'.join(x.lower() for x in parts[:-1]) + '/' + parts[-1].rsplit('.', 1)[0].lower() + '.json'
     return p if p.lower() in IDX else None
+@lru_cache(maxsize=None)
 def dir_biome(rel):     # 图块目录（如 Act1/Outdoors）→ 该目录下预设 json 的多数 biome | Tile directory (e.g. Act1/Outdoors) → the majority biome of the preset json files under that directory
     d = ENV + 'preset/' + '/'.join(x.lower() for x in rel.replace('\\', '/').split('/')) + '/'
     c = collections.Counter(biome_of_json(d + f) for f in ls(d) if f.lower().endswith('.json'))

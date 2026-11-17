@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""从统一中英表生成鸿蒙界面文案（与安卓 dm/android/tools/gen_strings.py 同一行集合）；不读取游戏文件。
-Generate HarmonyOS UI strings from the shared string table (the same rows as dm/android/tools/gen_strings.py); no game files.
+"""从统一中英表生成鸿蒙界面文案（含共用文案与鸿蒙壳专用文案）；不读取游戏文件。
+Generate HarmonyOS UI strings from the shared string table (shared strings and HarmonyOS shell strings); no game files.
 用法 / usage: python dm/harmony/tools/gen_strings.py   → dm/harmony/app/entry/src/main/ets/generated/UiText.ts
 """
 import importlib.util
@@ -15,7 +15,7 @@ def main():
     spec.loader.exec_module(table)
     shared = {"dmInputTitle", "dmNameTitle", "dmNameRule", "dmQtyTitle", "dmNameBlankRandom",
               "dmNamePickIme", "dmNameTooShort", "dmNameEdge", "dmCancel", "dmConfirm", "dmTcCancel", "dmHudLife", "dmHudMana"}
-    rows = [r for r in table.rows() if r[0].startswith("dmAndroid") or r[0] in shared]
+    rows = [r for r in table.rows() if r[0].startswith(("dmAndroid", "dmHarmony")) or r[0] in shared]
     zh = {r[0]: r[1] for r in rows}
     en = {r[0]: r[2] for r in rows}
     out = dm / "harmony/app/entry/src/main/ets/generated/UiText.ts"

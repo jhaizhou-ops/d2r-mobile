@@ -2,6 +2,9 @@
 export const start: (files: string, ext: string, src: string, lang: string) => number;
 export const focus: (ev: number) => void;
 export const refresh: (hz: number) => void;
+export const pad: (buttons: number, lx: number, ly: number, rx: number, ry: number) => void;
+export const checkPack: (root: string) => string;
+export const importStash: (save: string, source: string, name: string) => number;
 export const touchEvent: (phase: number, id: number, x: number, y: number) => void;
 export const touchScreen: (width: number, height: number, left: number, right: number, bottom: number) => void;
 export const touchTick: (out: Float32Array) => number;

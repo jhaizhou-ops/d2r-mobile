@@ -32,6 +32,12 @@ void front_gtx_register(int who);
 static void *_Atomic g_window;
 static _Atomic int g_screen_w, g_screen_h;
 void front_android_set_window(void *win, int w, int h) { atomic_store(&g_window, win); if (w > 0 && h > 0) { atomic_store(&g_screen_w, w); atomic_store(&g_screen_h, h); } }
+int front_android_window_size(int *w, int *h) {
+    if (!w || !h || !atomic_load(&g_window)) return 0;
+    *w = atomic_load(&g_screen_w);
+    *h = atomic_load(&g_screen_h);
+    return *w > 0 && *h > 0;
+}
 
 static _Atomic int g_refresh_millihz;
 void front_android_set_refresh(float hz) {
