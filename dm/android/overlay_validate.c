@@ -352,3 +352,29 @@ dm_overlay_result dm_overlay_validate(const char *directory, const char *expecte
     free(v.entries);
     return status;
 }
+
+int dm_overlay_variant(const char *overlay, const char *source_sha256, int (*enabled)(const char *),
+                       char *out, size_t n) {
+    char vdir[1300]; snprintf(vdir, sizeof vdir, "%s_variants", overlay);
+    DIR *d = opendir(vdir); if (!d) return 0;
+    char names[16][64]; int nv = 0; struct dirent *e;
+    while ((e = readdir(d)) && nv < 16) if (e->d_name[0] != '.' && strlen(e->d_name) < sizeof names[0]) strcpy(names[nv++], e->d_name);
+    closedir(d);
+    // 变体名里出现过的键（去重）里开着几个；某份变体的键全开、个数又相等 = 键集合正好相等
+    char keys[16][64]; int nk = 0, on = 0;
+    for (int i = 0; i < nv; i++) { char t[64], *sp = NULL; strcpy(t, names[i]);
+        for (char *k = strtok_r(t, "+", &sp); k; k = strtok_r(NULL, "+", &sp)) {
+            int seen = 0; for (int j = 0; j < nk; j++) seen |= !strcmp(keys[j], k);
+            if (!seen && nk < 16) { strcpy(keys[nk++], k); on += enabled(k) != 0; } } }
+    if (!on) return 0;
+    for (int i = 0; i < nv; i++) { char t[64], *sp = NULL; int cnt = 0, all = 1; strcpy(t, names[i]);
+        for (char *k = strtok_r(t, "+", &sp); k; k = strtok_r(NULL, "+", &sp)) { cnt++; all &= enabled(k) != 0; }
+        if (!all || cnt != on) continue;
+        char path[1400], reason[256]; snprintf(path, sizeof path, "%s/%s", vdir, names[i]);
+        dm_overlay_result r = dm_overlay_validate(path, source_sha256, reason, sizeof reason);
+        if (r != DM_OVERLAY_OK) return 0;
+        if (snprintf(out, n, "%s:%s", path, overlay) >= (int)n) return 0;
+        return 1;
+    }
+    return 0;
+}

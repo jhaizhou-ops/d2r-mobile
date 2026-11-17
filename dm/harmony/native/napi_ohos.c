@@ -15,6 +15,7 @@
 #include "touch_ohos.h"
 #include "../../host/dm_i18n.h"
 #include "../../host/dm_custom.h"
+#include "../../host/dm_input.h"
 #include "../../android/lifecycle_dispatch.h"
 #include "../../android/overlay_validate.h"
 #include "dm_overlay_contract.h"
@@ -188,9 +189,10 @@ static void *host_thread(void *arg) {
 // 返回 1 = 配套或没有这个文件（调试版内置包与旧包不带它，照旧放行），0 = 不配套（why 写原因）
 // Import pack match: PRODUCT in pack_info.txt (written by d2rm_android.py --target ohos) must equal the compiled-in dm/PRODUCT and TARGET must be ohos.
 // Returns 1 = matching or no such file (the debug builds' bundled pack and older packs have none and still start), 0 = mismatch (reason in why)
-static int pack_info_ok(char *why, size_t n) {
-    char p[1200]; snprintf(p, sizeof p, "%s/pack_info.txt", g_runtime);
-    FILE *f = fopen(p, "rb"); if (!f) return 1;
+static int pack_info_ok(const char *root, int required, char *why, size_t n) {
+    char p[1200]; snprintf(p, sizeof p, "%s/pack_info.txt", root);
+    FILE *f = fopen(p, "rb");
+    if (!f) { snprintf(why, n, "pack_info.txt: %s", strerror(errno)); return !required && errno == ENOENT; }
     char line[256], product[128] = "", target[32] = "";
     while (fgets(line, sizeof line, f)) {
         line[strcspn(line, "\r\n")] = 0;
@@ -279,6 +281,8 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     if (chdir(g_files)) LOG("【红】chdir %s 失败 errno %d", g_files, errno);
     if (n <= 0) return ret_int(env, -2);
     char required[1300];
+    snprintf(required, sizeof required, "%s/import-pending", g_runtime);
+    if (!access(required, F_OK)) return ret_int(env, -11);
     const char *modules[] = {"main.patched.bin", "main.fixups.tsv", "main.gates.tsv", "sdk.patched.bin", "sdk.fixups.tsv", "sdk.gates.tsv"};
     for (unsigned i = 0; i < sizeof modules / sizeof modules[0]; i++) {
         snprintf(required, sizeof required, "%s/out/%s", g_runtime, modules[i]);
@@ -292,7 +296,7 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     if (!have_shader) { LOG("boot: no shader bundles in %s", required); return ret_int(env, -4); }
     // -11 导入包与这版应用不配套；-12 三张衍生表没读全（壳版要从导入包的 derived.tsv 读） | -11 import pack does not match this app; -12 the three derived tables
     // were not all read (the shell build reads them from the import pack's derived.tsv)
-    { char why[256]; if (!pack_info_ok(why, sizeof why)) { LOG("boot: import pack mismatch: %s", why); return ret_int(env, -11); } }
+    { char why[256]; if (!pack_info_ok(g_runtime, 0, why, sizeof why)) { LOG("boot: import pack mismatch: %s", why); return ret_int(env, -11); } }
     snprintf(required, sizeof required, "%s/derived.tsv", g_runtime);
     setenv("DM_DERIVED", required, 1);
     if (dm_derived_reload && dm_derived_reload()) { LOG("boot: derived tables incomplete (%s)", required); return ret_int(env, -12); }
@@ -301,7 +305,10 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     dm_overlay_result ov = dm_overlay_validate(required, DM_OVERLAY_SOURCE_SHA256, reason, sizeof reason);
     if (ov == DM_OVERLAY_OK) ov = dm_overlay_require_touch_art(required, reason, sizeof reason);
     if (ov != DM_OVERLAY_OK) { LOG("boot: overlay rejected (%d): %s", ov, reason); return ret_int(env, ov == DM_OVERLAY_MISSING ? -9 : -10); }
-    setenv("DM_ROMFS_OVERLAY", required, 1);
+    // 先按鸿蒙窗口尺寸确定均衡档，避免读取物品注释开关时提前缓存通用比例。
+    front_game_res(1);
+    char layered[2800];
+    setenv("DM_ROMFS_OVERLAY", dm_overlay_variant(required, DM_OVERLAY_SOURCE_SHA256, dm_custom_get, layered, sizeof layered) ? layered : required, 1);
     if (!lifecycle_ready()) return ret_int(env, -8);
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8u << 20);
     pthread_t th; int rc = pthread_create(&th, &a, host_thread, NULL); pthread_attr_destroy(&a);
@@ -313,10 +320,45 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
 static napi_value js_focus(napi_env env, napi_callback_info info) {
     ARGS(1); int32_t ev = 0; napi_get_value_int32(env, argv[0], &ev);
     dm_ohos_touch_focus(ev == 2 || ev == 3);
+    if (ev == 0 || ev == 1) dm_pad_set(0, 0, 0, 0, 0);
     if (lifecycle_ready()) dm_lifecycle_post(&g_lifecycle, ev);
     return undefined(env);
 }
 static napi_value js_refresh(napi_env env, napi_callback_info info) { ARGS(1); double hz = 0; napi_get_value_double(env, argv[0], &hz); front_android_set_refresh((float)hz); return undefined(env); }
+
+static napi_value js_pad(napi_env env, napi_callback_info info) {
+    ARGS(5);
+    int32_t v[5] = {0};
+    for (int i = 0; i < 5; i++) napi_get_value_int32(env, argv[i], &v[i]);
+    if (v[0] || v[1] || v[2] || v[3] || v[4]) dm_ohos_touch_pad_mode(1);
+    dm_pad_set((uint16_t)v[0], v[1], v[2], v[3], v[4]);
+    return undefined(env);
+}
+
+static napi_value js_check_pack(napi_env env, napi_callback_info info) {
+    ARGS(1);
+    char root[1024] = {0}, reason[256] = {0};
+    get_str(env, argv[0], root, sizeof root);
+    if (pack_info_ok(root, 1, reason, sizeof reason)) {
+        char path[1200];
+        snprintf(path, sizeof path, "%s/overlay", root);
+        if (dm_overlay_validate(path, DM_OVERLAY_SOURCE_SHA256, reason, sizeof reason) == DM_OVERLAY_OK &&
+            dm_overlay_require_touch_art(path, reason, sizeof reason) == DM_OVERLAY_OK) reason[0] = 0;
+    }
+    napi_value result;
+    napi_create_string_utf8(env, reason, NAPI_AUTO_LENGTH, &result);
+    return result;
+}
+
+int dm_cloud_import_stash(const char *save, const char *source, const char *name);
+static napi_value js_import_stash(napi_env env, napi_callback_info info) {
+    ARGS(3);
+    char save[1024] = {0}, source[1024] = {0}, name[256] = {0};
+    get_str(env, argv[0], save, sizeof save);
+    get_str(env, argv[1], source, sizeof source);
+    get_str(env, argv[2], name, sizeof name);
+    return ret_int(env, dm_cloud_import_stash(save, source, name));
+}
 // touchEvent(phase, id, x, y)：0 按下 1 移动 2 抬起 3 取消，窗口坐标（vp）| 0 down 1 move 2 up 3 cancel, window coordinates (vp)
 static napi_value js_touch_event(napi_env env, napi_callback_info info) {
     ARGS(4); int32_t phase = 0, id = 0; double x = 0, y = 0;
@@ -383,6 +425,9 @@ static napi_value init(napi_env env, napi_value exports) {
         {"start", NULL, js_start, NULL, NULL, NULL, napi_default, NULL},
         {"focus", NULL, js_focus, NULL, NULL, NULL, napi_default, NULL},
         {"refresh", NULL, js_refresh, NULL, NULL, NULL, napi_default, NULL},
+        {"pad", NULL, js_pad, NULL, NULL, NULL, napi_default, NULL},
+        {"checkPack", NULL, js_check_pack, NULL, NULL, NULL, napi_default, NULL},
+        {"importStash", NULL, js_import_stash, NULL, NULL, NULL, napi_default, NULL},
         {"touchEvent", NULL, js_touch_event, NULL, NULL, NULL, napi_default, NULL},
         {"touchScreen", NULL, js_touch_screen, NULL, NULL, NULL, napi_default, NULL},
         {"touchTick", NULL, js_touch_tick, NULL, NULL, NULL, napi_default, NULL},

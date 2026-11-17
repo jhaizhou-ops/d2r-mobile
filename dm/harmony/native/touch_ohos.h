@@ -9,6 +9,7 @@ void dm_ohos_touch_uimsg(const char *cat, const char *act, const char *arg);   /
 void dm_ohos_touch_screen(float w, float h, float safe_l, float safe_r, float safe_b);   // 整个窗口（vp）与安全区 | whole window (vp) and safe area
 void dm_ohos_touch_event(int phase, int id, float x, float y);   // 0 按下 1 移动 2 抬起 3 取消；窗口坐标（vp） | 0 down 1 move 2 up 3 cancel; window coordinates (vp)
 void dm_ohos_touch_focus(int active);
+void dm_ohos_touch_pad_mode(int active);
 // 每帧调（同 iOS CADisplayLink tick）：跑手势层计时、刷新绑定快照；out 写绘图快照，返回 1 = 要重画
 // Called every frame (as the iOS CADisplayLink tick): runs gesture timers and refreshes the binding snapshot; writes the drawing snapshot to out, returns 1 = redraw
 int dm_ohos_touch_tick(float *out, int cap);

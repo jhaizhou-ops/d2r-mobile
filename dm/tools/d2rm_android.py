@@ -164,9 +164,8 @@ def main():
     # 三、覆盖层（触屏布局、界面底图）+ 技能图集与 HUD 小图，最后写清单（App 启动时逐文件核对）
     # 3. Overlay (touch layout, UI base art) + skill atlases and small HUD images, then write the manifest (the App checks it file by file at startup)
     say('生成覆盖层')
-    # 安卓没有 iCloud（自定义页那一行只有 iOS / Mac 的 cloud_ios.m 读）：DM_OVERLAY_NO_ICLOUD=1 让 touch_layout.py 不出这一行
-    # Android has no iCloud (only iOS / Mac cloud_ios.m reads that Custom page row): DM_OVERLAY_NO_ICLOUD=1 makes touch_layout.py leave the row out
-    run([PY, os.path.join(IOS, 'tools', 'gen_romfs_overlay.py'), romfs, os.path.join(stage, 'overlay')], cwd=IOS, env=dict({'DM_ROMFS_SRC': romfs}, **({'DM_OVERLAY_NO_ICLOUD': '1'} if T == 'android' else {})), log=os.path.join(stage, 'gen_overlay.log'), what='生成覆盖层')
+    # 安卓和鸿蒙都没有 iCloud，自定义页无需生成这一行。
+    run([PY, os.path.join(IOS, 'tools', 'gen_romfs_overlay.py'), romfs, os.path.join(stage, 'overlay')], cwd=IOS, env={'DM_ROMFS_SRC': romfs, 'DM_OVERLAY_NO_ICLOUD': '1'}, log=os.path.join(stage, 'gen_overlay.log'), what='生成覆盖层')
     sys.path.insert(0, os.path.join(DM, 'android', 'tools')); import stage_touch_assets
     hud = os.path.join(IOS, 'Gen', 'assets', 'NativeHUD', 'v4', 'hud_v4_ui')
     stage_touch_assets.stage(os.path.join(gen, 'TouchArt'), hud, os.path.join(stage, 'overlay'))
@@ -208,10 +207,8 @@ def main():
     for x in ('out', 'shaders', 'overlay') + (('ui-art',) if T == 'ohos' else ()): shutil.copytree(os.path.join(stage, x), os.path.join(part, x))
     for x in ('derived.tsv', 'pack_info.txt'): shutil.copyfile(os.path.join(stage, x), os.path.join(part, x))
     # 走覆盖层的自定义开关（物品注释与旧译名，#191）：gen_romfs_overlay.py 在 overlay 旁边出了各开关组合的完整覆盖层，
-    # 安卓 App 启动时按开关挑一份叠在 overlay 前面（jni_android.c）
-    # Custom switches that go through the overlay (item notes and old translated names, #191): gen_romfs_overlay.py writes a complete overlay per
-    # switch combination next to overlay; the Android App picks one by the switches at start and layers it in front of overlay (jni_android.c)
-    if T == 'android' and os.path.isdir(os.path.join(stage, 'overlay_variants')): shutil.copytree(os.path.join(stage, 'overlay_variants'), os.path.join(part, 'overlay_variants'))
+    # 两个平台启动时都按开关选择一份变体叠在基础覆盖层上。
+    if os.path.isdir(os.path.join(stage, 'overlay_variants')): shutil.copytree(os.path.join(stage, 'overlay_variants'), os.path.join(part, 'overlay_variants'))
     shutil.rmtree(final, ignore_errors=True); os.replace(part, final)
     size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(final) for f in fs)
     if T == 'ohos': say('好了：%s（%.0f MB）。在手机上建一个「D2R Mobile」文件夹，把这个 dm 文件夹和游戏资源（%s 整个拷过去，叫 data）并排放进去，'

@@ -270,7 +270,14 @@ static _Atomic float g_s3g_scale;
 // takes effect on phones only, and DM_3D_SCALE still wins. On a level change both dynamic controllers go back to level 0 and judge again downwards from the
 // new configured value (scale3d_tick rebuilds the 3D targets at the new scale the next time system notifications are fetched)
 void dm_3d_scale_level_set(int level) {
-    const float k[3] = {0.60f, s3_phone_default(), 1.00f};
+    const float balanced = s3_phone_default();
+#if defined(__OHOS__)
+    // 鸿蒙原生像素出图时，均衡档可能已经低于 60%。省电档不能提高渲染比例。
+    const float saver = balanced < 0.60f ? balanced : 0.60f;
+#else
+    const float saver = 0.60f;
+#endif
+    const float k[3] = {saver, balanced, 1.00f};
     if (level < 0 || level > 2) level = 1;
     if (!DM_PHONE) { static int said; if (!said++) LOG("3D 比例：Mac 宿主不按自定义页的档（配置 %.2f）", s3_cfg()); return; }
     float old = atomic_exchange(&g_s3_set, k[level]);
