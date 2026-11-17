@@ -13,6 +13,9 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+/* 待震的最高一档，取走即清（dm_drophaptic.c；宿主头文件里没有声明，iOS 也是就地声明）。
+   The highest pending vibration tier, cleared when taken (dm_drophaptic.c; no host header declares it, iOS declares it in place too). */
+int dm_drop_haptic_take(void);
 
 uint64_t now_ns(void);
 void dm_uiscreen_set_panel(int panel);
@@ -296,6 +299,12 @@ static void point_tick(double now) {
 }
 void dm_android_touch_step(uint64_t guest_now, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     (void)guest_now;
+    /* 高价值掉落震动（#289，同 iOS front_ios.m tickTouchControls）：每帧取走待震的最高一档交给 Java。放在拿触屏锁之前：
+       front_android_drop_haptic 只入队，不碰这把锁，手柄模式下也照样震。
+       Valuable-drop vibration (#289, as iOS front_ios.m tickTouchControls): every frame take the highest pending tier and hand it to
+       Java. It sits before the touch lock: front_android_drop_haptic only queues and never takes that lock, and it also vibrates in
+       controller mode. */
+    { int tier = dm_drop_haptic_take(); if (tier) front_android_drop_haptic(tier); }
     pthread_mutex_lock(&lock);
     init_locked();
     int next_swap = dm_custom_get("touch_swap_above");
