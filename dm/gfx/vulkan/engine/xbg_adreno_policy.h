@@ -27,19 +27,18 @@ inline int xbg_adreno_model(const char *device_name){
     return digits==3?model:0;
 }
 
-// 厂商 0x5143 是高通；740–799 这一族缺省关掉这两个改写。型号数字不够：骁龙 7 Gen 3 的 Adreno 720（设备号 0x43020000）
-// 与 8s Gen 3 的 735（0x43030b00）和 750（0x43051401）是同一代芯片，设备号最高字节都是 0x43；730（0x07030002）与
-// 830（0x44050001）不是。720 跑这两个改写，主菜单第一帧就 VK_ERROR_DEVICE_LOST（#263），与 740 当初（#141）一样，所以
-// 设备号最高字节为 0x43 的高通芯片也按这一族处理。device_id 传 0 时只看型号。
-// Vendor 0x5143 is Qualcomm; the 740-799 family defaults both rewrites off. The model number is not enough: the Snapdragon 7
-// Gen 3's Adreno 720 (device ID 0x43020000) is the same chip generation as the 8s Gen 3's 735 (0x43030b00) and the 750
-// (0x43051401), all with 0x43 in the top byte of the device ID; the 730 (0x07030002) and 830 (0x44050001) are not. With these
-// rewrites the 720 hits VK_ERROR_DEVICE_LOST on the main menu's first frame (#263), as the 740 did (#141), so Qualcomm chips
-// whose device ID has 0x43 in the top byte count as this family too. With device_id 0 only the model is used.
-inline bool xbg_adreno_rewrites_fault(uint32_t vendor_id,const char *device_name,uint32_t device_id=0){
+// 厂商 0x5143 是高通；740–799 这一族和 Adreno 720 缺省关掉这两个改写。720（骁龙 7 Gen 3，设备号 0x43020000）与 735、750
+// 是同一代芯片（设备号最高字节都是 0x43），跑这两个改写时主菜单第一帧就 VK_ERROR_DEVICE_LOST（#263），与 740 当初（#141）
+// 一样。同一代的 735 开着这两个改写、加上内联后能正常玩（#169），所以只加 720，不按设备号整代关掉。
+// Vendor 0x5143 is Qualcomm; the 740-799 family and the Adreno 720 default both rewrites off. The 720 (Snapdragon 7 Gen 3,
+// device ID 0x43020000) is the same chip generation as the 735 and 750 (0x43 in the top byte of the device ID), and with these
+// rewrites it hits VK_ERROR_DEVICE_LOST on the main menu's first frame (#263), as the 740 did (#141). The 735 of the same
+// generation runs fine with both rewrites on once its helpers are inlined (#169), so only the 720 is added rather than the
+// whole generation by device ID.
+inline bool xbg_adreno_rewrites_fault(uint32_t vendor_id,const char *device_name){
     if(vendor_id!=0x5143)return false;
     const int model=xbg_adreno_model(device_name);
-    return (model>=740 && model<800) || (device_id>>24)==0x43;
+    return (model>=740 && model<800) || model==720;
 }
 
 // 与其它 gfx 开关相同的优先顺序：标记文件优先（只有明确的 0 关闭），其次是机型判断，最后才看环境变量。安卓端
