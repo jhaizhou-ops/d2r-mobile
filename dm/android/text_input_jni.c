@@ -8,7 +8,7 @@
 
 static JavaVM *vm;
 static jclass activity_class;
-static jmethodID show_input, report_failure, share_log;
+static jmethodID show_input, report_failure, share_log, drop_haptic;
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t input_done = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t work_ready = PTHREAD_COND_INITIALIZER;
@@ -21,6 +21,9 @@ typedef struct input_job {
     char *strings[4];
     int max_chars, name_rule, numeric_max, failure_code;
     int share;   // 1 = 分享诊断日志，strings[0] 是 boot.log 路径 | 1 = share diagnostics, strings[0] is the boot.log path
+    // 高价值掉落震动的档位（1 重 / 2 中 / 3 轻，dm_drophaptic.c）；0 = 不是震动请求
+    // Tier of a valuable-drop vibration (1 heavy / 2 medium / 3 light, dm_drophaptic.c); 0 = not a vibration request
+    int haptic;
 } input_job;
 static input_job *jobs_head, *jobs_tail;
 
@@ -87,6 +90,8 @@ static void *input_worker(void *unused) {
             jstring path = utf8_string(env, job->strings[0]);
             if (path && !(*env)->ExceptionCheck(env)) (*env)->CallStaticVoidMethod(env, activity_class, share_log, path);
             if (path) (*env)->DeleteLocalRef(env, path);
+        } else if (job->haptic) {
+            (*env)->CallStaticVoidMethod(env, activity_class, drop_haptic, job->haptic);
         } else if (!job->id) {
             (*env)->CallStaticVoidMethod(env, activity_class, report_failure, job->failure_code);
         } else {
@@ -129,6 +134,13 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *java_vm, void *reserved) {
     if (!share_log) {
         (*env)->ExceptionClear(env);
         __android_log_print(ANDROID_LOG_ERROR, "dm-input", "DmActivity.shareDiagnostics not found: Share Diagnostics is off");
+    }
+    // 掉落震动同样可有可无：找不到 DmActivity.dropHaptic 时只是不震
+    // Drop vibration is optional too: without DmActivity.dropHaptic the phone just does not vibrate
+    drop_haptic = (*env)->GetStaticMethodID(env, activity_class, "dropHaptic", "(I)V");
+    if (!drop_haptic) {
+        (*env)->ExceptionClear(env);
+        __android_log_print(ANDROID_LOG_ERROR, "dm-input", "DmActivity.dropHaptic not found: drop vibration is off");
     }
     vm = java_vm;
     pthread_t worker;
@@ -213,4 +225,20 @@ JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeTextResult(
         pthread_cond_signal(&input_done);
     }
     pthread_mutex_unlock(&input_lock);
+}
+
+// 高价值掉落震动（#289）：交给工作线程去调 Java（DmActivity.dropHaptic），自己不等。每帧在游戏线程上被调（touch_android.c
+// dm_android_touch_step 取 dm_drop_haptic_take 的档位），只在有档位时才走到这里；不碰触屏锁，也不发界面消息
+// Valuable-drop vibration (#289): hands the tier to the worker thread, which calls Java (DmActivity.dropHaptic), without waiting. Called on
+// the game thread from the per-frame input hook (touch_android.c dm_android_touch_step takes the tier from dm_drop_haptic_take) and only
+// when there is a tier; it takes no touch lock and sends no UI messages
+void front_android_drop_haptic(int tier) {
+    if (!drop_haptic || tier < 1 || tier > 3) return;
+    input_job *job = calloc(1, sizeof *job);
+    if (!job) return;
+    job->haptic = tier;
+    pthread_mutex_lock(&input_lock);
+    if (worker_state > 0) { enqueue(job); job = NULL; }
+    pthread_mutex_unlock(&input_lock);
+    if (job) free_job(job);
 }
