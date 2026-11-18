@@ -37,6 +37,7 @@ SRC=\
 	memstat.m \
 	romfs_validate.c \
 	dm_actions.c \
+	dm_ammo.c \
 	dm_autobuff.c \
 	dm_beltauto.c \
 	dm_bossrush.c \
