@@ -18,7 +18,20 @@
 static struct { const char *kind, *name; void *fn; _Atomic uint64_t n; } g_hc[HC_MAX];
 static unsigned g_nhc; static uint32_t *g_hcode; static int g_hon = -1, g_hsealed; static const char *g_hpath;
 static _Atomic uint64_t g_hsvc[256];
-static int hc_on(void) { if (g_hon < 0) { g_hpath = getenv("DM_HLECOUNT"); g_hon = g_hpath != NULL; } return g_hon; }
+#ifdef __ANDROID__
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
+static int hc_on(void) {
+    if (g_hon < 0) { g_hpath = getenv("DM_HLECOUNT"); g_hon = g_hpath != NULL;
+#ifdef __ANDROID__
+        // 计数桩里的 stadd 是 LSE 指令（ARMv8.1）；安卓的 ARMv8.0 核（Cortex-A53 / A73 一类）没有它，执行就是非法指令。这种机器上不计数
+        // The stadd in the counting stubs is an LSE instruction (ARMv8.1); Android's ARMv8.0 cores (Cortex-A53 / A73 class) lack it and
+        // would hit an illegal instruction, so there is no counting on such a CPU
+        if (g_hon && !(getauxval(AT_HWCAP) & HWCAP_ATOMICS)) { g_hon = 0; LOG("【红】DM_HLECOUNT：这颗 CPU 没有 LSE 原子指令，不计数 | no LSE atomics on this CPU, counting is off"); }
+#endif
+    }
+    return g_hon; }
 static void hc_write(void) {
     char pth[1024]; snprintf(pth, sizeof pth, g_hpath, (int)getpid());   // 路径里的 %d 换成进程号（并行多局各写一份） | %d in the path is replaced with the process id (parallel runs each write their own copy)
     FILE *f = fopen(pth, "w"); if (!f) { LOG("【红】DM_HLECOUNT 写不了 %s", pth); return; }
