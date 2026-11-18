@@ -56,6 +56,7 @@ SOURCE_INPUTS = tuple(sorted((
     "dm/ios/tools/dm_i18n.py", "dm/ios/tools/merc_slots.py",
     "dm/ios/tools/pouch_layout.py", "dm/ios/tools/wide_stash.py",
     "dm/ios/tools/drop_light.py", "dm/ios/tools/kbd_glyphs.py",
+    "dm/ios/tools/gameplay_tables.py",
     "dm/ios/tools/gen_widestash_art.py", "dm/ios/tools/gen_vault_cover.py",
     "dm/ios/tools/gen_trove_art.py", "dm/ios/tools/gen_pouch_art.py",
     "dm/ios/tools/gen_fe_rightpanel.py", "dm/ios/tools/gen_map_goal_art.py",
