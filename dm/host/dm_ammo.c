@@ -54,15 +54,19 @@ static int ammo_is(uint8_t *b, uint64_t it, int type) { return ((int (*)(uint64_
 //   / 26 Strafe / 27 Immolation Arrow / 31 Freezing Arrow; 0 = normal attack, which also burns arrows with a bow.
 // Magic Arrow 6 is the only bow skill that burns nothing and is deliberately absent.
 static const int k_bow[] = { 0, 7, 11, 12, 16, 21, 22, 26, 27, 31 };
-// 吃标枪数量的投掷技能：2 投掷 Throw（通用投掷，实测在槽 7）/ 15 毒枪 / 20 闪电球 / 25 瘟疫标枪 / 35 闪电烈怒。
+// 吃标枪数量的投掷技能：2 投掷 Throw（通用投掷，实测在槽 7）/ 4 左手投掷 Left Hand Throw / 15 毒枪 /
+// 20 闪电球 / 25 瘟疫标枪 / 35 闪电烈怒 / 140 野蛮人双手投掷 Double Throw（两只手各扔一把）。
 // 不吃数量的两种情况：① 近战标枪技能（10 刺击 Jab / 14 猛击 Power Strike / 19 猛刺 Impale / 24 充能一击 Charged Strike /
 // 30 贯穿 Fend / 34 闪电击 Lightning Strike）；② 投掷武器的普通攻击——用户实测标枪普攻是近身戳刺，不减数量，所以 0 不在表里。
-// Throwing skills that consume javelin count: 2 Throw (the generic throw, measured on the device in slot 7) / 15 Poison Javelin /
-// 20 Lightning Bolt / 25 Plague Javelin / 35 Lightning Fury.
+// Throwing skills that consume javelin count: 2 Throw (the generic throw, measured on the device in slot 7) / 4 Left Hand Throw /
+// 15 Poison Javelin / 20 Lightning Bolt / 25 Plague Javelin / 35 Lightning Fury / 140 Double Throw (a Barbarian throws one weapon
+// from each hand).
 // Two cases that do not: (1) the melee javelin skills (10 Jab / 14 Power Strike / 19 Impale / 24 Charged Strike / 30 Fend /
 // 34 Lightning Strike); (2) a throwing weapon's normal attack -- measured on the device: a javelin's normal attack is a
 // close-range stab that consumes nothing, so 0 is absent from this list.
-static const int k_throw[] = { 2, 15, 20, 25, 35 };
+static const int k_throw[] = { 2, 4, 15, 20, 25, 35, 140 };
+#define SK_LEFT_THROW 4
+#define SK_DOUBLE_THROW 140
 
 static int in_list(const int *l, unsigned n, int v) { for (unsigned i = 0; i < n; i++) if (l[i] == v) return 1; return 0; }
 
@@ -89,8 +93,8 @@ static void ammo_diag(uint8_t *b, uint64_t inv, const dm_ammo_src *o) {
     lw = wsv; lk = o->kind; lq = o->qty;
     uint32_t c[4] = {0, 0, 0, 0}; const int cell[4] = {4, 5, 11, 12};
     for (int i = 0; i < 4; i++) { uint64_t e = eq_cell(inv, cell[i]); if (e) c[i] = ammo_code(b, e); }
-    LOG("[ammo] 切武器读数 ws=%d｜格4=%.4s 格5=%.4s 格11=%.4s 格12=%.4s｜选中 kind%d qty%d 组%d",
-        wsv, (char *)&c[0], (char *)&c[1], (char *)&c[2], (char *)&c[3], o->kind, o->qty, o->set);
+    LOG("[ammo] 切武器读数 ws=%d｜格4=%.4s 格5=%.4s 格11=%.4s 格12=%.4s｜选中 kind%d qty%d qty2=%d 组%d",
+        wsv, (char *)&c[0], (char *)&c[1], (char *)&c[2], (char *)&c[3], o->kind, o->qty, o->qty2, o->set);
 }
 
 static int dm_ammo_source_raw(uint8_t *b, uint64_t pl, dm_ammo_src *o);   // 真正的读取（dm_ammo_source 在它外面加防抖缓存） | the real read (dm_ammo_source wraps it with a debounce cache)
@@ -151,7 +155,13 @@ static int dm_ammo_source_raw(uint8_t *b, uint64_t pl, dm_ammo_src *o) {
         uint64_t w = eq_cell(inv, wcell[i]), sh = eq_cell(inv, ocell[i]);
         if (w) {   // 主手自带数量 = 投掷武器（箭袋不在主手位；书 / 药水 / 钥匙不进装备格） | a main hand carrying a count is a throwing weapon
             int q = ammo_stat(b, w, 70);
-            if (q > 0) { o->item = w; o->weapon = w; o->qty = q; o->kind = 2; o->set = i; ammo_diag(b, inv, o); return 1; }
+            if (q > 0) { o->item = w; o->weapon = w; o->qty = q; o->kind = 2; o->set = i;
+                // 双持投掷（野蛮人双手投掷 / 左手投掷）：副手那把也有数量时记下来——左手投掷只耗副手，
+                // 双手投掷两只手轮流扔，取较小的那个才不会先报空。
+                // Dual-wield throwing (Double Throw / Left Hand Throw): record the off-hand count too. Left Hand Throw only
+                // consumes the off hand, while Double Throw alternates hands, so the smaller of the two is what runs out first.
+                if (sh) { int q2 = ammo_stat(b, sh, 70); if (q2 > 0) o->qty2 = q2; }
+                ammo_diag(b, inv, o); return 1; }
         }
         if (sh) {   // 副手是箭袋（码 aq / cq 开头，不会误认） | the off hand is a quiver (code starts with aq / cq, cannot misfire)
             uint32_t lc = ammo_code(b, sh) & 0xffffu;
@@ -169,7 +179,12 @@ int dm_ammo_for_skill(uint8_t *b, uint64_t pl, const dm_ammo_src *src, int skill
     (void)pl;
     if (!b || !src || !src->item || skill < 0) return -1;
     if (src->kind == 1) return in_list(k_bow, sizeof k_bow / sizeof *k_bow, skill) ? src->qty : -1;       // 箭袋：只认弓技能名单 | quiver: only the bow skill list
-    if (src->kind == 2) return in_list(k_throw, sizeof k_throw / sizeof *k_throw, skill) ? src->qty : -1;   // 投掷：只认投掷技能名单 | throwing: only the throwing skill list
+    if (src->kind == 2) {   // 投掷：只认投掷技能名单 | throwing: only the throwing skill list
+        if (skill == SK_LEFT_THROW) return src->qty2 > 0 ? src->qty2 : -1;   // 左手投掷耗的是副手那把 | Left Hand Throw consumes the off-hand weapon
+        if (!in_list(k_throw, sizeof k_throw / sizeof *k_throw, skill)) return -1;
+        if (skill == SK_DOUBLE_THROW) return src->qty2 > 0 && src->qty2 < src->qty ? src->qty2 : src->qty;   // 双手投掷：两把里先打空的那把 | Double Throw: whichever hand runs out first
+        return src->qty;
+    }
     return -1;
 }
 

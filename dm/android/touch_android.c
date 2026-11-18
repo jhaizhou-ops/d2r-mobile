@@ -473,14 +473,14 @@ void dm_android_touch_layout(float out[DM_ANDROID_TOUCH_DRAW_FLOATS]) {
             // from ever completing): look it up in the face mapping table instead
             int slot=g.slot;
             if(slot<0) slot=dm_swapskill_face_slot(tc.layout.target[i].button,tc.skill_set);
-            // 最后的兜底：面索引直接当槽位。移植层那张「面→槽」映射表在本机读不到（全是 0），
-            // 而用户实测的槽位与屏幕按钮顺序一一对应（钮 1–4 = 槽 1–4：多重箭 / 魔法箭 / 引导箭 / 女武神）。
-            // tc.skill_set 在本机恒被读成 1（第二套），加 6 会全跑进空槽，所以两套都试、挑有内容的那套。
-            // Last-resort fallback: the face index is the slot. The port's face->slot table reads back all zeros on this device,
-            // while the measured slots line up with the on-screen order (buttons 1-4 = slots 1-4). tc.skill_set reads as 1
-            // (second set) on this device, and adding 6 would land on empty slots, so both sets are tried and the one with
-            // content wins.
-            if(slot<0 && i<=5) { int a=0, b2=0; slot=i; if(!dm_swapskill_slot(i,&a) && dm_swapskill_slot(i+6,&b2)) slot=i+6; }
+            // 最后的兜底：面索引直接当槽位。**缺省关**（review 意见：映射表给不出真槽位时宁可不显示数字，
+            // 免得改过键位之后把数字画到错的钮上）。本机实测那张「面→槽」映射表读回全 0，要保留数字就在
+            // files/dm/env 里写一行 DM_AMMO_FACE_FALLBACK=1。
+            // Last-resort fallback: the face index is the slot. OFF by default (per review: show a number only when the
+            // table gives a real slot, so a rebind cannot put a digit on the wrong button). The face->slot table reads
+            // back all zeros on our device, so set DM_AMMO_FACE_FALLBACK=1 in files/dm/env to keep the digits there.
+            static int ff = -1; if (ff < 0) { const char *e = getenv("DM_AMMO_FACE_FALLBACK"); ff = e && *e && strcmp(e, "0") != 0; }
+            if(slot<0 && i<=5 && ff) { int a=0, b2=0; slot=i; if(!dm_swapskill_slot(i,&a) && dm_swapskill_slot(i+6,&b2)) slot=i+6; }
             // 绑定表在游戏更新背包时会短暂读到无效值，kind 会在 10 和 0 之间跳（日志里 k10 q44 出现 34 ms 后变回 k0 q0），
             // 而屏幕每帧重绘多半落在 0 那帧。抹平：非 0 的值记下来，读到 0 时最多沿用 30 帧。
             // The binding table briefly reads invalid while the game updates the inventory, so kind jumps between 10 and 0

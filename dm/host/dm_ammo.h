@@ -14,6 +14,7 @@ typedef struct {
     uint64_t item;    // 提供数量的那件物品（箭袋 / 投掷武器） | the item that carries the count (quiver / throwing weapon)
     uint64_t weapon;  // 当前武器组的主手武器（判定技能要什么装备时用） | the main-hand weapon of the current set (used to test what the skill requires)
     int qty;          // 剩余数量（stat 70） | remaining count (stat 70)
+    int qty2;         // 副手那把投掷武器的数量（双持投掷用；0 = 副手没有投掷武器） | count on the off-hand throwing weapon (dual-wield throwing; 0 = none)
     int kind;         // 0 = 没有弹药来源，1 = 箭袋（弓 / 弩），2 = 投掷武器自身 | 0 = no ammo source, 1 = quiver (bow / crossbow), 2 = the throwing weapon itself
     int set;          // 来源组：0 = 当前武器组，1 = 另一组 | source set: 0 = the current weapon set, 1 = the other one
 } dm_ammo_src;
