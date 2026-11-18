@@ -36,6 +36,7 @@ run: \
 	$(B)/t_namegen \
 	$(B)/t_oe \
 	$(B)/t_padmap \
+	$(B)/t_pkg_cache \
 	$(B)/t_rift_clock \
 	$(B)/t_rift_hud \
 	$(B)/t_rift_next \
@@ -107,6 +108,7 @@ run: \
 	$(B)/t_legend
 	$(B)/t_vault_icons
 	$(B)/t_padmap
+	$(B)/t_pkg_cache
 	$(B)/t_unit_level
 	$(B)/t_widget
 	$(B)/t_doorspot
@@ -132,6 +134,8 @@ $(B)/t_unit_level: t_unit_level.c ../dm_unit.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_unit_level.c
 $(B)/t_padmap: t_padmap.c ../dm_padmap.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -o $@ t_padmap.c
+$(B)/t_pkg_cache: t_pkg_cache.c ../../gfx/nvn/nvn_pkg_cache.h ../../gfx/nvn/nvn_astc_copy.h | $(B)
+	clang -O1 -Wall -Werror -o $@ t_pkg_cache.c
 $(B)/t_minimap_lift: t_minimap_lift.c ../dm_cursor.c ../dm_cursor.h | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_minimap_lift.c
 $(B)/t_widestash_restore: t_widestash_restore.c ../dm_cursor.c ../dm_cursor.h | $(B)
