@@ -737,7 +737,7 @@ static void w_map_goal_step(void) {
 // game thread (w_chest_step, every frame) and published as offsets from the player; the UI thread
 // (dm_chest_marks, called from CamThreats through JNI) only reads that array and projects it -- walking the
 // unit table on the UI thread can read a unit freed under it, or loop while the list is relinked.
-static const uint16_t g_cont_cls[] = { 1,3,4,5,6,7,9,11,46,50,51,52,53,79,87,88,94,95,125,127,128,139,140,141,142,143,144,146,147,148,155,159,176,177,181,183,185,186,187,188,198,203,204,205,208,209,240,241,242,243,274,329,330,331,332,333,334,335,336,354,355,356,362,365,371,387,388,389,390,391,397,405,406,407,455,463 };
+static const uint16_t g_cont_cls[] = { 1,3,4,5,6,7,9,11,46,50,51,52,53,54,55,56,79,87,88,89,94,95,106,107,125,126,127,128,139,140,141,142,143,144,146,147,148,154,155,158,159,163,169,171,174,175,176,177,178,181,182,183,185,186,187,188,198,203,204,205,208,209,223,224,225,240,241,242,243,244,246,274,329,330,331,332,333,334,335,336,354,355,356,362,365,371,372,387,388,389,390,391,397,405,406,407,455,463,507 };
 static int is_container_cls(uint32_t c) { for (unsigned i = 0; i < sizeof g_cont_cls / sizeof *g_cont_cls; i++) if (g_cont_cls[i] == c) return 1; return 0; }
 int dm_ui_map_geom(float *cell); int dm_ui_minimap_rect(float r[4]); int dm_cam_map_heading(float o[4]);
 #define DM_CHEST_MAX 64
