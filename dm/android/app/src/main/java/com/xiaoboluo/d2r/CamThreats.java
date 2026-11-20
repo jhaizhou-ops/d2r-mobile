@@ -116,7 +116,7 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
             canvas.drawPath(arrow, edge);
             canvas.restore();
         }
-        if (chestN > 0) {   // å°å¾ä¸æ²¡å¼çå®¹å¨ï¼éè²å°æ¹åï¼dm_world.c dm_chest_marksï¼ | un-opened containers on the map: small gold squares
+        if (chestN > 0) {   // 小地图上没开的容器：金色小方块 | un-opened containers on the map: small gold squares
             float r = Math.max(2f, h * 0.006f);
             dotFill.setColor(0xFFFFD24A); dotFill.setAlpha(235);
             dotEdge.setStyle(Paint.Style.STROKE); dotEdge.setStrokeWidth(Math.max(1f, r * 0.45f)); dotEdge.setColor(0xFF3A2A00); dotEdge.setAlpha(220);
