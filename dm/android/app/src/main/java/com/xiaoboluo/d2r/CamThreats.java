@@ -28,6 +28,9 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path arrow = new Path();
     private int count;
+    private final float[] chest = new float[64 * 2];
+    private int chestN, chestDrawn = -1;
+    private final Paint dotFill = new Paint(Paint.ANTI_ALIAS_FLAG), dotEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean running, headOn, aimOn, ringTried;
     // 瞄准环用游戏自己的金环（导入包 touchart/dm_native_circle.png，触屏圆钮同一张）；包里没有就画一圈线
     // The aim ring uses the game's own gold ring (import pack touchart/dm_native_circle.png, the same image as the touch round buttons); without it, a line ring
@@ -56,7 +59,8 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
         // 瞄准环（拖技能键时，宿主 dm_cam_aim 投好的 5 × 5 网格）：瞄着就每帧重画
         // Aim ring (while a skill button is dragged; the 5 x 5 grid projected by the host's dm_cam_aim): redrawn every frame while aiming
         boolean a = DmActivity.nativeCamAim(aim) == 25;
-        if (n != count || n > 0 || headMoved || a || a != aimOn) { count = n; headOn = h; aimOn = a; System.arraycopy(head, 0, drawn, 0, 4); invalidate(); }
+        chestN = DmActivity.nativeChestMarks(chest);
+        { boolean any = (n > 0 || chestN > 0 || headOn || a); if (any || n != count || headMoved || a != aimOn || chestN != chestDrawn) { count = n; headOn = h; aimOn = a; chestDrawn = chestN; System.arraycopy(head, 0, drawn, 0, 4); invalidate(); } }
         Choreographer.getInstance().postFrameCallback(this);
     }
 
@@ -111,6 +115,13 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
             canvas.drawPath(arrow, fill);
             canvas.drawPath(arrow, edge);
             canvas.restore();
+        }
+        if (chestN > 0) {   // å°å¾ä¸æ²¡å¼çå®¹å¨ï¼éè²å°æ¹åï¼dm_world.c dm_chest_marksï¼ | un-opened containers on the map: small gold squares
+            float r = Math.max(2f, h * 0.006f);
+            dotFill.setColor(0xFFFFD24A); dotFill.setAlpha(235);
+            dotEdge.setStyle(Paint.Style.STROKE); dotEdge.setStrokeWidth(Math.max(1f, r * 0.45f)); dotEdge.setColor(0xFF3A2A00); dotEdge.setAlpha(220);
+            for (int i = 0; i < chestN; i++) { float px = chest[i * 2] * w, py = chest[i * 2 + 1] * h;
+                canvas.drawRect(px - r, py - r, px + r, py + r, dotFill); canvas.drawRect(px - r, py - r, px + r, py + r, dotEdge); }
         }
         if (headOn) {
             // 朝向箭头：白色，离开玩家点一小段（不盖住游戏自己的玩家标记），尖在 0.115 个尺度处（小地图 = 框高，全屏地图更大）

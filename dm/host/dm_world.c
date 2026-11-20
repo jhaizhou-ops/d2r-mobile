@@ -729,6 +729,54 @@ static void w_map_goal_step(void) {
             for (int i = 0; i < nx && v.n < DM_MAP_GOAL_MAX; i++, v.n++) { v.x[v.n] = g_mx.x[i]; v.y[v.n] = g_mx.y[i]; v.art[v.n] = g_mx.art[i]; } } }
     atomic_fetch_add(&g_mg_seq, 1); g_mg_pub = v; atomic_fetch_add(&g_mg_seq, 1);
 }
+// ---- å°å°å¾ä¸çæªå¼å®¹å¨ï¼ç®±å­ / å¨èç®± / ç³æ£º / ç® / æ¡¶ / ç¯®ï¼
+// åæ³ï¼éåå®¢æ·ç«¯åä½è¡¨çç©ä»¶åæ¡¶ï¼ç±»å 2ï¼ï¼ç­åºå®¹å¨ç±»ä¸ mode == 0ï¼æªå¼ï¼å®æµå¼è¿çä¼åæ 2ï¼ï¼
+// åæä¸çæ ¼æ¢æå°å¾ä¸çå±å¹ä½ç½®ï¼ç­è·æ¢ç®å dm_cam_map_headingï¼ä¸ç (x,z) å¨å°å¾ä¸ = ((xâz)Ã1.6, (x+z)Ã0.8) åç´ /æ ¼ï¼ã
+// outï¼æ¯ 2 ä¸ª float = å±å¹å½ä¸å x / yï¼è¿åä¸ªæ°ã
+// Uneaten containers on the minimap (chests / stashes / caskets / urns / barrels / baskets): walk the client object
+// bucket (type 2), keep container classes with mode == 0 (not opened; an opened one becomes 2, measured), then map the
+// world cell to a screen position with the same isometric mapping as dm_cam_map_heading.
+static const uint16_t g_cont_cls[] = { 1,3,4,5,6,7,9,11,46,50,51,52,53,79,87,88,94,95,125,127,128,139,140,141,142,143,144,146,147,148,155,159,176,177,181,183,185,186,187,188,198,203,204,205,208,209,240,241,242,243,274,329,330,331,332,333,334,335,336,354,355,356,362,365,371,387,388,389,390,391,397,405,406,407,455,463 };
+static int is_container_cls(uint32_t c) { for (unsigned i = 0; i < sizeof g_cont_cls / sizeof *g_cont_cls; i++) if (g_cont_cls[i] == c) return 1; return 0; }
+int dm_ui_map_geom(float *cell); int dm_ui_minimap_rect(float r[4]); int dm_cam_map_heading(float o[4]);
+int dm_chest_marks(float *out, int max) {
+    uint8_t *b = wb(); uint64_t pl = b ? w_player() : 0; if (!pl || !out || max <= 0) return 0;
+    uint64_t lv = w_level(pl); if (!lv) return 0;
+    static uint64_t lv_seen, lv_at;
+    uint64_t ns = w_now_ns();
+    if (lv != lv_seen) { lv_seen = lv; lv_at = ns; return 0; }
+    if (ns - lv_at < 2000000000ull) return 0;
+    float cell = 0; int map = dm_ui_map_geom(&cell); if (!map || !(cell > 0)) return 0;
+    float cx = 0.5f, cy = 0.5f, mm[4];
+    if (map == 1) { if (!dm_ui_minimap_rect(mm)) return 0; cx = (mm[0] + mm[2]) * 0.5f; cy = (mm[1] + mm[3]) * 0.5f; }
+    else { float hd[4]; if (dm_cam_map_heading(hd)) { cx = hd[0]; cy = hd[1]; } }
+    int rw = 0, rh = 0; dm_screen_real(&rw, &rh); if (rw <= 0 || rh <= 0) return 0;
+    int px = 0, py = 0; if (!w_unit_xy(pl, &px, &py)) return 0;
+    int n = 0;
+    for (int k = 0; k < 128 && n < max; k++)
+        for (uint64_t u = *(uint64_t *)(b + 0x2d603a0 + 2 * 0x400 + k * 8); u && n < max; u = *(uint64_t *)(u + 0x158)) {
+            if (u < 0x10000 || (u & 7)) break;
+            if (*(uint32_t *)u != 2 || *(uint32_t *)(u + 0xc) != 0) continue;
+            if (!is_container_cls(*(uint32_t *)(u + 4))) continue;
+            uint64_t q = *(uint64_t *)(u + 0x38); if (!q || q < 0x10000) continue;
+            int ux = *(int32_t *)(q + 0x10), uy = *(int32_t *)(q + 0x14);
+            int ddx = ux - px, ddy = uy - py;
+            if (ddx * ddx + ddy * ddy < 4) continue;   // 贴玩家 8 格内不画（幽灵）
+            float dx = (float)ddx, dy = (float)ddy;
+            float mx = (dx - dy) * 1.6f * cell, my = (dx + dy) * 0.8f * cell;
+            float sx = cx + mx / (float)rw, sy = cy + my / (float)rh;
+            if (sx < 0.0f || sx > 1.0f || sy < 0.0f || sy > 1.0f) continue;
+            out[n * 2] = sx; out[n * 2 + 1] = sy; n++;
+        }
+    return n;
+}
+
+
+
+
+
+
+
 int dm_map_goals(dm_map_goal_view *v) {
     for (int t = 0; t < 4; t++) { uint32_t a = atomic_load(&g_mg_seq); if (a & 1) continue; *v = g_mg_pub; if (atomic_load(&g_mg_seq) == a) return v->n; }
     v->n = 0; return 0;
