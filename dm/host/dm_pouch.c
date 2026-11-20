@@ -64,6 +64,15 @@ int dm_request_save(void); void dm_vault_request_deposit(uint32_t item_id); int 
 #define T_CHARM 13        // charm：小 / 中 / 大护身符（scha 83 / mcha 84 / lcha 85）与碎裂护身符（csch 108）的父类型（ItemTypes.txt 行号，同法算出 gem 20、rune 75 与宿主实探一致） | charm: the parent type of small / large / grand charms (scha 83 / mcha 84 / lcha 85) and the cracked charm (csch 108) (ItemTypes.txt row number; gem 20 and rune 75 computed the same way match what was probed on the host)
 
 static uint8_t *B;
+// 同款比较的请求 / 结果（dm_vault.c：服务端拍里建临时物品比较，主线程只读结果）
+// Request / result of the duplicate comparison (dm_vault.c: the server tick builds the temporary item and
+// compares; the main thread only reads the result)
+void dm_vault_request_compare(int kind, int idx, uint32_t new_item_id);
+int dm_vault_take_compare(uint32_t new_item_id, int *diff);
+// 比较开关：缺省关（review 意见：算法还粗，先做成开关；files/dm/env 里写 DM_VAULT_COMPARE=1 才启用）
+// Comparison switch: off by default (review: the scoring is still coarse, so make it a switch; enable it with
+// DM_VAULT_COMPARE=1 in files/dm/env)
+static int vault_compare_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_VAULT_COMPARE"); on = e && *e && strcmp(e, "0") != 0; } return on; }
 static uint64_t cli_player(void) { return ((uint64_t (*)(uint32_t))(B + 0x45f9d0))(*(uint32_t *)(B + 0x2d20e4c)); }
 static int is_rune_gem(uint64_t it) { int (*is)(uint64_t, int) = (int (*)(uint64_t, int))(B + 0x574bc0); return is(it, T_RUNE) || is(it, T_GEM); }
 // 材料页（原版高级仓库第三页，每种一个固定格）收的东西里，一键存放管这些：三把钥匙、三件器官、四种精华、赦免之证、世界之石碎片、五种超级先祖召唤材料（ua1–ua5）。
@@ -354,7 +363,7 @@ static void auto_pick(uint64_t pl, uint64_t fr) {
 
 // ---- 存放：一件一件做
 // ---- Deposit: done one item at a time
-typedef struct { uint32_t id, code; uint8_t to_vault, page; } sitem;   // page：这件原来在哪一页（0 背包 / 3 魔盒） | page: which page this item was originally on (0 inventory / 3 Horadric Cube)
+typedef struct { uint32_t id, code; uint8_t to_vault, page, cmp, cmp_req; uint64_t cmp_fr; } sitem;   // page：这件原来在哪一页（0 背包 / 3 魔盒）；cmp = 同款要先比较再决定存不存 | page: which page this item was originally on (0 inventory / 3 Horadric Cube); cmp = a duplicate that must be compared before deciding
 static sitem g_st[128]; static int g_nst, g_ist = -1, g_sv, g_sg, g_sp, g_sleft, g_snear; static uint64_t g_sfr;
 static _Atomic int g_store_req, g_pouch_tap;
 static char g_notice[160]; static _Atomic int g_notice_req;
@@ -365,7 +374,11 @@ static uint64_t page_item(uint64_t pl, uint32_t id, int page) {
     for (int k = 0; it && k < 2048; k++) { uint64_t d = *(uint64_t *)(it + 0x10); if (!d) break; if (*(uint32_t *)(it + 8) == id && *(uint32_t *)(it + 0xc) == 0 && *(uint8_t *)(d + 0x55) == page) return it; it = *(uint64_t *)(d + 0xb0); }
     return 0;
 }
+// 新的比编年史里的旧件好多少：**在服务端拍里算**（dm_vault.c 的 vault_compare），这里只发请求、等结果。
+// How much better the new item is than the one in the Chronicle: computed **in the server tick** (vault_compare
+// in dm_vault.c); this side only sends the request and waits for the result.
 static void store_begin(uint64_t pl) {
+    int cmp_on = vault_compare_on();
     int ncube = 0;
     g_nst = 0; g_sv = g_sg = g_sp = g_sleft = 0; int vault = dm_vault_ready(), adv = adv_stash_unit(pl) != 0; g_snear = atomic_load(&g_near_pub);
     uint64_t inv = *(uint64_t *)(pl + 0x90), it = inv && *(uint32_t *)inv == 0x01020304 ? *(uint64_t *)(inv + 0x10) : 0;
@@ -382,13 +395,27 @@ static void store_begin(uint64_t pl) {
             else if ((q == 7 || q == 5) && (*(uint32_t *)(d + 0x18) & 0x10) && !is_charm(it) && !dm_item_quest(B, it)) {   // 已鉴定的暗金 / 套装件（同 dm_vault.c item_key）；护身符（常驻背包）与任务物品（编年史不收）不搬、也不算「留在背包」 | Identified unique / set items (same as item_key in dm_vault.c); charms (kept permanently in the inventory) and quest items (not accepted by the chronicle) are not moved and do not count as "left in the inventory" either
                 uint32_t key = (uint32_t)(q == 7) << 16 | (*(uint32_t *)(d + 0x34) & 0xffff); int dup = 0;   // 这一批里已有同一款（背包一件、魔盒又一件）：只存头一件，后一件不动——不然后一件会把前一件从编年史换回背包 | The same item is already in this batch (one in the inventory, another in the Horadric Cube): store only the first and leave the second alone, otherwise the second would swap the first back from the Chronicle into the inventory
                 for (int i = 0; i < g_nst; i++) if (g_st[i].to_vault && g_st[i].code == key) dup = 1;
-                if (vault && !dup && !dm_vault_has(q == 7, (int)*(uint32_t *)(d + 0x34))) { g_st[g_nst++] = (sitem){ id, key, 1, (uint8_t)page }; ncube += page == 3; } else if (page == 0) g_sleft++; } }
+                if (vault && !dup) {
+                    int vk = (q == 7), vi = (int)*(uint32_t *)(d + 0x34);
+                    if (!dm_vault_has(vk, vi)) { g_st[g_nst++] = (sitem){ id, key, 1, (uint8_t)page, 0, 0, 0 }; ncube += page == 3; }   // 没有同款：照旧存 | not in the Chronicle yet: store as before
+                    else if (cmp_on) { g_st[g_nst++] = (sitem){ id, key, 1, (uint8_t)page, 1, 0, 0 }; ncube += page == 3; LOG("编年史：同款 id %u（类 %d 号 %d）→ 等服务端拍比较", id, vk, vi); }   // 同款：比较放到服务端拍，结果出来再决定 | Duplicate: the comparison runs in the server tick; decide once the result is in
+                    else if (page == 0) g_sleft++;   // 同款、比较开关关着：不存，留在背包（老行为） | Duplicate with the comparison switch off: not stored, stays in the inventory (old behaviour)
+                } else if (page == 0) g_sleft++; } }
         it = *(uint64_t *)(d + 0xb0); }
     g_ist = 0; g_sfr = 0; LOG("存放：背包里 %d 件、魔盒里 %d 件要存（编年史里已有同件 / 没有编年史仓库的 %d 件不动；符文宝石%s）", g_nst - ncube, ncube, g_sleft, g_snear ? "在储藏箱旁，进高级仓库" : "进百宝囊");
 }
 static void store_step(uint64_t pl, uint64_t fr) {
     if (g_ist < 0) return;
     if (g_ist < g_nst) { sitem *s = &g_st[g_ist]; uint64_t it = page_item(pl, s->id, s->page);
+        if (s->cmp) {   // 同款：先让服务端拍比较（主线程不建 / 删服务端物品） | Duplicate: let the server tick compare first (the main thread never builds or frees a server item)
+            if (!it) { g_ist++; g_sfr = 0; return; }   // 已经不在背包 | No longer in the inventory
+            if (!s->cmp_req) { dm_vault_request_compare((int)(s->code >> 16), (int)(s->code & 0xffff), s->id); s->cmp_req = 1; s->cmp_fr = fr; return; }
+            int diff = 0;
+            if (!dm_vault_take_compare(s->id, &diff)) {
+                if (fr - s->cmp_fr > 240) { if (s->page == 0) g_sleft++; LOG("【红】编年史：比较等不到结果（物品 id %u），这次不替换", s->id); g_ist++; g_sfr = 0; }
+                return; }
+            if (diff <= 0) { if (s->page == 0) g_sleft++; LOG("编年史：新的不如旧件（%d）→ 不替换", diff); g_ist++; g_sfr = 0; return; }
+            LOG("编年史：新的比旧件好（%d）→ 替换，旧件回背包", diff); s->cmp = 0; }
         if (!g_sfr) { if (!it) { g_ist++; return; }   // 已经不在背包（玩家自己挪了） | No longer in the inventory (the player moved it)
             if (s->to_vault) { if (dm_vault_put_pending()) return; dm_vault_request_deposit(s->id); } else absorb_push(s->id);
             g_sfr = fr; return; }
