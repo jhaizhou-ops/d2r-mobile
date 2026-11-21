@@ -40,6 +40,12 @@ int main(){
     CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 22",0x43020000));
     CHECK(!xbg_adreno_compiler_needs_inline(0x1234,"Adreno (TM) 22",0x43030b00));
     CHECK(xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 8",0x44050001));
+    // 6xx 的内联与重试同样按设备号认（#298 的做法用到 #287）。
+    // The 6xx inlining and retry are recognised by device ID as well (#298's fallback applied to #287).
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 22",0x43030b00));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno",0x06050002));
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno",0x06060001));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno",0x43051401));
 
     // 只有高通 740–799 这一族缺省关掉两个改写。
     // Only Qualcomm's 740-799 family defaults both rewrites off.
@@ -70,6 +76,20 @@ int main(){
     CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 732"));
     CHECK(!xbg_adreno_rewrites_fault(0x13b5,"Mali-G720"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 720"));
+
+    // 6xx 也内联（#266 的 660、#243 的 650）；这一版新打开内联的机型（6xx、735）重试没内联时记的跳过条目，750–799 不重试。
+    // The 6xx are inlined too (#266's 660, #243's 650); models whose inlining is new in this version (6xx, 735) retry skip entries
+    // recorded without inlining, the 750-799 do not.
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 660"));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 650"));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 618"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 540"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 730"));
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 660"));
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 735"));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 750"));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 730"));
+    CHECK(!xbg_adreno_inline_is_new(0x13b5,"Mali-G610"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 830"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,nullptr));
     CHECK(!xbg_adreno_compiler_needs_inline(0x10002,"Adreno 750"));
@@ -118,6 +138,6 @@ int main(){
     CHECK(!xbg_adreno_dispatch_guard_option(false,-1,nullptr,false));
 
     if(failures){printf("FAIL %d check(s)\n",failures);return 1;}
-    printf("PASS Adreno policy: 720 and 740-799 default off, 735 and 750-799 inline helpers, 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
+    printf("PASS Adreno policy: 720 and 740-799 default off, 6xx, 735 and 750-799 inline helpers (6xx and 735 retry old skips), 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
     return 0;
 }
