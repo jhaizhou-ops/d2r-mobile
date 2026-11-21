@@ -23,6 +23,30 @@ int main(){
     CHECK(xbg_adreno_model("Adreno 7400")==0);
     CHECK(xbg_adreno_model("Mali-G715")==0);
 
+    // 设备名认不出型号时按设备号（#298：Retroid Pocket G2 报 "Adreno (TM) 22"，设备号同 735）；认得出名字时名字为准。
+    // When the name gives no model, the device ID decides (#298: the Retroid Pocket G2 reports "Adreno (TM) 22" with the 735's
+    // device ID); a name that parses always wins.
+    CHECK(xbg_adreno_model_by_id(0x43030b00)==735);
+    CHECK(xbg_adreno_model_by_id(0x43020000)==720);
+    CHECK(xbg_adreno_model_by_id(0x12345678)==0);
+    CHECK(xbg_adreno_model_of("Adreno (TM) 22",0x43030b00)==735);
+    CHECK(xbg_adreno_model_of("Adreno (TM) 22",0x12345678)==0);
+    CHECK(xbg_adreno_model_of("Adreno (TM) 730",0x43030b00)==730);
+    CHECK(xbg_adreno_model_of(nullptr,0x43051401)==750);
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 22",0x43030b00));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 22",0x43030b00));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 22",0x12345678));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 22"));
+    CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 22",0x43020000));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x1234,"Adreno (TM) 22",0x43030b00));
+    CHECK(xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 8",0x44050001));
+    // 6xx 的内联与重试同样按设备号认（#298 的做法用到 #287）。
+    // The 6xx inlining and retry are recognised by device ID as well (#298's fallback applied to #287).
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 22",0x43030b00));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno",0x06050002));
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno",0x06060001));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno",0x43051401));
+
     // 只有高通 740–799 这一族缺省关掉两个改写。
     // Only Qualcomm's 740-799 family defaults both rewrites off.
     CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 740"));
