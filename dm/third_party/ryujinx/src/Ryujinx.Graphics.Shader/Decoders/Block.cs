@@ -72,6 +72,20 @@ namespace Ryujinx.Graphics.Shader.Decoders
             rightBlock.Successors.AddRange(Successors);
             rightBlock.Predecessors.Add(this);
 
+            // D2R-Mobile：拆块后原来的后继块改由右半块跳过去，它们的前驱表里也要把左半块换成右半块。
+            // 不换的话 BRX 跳转表的回溯（FindFirstRegWrite）会走错前驱、找不到跳转目标，BRX 之后的代码（像素着色器的颜色输出和 EXIT）整段丢掉（#215 圣骑士专注光环）。
+            // D2R-Mobile: after the split the old successors are reached from the right block, so their predecessor lists must name it instead of this block.
+            // Otherwise the BRX jump-table search (FindFirstRegWrite) walks a wrong predecessor, finds no targets, and the code after the BRX (a fragment shader's colour outputs and EXIT) is dropped (#215, Paladin Concentration aura).
+            foreach (Block successor in Successors)
+            {
+                int index = successor.Predecessors.IndexOf(this);
+
+                if (index >= 0)
+                {
+                    successor.Predecessors[index] = rightBlock;
+                }
+            }
+
             EndAddress = rightBlock.Address;
 
             Successors.Clear();
