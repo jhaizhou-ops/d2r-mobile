@@ -440,19 +440,20 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         if (activity != null) activity.runOnUiThread(() -> activity.startShareLog(logPath));
     }
 
-    // 高价值掉落震动（#289，同 iOS 的 UIImpactFeedbackGenerator Heavy / Medium / Light）：由 text_input_jni.c 的工作线程直接调，Vibrator
-    // 在哪个线程用都行。档位 1 重 / 2 中 / 3 轻 → 系统预设的重击 / 点击 / 轻触。按媒体（游戏）震动算，系统「触摸反馈」关着也照样震
-    // Valuable-drop vibration (#289, as iOS's UIImpactFeedbackGenerator Heavy / Medium / Light): called directly by the worker thread of
-    // text_input_jni.c; Vibrator works on any thread. Tier 1 heavy / 2 medium / 3 light -> the system's predefined heavy click / click / tick.
-    // It counts as media (game) vibration, so it still vibrates when the system's touch feedback is off
+    // 高价值掉落震动（#289）：由 text_input_jni.c 的工作线程直接调，Vibrator 在哪个线程用都行。三档一律用系统预设的重击：
+    // 一加 13 上实测重击也只是短促的一下，中 / 轻两档的点击、轻触几乎感觉不到，所以不分档（iOS 仍按档用 Heavy / Medium / Light）。
+    // 档位只记进日志。按媒体（游戏）震动算，系统「触摸反馈」关着也照样震
+    // Valuable-drop vibration (#289): called directly by the worker thread of text_input_jni.c; Vibrator works on any thread. Every tier
+    // uses the system's predefined heavy click: on a OnePlus 13 even the heavy click is one short tap, and the click / tick of the medium
+    // and light tiers are barely noticeable, so the tiers are not told apart (iOS still uses Heavy / Medium / Light by tier). The tier only
+    // goes into the log. It counts as media (game) vibration, so it still vibrates when the system's touch feedback is off
     private static void dropHaptic(int tier) {
         DmActivity activity = current.get();
         if (activity == null) return;
         android.os.VibratorManager manager = activity.getSystemService(android.os.VibratorManager.class);
         android.os.Vibrator vibrator = manager != null ? manager.getDefaultVibrator() : null;
         if (vibrator == null || !vibrator.hasVibrator()) { android.util.Log.i("dm", "drop haptic tier=" + tier + ": no vibrator"); return; }
-        android.os.VibrationEffect effect = android.os.VibrationEffect.createPredefined(tier == 1 ? android.os.VibrationEffect.EFFECT_HEAVY_CLICK
-            : tier == 2 ? android.os.VibrationEffect.EFFECT_CLICK : android.os.VibrationEffect.EFFECT_TICK);
+        android.os.VibrationEffect effect = android.os.VibrationEffect.createPredefined(android.os.VibrationEffect.EFFECT_HEAVY_CLICK);
         if (android.os.Build.VERSION.SDK_INT >= 33)
             vibrator.vibrate(effect, android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_MEDIA));
         else
