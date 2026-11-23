@@ -28,7 +28,7 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path arrow = new Path();
     private int count;
-    private final float[] chest = new float[64 * 2];
+    private final float[] chest = new float[96 * 2];
     private int chestN, chestDrawn = -1;
     private final Paint dotFill = new Paint(Paint.ANTI_ALIAS_FLAG), dotEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean running, headOn, aimOn, ringTried;
