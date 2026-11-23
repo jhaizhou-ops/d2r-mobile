@@ -201,6 +201,20 @@ def xlate_ready(xl, z=None):
     return True
 
 
+def patched_ready(out):
+    """改写过的游戏程序齐了、而且是这份源码的改写器出的：产物记下的改写器指纹（patch_nso.py 写的 build_src.sha256）要等于这份 patch_nso.py。
+    改写器更新时产物代号不一定变（v2.3.0 → v2.3.1 就是这样，代号一直是 r45），只看文件在不在，复用同一个工作目录的人（S2Arm 每次导出都这样）
+    会一直拿着旧改写器出的程序做包。与 d2rm_android.py 的判法相同
+    | The rewritten game program is complete and was made by this source's rewriter: the rewriter fingerprint the products record (build_src.sha256,
+    written by patch_nso.py) must equal this patch_nso.py. The product code does not always change when the rewriter does (v2.3.0 -> v2.3.1 kept r45),
+    so with only a presence check anyone reusing a work directory (S2Arm does on every export) would keep packing the program an older rewriter made.
+    Same rule as d2rm_android.py"""
+    src = hashlib.sha256(open(os.path.join(HERE, 'patch_nso.py'), 'rb').read()).hexdigest()
+    try: rec = open(os.path.join(out, 'build_src.sha256')).read().split()[0]
+    except (OSError, IndexError): return False
+    return rec == src and all(os.path.isfile(os.path.join(out, m + '.patched.bin')) and os.path.isfile(os.path.join(out, m + '.gates.tsv')) for m in MODS)
+
+
 # 手机上要的游戏资源档案：与宿主 host/romfs_validate.c 的 need[] 同一份（dm/tools/tests/test_s2arm_pack.py 核两处一致）
 # The game resource archives the phone needs: the same list as need[] in host/romfs_validate.c (dm/tools/tests/test_s2arm_pack.py checks the two agree)
 PHONE_ARCHIVES = ['00-00000001.data', '00-00000002.data', '00-00000003.data', '00-00000004.data', '00-00000005.data', '00-00000006.data',
@@ -284,7 +298,7 @@ def main():
     out = os.path.join(ROOT, 'build', 'cache', 'dm', 'out', P + '-touch'); os.makedirs(out, exist_ok=True)
     def patch():
         for m in MODS: run([PY, os.path.join(HERE, 'patch_nso.py'), os.path.join(game, 'ExeFS', m), out, m], env={'DM_RULESET': 'touch-run-v4'}, log=os.path.join(out, m + '.patch.log'), what='改写 ' + m)
-    step('改写游戏程序', lambda: all(os.path.isfile(os.path.join(out, m + '.patched.bin')) and os.path.isfile(os.path.join(out, m + '.gates.tsv')) for m in MODS), patch)
+    step('改写游戏程序', lambda: patched_ready(out), patch)
 
     # 二、界面素材与几张数据表（与 ios/run.sh build 开头相同）
     # 2. UI assets and a few data tables (same as the beginning of ios/run.sh build)
