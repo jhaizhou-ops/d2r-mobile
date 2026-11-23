@@ -2173,6 +2173,18 @@ bool inline_rewrite(std::vector<uint32_t> &words,const std::string &key){
 #endif
     return false;
 }
+// 内联与 quad 改写的先后：片元阶段支持子组时先内联再改写（原来的顺序）。不支持时片元着色器先做 quad 改写和清理再内联：
+// 先内联的话 shuffle 进了入口函数、落在分叉的控制流里，quad 改写一个也换不掉，载入时的能力检查照样中止（Adreno 650 实测，
+// gfx-inline=1 时）。两个载入路径用同一个顺序，预热交出去的模块才和这里自己改写的一样。返回是否内联了。
+// The order of inlining and the quad rewrite: with fragment-stage subgroups, inline first and then rewrite (the order so far).
+// Without them, fragment shaders get the quad rewrite and clean-up before the inlining: inlined first, the shuffles land in
+// the entry function under divergent control flow, the quad rewrite replaces none of them, and the capability check at load
+// still aborts (seen on an Adreno 650 with gfx-inline=1). Both loaders use the same order, so the modules the warm-up hands
+// over match what this loader rewrites itself. Returns whether the shader was inlined.
+bool front_rewrites(std::vector<uint32_t> &words,uint32_t stage,const std::string &key,const char *loader){
+    if(!fragment_subgroups){quad_rewrite(words,stage,key.c_str(),loader);return inline_rewrite(words,key);}
+    bool inlined=inline_rewrite(words,key);quad_rewrite(words,stage,key.c_str(),loader);return inlined;
+}
 // Diagnostic (files/dm/spv-override/<key>.spv): this SPIR-V replaces the bundle's, for offline-optimized test modules.
 bool spv_override(const std::string &key,std::vector<uint32_t> &words){
     std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');std::string path=(cut==std::string::npos?dir:dir.substr(0,cut))+"/spv-override/"+key+".spv";
@@ -2198,8 +2210,10 @@ Shader *load_shader(const void *control){
     // 预热线程取来的已经内联过（load_module 同一步）；只有自己改写时才内联，免得在图形线程上重做一遍（大着色器 40–90 ms）。
     // What the warm-up hands over is already inlined (the same step in load_module); inline only when rewriting here, so the
     // graphics thread does not redo it (40-90 ms on the large shaders).
-    bool inlined=have_reused && shader_reuse!=2 && inline_helpers && helper_has_subgroup(words);
-    if(!have_reused || shader_reuse==2){inlined=inline_rewrite(words,key);quad_rewrite(words,h.stage,key.c_str(),"runtime");warp_rewrite(words,h.stage,key.c_str(),"runtime");tidy_rewrite(words);guard_rewrite(words,h.stage,key.c_str(),"runtime");
+    // 片元阶段不支持子组时片元着色器先改写、清掉辅助函数，内联已无事可做（front_rewrites）。
+    // Without fragment subgroups a fragment shader is rewritten and its helpers removed first, leaving nothing to inline (front_rewrites).
+    bool inlined=have_reused && shader_reuse!=2 && inline_helpers && (fragment_subgroups || h.stage!=4) && helper_has_subgroup(words);
+    if(!have_reused || shader_reuse==2){inlined=front_rewrites(words,h.stage,key,"runtime");warp_rewrite(words,h.stage,key.c_str(),"runtime");tidy_rewrite(words);guard_rewrite(words,h.stage,key.c_str(),"runtime");
         if(have_reused && reused!=words){++shader_reuse_mismatches;xbg_logf("NVN shader reuse MISMATCH %s stage=%u words=%zu/%zu",key.c_str(),h.stage,reused.size(),words.size());}}
     else words.swap(reused);
     // 能力检查放在改写之后：片元阶段不支持子组的驱动上，改写才去掉 shuffle（#243 #155）。
@@ -2341,7 +2355,7 @@ VkShaderModule load_module(const std::string &key){
     fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);if(n<32 || n>16*1024*1024){fclose(f);return VK_NULL_HANDLE;}std::vector<uint8_t> b(static_cast<size_t>(n));bool ok=fread(b.data(),1,b.size(),f)==b.size();fclose(f);if(!ok)return VK_NULL_HANDLE;
     xbg_shader_header h;memcpy(&h,b.data(),sizeof(h));if(h.magic!=0x31534758 || h.version!=1 || h.spirv_bytes%4)return VK_NULL_HANDLE;
     size_t off=sizeof(h)+size_t(h.binding_count)*sizeof(xbg_shader_binding)+size_t(h.input_count)*4+h.c1_bytes;if(off+h.spirv_bytes!=b.size())return VK_NULL_HANDLE;
-    std::vector<uint32_t> w(h.spirv_bytes/4);memcpy(w.data(),b.data()+off,h.spirv_bytes);spv_override(key,w);inline_rewrite(w,key);quad_rewrite(w,h.stage,key.c_str(),"warm");warp_rewrite(w,h.stage,key.c_str(),"warm");tidy_rewrite(w);guard_rewrite(w,h.stage,key.c_str(),"warm");
+    std::vector<uint32_t> w(h.spirv_bytes/4);memcpy(w.data(),b.data()+off,h.spirv_bytes);spv_override(key,w);front_rewrites(w,h.stage,key,"warm");warp_rewrite(w,h.stage,key.c_str(),"warm");tidy_rewrite(w);guard_rewrite(w,h.stage,key.c_str(),"warm");
     if(keep_rewritten){std::lock_guard<std::mutex> l(mu);rewritten.emplace(key,w);}
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=w.size()*4;ci.pCode=w.data();VkShaderModule m;if(vkCreateShaderModule(cfg.device,&ci,nullptr,&m)!=VK_SUCCESS)return VK_NULL_HANDLE;
     std::lock_guard<std::mutex> l(mu);auto ins=modules.emplace(key,m);if(!ins.second){vkDestroyShaderModule(cfg.device,m,nullptr);return ins.first->second;}return m;
@@ -4255,14 +4269,14 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
      warp32=sw("/gfx-warp32","DM_GFX_WARP32");
      xbg_logf("NVN quad shuffles to fine derivatives=%d (marker gfx-quad-derivatives)",int(quad_derivatives));
      xbg_logf("NVN 32-lane warps in wider subgroups=%d subgroup=%u (marker gfx-warp32)",int(warp32),subgroup.subgroupSize);
-     {FILE *q=fopen((base+"/gfx-inline").c_str(),"rb");const bool marker=q!=nullptr;if(q){inline_helpers=fgetc(q)!='0';fclose(q);}else inline_helpers=xbg_adreno_compiler_needs_inline(properties.vendorID,properties.deviceName,properties.deviceID);
+     {FILE *q=fopen((base+"/gfx-inline").c_str(),"rb");const bool marker=q!=nullptr;if(q){inline_helpers=fgetc(q)!='0';fclose(q);}else inline_helpers=xbg_adreno_inline_default(properties.vendorID,properties.deviceName,fragment_subgroups,properties.deviceID);
 #ifndef XBG_HAVE_SPIRV_OPT
       if(inline_helpers)xbg_logf("NVN helper inlining is not built into this package; shaders load as they are");inline_helpers=false;
 #endif
       // 内联是新打开的（这一版的新缺省机型，或标记文件开的）时，gfx-pipe-skip 里没内联时记的条目重试一次（见 pipeguard）。
       // When inlining is newly on (a model whose default is new in this version, or the marker file), gfx-pipe-skip entries
       // recorded without inlining are retried once (see pipeguard).
-      pipeguard::retry_uninlined=inline_helpers && (marker || xbg_adreno_inline_is_new(properties.vendorID,properties.deviceName,properties.deviceID));
+      pipeguard::retry_uninlined=inline_helpers && (marker || xbg_adreno_inline_is_new(properties.vendorID,properties.deviceName,properties.deviceID,fragment_subgroups));
       xbg_logf("NVN shaders with subgroup helpers are inlined at load=%d (marker gfx-inline)",int(inline_helpers));}
      {FILE *q=fopen((base+"/gfx-dispatch-guard").c_str(),"rb");const bool present=q!=nullptr;int c=-1;if(q){c=fgetc(q);fclose(q);}
       dispatch_guard=xbg_adreno_dispatch_guard_option(present,c,getenv("DM_GFX_DISPATCH_GUARD"),xbg_adreno_dispatch_overruns(properties.vendorID,properties.deviceName,properties.deviceID));

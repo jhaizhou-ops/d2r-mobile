@@ -51,3 +51,18 @@ English: [2026-11-16-fragment-subgroup-fallback.md](2026-11-16-fragment-subgroup
 - 这里没有 Adreno 650 和 Maleoon 910，Redmi 只能假装不支持。
 - Adreno 650：流体计算着色器 `098a126f92bf533a` 在那里仍然建不起来（`VK_ERROR_UNKNOWN`，#155），烟和火会显示成乱码方块。另外改。
 - Maleoon 910：#249 说过了检查之后，画人物时驱动里崩溃。这里不处理。
+
+## 后续（2026-11-17）：真 Adreno 650 上内联的先后
+
+@kieusonlam 在 Retroid Pocket 5（原厂驱动，`stages=0x20`，#243）上测了 #280，`gfx-inline` 设成哪个值都启动不了：
+- `gfx-inline=1`：辅助函数在 quad 改写之前就被内联了。shuffle 进了入口函数、落在分叉的控制流里，改写一个也换不掉，检查又中止。
+- `gfx-inline=0`：流体计算着色器 `098a126f92bf533a` 让 `libllvm-qgl.so` 崩溃（addr 0x48），和 750 一族是同一个编译器问题。
+
+改动：
+- `front_rewrites`：片元阶段不支持子组的驱动上，先做 quad 改写和清理，再内联。支持的驱动上顺序不变。
+- `xbg_adreno_inline_default`：内联缺省在 750–799 一族和片元阶段不支持子组的高通驱动上打开；标记 `gfx-inline` 仍然优先。
+
+验证：
+- `tests/adreno_policy_test.cpp` 通过，新增 7 项。
+- 离线按 Adreno 650 的链（片元：放宽 quad 加清理，再内联；计算：内联、warp32、整理）跑 6,931 个着色器，0 个过不了检查。没有片元着色器还需要内联；187 个用到子组的模块全部通过 spirv-val，包括先内联再做 warp32 的 5 个计算着色器。
+- Redmi（Adreno 730）营地，开关开（因此缺省内联）：不中止。17 个片元着色器在内联前改写（`stripped=4`），一个都没被内联；`098a126f92bf533a` 和 `6a7a308d61928982` 先内联再做 warp32。预热建好 392 条、失败 0，命中 178 次，游戏中新建 0 条，GPU 14.34 ms。开关关：内联照旧不开，14.38 ms。截图只在会动的内容上不同。

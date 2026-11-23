@@ -96,16 +96,26 @@ inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *devi
     const int model=xbg_adreno_model_of(device_name,device_id);
     return (model>=600 && model<700) || model==735 || (model>=750 && model<800);
 }
-// 内联缺省是这一版才打开的机型（6xx、735）：它们 gfx-pipe-skip 里没带内联记号的条目是在没内联时记的，读到时重试一次。
-// 750–799 自 v2.0.2 起就内联，它们的条目本来就是内联时记的，不重试（否则更新后要再崩两次才重新记上）。
-// Models whose inlining default is new in this version (6xx, 735): their gfx-pipe-skip entries without the inlining tag were
-// recorded without inlining, so they are retried once. The 750-799 have been inlined since v2.0.2, so their entries were
-// recorded with inlining anyway and are not retried (otherwise they would crash twice more after the update before being
-// recorded again).
-inline bool xbg_adreno_inline_is_new(uint32_t vendor_id,const char *device_name,uint32_t device_id=0){
+// 片元阶段不支持子组的高通驱动（Adreno 650 的旧驱动，#243 #155：supportedStages 只有计算阶段）也要内联：流体计算着色器
+// 098a126f92bf533a 不内联时，libllvm-qgl.so 在建管线时同样段错误（addr=0x48，Retroid Pocket 5 实测），内联后能编。
+// 片元着色器在这类驱动上先做 quad 改写再内联（xbg_game.cpp），所以内联不会挡住片元那边的改写。
+// Qualcomm drivers without fragment-stage subgroups (old Adreno 650 drivers, #243 #155: supportedStages holds only compute)
+// need the inlining too: without it, the fluid compute shader 098a126f92bf533a crashes libllvm-qgl.so while its pipeline is
+// built (addr=0x48, seen on a Retroid Pocket 5), and inlined it compiles. On such drivers fragment shaders get the quad rewrite
+// before the inlining (xbg_game.cpp), so the inlining does not get in the way of the fragment rewrite.
+inline bool xbg_adreno_inline_default(uint32_t vendor_id,const char *device_name,bool fragment_subgroups,uint32_t device_id=0){
+    return xbg_adreno_compiler_needs_inline(vendor_id,device_name,device_id) || (vendor_id==0x5143 && !fragment_subgroups);
+}
+// 内联缺省是这一版才打开的机型（6xx、735，以及片元阶段不支持子组的高通驱动）：它们 gfx-pipe-skip 里没带内联记号的条目是在
+// 没内联时记的，读到时重试一次。750–799 自 v2.0.2 起就内联，它们的条目本来就是内联时记的，不重试（否则更新后要再崩两次才重新记上）。
+// Models whose inlining default is new in this version (6xx, 735, and Qualcomm drivers without fragment-stage subgroups): their
+// gfx-pipe-skip entries without the inlining tag were recorded without inlining, so they are retried once. The 750-799 have been
+// inlined since v2.0.2, so their entries were recorded with inlining anyway and are not retried (otherwise they would crash twice
+// more after the update before being recorded again).
+inline bool xbg_adreno_inline_is_new(uint32_t vendor_id,const char *device_name,uint32_t device_id=0,bool fragment_subgroups=true){
     if(vendor_id!=0x5143)return false;
     const int model=xbg_adreno_model_of(device_name,device_id);
-    return (model>=600 && model<700) || model==735;
+    return (model>=600 && model<700) || model==735 || (!fragment_subgroups && !(model>=750 && model<800));
 }
 
 // Adreno 8xx：计算派发会多跑范围之外的调用（#256：830 上局部尺寸 8×4×1、y 方向工作组数为奇数时多一行工作组；#261 的 825 症状

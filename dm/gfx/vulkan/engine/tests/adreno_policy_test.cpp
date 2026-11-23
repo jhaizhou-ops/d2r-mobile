@@ -90,6 +90,25 @@ int main(){
     CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 750"));
     CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 730"));
     CHECK(!xbg_adreno_inline_is_new(0x13b5,"Mali-G610"));
+
+    // 内联的缺省：上面那些机型（6xx、735、750–799），加上片元阶段不支持子组的高通驱动（Adreno 650 旧驱动，#243）；别家不管。
+    // The inlining default: the models above (6xx, 735, 750-799), plus Qualcomm drivers without fragment-stage subgroups (old
+    // Adreno 650 drivers, #243); other vendors are left alone.
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 750",true));
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 650",false));
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 650",true));
+    CHECK(!xbg_adreno_inline_default(0x5143,"Adreno (TM) 730",true));
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 730",false));
+    CHECK(!xbg_adreno_inline_default(0x13b5,"Mali-G925-Immortalis MC12",false));
+    CHECK(!xbg_adreno_inline_default(0x144d,"Samsung Xclipse 940",false));
+    CHECK(xbg_adreno_inline_default(0x5143,"Adreno (TM) 22",true,0x43030b00u));
+    // 片元阶段不支持子组的高通驱动也算这一版新打开内联，旧条目重试一次；750–799 照旧不重试，别家不管。
+    // Qualcomm drivers without fragment-stage subgroups also count as newly inlined, so old entries are retried once; the 750-799
+    // still are not, and other vendors are left alone.
+    CHECK(xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 730",0,false));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 730",0,true));
+    CHECK(!xbg_adreno_inline_is_new(0x5143,"Adreno (TM) 750",0,false));
+    CHECK(!xbg_adreno_inline_is_new(0x13b5,"Mali-G610",0,false));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 830"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,nullptr));
     CHECK(!xbg_adreno_compiler_needs_inline(0x10002,"Adreno 750"));
