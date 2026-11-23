@@ -2,6 +2,7 @@
 // 时机：物品落地那一刻——掉落音剪口 svc #0x88（dm_dropfilter.c，原版落地调用点 0x468f2c，物品模式 5）每落一件调 dm_drop_haptic_land。
 //   怪物 / 宝箱掉出来的都算掉落；捡起、交易、魔盒不落地，不会走到这里；玩家从手上扔到地上（包 0x17）也不经这个调用点（Mac 上的 iOS 包实测：扔 Ber 没有触发）。
 // 前端（front_ios.m）每帧 dm_drop_haptic_take() 取走待震的最高一档：1 重 / 2 中 / 3 轻 → UIImpactFeedbackGenerator Heavy / Medium / Light。
+// 安卓（#289）：touch_android.c dm_android_touch_step 每帧取档，经 text_input_jni.c 的工作线程交给 DmActivity.dropHaptic；三档一律用系统预设的重击（一加 13 上较轻的两种几乎感觉不到）。
 //
 // 名单（k_rules，按档从重到轻，命中第一条即定档；改名单只改这张表）。来源：
 //   · 社群过滤器：GitHub n0130dykn0ws/n0130dy-d2r-loot-filter（v1.5，D2R 3.x 原版过滤器 JSON）——它的「常显」类：全部符文与钥匙 / 精华、暗金、套装、护身符、珠宝、
@@ -13,6 +14,7 @@
 // Timing: the moment the item lands -- the drop sound cut svc #0x88 (dm_dropfilter.c, the original game's landing call site 0x468f2c, item mode 5) calls dm_drop_haptic_land for every item that lands.
 //   Anything dropped by monsters / chests counts as a drop; picking up, trading and the Horadric Cube do not land and never get here; the player throwing an item from hand onto the ground (packet 0x17) does not go through this call site either (measured with the iOS app on Mac: throwing Ber did not trigger it).
 // The front end (front_ios.m) calls dm_drop_haptic_take() every frame to take the highest pending tier: 1 heavy / 2 medium / 3 light -> UIImpactFeedbackGenerator Heavy / Medium / Light.
+// Android (#289): touch_android.c dm_android_touch_step takes the tier every frame and the worker thread of text_input_jni.c hands it to DmActivity.dropHaptic; every tier uses the system's predefined heavy click (on a OnePlus 13 the two lighter ones are barely noticeable).
 // List (k_rules, ordered by tier from heavy to light, the first matching rule sets the tier; to change the list change only this table). Sources:
 //   - Community filter: GitHub n0130dykn0ws/n0130dy-d2r-loot-filter (v1.5, original-game filter JSON for D2R 3.x) -- its 'always show' classes: all runes and keys / essences, uniques, sets, charms, jewels,
 //     rare rings and amulets, elite socketed bases; it only distinguishes show / hide, not how valuable
