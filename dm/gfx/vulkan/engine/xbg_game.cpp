@@ -4233,8 +4233,8 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
     VkCommandPoolCreateInfo cp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};cp.queueFamilyIndex=cfg.queue_family;cp.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;VkResult r=vkCreateCommandPool(cfg.device,&cp,nullptr,&command_pool);if(r!=VK_SUCCESS){if(error&&bytes)snprintf(error,bytes,"vkCreateCommandPool=%d",r);return r;}
     VkPipelineCacheCreateInfo cache{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};std::vector<uint8_t> cache_data=load_pipeline_cache();cache.initialDataSize=cache_data.size();cache.pInitialData=cache_data.empty()?nullptr:cache_data.data();r=vkCreatePipelineCache(cfg.device,&cache,nullptr,&pipeline_cache);if(r!=VK_SUCCESS){vkDestroyCommandPool(cfg.device,command_pool,nullptr);command_pool=VK_NULL_HANDLE;if(error&&bytes)snprintf(error,bytes,"vkCreatePipelineCache=%d",r);return r;}
     {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');std::string base=cut==std::string::npos?dir:dir.substr(0,cut);
-     const bool rewrites_fault=xbg_adreno_rewrites_fault(properties.vendorID,properties.deviceName);
-     if(rewrites_fault)xbg_logf("NVN Adreno 740/750 (device \"%s\"): the quad-derivative and warp32 rewrites default off; a marker file still turns either on",properties.deviceName);
+     const bool rewrites_fault=xbg_adreno_rewrites_fault(properties.vendorID,properties.deviceName,properties.deviceID);
+     if(rewrites_fault)xbg_logf("NVN Adreno 720 / 740-799 (device \"%s\" id=%#x): the quad-derivative and warp32 rewrites default off; a marker file still turns either on",properties.deviceName,properties.deviceID);
      auto sw=[&](const char *marker,const char *env){FILE *q=fopen((base+marker).c_str(),"rb");const bool present=q!=nullptr;int c=-1;if(q){c=fgetc(q);fclose(q);}return xbg_adreno_rewrite_option(present,c,getenv(env),rewrites_fault);};
      quad_derivatives=sw("/gfx-quad-derivatives","DM_GFX_QUAD_DERIVATIVES");
      {bool pretend=false;FILE *q=fopen((base+"/gfx-no-fragment-subgroups").c_str(),"rb");if(q){pretend=fgetc(q)!='0';fclose(q);}else if(const char *e=getenv("DM_GFX_NO_FRAGMENT_SUBGROUPS"))pretend=atoi(e)!=0;
@@ -4244,13 +4244,13 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
      warp32=sw("/gfx-warp32","DM_GFX_WARP32");
      xbg_logf("NVN quad shuffles to fine derivatives=%d (marker gfx-quad-derivatives)",int(quad_derivatives));
      xbg_logf("NVN 32-lane warps in wider subgroups=%d subgroup=%u (marker gfx-warp32)",int(warp32),subgroup.subgroupSize);
-     {FILE *q=fopen((base+"/gfx-inline").c_str(),"rb");if(q){inline_helpers=fgetc(q)!='0';fclose(q);}else inline_helpers=xbg_adreno_compiler_needs_inline(properties.vendorID,properties.deviceName);
+     {FILE *q=fopen((base+"/gfx-inline").c_str(),"rb");if(q){inline_helpers=fgetc(q)!='0';fclose(q);}else inline_helpers=xbg_adreno_compiler_needs_inline(properties.vendorID,properties.deviceName,properties.deviceID);
 #ifndef XBG_HAVE_SPIRV_OPT
       if(inline_helpers)xbg_logf("NVN helper inlining is not built into this package; shaders load as they are");inline_helpers=false;
 #endif
       xbg_logf("NVN shaders with subgroup helpers are inlined at load=%d (marker gfx-inline)",int(inline_helpers));}
      {FILE *q=fopen((base+"/gfx-dispatch-guard").c_str(),"rb");const bool present=q!=nullptr;int c=-1;if(q){c=fgetc(q);fclose(q);}
-      dispatch_guard=xbg_adreno_dispatch_guard_option(present,c,getenv("DM_GFX_DISPATCH_GUARD"),xbg_adreno_dispatch_overruns(properties.vendorID,properties.deviceName));
+      dispatch_guard=xbg_adreno_dispatch_guard_option(present,c,getenv("DM_GFX_DISPATCH_GUARD"),xbg_adreno_dispatch_overruns(properties.vendorID,properties.deviceName,properties.deviceID));
       xbg_logf("NVN compute shaders return at once outside the dispatched range=%d (marker gfx-dispatch-guard)",int(dispatch_guard));}}
     {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');std::string base=cut==std::string::npos?dir:dir.substr(0,cut);
      auto dm=[&](const char *marker,const char *env){FILE *q=fopen((base+marker).c_str(),"rb");bool on=false;if(q){on=fgetc(q)!='0';fclose(q);}else if(const char *e=getenv(env))on=atoi(e)!=0;return on;};

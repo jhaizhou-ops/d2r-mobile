@@ -27,12 +27,40 @@ inline int xbg_adreno_model(const char *device_name){
     return digits==3?model:0;
 }
 
-// 厂商 0x5143 是高通；只有 740–799 这一族缺省关掉这两个改写。
-// Vendor 0x5143 is Qualcomm; only the 740-799 family defaults both rewrites off.
-inline bool xbg_adreno_rewrites_fault(uint32_t vendor_id,const char *device_name){
-    if(vendor_id!=0x5143)return false;
+// 有的机器设备名里没有三位型号（#298：Retroid Pocket G2 报 "Adreno (TM) 22"，设备号却是 0x43030b00，与 735 相同，崩溃也与 #169
+// 的 735 一模一样）。这时按设备号认：表里只放各问题报告里实际见过的设备号。设备名认得出来时永远以名字为准。
+// Some devices carry no three-digit model in the name (#298: the Retroid Pocket G2 reports "Adreno (TM) 22" with device ID
+// 0x43030b00, the same as the 735, and crashes exactly as the 735 in #169 does). Then the device ID decides; the table holds only
+// IDs actually seen in the issue reports. A name that parses always wins.
+inline int xbg_adreno_model_by_id(uint32_t device_id){
+    switch(device_id){
+    case 0x06050002u: return 650;
+    case 0x06060001u: return 660;
+    case 0x07030002u: return 730;
+    case 0x43020000u: return 720;
+    case 0x43030b00u: return 735;
+    case 0x43051401u: return 750;
+    case 0x44050001u: return 830;
+    default: return 0;
+    }
+}
+inline int xbg_adreno_model_of(const char *device_name,uint32_t device_id){
     const int model=xbg_adreno_model(device_name);
-    return model>=740 && model<800;
+    return model?model:xbg_adreno_model_by_id(device_id);
+}
+
+// 厂商 0x5143 是高通；740–799 这一族和 Adreno 720 缺省关掉这两个改写。720（骁龙 7 Gen 3，设备号 0x43020000）与 735、750
+// 是同一代芯片（设备号最高字节都是 0x43），跑这两个改写时主菜单第一帧就 VK_ERROR_DEVICE_LOST（#263），与 740 当初（#141）
+// 一样。同一代的 735 开着这两个改写、加上内联后能正常玩（#169），所以只加 720，不按设备号整代关掉。
+// Vendor 0x5143 is Qualcomm; the 740-799 family and the Adreno 720 default both rewrites off. The 720 (Snapdragon 7 Gen 3,
+// device ID 0x43020000) is the same chip generation as the 735 and 750 (0x43 in the top byte of the device ID), and with these
+// rewrites it hits VK_ERROR_DEVICE_LOST on the main menu's first frame (#263), as the 740 did (#141). The 735 of the same
+// generation runs fine with both rewrites on once its helpers are inlined (#169), so only the 720 is added rather than the
+// whole generation by device ID.
+inline bool xbg_adreno_rewrites_fault(uint32_t vendor_id,const char *device_name,uint32_t device_id=0){
+    if(vendor_id!=0x5143)return false;
+    const int model=xbg_adreno_model_of(device_name,device_id);
+    return (model>=740 && model<800) || model==720;
 }
 
 // 与其它 gfx 开关相同的优先顺序：标记文件优先（只有明确的 0 关闭），其次是机型判断，最后才看环境变量。安卓端
@@ -53,10 +81,15 @@ inline bool xbg_adreno_rewrite_option(bool marker_present,int marker,const char 
 // whose subgroup instructions sit in a called helper function (addr=0x48; #123, #153, #166 and one private report: four
 // Samsung and Xiaomi phones). On this family the engine inlines the helpers into the entry point when it loads such a shader
 // (the import pack is unchanged); the marker file gfx-inline turns it on or off explicitly (1 / 0).
-inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *device_name){
+// 骁龙 8s Gen 3 的 Adreno 735 是 750 那一代（设备号 0x43030b00），编译器同样在 098a126f92bf533a 上段错误（addr=0x48，#169：
+// 报告者把内联放宽到 735 后能玩），所以 735 也内联。
+// The Snapdragon 8s Gen 3's Adreno 735 is the 750's generation (device ID 0x43030b00), and its compiler segfaults on
+// 098a126f92bf533a in the same way (addr=0x48, #169: the reporter extended the inlining to the 735 and the game ran), so the
+// 735 is inlined too.
+inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *device_name,uint32_t device_id=0){
     if(vendor_id!=0x5143)return false;
-    const int model=xbg_adreno_model(device_name);
-    return model>=750 && model<800;
+    const int model=xbg_adreno_model_of(device_name,device_id);
+    return model==735 || (model>=750 && model<800);
 }
 
 // Adreno 8xx：计算派发会多跑范围之外的调用（#256：830 上局部尺寸 8×4×1、y 方向工作组数为奇数时多一行工作组；#261 的 825 症状
@@ -65,9 +98,9 @@ inline bool xbg_adreno_compiler_needs_inline(uint32_t vendor_id,const char *devi
 // local size 8x4x1 and an odd y group count; the 825 in #261 shows the same symptom), so compute shaders get the dispatch-range
 // check at their entry when they load (xbg_spirv_dispatch.cpp). The marker file gfx-dispatch-guard turns it on or off
 // explicitly (1 / 0).
-inline bool xbg_adreno_dispatch_overruns(uint32_t vendor_id,const char *device_name){
+inline bool xbg_adreno_dispatch_overruns(uint32_t vendor_id,const char *device_name,uint32_t device_id=0){
     if(vendor_id!=0x5143)return false;
-    const int model=xbg_adreno_model(device_name);
+    const int model=xbg_adreno_model_of(device_name,device_id);
     return model>=800 && model<900;
 }
 

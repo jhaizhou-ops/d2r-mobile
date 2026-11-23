@@ -23,6 +23,24 @@ int main(){
     CHECK(xbg_adreno_model("Adreno 7400")==0);
     CHECK(xbg_adreno_model("Mali-G715")==0);
 
+    // 设备名认不出型号时按设备号（#298：Retroid Pocket G2 报 "Adreno (TM) 22"，设备号同 735）；认得出名字时名字为准。
+    // When the name gives no model, the device ID decides (#298: the Retroid Pocket G2 reports "Adreno (TM) 22" with the 735's
+    // device ID); a name that parses always wins.
+    CHECK(xbg_adreno_model_by_id(0x43030b00)==735);
+    CHECK(xbg_adreno_model_by_id(0x43020000)==720);
+    CHECK(xbg_adreno_model_by_id(0x12345678)==0);
+    CHECK(xbg_adreno_model_of("Adreno (TM) 22",0x43030b00)==735);
+    CHECK(xbg_adreno_model_of("Adreno (TM) 22",0x12345678)==0);
+    CHECK(xbg_adreno_model_of("Adreno (TM) 730",0x43030b00)==730);
+    CHECK(xbg_adreno_model_of(nullptr,0x43051401)==750);
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 22",0x43030b00));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 22",0x43030b00));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 22",0x12345678));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 22"));
+    CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 22",0x43020000));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x1234,"Adreno (TM) 22",0x43030b00));
+    CHECK(xbg_adreno_dispatch_overruns(0x5143,"Adreno (TM) 8",0x44050001));
+
     // 只有高通 740–799 这一族缺省关掉两个改写。
     // Only Qualcomm's 740-799 family defaults both rewrites off.
     CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 740"));
@@ -41,8 +59,17 @@ int main(){
     CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 750"));
     CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno 799"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 740"));
-    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 735"));
+    CHECK(xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 735"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 730"));
+
+    // Adreno 720 也缺省关掉两个改写（#263）；同一代的 735 不关（#169 开着能玩），只内联。
+    // The Adreno 720 also defaults both rewrites off (#263); the 735 of the same generation does not (it ran fine with them on in
+    // #169), it is only inlined.
+    CHECK(xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 720"));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 725"));
+    CHECK(!xbg_adreno_rewrites_fault(0x5143,"Adreno (TM) 732"));
+    CHECK(!xbg_adreno_rewrites_fault(0x13b5,"Mali-G720"));
+    CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 720"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,"Adreno (TM) 830"));
     CHECK(!xbg_adreno_compiler_needs_inline(0x5143,nullptr));
     CHECK(!xbg_adreno_compiler_needs_inline(0x10002,"Adreno 750"));
@@ -91,6 +118,6 @@ int main(){
     CHECK(!xbg_adreno_dispatch_guard_option(false,-1,nullptr,false));
 
     if(failures){printf("FAIL %d check(s)\n",failures);return 1;}
-    printf("PASS Adreno policy: 740/750 default off, 750-799 inline helpers, 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
+    printf("PASS Adreno policy: 720 and 740-799 default off, 735 and 750-799 inline helpers, 8xx dispatch guard, other vendors unchanged, marker file still wins\n");
     return 0;
 }
