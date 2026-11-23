@@ -33,8 +33,9 @@ The S2Arm launcher brings its own runtime, and nothing extra is installed on the
 | Dependency | What S2Arm ships now | Notes |
 |---|---|---|
 | Python | 3.12 with `capstone`, `lz4`, `numpy`, `Pillow` | No other third-party package in the packing path (`unicorn` is for the test and verification scripts only). Checked by `dm/tools/tests/test_s2arm_deps.py` |
-| spirv-cross | the Homebrew version at S2Arm's release (now 1.4.363.0) | The shell carries the shader source digest, and a mismatch stops with an explanation. If S2Arm moves to a spirv-cross whose output changes the digest, rebuild the shell with that version |
-| .NET | runtime only, no SDK | Hence the prebuilt `dmsh_xlate` in the shell; `DM_XLATE_PREBUILT=<dir>` also works |
+| spirv-cross | not S2Arm's | The shell carries its own build of upstream vulkan-sdk-1.4.363.0 as is (Tools/spirv-cross/macos-arm64, win-x64); `d2rm_pack.py` uses it first and falls back to PATH. The shell also carries the shader source digest, and a mismatch stops with an explanation |
+| .NET | not needed | The shell carries `dmsh_xlate` prebuilt with NativeAOT (one for Mac, one for Windows; single files, no .NET runtime needed); `DM_XLATE_PREBUILT=<dir>` also works |
+| C compiler | not needed | The texture deswizzle library used for the interface art is prebuilt in the shell for Mac and Windows |
 | Apple's Metal shader compiler | in Xcode (S2Arm's Mac launcher requires Xcode) | Without it the shaders go into the package as source and are compiled on the phone at first launch |
 
 ## 4. How the game resources reach the phone
@@ -57,11 +58,11 @@ The wording of the log lines is part of the contract; S2Arm reads progress, comp
 
 ## 6. The extra release step
 
-1. Build the iOS shell: `dm/ios/tools/shell_build.sh ios`, on a machine whose spirv-cross matches the one S2Arm ships.
+1. Build the iOS shell: `dm/ios/tools/shell_build.sh ios`, giving `DM_XLATE_WIN_AOT` (the dir of the translator built with NativeAOT on Windows) and `DM_SPIRV_CROSS_DIR` (holding macos-arm64/spirv-cross and win-x64/spirv-cross.exe, both built as is from the upstream vulkan-sdk tag); see the notes in shell_build.sh.
 2. `python3 dm/tools/s2arm_bundle.py <shell zip> D2RMobile-s2arm-bundle.zip <tag>`.
 3. Attach the bundle to the release and upload it to s2arm.com.
 4. Open a merge in S2Arm updating the registry entry (tag, commit, URL, SHA-256).
 
 ## 7. Not connected yet
 
-The older-API shell for iOS 18 – 25 (the bundle carries only the iOS 26 shell for now), Android (`d2rm_android.py` + APK), HarmonyOS, the native Mac version and S2Arm on Windows are not connected yet; players follow the README sections for those.
+The older-API shell for iOS 18 – 25 (the bundle carries only the iOS 26 shell for now), Android (`d2rm_android.py` + APK), HarmonyOS and the native Mac version are not connected yet; players follow the README sections for those.

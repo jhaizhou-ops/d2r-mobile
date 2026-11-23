@@ -41,7 +41,14 @@ def tools_now():
     """实际工具指纹：翻译器 dll（含 Ryujinx 着色器库）、spirv-cross、metal 编译器（macOS / iOS） | Actual tool fingerprints: translator dll (including the Ryujinx shader library), spirv-cross, metal compiler (macOS / iOS)"""
     t = {}
     for dll in ('dmsh_xlate.dll', 'Ryujinx.Graphics.Shader.dll', 'Ryujinx.Common.dll'): t[dll] = sha16(os.path.join(XLATE_DIR, dll))
-    t['xlate_source'] = subprocess.run([os.path.join(XLATE_DIR, 'dmsh_xlate'), '--source-sha'], capture_output=True, text=True).stdout.strip()
+    # 翻译器跑不起来（例如旧的框架依赖版找不到 .NET，#299）时记成以 ? 开头的原因，报错里与「不是用仓内源编的」分开
+    # When the translator does not run (for example an old framework-dependent build that cannot find .NET, #299), record a reason
+    # starting with ?, so the report keeps it apart from "not built from the repository's source"
+    try:
+        r = subprocess.run([os.path.join(XLATE_DIR, 'dmsh_xlate'), '--source-sha'], capture_output=True, text=True)
+        t['xlate_source'] = r.stdout.strip() or '?退出码 %d：%s' % (r.returncode, (r.stderr.strip().splitlines() or ['没有输出'])[0][:160])
+    except OSError as e:
+        t['xlate_source'] = '?起不来：%s' % e
     sc = subprocess.run(['which', 'spirv-cross'], capture_output=True, text=True).stdout.strip()
     t['spirv-cross'] = sha16(sc) if sc else 'missing'
     for sdk in ('macosx', 'iphoneos'):
@@ -52,17 +59,25 @@ def tools_now():
 def xlate_source_sha():   # 与 dmsh_xlate --source-sha 同口径：嵌入的 Program.cs 与 csproj 依次拼接 | same convention as dmsh_xlate --source-sha: the embedded Program.cs and csproj concatenated in that order
     return hashlib.sha256(b''.join(open(os.path.join(HERE, 'dmsh_xlate', f), 'rb').read() for f in ('Program.cs', 'dmsh_xlate.csproj'))).hexdigest()[:16]
 
+def xlate_problem(src):
+    """翻译器嵌入源对不上时的说法：没跑起来与不是用仓内源编的是两回事，方向不同（#299：前者曾被报成后者）
+    | What to say when the translator's embedded source does not match: not running and not built from the repository's source are
+    different problems with different fixes (#299: the first used to be reported as the second)"""
+    if src.startswith('?'):
+        return f'翻译器没跑起来（{src[1:]}）：多半是旧壳留下的框架依赖版找不到 .NET；删掉 {XLATE_DIR} 再做包（会换成壳里预编的），或重编 dmsh_xlate'
+    return f'翻译器不是用仓内源编的（嵌入 {src} / 仓内 {xlate_source_sha()}）：先重编 dmsh_xlate'
+
 def check_tools():
     want = dict(l.rstrip('\n').split('\t', 1) for l in open(LOCK) if '\t' in l and not l.startswith('#'))
     now = tools_now(); bad = [f'{k}：锁 {want.get(k)} / 实际 {v}' for k, v in now.items() if want.get(k) != v]
-    if now['xlate_source'] != xlate_source_sha(): bad.append(f'翻译器不是用仓内源编的：嵌入源 {now["xlate_source"]} / 仓内 {xlate_source_sha()}（重编 dmsh_xlate）')
+    if now['xlate_source'] != xlate_source_sha(): bad.append(xlate_problem(now['xlate_source']))
     return bad
 
 if __name__ == '__main__':
     a = sys.argv[1:]
     if a == ['--update-lock']:
         t = tools_now()
-        if t['xlate_source'] != xlate_source_sha(): sys.exit(f'【红】翻译器不是用仓内源编的（嵌入 {t["xlate_source"]} / 仓内 {xlate_source_sha()}）：先重编 dmsh_xlate')
+        if t['xlate_source'] != xlate_source_sha(): sys.exit('【红】' + xlate_problem(t['xlate_source']))
         open(LOCK, 'w').write('# 翻译链工具指纹（dmsh_chain.py --update-lock 生成；换工具后重生成并随提交入仓）\n' + ''.join(f'{k}\t{v}\n' for k, v in t.items()))
         print('已写', LOCK)
     elif a == ['--check-tools']:

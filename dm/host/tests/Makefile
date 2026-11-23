@@ -65,6 +65,7 @@ run: \
 	python3 ../../ios/tools/dm_i18n.py --check
 	python3 ../../i18n/scan_literals.py
 	python3 ../../tools/tests/test_warm_seed.py
+	python3 ../../tools/tests/test_patched_ready.py
 	$(B)/t_thread_leak
 	$(B)/t_loader_weak
 	$(B)/t_mac_overlay

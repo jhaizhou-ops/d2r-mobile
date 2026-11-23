@@ -32,6 +32,10 @@ void front_android_view_rect(int win_w, int win_h, int out[4]);
    shows the system share sheet. It only queues the request and does not wait (the worker thread in text_input_jni.c calls Java);
    callable on the game main thread. */
 void front_android_share_log(const char *log_path);
+/* 高价值掉落震动（#289）：档位 1 重 / 2 中 / 3 轻（dm_drophaptic.c）交给 Java（DmActivity.dropHaptic）去震。只入队、不等；游戏线程每帧可调。
+   Valuable-drop vibration (#289): hands tier 1 heavy / 2 medium / 3 light (dm_drophaptic.c) to Java (DmActivity.dropHaptic) to vibrate.
+   It only queues the request and does not wait; callable on the game thread every frame. */
+void front_android_drop_haptic(int tier);
 #ifdef __cplusplus
 }
 #endif

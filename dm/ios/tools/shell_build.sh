@@ -111,11 +111,33 @@ for d, _, fs in os.walk(app):
 print('内容核对：%d 个特征串（另有 %d 个是源码里本来就有的，不算）× %d 个文件，命中 %d 个文件' % (len(needles), len(own), sum(len(fs) for _, _, fs in os.walk(app)), bad)); sys.exit(1 if bad else 0)
 PYEOF
 ( cd "$A" && find . -type f | sort | while read -r f; do printf '%s\t%s\n' "$(stat -f %z "$f")" "$f"; done ) > "$O/shell_files.tsv"
-# 预编的着色器翻译工具随壳走（壳 zip 顶层 Tools/dmsh_xlate/，d2rm_pack.py 取出来用、不放进安装包）：没有 .NET SDK、只有 .NET 运行时的机器（S2Arm 启动器）也能做包。
-#   不带调试符号、源码路径映射成 /_/，下面照样核不含本机路径
-# The prebuilt shader translator ships with the shell (top-level Tools/dmsh_xlate/ of the shell zip; d2rm_pack.py takes it out and uses it, it does not go into the install package): machines with only the .NET runtime and no SDK (the S2Arm launcher) can pack too.
-#   No debug symbols, source paths mapped to /_/; checked below for local paths like everything else
-rm -rf "$O/Tools" && dotnet publish ../gfx/tools/dmsh_xlate -c Release -o "$O/Tools/dmsh_xlate" -v quiet -p:DebugType=none -p:DebugSymbols=false "-p:PathMap=$(cd ../.. && pwd)=/_/" || die "预编着色器翻译工具失败"
-leak=$(LC_ALL=C grep -raoE -- "/Users/[A-Za-z0-9._-]+|$HOME" "$O/Tools" | head -3); [ -z "$leak" ] || die "预编的翻译工具里带着本机路径：$leak"
+# 预编的着色器翻译工具随壳走（壳 zip 顶层 Tools/dmsh_xlate/<平台>/，d2rm_pack.py 按本机平台取一份用、不放进安装包）：
+#   NativeAOT 单文件，做包的机器上不需要 .NET（SDK、运行时都不要）。macos-arm64 在这台 Mac 上出；win-x64 只能在 Windows 上出（NativeAOT 不能跨系统），
+#   由 DM_XLATE_WIN_AOT=<目录> 给出那里出好的 dmsh_xlate.exe（出法：在 Windows 上 dotnet publish dm/gfx/tools/dmsh_xlate -c Release -r win-x64 -p:PublishAot=true -o <目录>）。
+#   两份都要报出同一个源码指纹（--source-sha）；不带调试符号、源码路径映射成 /_/，下面照样核不含本机路径
+# The prebuilt shader translator ships with the shell (top-level Tools/dmsh_xlate/<platform>/ of the shell zip; d2rm_pack.py takes the one for its platform, it does not go into the install package):
+#   a NativeAOT single file, so the packing machine needs no .NET (neither SDK nor runtime). macos-arm64 is built on this Mac; win-x64 can only be built on Windows (NativeAOT does not cross operating systems),
+#   and DM_XLATE_WIN_AOT=<dir> points at the dmsh_xlate.exe built there (how: on Windows, dotnet publish dm/gfx/tools/dmsh_xlate -c Release -r win-x64 -p:PublishAot=true -o <dir>).
+#   Both must report the same source fingerprint (--source-sha); no debug symbols, source paths mapped to /_/; checked below for local paths like everything else
+rm -rf "$O/Tools" && dotnet publish ../gfx/tools/dmsh_xlate -c Release -r osx-arm64 -p:PublishAot=true -p:StripSymbols=true -o "$O/Tools/dmsh_xlate/macos-arm64" -v quiet \
+  -p:DebugType=none -p:DebugSymbols=false "-p:PathMap=$(cd ../.. && pwd)=/_/" && rm -rf "$O/Tools/dmsh_xlate/macos-arm64/"*.dSYM || die "预编着色器翻译工具（macos-arm64）失败"
+XS=$("$O/Tools/dmsh_xlate/macos-arm64/dmsh_xlate" --source-sha) || die "预编的翻译工具起不来"
+WX=${DM_XLATE_WIN_AOT:?要 DM_XLATE_WIN_AOT=<Windows 上出好的 NativeAOT 翻译工具目录>（见上面的说明） | needs DM_XLATE_WIN_AOT=<dir of the NativeAOT translator built on Windows> (see above)}
+[ "$(head -c 2 "$WX/dmsh_xlate.exe")" = MZ ] || die "$WX/dmsh_xlate.exe 不是 Windows 程序"
+mkdir -p "$O/Tools/dmsh_xlate/win-x64" && cp "$WX/dmsh_xlate.exe" "$O/Tools/dmsh_xlate/win-x64/" || die "放不进 Windows 版翻译工具"
+[ -z "${DM_XLATE_WIN_SHA:-}" ] || [ "$DM_XLATE_WIN_SHA" = "$XS" ] || die "Windows 版翻译工具的源码指纹 $DM_XLATE_WIN_SHA 和本机这份 $XS 不同：两边不是同一份源码"
+# 贴图解排布库（界面素材脚本用）也随壳预编：做包的机器上不用 C 编译器 | The texture deswizzle library (used by the interface-art scripts) is prebuilt with the shell too: no C compiler on the packing machine
+bash ../tools/deswizzle_build.sh "$O/Tools/deswizzle" || die "预编贴图解排布库失败"
+# spirv-cross 也随壳走（壳 zip 顶层 Tools/spirv-cross/<平台>/，d2rm_pack.py 优先用它）：做包的机器上不用另装，版本也和出壳时一致。
+#   由 DM_SPIRV_CROSS_DIR=<目录> 给出 macos-arm64/spirv-cross 与 win-x64/spirv-cross.exe：都用上游 vulkan-sdk-<版本> 标签源码原样编（CLI 静态链 spirv-cross 库；
+#   Windows 用 MSVC 静态 C 运行库 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded，只依赖系统 KERNEL32）。不要用 S2Arm 随包的那份：S2Arm 改过源码，翻出的着色器不同
+# spirv-cross ships with the shell too (top-level Tools/spirv-cross/<platform>/ of the shell zip; d2rm_pack.py prefers it): nothing to install on the packing machine, and the version matches the one the shell was built with.
+#   DM_SPIRV_CROSS_DIR=<dir> provides macos-arm64/spirv-cross and win-x64/spirv-cross.exe, both built as is from the upstream vulkan-sdk-<version> tag source (CLI statically linked;
+#   on Windows with the static MSVC C runtime, -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded, depending only on the system KERNEL32). Do not use the copy bundled with S2Arm: S2Arm modified the source and it translates differently
+SC=${DM_SPIRV_CROSS_DIR:?要 DM_SPIRV_CROSS_DIR=<放 macos-arm64/spirv-cross 与 win-x64/spirv-cross.exe 的目录>（见上面的说明） | needs DM_SPIRV_CROSS_DIR (see above)}
+[ "$(head -c 2 "$SC/win-x64/spirv-cross.exe")" = MZ ] || die "$SC/win-x64/spirv-cross.exe 不是 Windows 程序"
+"$SC/macos-arm64/spirv-cross" --help > /dev/null 2>&1; [ $? -le 1 ] && file "$SC/macos-arm64/spirv-cross" | grep -q "Mach-O.*arm64" || die "$SC/macos-arm64/spirv-cross 不是能跑的 macOS arm64 程序"
+mkdir -p "$O/Tools/spirv-cross/macos-arm64" "$O/Tools/spirv-cross/win-x64" && cp "$SC/macos-arm64/spirv-cross" "$O/Tools/spirv-cross/macos-arm64/" && cp "$SC/win-x64/spirv-cross.exe" "$O/Tools/spirv-cross/win-x64/" || die "放不进 spirv-cross"
+leak=$(LC_ALL=C grep -raoE -- "/Users/[A-Za-z0-9._-]+|$HOME" "$O/Tools" | head -3); [ -z "$leak" ] || die "预编的工具里带着本机路径：$leak"
 ( cd "$O" && rm -rf Payload && mkdir Payload && cp -R app Payload/DmIOS.app && zip -qry D2RMobile-shell-build-input.zip Payload Tools && rm -rf Payload ) || die "打包失败"
 t "壳：$O/D2RMobile-shell-build-input.zip（$(du -h "$O/D2RMobile-shell-build-input.zip" | cut -f1)，$(wc -l < "$O/shell_files.tsv" | tr -d ' ') 个文件）；缺的内容 $(wc -l < "$O/shell_manifest.txt" | tr -d ' ') 项，清单 $O/shell_manifest.txt"
