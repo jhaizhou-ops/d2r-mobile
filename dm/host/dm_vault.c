@@ -141,6 +141,49 @@ static void vault_desc(uint8_t *b, uint64_t G, uint64_t player, uint32_t req) {
 }
 int dm_vault_has(int kind, int idx) { pthread_mutex_lock(&g_vmu); int r = g_loaded && vfind(kind, idx) >= 0; pthread_mutex_unlock(&g_vmu); return r; }   // 界面读（游戏主线程）：这一格存着没有 | UI read (game main thread): whether this cell holds a stored item
 
+// ---- 编年史比较（新件 vs 存着的那件）：请求 / 结果都走原子量，建物品和释放全在服务端拍里 ----
+// 主线程（存放流程 dm_pouch.c）只发请求、等结果；**绝不在主线程建 / 删服务端物品**（review 意见：
+// 主线程调 dm_item_make / 0x658be0 会和服务端线程抢物品分配器，偶发崩溃或数据损坏）。
+// ---- Chronicle comparison (new item vs the stored one): request / result go through atomics, and both
+// building and freeing the temporary item happen in the server tick ----
+// The main thread (the deposit flow in dm_pouch.c) only sends a request and waits for the result; it never
+// creates or frees a server item (review: doing that on the main thread races the server thread's item
+// allocator, which can crash or corrupt state now and then).
+static _Atomic uint32_t g_cmp_req, g_cmp_newid, g_cmp_doneid; static _Atomic int g_cmp_ready, g_cmp_diff;   // doneid: which new item this result belongs to (a timeout followed by another item must not mix them up)
+void dm_vault_request_compare(int kind, int idx, uint32_t new_item_id) {
+    atomic_store(&g_cmp_ready, 0); atomic_store(&g_cmp_newid, new_item_id);
+    atomic_store(&g_cmp_req, 1u << 24 | (uint32_t)(kind & 0xff) << 16 | (uint32_t)(idx & 0xffff)); }
+int dm_vault_take_compare(uint32_t new_item_id, int *diff) {   // 1 = 有结果（*diff > 0 新的好；比不了也回 1、*diff = 0） | 1 = result ready (*diff > 0 = new is better; also 1 when it could not compare, *diff = 0)
+    if (atomic_load(&g_cmp_doneid) != new_item_id || !atomic_load(&g_cmp_ready)) return 0;   // the result must belong to this very item
+    if (diff) *diff = atomic_load(&g_cmp_diff);
+    atomic_store(&g_cmp_ready, 0); atomic_store(&g_cmp_doneid, 0); return 1; }
+static int cmp_skip_stat(int sid) { return sid >= 70 && sid <= 73; }   // 数量 / 当前与最大耐久：使用状态，不是好坏 | quantity / current and max durability: usage state, not quality
+static int cmp_fixed_stat(int sid) { return sid >= 6 && sid <= 11; }   // 生命 / 法力 / 耐力：内部按 1/256 存，直接相加会压过所有词条 | life / mana / stamina live in 1/256 units; summing raw values swamps every other affix
+static int item_score(uint8_t *b, uint64_t it) {   // 遍历物品自己的 stat 表：每项是 (statId<<16 | layer, 值)。0x5b9290 的第三个参数是 stat 的参数本身（不是 0-2 的层号），带参数的词条全在 layer 上：+N 某技能（stat 107，layer = 技能号）、按职业 +技能（stat 83，layer = 职业号 0-6），所以只能按物品自己的表逐对读
+// Walk the item stat list: each entry is (statId<<16 | layer, value). The third argument of 0x5b9290 is the param of the stat itself, not a layer index 0-2, and parameterised affixes live on that layer (+N to a skill = stat 107 with layer = skill id; class skill bonus = stat 83 with layer = class 0-6), so they can only be read pair by pair from the item table
+    (void)b;
+    uint64_t sl = *(uint64_t *)(it + 0x88); if (!sl) return 0;
+    uint64_t sb = *(uint64_t *)(sl + 0x30); uint32_t sc = *(uint32_t *)(sl + 0x38);
+    if (!sb || sc > 512) return 0;
+    int score = 0;
+    for (uint32_t i = 0; i < sc; i++) {
+        uint32_t key = *(uint32_t *)(sb + 8 * i); int32_t val = *(int32_t *)(sb + 8 * i + 4);
+        int sid = (int)(key >> 16);
+        if (sid <= 0 || cmp_skip_stat(sid)) continue;
+        score += cmp_fixed_stat(sid) ? val / 256 : val; }
+    return score; }
+static void vault_compare(uint8_t *b, uint64_t G, uint32_t newid, int kind, int idx) {   // 调用方已持 g_vmu | the caller already holds g_vmu
+    uint8_t bits[VBYTES]; int len = 0;
+    int i = vfind(kind, idx);
+    if (i >= 0 && g_v[i].len > 0 && (int)g_v[i].len <= (int)sizeof bits) { memcpy(bits, g_v[i].data, g_v[i].len); len = (int)g_v[i].len; }
+    uint64_t old_it = len > 0 ? dm_item_make(b, G, 0, bits, len, NULL) : 0;   // 重建旧件（不进任何物品栏） | rebuild the old item (into no container)
+    uint64_t new_it = dm_diag_srv_item(newid);
+    int diff = 0, ok = old_it && new_it;
+    if (ok) diff = item_score(b, new_it) - item_score(b, old_it);
+    if (old_it) ((void (*)(uint64_t, uint64_t))(b + 0x658be0))(G, old_it);   // 释放临时物品 | free the temporary item
+    LOG("编年史比较（服务端拍）：%s，差值 %d（>0 新的好）", ok ? "完成" : "【红】拿不到物品，按不替换", diff);
+    atomic_store(&g_cmp_diff, ok ? diff : 0); atomic_store(&g_cmp_doneid, newid); atomic_store(&g_cmp_ready, 1); }
+
 // 任务物品（王者之杖、卡林的连枷、毒蛇护身符……）：游戏自己的物品表记录（步长 0x1c0，[版本表+0x15c0]，下标 [物品+4]，同 dm_cursor_item.c）+0x13a = weapons / armor / misc.txt 的 quest 列。
 // 宿主实测：只有 0x13a 一处同时对上 msf 10 / hst 10 / hfh 25 / qf1 17 / qf2 17 / vip 10 / rin 0，全表非 0 的 26 条与原版表逐条一致。
 // 存进编年史会卡任务进度：存放与手动存入都不收；已经存进去的照常能取出
@@ -245,6 +288,8 @@ void dm_vault_tick(uint64_t G, uint64_t player, uint8_t *b) {   // 服务端拍�
     { static int done; const char *e = getenv("DM_TEST_ITEM_DUMP"); if (e && !done && *(uint32_t *)(G + 0x170) >= (uint32_t)atoi(e)) { done = 1; item_dump(b, player); } }
     if (player != lastp) { lastp = player; pthread_mutex_lock(&g_vmu); const char *nm = vault_name(b); g_loaded = nm != NULL; if (nm) { strlcpy(g_vname, nm, sizeof g_vname); vault_load(nm); } else vault_clear(); pthread_mutex_unlock(&g_vmu); atomic_fetch_add(&g_vgen, 1); }   // 进局（换了玩家单位）读一次 | Read once on entering a run (the player unit changed)
     { uint32_t dq = atomic_exchange(&g_desc_req, 0); if (dq) { pthread_mutex_lock(&g_vmu); vault_desc(b, G, player, dq); pthread_mutex_unlock(&g_vmu); } }
+    { uint32_t cq = atomic_exchange(&g_cmp_req, 0); uint32_t nid = atomic_load(&g_cmp_newid);
+      if (cq && nid) { pthread_mutex_lock(&g_vmu); vault_compare(b, G, nid, (int)(cq >> 16 & 0xff), (int)(cq & 0xffff)); pthread_mutex_unlock(&g_vmu); } }
     { static uint32_t last; uint32_t t = *(uint32_t *)(G + 0x170); if (atomic_load(&g_vretry) && t - last >= 250) { last = t; LOG("编年史仓库：侧文件上次没写成，再请一次存盘 → %d", dm_request_save()); } }
     // 待落盘队列快满（一次交换要记取出 + 存入两条）：这一拍先不做存取，请求原样留着（存放按钮本来就等上一件被取走，dm_vault_put_pending），请游戏存盘；
     // 提交时队首得到证明、队列腾出来，下一拍再做。原先满了照做存取、只是不记：那件已从物品栏摘下，侧文件却永远不会写它，重进后消失
