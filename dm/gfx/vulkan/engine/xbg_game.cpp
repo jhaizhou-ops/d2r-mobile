@@ -537,7 +537,7 @@ std::unordered_set<uint64_t> storage_pages;uint64_t storage_snap_count=0;
 namespace wtrack{extern uint64_t copied_bytes,dirty_pages,mismatches,fallbacks;}
 extern std::atomic<uint64_t> memo_epoch;extern uint64_t key_diff[14];extern uint64_t memo_bump[5];extern uint64_t xmemo_hits,xmemo_drops;struct PinRef{VkDescriptorSetLayout layout;uint32_t refs;};extern std::unordered_map<VkDescriptorSet,PinRef> memo_pinned[2];
 extern uint64_t memo_front_hits;extern uint64_t desc_memo_hits,desc_memo_misses,desc_memo_why[6],desc_ns[6],noload_passes,img_cache_hits,img_cache_misses,noload_why[8],binds_skipped,set_binds,set_bind_offsets,set_binds_offsets_only,offset_changes[10],offset_changed_at[32];
-namespace warm{extern uint64_t hits,creates,create_ns,create_max_ns;extern std::atomic<uint64_t> built,failed,build_ns,async_built,async_skips,compiled;extern bool async_on;void flush();void register_module(VkShaderModule m,const std::string &key);
+namespace warm{extern uint64_t hits,creates,create_ns,create_max_ns;extern std::atomic<uint64_t> built,failed,stale,build_ns,async_built,async_skips,compiled;extern bool async_on;void flush();void register_module(VkShaderModule m,const std::string &key);
     extern bool keep_rewritten;bool take_rewritten(const std::string &key,std::vector<uint32_t> &out);}
 // 长帧日志的读数（nvn_vk.c 把它们接到 hle_nvn.c 的 mtl_create_* / mtl_pkg_stats / mtl_upload_* / mtl_gpu_ms）：自启动起的累计，图形线程写、
 // 游戏线程读。只算帧里同步做的：管线现建（预热和后台建的不算）、着色器载入（读文件、SPIR-V 改写、建模块）、贴图整份上传（含解交错与 BC 解码）。
@@ -1013,7 +1013,7 @@ void perf_frame(){
     if(bright::enabled){xbg_logf("NVN PERF bright applied=%.2f k=%.2f",bright::applied/f,bright::last_k);bright::applied=0;}
     if(tex_dirty){xbg_logf("NVN PERF texdirty tracked=%.1f checks=%.1f changed=%.1f",tex_dirty_tracked/f,tex_dirty_checks/f,tex_dirty_changed/f);tex_dirty_tracked=tex_dirty_checks=tex_dirty_changed=0;}
     if(vcache::enabled){xbg_logf("NVN PERF vcache hits=%.1f (%.2fMB) fills=%.1f (%.2fMB) refills=%.2f volatile=%llu untracked=%llu flushes=%llu entries=%zu arena=%.1fMB pools=%d",vcache::hits/f,vcache::hit_bytes/1048576.0/f,vcache::fills/f,vcache::fill_bytes/1048576.0/f,vcache::refills/f,(unsigned long long)vcache::volatiles,(unsigned long long)vcache::untracked,(unsigned long long)vcache::flushes,vcache::live(),vcache::arena_bytes()/1048576.0,[]{int live=0,used=0;uint64_t adds=0;if(nvn_dirty_slot_stats)nvn_dirty_slot_stats(&live,&used,&adds);return used;}());vcache::hits=vcache::hit_bytes=vcache::fills=vcache::fill_bytes=vcache::refills=0;}
-    {static uint64_t pm=0,pe=0;xbg_logf("NVN PERF pipelines_new=%llu evicted=%llu warm_hits=%llu created=%llu create_ms=%.1f create_max_ms=%.1f warm_built=%llu warm_failed=%llu warm_ms=%.0f async_skips=%llu async_built=%llu",(unsigned long long)(pipeline_counts.misses-pm),(unsigned long long)(pipeline_counts.evictions-pe),(unsigned long long)warm::hits,(unsigned long long)warm::creates,warm::create_ns/1e6,warm::create_max_ns/1e6,(unsigned long long)warm::built.load(),(unsigned long long)warm::failed.load(),warm::build_ns.load()/1e6,(unsigned long long)warm::async_skips.exchange(0),(unsigned long long)warm::async_built.load());warm::hits=warm::creates=warm::create_ns=warm::create_max_ns=0;pm=pipeline_counts.misses;pe=pipeline_counts.evictions;}
+    {static uint64_t pm=0,pe=0;xbg_logf("NVN PERF pipelines_new=%llu evicted=%llu warm_hits=%llu created=%llu create_ms=%.1f create_max_ms=%.1f warm_built=%llu warm_failed=%llu warm_ms=%.0f async_skips=%llu async_built=%llu warm_stale=%llu",(unsigned long long)(pipeline_counts.misses-pm),(unsigned long long)(pipeline_counts.evictions-pe),(unsigned long long)warm::hits,(unsigned long long)warm::creates,warm::create_ns/1e6,warm::create_max_ns/1e6,(unsigned long long)warm::built.load(),(unsigned long long)warm::failed.load(),warm::build_ns.load()/1e6,(unsigned long long)warm::async_skips.exchange(0),(unsigned long long)warm::async_built.load(),(unsigned long long)warm::stale.load());warm::hits=warm::creates=warm::create_ns=warm::create_max_ns=0;pm=pipeline_counts.misses;pe=pipeline_counts.evictions;}
     xbg_logf("NVN PERF setcache ab=%d hits=%.1f misses=%.1f template=%.1f plain=%.1f memo_hits=%.1f memo_misses=%.1f memo_front=%.1f why=texel%.1f/simg%.1f/dm%.1f/dynbuf%.1f/store%.1f",int(ab_frame_on),set_cache_hits/f,set_cache_misses/f,template_updates/f,plain_updates/f,desc_memo_hits/f,desc_memo_misses/f,memo_front_hits/f,desc_memo_why[0]/f,desc_memo_why[1]/f,desc_memo_why[2]/f,desc_memo_why[3]/f,desc_memo_why[4]/f);desc_memo_hits=desc_memo_misses=memo_front_hits=0;for(auto &w:desc_memo_why)w=0;xbg_logf("NVN PERF keydiff shader%.0f pool%.0f ubo%.0f uaddr%.0f size%.0f vp%.0f alpha%.0f drv%.0f tex%.0f samp%.0f saddr%.0f same%.0f new%.0f len%.0f",key_diff[0]/tf,key_diff[1]/tf,key_diff[2]/tf,key_diff[3]/tf,key_diff[4]/tf,key_diff[5]/tf,key_diff[6]/tf,key_diff[7]/tf,key_diff[8]/tf,key_diff[9]/tf,key_diff[10]/tf,key_diff[11]/tf,key_diff[12]/tf,key_diff[13]/tf);for(auto &k:key_diff)k=0;   // per timed frame
     xbg_logf("NVN PERF binds_skipped_per_frame=%.1f xmemo_hits=%.1f drops=%llu bumps=%llu/%llu/%llu/%llu/%llu pinned=%zu/%zu",binds_skipped/f,xmemo_hits/f,(unsigned long long)xmemo_drops,(unsigned long long)memo_bump[0],(unsigned long long)memo_bump[1],(unsigned long long)memo_bump[2],(unsigned long long)memo_bump[3],(unsigned long long)memo_bump[4],memo_pinned[0].size(),memo_pinned[1].size());binds_skipped=0;{char top[160]="";int at=0;bool used[32]={};
      for(int r=0;r<4;r++){int best=-1;for(int k=0;k<32;k++)if(!used[k] && offset_changed_at[k] && (best<0 || offset_changed_at[k]>offset_changed_at[best]))best=k;if(best<0)break;used[best]=true;at+=snprintf(top+at,sizeof(top)-size_t(at),"%s%d:%.1f",r?",":"",best,offset_changed_at[best]/f);}
@@ -2316,7 +2316,7 @@ void register_module(VkShaderModule m,const std::string &key){std::lock_guard<st
 struct Rec{std::vector<std::string> keys;std::vector<uint32_t> words;};
 std::vector<Rec> recs;std::unordered_set<std::string> known;std::vector<uint8_t> pending;
 std::unordered_map<std::string,VkPipeline> ready;std::vector<std::thread> threads;std::atomic<bool> stop{false};std::atomic<size_t> next{0};
-std::atomic<uint64_t> built{0},failed{0},build_ns{0},compiled{0};uint64_t hits=0,creates=0,create_ns=0,create_max_ns=0;bool enabled=true;
+std::atomic<uint64_t> built{0},failed{0},stale{0},build_ns{0},compiled{0};uint64_t hits=0,creates=0,create_ns=0,create_max_ns=0;bool enabled=true;
 std::unordered_map<std::string,VkShaderModule> modules;std::unordered_map<std::string,VkPipelineLayout> layouts;std::unordered_map<std::string,VkRenderPass> passes;
 std::vector<VkDescriptorSetLayout> set_layouts;
 std::string list_path(){std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');return (cut==std::string::npos?dir:dir.substr(0,cut))+"/vk-pipeline-list.bin";}
@@ -2348,6 +2348,9 @@ void flush(){if(pending.empty())return;FILE *f=fopen(list_path().c_str(),"ab");i
 // gfx-shader-reuse: SPIR-V the warm-up rewrote, kept by shader key until load_shader takes it (taking removes it); unused entries
 // are freed at shutdown.
 bool keep_rewritten=false;std::unordered_map<std::string,std::vector<uint32_t>> rewritten;
+// 每个包的绑定表（load_module 读包时记下），用来核对记录里的管线布局还是不是这份包的（见 layout_current）
+// Each bundle's binding table, kept when load_module reads the bundle, to check that a record's pipeline layout still belongs to it (see layout_current)
+std::unordered_map<std::string,std::vector<xbg_shader_binding>> bundle_bindings;
 bool take_rewritten(const std::string &key,std::vector<uint32_t> &out){std::lock_guard<std::mutex> l(mu);auto it=rewritten.find(key);if(it==rewritten.end())return false;out.swap(it->second);rewritten.erase(it);return true;}
 VkShaderModule load_module(const std::string &key){
     {std::lock_guard<std::mutex> l(mu);auto it=modules.find(key);if(it!=modules.end())return it->second;}
@@ -2355,6 +2358,7 @@ VkShaderModule load_module(const std::string &key){
     fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);if(n<32 || n>16*1024*1024){fclose(f);return VK_NULL_HANDLE;}std::vector<uint8_t> b(static_cast<size_t>(n));bool ok=fread(b.data(),1,b.size(),f)==b.size();fclose(f);if(!ok)return VK_NULL_HANDLE;
     xbg_shader_header h;memcpy(&h,b.data(),sizeof(h));if(h.magic!=0x31534758 || h.version!=1 || h.spirv_bytes%4)return VK_NULL_HANDLE;
     size_t off=sizeof(h)+size_t(h.binding_count)*sizeof(xbg_shader_binding)+size_t(h.input_count)*4+h.c1_bytes;if(off+h.spirv_bytes!=b.size())return VK_NULL_HANDLE;
+    if(h.binding_count<=256 && sizeof(h)+size_t(h.binding_count)*sizeof(xbg_shader_binding)<=off){std::vector<xbg_shader_binding> bs(h.binding_count);if(h.binding_count)memcpy(bs.data(),b.data()+sizeof(h),bs.size()*sizeof(xbg_shader_binding));std::lock_guard<std::mutex> l(mu);bundle_bindings[key]=std::move(bs);}
     std::vector<uint32_t> w(h.spirv_bytes/4);memcpy(w.data(),b.data()+off,h.spirv_bytes);spv_override(key,w);front_rewrites(w,h.stage,key,"warm");warp_rewrite(w,h.stage,key.c_str(),"warm");tidy_rewrite(w);guard_rewrite(w,h.stage,key.c_str(),"warm");
     if(keep_rewritten){std::lock_guard<std::mutex> l(mu);rewritten.emplace(key,w);}
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=w.size()*4;ci.pCode=w.data();VkShaderModule m;if(vkCreateShaderModule(cfg.device,&ci,nullptr,&m)!=VK_SUCCESS)return VK_NULL_HANDLE;
@@ -2382,12 +2386,32 @@ VkRenderPass make_pass(const uint32_t *w,uint32_t n){
     VkRenderPass rp;if(vkCreateRenderPass(cfg.device,&p,nullptr,&rp)!=VK_SUCCESS)return VK_NULL_HANDLE;
     std::lock_guard<std::mutex> l(mu);auto ins=passes.emplace(k,rp);if(!ins.second){vkDestroyRenderPass(cfg.device,rp,nullptr);return ins.first->second;}return rp;
 }
-bool build(const Rec &rec){
+// 记录里的描述符布局是否还和现在的着色器包一致：每个阶段按包的绑定表应有的 (绑定号, 类型, 个数, 阶段位) 与记录逐项比（统一缓冲与动态统一缓冲算同一类，
+// 那是运行时按模式选的）。导入包换了、某个着色器的绑定变了（#215 翻译工具修好后 25 个像素着色器多了一个贴图），旧记录就不再对得上：
+// 拿它建管线是用旧布局配新着色器，驱动会拒绝（Adreno 830 报 -13），而 pipeguard 把失败记进 gfx-pipe-skip，画的时候连同正确的管线一起跳过，
+// 这个效果就再也画不出来。所以不一致的记录直接丢掉，不交给驱动、不记跳过；那个效果下次画时按新布局重建，并作为新记录追加。
+// Whether a record's descriptor layout still matches the shader bundles now on disk: for each stage, the (binding, type, count, stage bit) the bundle's
+// binding table gives are compared with the record (uniform and dynamic uniform buffers count as the same type, since the mode picks one at run time).
+// After a new import pack changes a shader's bindings (the #215 translator fix adds a texture to 25 fragment shaders), an old record no longer matches:
+// building it pairs the old layout with the new shader, the driver rejects it (-13 on the Adreno 830), and pipeguard writes the failure to gfx-pipe-skip,
+// which then skips the correct pipeline at draw time too, so the effect never draws again. Such a record is dropped instead, without reaching the driver
+// or the skip list. The effect's pipeline is rebuilt with the new layout when it is next drawn and appended as a new record.
+bool layout_current(const uint32_t *w,uint32_t n,const std::vector<std::string> &keys,const VkPipelineShaderStageCreateInfo *st){
+    if(n<2 || 2+size_t(w[1])*4>n)return false;auto norm=[](uint32_t t){return t==uint32_t(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)?uint32_t(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER):t;};
+    std::vector<std::array<uint32_t,4>> have,want;for(uint32_t i=0;i<w[1];i++){const uint32_t *e=w+2+size_t(i)*4;have.push_back({e[0],norm(e[1]),e[2],e[3]});}
+    std::lock_guard<std::mutex> l(mu);
+    for(size_t s=0;s<keys.size();s++){auto it=bundle_bindings.find(keys[s]);if(it==bundle_bindings.end())return true;for(auto &b:it->second)want.push_back({b.binding,norm(b.type),b.count,uint32_t(st[s].stage)});}
+    std::sort(have.begin(),have.end());std::sort(want.begin(),want.end());return have==want;
+}
+// 1 = 建好，0 = 建不成，-1 = 记录已过时（见 layout_current），不算失败
+// 1 = built, 0 = could not be built, -1 = the record is stale (see layout_current), which is not a failure
+int build(const Rec &rec){
     Reader r{rec.words.data(),rec.words.size()};if(r.u()!=1)return false;
-    uint32_t ln=r.u();if(r.i+ln>r.n)return false;VkPipelineLayout layout=make_layout(r.w+r.i,ln);r.i+=ln;
+    uint32_t ln=r.u();if(r.i+ln>r.n)return false;const uint32_t *layout_words=r.w+r.i;VkPipelineLayout layout=make_layout(layout_words,ln);r.i+=ln;
     uint32_t pn=r.u();if(r.i+pn>r.n)return false;VkRenderPass pass=make_pass(r.w+r.i,pn);r.i+=pn;if(!layout || !pass)return false;
     VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.flags=r.u();ci.subpass=r.u();uint32_t ns=r.u();if(ns>5 || ns!=rec.keys.size())return false;
     VkPipelineShaderStageCreateInfo st[5]{};for(uint32_t i=0;i<ns;i++){st[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;st[i].flags=r.u();st[i].stage=VkShaderStageFlagBits(r.u());uint64_t id=r.q();if(id!=fnv(rec.keys[i]))return false;st[i].module=load_module(rec.keys[i]);if(!st[i].module)return false;st[i].pName="main";}
+    if(!layout_current(layout_words,ln,rec.keys,st)){++stale;return -1;}
     VkPipelineVertexInputStateCreateInfo v{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};v.flags=r.u();uint32_t nvb=r.u();if(nvb>32)return false;std::vector<VkVertexInputBindingDescription> vb(nvb);for(auto &x:vb){x.binding=r.u();x.stride=r.u();x.inputRate=VkVertexInputRate(r.u());}
     uint32_t nva=r.u();if(nva>32)return false;std::vector<VkVertexInputAttributeDescription> va(nva);for(auto &x:va){x.location=r.u();x.binding=r.u();x.format=VkFormat(r.u());x.offset=r.u();}
     v.vertexBindingDescriptionCount=nvb;v.pVertexBindingDescriptions=vb.data();v.vertexAttributeDescriptionCount=nva;v.pVertexAttributeDescriptions=va.data();
@@ -2417,7 +2441,7 @@ bool build(const Rec &rec){
 }
 void worker(){
     setpriority(PRIO_PROCESS,0,5); // below the game and graphics threads
-    for(;;){if(stop.load())return;size_t i=next.fetch_add(1);if(i>=recs.size())return;uint64_t t0=timing_clock();if(build(recs[i]))++built;else ++failed;build_ns+=timing_clock()-t0;}
+    for(;;){if(stop.load())return;size_t i=next.fetch_add(1);if(i>=recs.size())return;uint64_t t0=timing_clock();const int made=build(recs[i]);if(made>0)++built;else if(made==0)++failed;build_ns+=timing_clock()-t0;}
 }
 // Runtime builds for draws that may be skipped (gfx-async-pipelines): a blended draw that writes no depth, stencil or
 // storage and counts no samples the game reads is skipped while one background thread builds its pipeline from the
@@ -2429,7 +2453,7 @@ std::atomic<uint64_t> async_built{0},async_skips{0};
 void async_worker(){
     setpriority(PRIO_PROCESS,0,5);
     for(;;){Rec r;{std::unique_lock<std::mutex> l(mu);async_cv.wait(l,[]{return stop.load() || !async_q.empty();});if(stop.load())return;r=std::move(async_q.front());async_q.pop_front();}
-        bool ok=build(r);if(ok)++async_built;else ++failed;
+        const int made=build(r);const bool ok=made>0;if(ok)++async_built;else if(made==0)++failed;
         std::string bytes(reinterpret_cast<const char*>(r.words.data()),r.words.size()*4);std::lock_guard<std::mutex> l(mu);async_pending.erase(bytes);if(!ok)async_failed.insert(bytes);}
 }
 // Queue the build of this draw's pipeline (once); false when the caller should build it now: a module without a bundle key,
@@ -2468,7 +2492,7 @@ void start(){
 }
 void shutdown(){{std::lock_guard<std::mutex> l(mu);stop=true;}async_cv.notify_all();for(auto &t:threads)if(t.joinable())t.join();threads.clear();if(async_thread.joinable())async_thread.join();std::lock_guard<std::mutex> l(mu);async_q.clear();async_pending.clear();async_failed.clear();
     for(auto &p:ready)vkDestroyPipeline(cfg.device,p.second,nullptr);ready.clear();for(auto &p:layouts)vkDestroyPipelineLayout(cfg.device,p.second,nullptr);layouts.clear();for(auto s:set_layouts)vkDestroyDescriptorSetLayout(cfg.device,s,nullptr);set_layouts.clear();
-    for(auto &p:passes)vkDestroyRenderPass(cfg.device,p.second,nullptr);passes.clear();for(auto &m:modules)vkDestroyShaderModule(cfg.device,m.second,nullptr);modules.clear();ids.clear();id_keys.clear();recs.clear();known.clear();rewritten.clear();remapped_records=0;}
+    for(auto &p:passes)vkDestroyRenderPass(cfg.device,p.second,nullptr);passes.clear();for(auto &m:modules)vkDestroyShaderModule(cfg.device,m.second,nullptr);modules.clear();ids.clear();id_keys.clear();recs.clear();known.clear();rewritten.clear();bundle_bindings.clear();remapped_records=0;}
 bool take(const std::string &bytes,VkPipeline &out){std::lock_guard<std::mutex> l(mu);auto it=ready.find(bytes);if(it==ready.end())return false;out=it->second;ready.erase(it);return true;}
 }
 // Diagnostic (marker gfx-pipe-stats, with the warm-up off): the driver's statistics of each pipeline as it is created, and
