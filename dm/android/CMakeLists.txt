@@ -122,3 +122,14 @@ target_include_directories(dm PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(dm PRIVATE $<$<CONFIG:Debug>:DM_ANDROID_DEBUG_ENV=1>)
 target_link_libraries(dm PRIVATE -Wl,--whole-archive dmcore -Wl,--no-whole-archive android)
 target_link_options(dm PRIVATE -Wl,--no-undefined -Wl,-z,nostart-stop-gc -Wl,-Bsymbolic)   # 汇编按页寻址宿主全局（adrp + :lo12:）：库内符号就地绑定，不许被抢占 | assembly addresses host globals by page (adrp + :lo12:): symbols bind locally inside the library and cannot be preempted
+# 构建后检查库里没有 ARMv8.0 之后的指令（#293：骁龙 680 一类上是非法指令，测试机发现不了）。llvm-objdump 取 NDK 里与 clang 同目录的那个
+# Post-build check that the library has no instruction newer than ARMv8.0 (#293: illegal on Snapdragon 680-class CPUs, and our test
+# phones cannot catch it). llvm-objdump is the NDK's, from the same directory as clang
+get_filename_component(DM_LLVM_BIN ${CMAKE_C_COMPILER} DIRECTORY)
+find_program(DM_LLVM_OBJDUMP llvm-objdump HINTS ${DM_LLVM_BIN} ${ANDROID_TOOLCHAIN_ROOT}/bin NO_DEFAULT_PATH)
+if(NOT DM_LLVM_OBJDUMP)
+  message(FATAL_ERROR "llvm-objdump not found next to ${CMAKE_C_COMPILER} (needed by tools/check_armv80.py)")
+endif()
+add_custom_command(TARGET dm POST_BUILD
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_armv80.py ${DM_LLVM_OBJDUMP} $<TARGET_FILE:dm>
+  VERBATIM)
