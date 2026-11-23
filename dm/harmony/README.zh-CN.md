@@ -33,6 +33,13 @@ English: [README.md](README.md)
    应用首次启动时解压。没有内置包时，应用让玩家选一个装着 `dm/` 和 `data/` 的文件夹导入。发布包不得带运行包：`app/scripts/check_release_clean.py <hap>`。
 4. `hvigorw --mode module -p module=entry@default -p product=default assembleHap`，再 `hdc install -r entry/build/default/outputs/default/entry-default-signed.hap`。
 
+### v2.3.0 本地壳
+
+- 使用本源码树的 `dm/tools/d2rm_android.py --target ohos` 生成 `3.3.94012-r45` 运行包。手机里已有游戏数据时，只需把新版 `dm` 放到手机上的文件夹内，在启动页点「导入游戏资源」并选择该文件夹。
+- 启动页可选择是否显示帧率，并可在游戏启动前导入或导出角色、共享仓库和游戏设置存档。将安卓导出的备份文件夹传到手机即可导入。鸿蒙导出的 ZIP 要先解压。同名角色会跳过，来自其他安装的同类共享仓库可在打开储藏箱时合并。
+- 游戏内「选项 → 自定义」包含三档 3D 清晰度、暗处加亮、省电帧率和物品注释等设置。物品注释和旧译名需重启应用。越肩与第一人称镜头可以在右半屏空白处拖动。使用实体手柄会切换键位布局，再点击屏幕可回到触屏布局。
+- 打包公开壳时先把生成表复制到独立目录，对该副本运行 `dm/ios/tools/shell_stubs.py stubs-gen`，将构建的 `DM_GEN_DIR` 指向该目录。同时加入 `gen_bright_levels.py` 生成的关卡亮度参数。发布包使用 `release` 目标，运行组件由玩家单独导入。
+
 ## 鸿蒙缺省值与实测
 
 `napi_ohos.c` 只在环境里没有时设下面这些（`files/dm/env` 与标记文件仍可覆盖）：

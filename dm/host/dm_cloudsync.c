@@ -199,6 +199,28 @@ static int pack_write(const char *path, const cs_unit *u) {
         ok = fwrite(&pl, 2, 1, f) == 1 && fwrite(u->f[i].path, pl, 1, f) == 1 && fwrite(&u->f[i].mt, 8, 1, f) == 1 && fwrite(&u->f[i].size, 4, 1, f) == 1 && (!u->f[i].size || fwrite(u->f[i].data, u->f[i].size, 1, f) == 1); }
     ok = fclose(f) == 0 && ok; if (ok) ok = rename(tmp, path) == 0; if (!ok) unlink(tmp); return ok ? 0 : -1;   // 先写临时文件再换名：云端看到的总是整包 | write a temporary file first and then rename: what the cloud sees is always a whole pack
 }
+#if defined(__OHOS__)
+// 把手动导入的共享仓库交给现有的局内合并流程。同一份内容只进入收件箱一次。
+// Queue a manually imported shared stash for the existing in-game merge. Identical contents enter the inbox once.
+int dm_cloud_import_stash(const char *save, const char *source, const char *name) {
+    if (!*save || !*source || !is_stash(name) || strchr(name, '/') || strstr(name, "..")) return -1;
+    cs_unit unit = {0};
+    if (read_dir(source, name, &unit) || !unit.n) { unit_free(&unit); return -1; }
+    unit_finish(&unit);
+    char inbox[1100], entry[1150], staging[1150], pack[1200];
+    snprintf(inbox, sizeof inbox, "%s/_cloudinbox", save);
+    if (mkdir(inbox, 0700) && errno != EEXIST) { unit_free(&unit); return -1; }
+    snprintf(entry, sizeof entry, "%s/ohos-%016llx", inbox, (unsigned long long)unit.hash);
+    snprintf(pack, sizeof pack, "%s/mine.pack", entry);
+    if (!access(pack, R_OK)) { unit_free(&unit); return 0; }
+    snprintf(staging, sizeof staging, "%s/.ohos-%016llx.part", inbox, (unsigned long long)unit.hash);
+    if (mkdir(staging, 0700) && errno != EEXIST) { unit_free(&unit); return -1; }
+    snprintf(pack, sizeof pack, "%s/mine.pack", staging);
+    int ok = !pack_write(pack, &unit) && !rename(staging, entry);
+    unit_free(&unit);
+    return ok ? 1 : -1;
+}
+#endif
 static int pack_read(const char *path, cs_unit *u) {   // 1 = 读到，0 = 没有这个包，-1 = 坏包 | 1 = read, 0 = no such pack, -1 = bad pack
     memset(u, 0, sizeof *u); FILE *f = fopen(path, "rb"); if (!f) return errno == ENOENT ? 0 : -1;
     char mg[8]; uint32_t fl = 0, n = 0; int ok = fread(mg, 8, 1, f) == 1 && !memcmp(mg, k_magic, 8) && fread(&u->stamp, 8, 1, f) == 1 && fread(&fl, 4, 1, f) == 1 && fread(&n, 4, 1, f) == 1 && n <= MAXF;
