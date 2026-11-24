@@ -729,6 +729,85 @@ static void w_map_goal_step(void) {
             for (int i = 0; i < nx && v.n < DM_MAP_GOAL_MAX; i++, v.n++) { v.x[v.n] = g_mx.x[i]; v.y[v.n] = g_mx.y[i]; v.art[v.n] = g_mx.art[i]; } } }
     atomic_fetch_add(&g_mg_seq, 1); g_mg_pub = v; atomic_fetch_add(&g_mg_seq, 1);
 }
+// ---- 小地图上的未开容器（箱子 / 储藏箱 / 石棺 / 瓮 / 桶 / 篮）----
+// 收集放在游戏线程（w_chest_step，每帧）：遍历客户端单位表的物件分桶（类型 2），筛出容器类且 mode == 0
+// （未开；实测开过的会变成 2），算出相对玩家的格差；界面线程（dm_chest_marks，由 CamThreats 经 JNI 调）
+// 只读发布出来的数组再投影，不碰游戏内存——界面线程遍历单位表会读到刚被释放的单位，链表改写时还可能绕圈。
+// Uneaten containers on the minimap (chests / stashes / caskets / urns / barrels / baskets): collected on the
+// game thread (w_chest_step, every frame) and published as offsets from the player; the UI thread
+// (dm_chest_marks, called from CamThreats through JNI) only reads that array and projects it -- walking the
+// unit table on the UI thread can read a unit freed under it, or loop while the list is relinked.
+// 容器类号（objects.txt 的 *ID 列）：把玩家能点开的搜刮类物件全收进来——OperateFn 1/3/4/5/6/7（箱、石棺、瓮、罐、桶、
+// 篮、墓、尸体、鼠窝、藏匿物、塔里的书）、14（骸骨堆、空心木、松石、茧、柱子这类能搜刮的道具）、19/20（护甲架、武器架）、
+// 26（书架）、30（爆炸箱）、48（受困灵魂）、51（丛林藏匿处）、68（邪恶瓮），再加上任务容器 28（拉姆·艾森之书）、
+// 33（维特的尸体）、39–42（赫拉迪克方块 / 卷轴 / 国王法杖的箱子、秘法之书）、57–59（卡林器官的箱子）。
+// OperateFn = 0 的点不开、标了也永不消失（371 ForgottenTowerChest、507 SnowDebris），不收；祭坛、门、传送点、传送门、
+// 火把、装饰树石也在表外。
+// Container class ids (objects.txt *ID column): every object a player can loot -- OperateFn 1/3/4/5/6/7 (chests,
+// caskets, sarcophagi, urns, jars, barrels, baskets, tombs, corpses, rat nests, hidden stashes, the tower tome), 14
+// (skull piles, hollow logs, loose rocks, cocoons, pillars and similar lootable props), 19/20 (armor stands, weapon
+// racks), 26 (bookshelves), 30 (exploding chest), 48 (trapped souls), 51 (jungle stashes), 68 (evil urn), plus the quest
+// containers 28 (Lam Esen's Tome), 33 (Wirt's body), 39-42 (Horadric Cube / Scroll / Staff chests, Arcane Tome) and
+// 57-59 (Khalim's organ chests). OperateFn 0 objects cannot be opened and would stay marked forever (371, 507), so they
+// are left out, as are shrines, doors, waypoints, portals, torches and scenery. Sorted: is_container_cls() binary-searches it.
+static const uint16_t g_cont_cls[] = { 1,3,4,5,6,7,8,9,11,46,50,51,52,53,54,55,56,79,87,88,89,94,95,104,105,106,107,125,126,127,128,139,140,141,142,143,144,146,147,148,154,155,158,159,163,169,171,174,175,176,177,178,179,180,181,182,183,185,186,187,188,193,198,203,204,205,208,209,222,223,224,225,233,240,241,242,243,244,246,266,268,270,271,272,274,284,314,315,316,317,326,329,330,331,332,333,334,335,336,354,355,356,357,360,362,363,365,372,380,381,383,384,387,388,389,390,391,397,405,406,407,413,416,418,419,420,424,425,430,431,432,433,443,444,445,448,454,455,463,466,467,468,469,470,471,477,485,486,487,500,501,502,504,505,516,517,518,524,525,526,529,530,531,532,533,534,535,540,541,544,545,548,549,550,551,556 };
+static int is_container_cls(uint32_t c) {   // 表已排序，二分查找（每帧要对几百个物件判一次） | the table is sorted, binary search (hundreds of units per frame)
+    unsigned lo = 0, hi = (unsigned)(sizeof g_cont_cls / sizeof *g_cont_cls);
+    while (lo < hi) { unsigned m = (lo + hi) / 2; if (g_cont_cls[m] == c) return 1; if (g_cont_cls[m] < c) lo = m + 1; else hi = m; }
+    return 0;
+}
+int dm_ui_map_geom(float *cell); int dm_ui_minimap_rect(float r[4]); int dm_cam_map_heading(float o[4]);
+typedef struct { int n; int dx[DM_CHEST_MAX], dy[DM_CHEST_MAX]; } dm_chest_view;
+static _Atomic uint32_t g_chest_seq; static dm_chest_view g_chest_pub;
+static void w_chest_step(void) {   // 游戏线程：扫单位表 → 发布相对玩家的格差 | game thread: walk the unit table, publish offsets from the player
+    static int env = -2; if (env == -2) { const char *e = getenv("DM_CHEST_MARK"); env = e ? e[0] != '0' : -1; }
+    int dm_custom_get(const char *key); int on = env >= 0 ? env : dm_custom_get("map_mark");   // 跟「小地图标注」同一个开关 | same switch as the minimap marks
+    uint8_t *b = wb(); uint64_t pl = on && b ? w_player() : 0, lv = pl ? w_level(pl) : 0;
+    static uint64_t lv_seen, lv_at;
+    dm_chest_view v; memset(&v, 0, sizeof v);
+    if (pl && lv) {
+        uint64_t ns = w_now_ns();
+        if (lv != lv_seen) { lv_seen = lv; lv_at = ns; }
+        if (ns - lv_at >= 2000000000ull) {   // 换图后 2 秒内不标：加载动画期间单位表还是旧关卡的 | 2 s of silence after a level change: the unit table still holds the old level during the load
+            int px = 0, py = 0;
+            if (w_unit_xy(pl, &px, &py)) {
+                int nodes = 0;
+                for (int k = 0; k < 128 && v.n < DM_CHEST_MAX && nodes < 1024; k++)
+                    for (uint64_t u = *(uint64_t *)(b + 0x2d603a0 + 2 * 0x400 + k * 8); u && v.n < DM_CHEST_MAX && nodes < 1024; u = *(uint64_t *)(u + 0x158)) {
+                        nodes++;
+                        if (u < 0x10000 || (u & 7)) break;
+                        if (*(uint32_t *)u != 2 || *(uint32_t *)(u + 0xc) != 0) continue;
+                        if (!is_container_cls(*(uint32_t *)(u + 4))) continue;
+                        uint64_t q = *(uint64_t *)(u + 0x38); if (!q || q < 0x10000) continue;
+                        int ddx = *(int32_t *)(q + 0x10) - px, ddy = *(int32_t *)(q + 0x14) - py;
+                        if (ddx * ddx + ddy * ddy < 4) continue;   // 贴玩家 2 格内不标：开箱后单位被回收、读到的还是「未开」，会变成跟着人走的幽灵 | skip within 2 cells: a picked-up unit is recycled but still reads as mode 0, which would leave a marker following the player
+                        v.dx[v.n] = ddx; v.dy[v.n] = ddy; v.n++;
+                    }
+            }
+        }
+    }
+    atomic_fetch_add(&g_chest_seq, 1); g_chest_pub = v; atomic_fetch_add(&g_chest_seq, 1);
+}
+int dm_chest_marks(float *out, int max) {   // 界面线程：只读发布的格差，按当前小地图几何投影 | UI thread: read the published offsets and project them
+    if (!out || max <= 0) return 0;
+    float cell = 0; int map = dm_ui_map_geom(&cell); if (!map || !(cell > 0)) return 0;
+    float cx = 0.5f, cy = 0.5f, mm[4];
+    if (map == 1) { if (!dm_ui_minimap_rect(mm)) return 0; cx = (mm[0] + mm[2]) * 0.5f; cy = (mm[1] + mm[3]) * 0.5f; }
+    else { float hd[4]; if (dm_cam_map_heading(hd)) { cx = hd[0]; cy = hd[1]; } }
+    int rw = 0, rh = 0; dm_screen_real(&rw, &rh); if (rw <= 0 || rh <= 0) return 0;
+    dm_chest_view v; int got = 0;
+    for (int t = 0; t < 4 && !got; t++) { uint32_t a = atomic_load(&g_chest_seq); if (a & 1) continue; v = g_chest_pub; if (atomic_load(&g_chest_seq) == a) got = 1; }
+    if (!got) return 0;
+    int n = 0;
+    for (int i = 0; i < v.n && n < max; i++) {
+        float dx = (float)v.dx[i], dy = (float)v.dy[i];
+        float mx = (dx - dy) * 1.6f * cell, my = (dx + dy) * 0.8f * cell;
+        float sx = cx + mx / (float)rw, sy = cy + my / (float)rh;
+        if (sx < 0.0f || sx > 1.0f || sy < 0.0f || sy > 1.0f) continue;
+        out[n * 2] = sx; out[n * 2 + 1] = sy; n++;
+    }
+    return n;
+}
 int dm_map_goals(dm_map_goal_view *v) {
     for (int t = 0; t < 4; t++) { uint32_t a = atomic_load(&g_mg_seq); if (a & 1) continue; *v = g_mg_pub; if (atomic_load(&g_mg_seq) == a) return v->n; }
     v->n = 0; return 0;
@@ -808,6 +887,7 @@ void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at th
     DM_PROF(0, "w.tile_retry", w_tile_retry_step());
     DM_PROF(0, "w.map_mark", w_map_mark_step());
     DM_PROF(0, "w.map_goal", w_map_goal_step());
+    DM_PROF(0, "w.chest", w_chest_step());
     // 测试开关 DM_TEST_WORLD_TAP（及 TAP2 / TAP3 / TAP4）=<类型>:c<类号>@<拍>（或 <类型>:any@<拍> = 这一类里任意一个，物品只认地上的）：到这一拍起盯住这类单位，它一进画面就在它身体框中心落一次世界点按（走 dm_world_tap 的真实命中路径，
     // 不是直接指定目标）——Mac 宿主上验「点得中、走得到、开得了」用（iOS 包用触点脚本的 tap_unit，同一个量具）。5 秒内没进画面报一行并放弃。
     // Test switch DM_TEST_WORLD_TAP (and TAP2 / TAP3 / TAP4)=<type>:c<class>@<tick> (or <type>:any@<tick> = any one of this type, items only count when on the ground): from this tick on, watch this kind of unit, and as soon as it enters the picture drop one world tap at the center of its body box (going through the real hit path of dm_world_tap,

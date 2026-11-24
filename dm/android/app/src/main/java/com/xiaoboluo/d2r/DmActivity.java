@@ -78,6 +78,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     // 小地图上的朝向箭头（CamThreats）：4 个数，返回 1 = 该画
     // Heading arrow on the minimap (CamThreats): 4 numbers, returns 1 = draw it
     static native int nativeCamHeading(float[] out);
+    static native int nativeChestMarks(float[] out);
     static native void nativePad(long buttons, int lx, int ly, int rx, int ry);
     static native void nativePadMode(int pad);
     static native void nativePadGlyph(int glyph);
