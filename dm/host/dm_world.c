@@ -737,19 +737,26 @@ static void w_map_goal_step(void) {
 // game thread (w_chest_step, every frame) and published as offsets from the player; the UI thread
 // (dm_chest_marks, called from CamThreats through JNI) only reads that array and projects it -- walking the
 // unit table on the UI thread can read a unit freed under it, or loop while the list is relinked.
-// 容器类号（objects.txt 的 *ID 列）。筛法：OperateFn = 3/4/19/20 的搜刮类（箱/桶/瓮/罐/篮/墓/尸体/架子/书），
-// 加上 op=14 里名字明确的柱子与受困灵魂；排除 shrine/door/waypoint/portal/火盆/火把/装饰树石。
-// Container class ids (objects.txt *ID column), picked from OperateFn 3/4/19/20 (chests, barrels, urns, jars, baskets,
-// tombs, corpses, racks, tomes) plus the named pillars / trapped souls that use the dummy operate; shrines, doors,
-// waypoints, portals, braziers, torches and scenery are left out. Sorted: is_container_cls() binary-searches it.
-static const uint16_t g_cont_cls[] = { 1,3,4,5,6,7,8,9,11,46,50,51,52,53,54,55,56,79,87,88,89,94,95,104,105,106,107,125,126,127,128,139,140,141,142,143,144,146,147,148,154,155,158,159,163,169,171,174,175,176,177,178,179,180,181,182,183,185,186,187,188,193,198,203,204,205,208,209,222,223,224,225,233,240,241,242,243,244,246,266,268,270,271,272,274,284,314,315,316,317,326,329,330,331,332,333,334,335,336,354,355,356,357,360,362,363,365,371,372,380,381,383,384,387,388,389,390,391,397,405,406,407,413,416,418,419,420,424,425,430,431,432,433,443,444,445,448,454,455,463,466,467,468,469,470,471,477,485,486,487,500,501,502,504,505,507,516,517,518,524,525,526,529,530,531,532,533,534,535,540,541,544,545,548,549,550,551,556 };
+// 容器类号（objects.txt 的 *ID 列）：把玩家能点开的搜刮类物件全收进来——OperateFn 1/3/4/5/6/7（箱、石棺、瓮、罐、桶、
+// 篮、墓、尸体、鼠窝、藏匿物、塔里的书）、14（骸骨堆、空心木、松石、茧、柱子这类能搜刮的道具）、19/20（护甲架、武器架）、
+// 26（书架）、30（爆炸箱）、48（受困灵魂）、51（丛林藏匿处）、68（邪恶瓮），再加上任务容器 28（拉姆·艾森之书）、
+// 33（维特的尸体）、39–42（赫拉迪克方块 / 卷轴 / 国王法杖的箱子、秘法之书）、57–59（卡林器官的箱子）。
+// OperateFn = 0 的点不开、标了也永不消失（371 ForgottenTowerChest、507 SnowDebris），不收；祭坛、门、传送点、传送门、
+// 火把、装饰树石也在表外。
+// Container class ids (objects.txt *ID column): every object a player can loot -- OperateFn 1/3/4/5/6/7 (chests,
+// caskets, sarcophagi, urns, jars, barrels, baskets, tombs, corpses, rat nests, hidden stashes, the tower tome), 14
+// (skull piles, hollow logs, loose rocks, cocoons, pillars and similar lootable props), 19/20 (armor stands, weapon
+// racks), 26 (bookshelves), 30 (exploding chest), 48 (trapped souls), 51 (jungle stashes), 68 (evil urn), plus the quest
+// containers 28 (Lam Esen's Tome), 33 (Wirt's body), 39-42 (Horadric Cube / Scroll / Staff chests, Arcane Tome) and
+// 57-59 (Khalim's organ chests). OperateFn 0 objects cannot be opened and would stay marked forever (371, 507), so they
+// are left out, as are shrines, doors, waypoints, portals, torches and scenery. Sorted: is_container_cls() binary-searches it.
+static const uint16_t g_cont_cls[] = { 1,3,4,5,6,7,8,9,11,46,50,51,52,53,54,55,56,79,87,88,89,94,95,104,105,106,107,125,126,127,128,139,140,141,142,143,144,146,147,148,154,155,158,159,163,169,171,174,175,176,177,178,179,180,181,182,183,185,186,187,188,193,198,203,204,205,208,209,222,223,224,225,233,240,241,242,243,244,246,266,268,270,271,272,274,284,314,315,316,317,326,329,330,331,332,333,334,335,336,354,355,356,357,360,362,363,365,372,380,381,383,384,387,388,389,390,391,397,405,406,407,413,416,418,419,420,424,425,430,431,432,433,443,444,445,448,454,455,463,466,467,468,469,470,471,477,485,486,487,500,501,502,504,505,516,517,518,524,525,526,529,530,531,532,533,534,535,540,541,544,545,548,549,550,551,556 };
 static int is_container_cls(uint32_t c) {   // 表已排序，二分查找（每帧要对几百个物件判一次） | the table is sorted, binary search (hundreds of units per frame)
     unsigned lo = 0, hi = (unsigned)(sizeof g_cont_cls / sizeof *g_cont_cls);
     while (lo < hi) { unsigned m = (lo + hi) / 2; if (g_cont_cls[m] == c) return 1; if (g_cont_cls[m] < c) lo = m + 1; else hi = m; }
     return 0;
 }
 int dm_ui_map_geom(float *cell); int dm_ui_minimap_rect(float r[4]); int dm_cam_map_heading(float o[4]);
-#define DM_CHEST_MAX 96
 typedef struct { int n; int dx[DM_CHEST_MAX], dy[DM_CHEST_MAX]; } dm_chest_view;
 static _Atomic uint32_t g_chest_seq; static dm_chest_view g_chest_pub;
 static void w_chest_step(void) {   // 游戏线程：扫单位表 → 发布相对玩家的格差 | game thread: walk the unit table, publish offsets from the player

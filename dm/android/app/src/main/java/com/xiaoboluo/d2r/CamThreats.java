@@ -28,7 +28,7 @@ final class CamThreats extends View implements Choreographer.FrameCallback {
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path arrow = new Path();
     private int count;
-    private final float[] chest = new float[96 * 2];
+    private final float[] chest = new float[96 * 2];   // 与 dm_world.h 的 DM_CHEST_MAX 一致 | must match DM_CHEST_MAX in dm_world.h
     private int chestN, chestDrawn = -1;
     private final Paint dotFill = new Paint(Paint.ANTI_ALIAS_FLAG), dotEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean running, headOn, aimOn, ringTried;

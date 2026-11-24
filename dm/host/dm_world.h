@@ -12,3 +12,7 @@ int dm_world_watch_pos(float *nx, float *ny);    // 任意线程：盯住的单�
 enum { DM_MAP_GOAL_MAX = 24, DM_MG_WP = 255, DM_MG_LVL = 256 };   // 图样号：< 64 任务名牌、64–70 塔拉夏符号、DM_MG_WP 传送点、DM_MG_LVL + 区域号 = 区域名 | art: < 64 quest nameplate, 64–70 Tal Rasha symbol, DM_MG_WP waypoint, DM_MG_LVL + level id = level name
 typedef struct { int n, px, py; float sx, sy; int x[DM_MAP_GOAL_MAX], y[DM_MAP_GOAL_MAX]; unsigned short art[DM_MAP_GOAL_MAX]; } dm_map_goal_view;   // px / py 玩家世界格；sx / sy 玩家脚底在画面上的位置（归一化） | px / py player world cell; sx / sy position of the player's feet on screen (normalized)
 int dm_map_goals(dm_map_goal_view *v);      // 返回终点个数（地图标注开关关着、本关没有终点、还没扫完 = 0） | returns the number of goals (map marking switch off, no goal in this level, scan not finished = 0)
+// 小地图未开容器标记（dm_world.c）：游戏线程收集、界面线程只读投影；DM_CHEST_MAX 与 CamThreats.java 的数组长度必须一致
+// Un-opened container marks (dm_world.c): collected on the game thread, projected read-only on the UI thread; DM_CHEST_MAX must match the array size in CamThreats.java
+enum { DM_CHEST_MAX = 96 };
+int dm_chest_marks(float *out, int max);   // 任意线程：已投影的屏幕归一化坐标对，返回个数 | any thread: projected normalized screen coordinates (pairs), returns the count
