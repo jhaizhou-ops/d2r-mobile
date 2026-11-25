@@ -66,6 +66,7 @@ run: \
 	python3 ../../i18n/scan_literals.py
 	python3 ../../tools/tests/test_warm_seed.py
 	python3 ../../tools/tests/test_patched_ready.py
+	python3 ../../tools/tests/test_android_shell.py
 	$(B)/t_thread_leak
 	$(B)/t_loader_weak
 	$(B)/t_mac_overlay

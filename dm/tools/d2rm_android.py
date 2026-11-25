@@ -3,13 +3,15 @@
 #   做出来的是 <输出目录>/android/：out/（改写后的游戏程序与配套表）、shaders/（Vulkan 着色器包）、overlay/（触屏覆盖层与界面素材）、
 #   overlay_variants/（「物品注释与旧译名」等走覆盖层的开关打开时用的覆盖层）、
 #   derived.tsv（几张从游戏文件生成的数据表）、pack_info.txt（做给哪一版 App）。游戏文件只在本机读，不上传；这个文件夹里有游戏内容，请只自己用，不要分发。
-# 用法：d2rm_android.py [--warm-seed <预热种子>] <游戏文件目录> <输出目录>
+# 用法：d2rm_android.py [--warm-seed <预热种子>] [--shell <壳 zip>] <游戏文件目录> <输出目录>
 #   游戏文件目录 = Switch 版 3.3.94012 的 Update 目录，里面有 ExeFS/{main,sdk} 与 RomFS/data/…（怎么从自己的游戏导出）
 #   工作目录（缓存与中间产物）：环境变量 DM_ROOT，缺省 ~/dm-work；每一步做过就跳过
 #   --warm-seed <文件>：把预热种子放进包里的 shaders/（不给就不带；种子放在仓库外，免得被提交）。首次启动、还没有自己的管线列表时，引擎按种子先建好
 #     别的设备见过的管线，第一次进战斗不卡；见 dm/android/README.zh-CN.md「着色器包」一节。种子在读参数时就先核一遍（在不在、格式对不对）
+#   --shell <壳 zip>：发布页同一版本的 D2RMobile-shell-build-input.zip。用里面这个平台预编的着色器翻译工具（Windows、Apple 芯片 Mac 有），就不用装 .NET SDK；
+#     只取 zip 顶层 Tools/ 里的工具，壳的产物代号必须与这份源码一致
 # 之后：把 android 文件夹整个拷到手机的 Download/S2X/D2R Mobile/ 下（和放游戏资源的 data 文件夹并排），打开 App 就会导入；导入完可以删掉这份。
-# 需要：Python 3.9+ 与 pillow numpy lz4 capstone；.NET SDK（编着色器翻译工具）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
+# 需要：Python 3.9+ 与 pillow numpy lz4 capstone；.NET SDK（编着色器翻译工具；给了 --shell 或 DM_XLATE_PREBUILT 就不用）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
 #   （Mac：brew install spirv-tools shaderc；Windows / Linux：LunarG Vulkan SDK；glslc 也可以用安卓 NDK 里的）。缺什么本工具开头会逐项报。
 # 它做的事与 d2rm_pack.py（iOS 壳）同一套：改写游戏程序换成安卓目标，着色器翻成 Vulkan 用的包（dm/gfx/tools/dmsh_vk.py）而不是 Metal 库。
 # 鸿蒙：d2rm_android.py --target ohos <游戏文件目录> <输出目录>，写出 <输出目录>/harmony/dm/：改写目标换成鸿蒙（out/ 与安卓不能共用），着色器包与安卓同一份，
@@ -18,14 +20,16 @@
 #   The result is <output directory>/android/: out/ (the rewritten game program and its tables), shaders/ (Vulkan shader bundles), overlay/ (touch overlay and UI art),
 #   overlay_variants/ (the overlays used when switches that go through the overlay, such as "item notes and old names", are on),
 #   derived.tsv (a few data tables generated from the game files), pack_info.txt (which App release it is for). Game files are only read on this machine, never uploaded; this folder contains game content, keep it to yourself and do not distribute it.
-# Usage: d2rm_android.py [--warm-seed <seed file>] <game files directory> <output directory>
+# Usage: d2rm_android.py [--warm-seed <seed file>] [--shell <shell zip>] <game files directory> <output directory>
 #   game files directory = the Update directory of the Switch version 3.3.94012, with ExeFS/{main,sdk} and RomFS/data/... (how to export them from your own game: docs/GAME_FILES)
 #   working directory (caches and intermediate products): environment variable DM_ROOT, default ~/dm-work; each step that is done is skipped
 #   --warm-seed <file>: put the warm-up seed into the pack's shaders/ (none without the option; keep seeds outside the repository so they are not committed). On a first launch,
 #     before the engine has a pipeline list of its own, it builds the pipelines other devices saw from the seed, so the first fight does not stutter; see "Shader bundles" in
 #     dm/android/README.md. The seed is checked as soon as the arguments are read (that it exists and parses)
+#   --shell <shell zip>: D2RMobile-shell-build-input.zip from the release page of the same version. Its prebuilt shader translator for this platform (Windows and
+#     Apple-silicon Macs have one) is used, so the .NET SDK is not needed; only the tools in the zip's top-level Tools/ are used, and the shell's product code must match this source
 # Then: copy the whole android folder to Download/S2X/D2R Mobile/ on the phone (next to the data folder with the game resources); opening the App imports it, and afterwards this copy can be deleted.
-# Needs: Python 3.9+ with pillow numpy lz4 capstone; the .NET SDK (to build the shader translation tool); spirv-opt, spirv-val and glslc from the Vulkan SDK
+# Needs: Python 3.9+ with pillow numpy lz4 capstone; the .NET SDK (to build the shader translation tool; not needed with --shell or DM_XLATE_PREBUILT); spirv-opt, spirv-val and glslc from the Vulkan SDK
 #   (Mac: brew install spirv-tools shaderc; Windows / Linux: the LunarG Vulkan SDK; glslc can also come from the Android NDK). The tool lists anything missing at the start.
 # It does the same as d2rm_pack.py (the iOS shell): the game program is rewritten for the Android target, and the shaders become the bundles Vulkan uses (dm/gfx/tools/dmsh_vk.py) instead of a Metal library.
 # HarmonyOS: d2rm_android.py --target ohos <game files directory> <output directory> writes <output directory>/harmony/dm/: the game program is rewritten for HarmonyOS (out/ cannot be shared with Android), the shader bundles are the same as Android's,
@@ -33,16 +37,22 @@
 import hashlib, os, shutil, struct, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__)); DM = os.path.dirname(HERE); IOS = os.path.join(DM, 'ios'); GT = os.path.join(DM, 'gfx', 'tools')
-sys.path.insert(0, HERE); from d2rm_pack import ROOT, PY, MODS, say, die, run, step, game_layout, place_xlate, xlate_ready   # 共用 iOS 壳工具的执行与跳步框架（含 Windows 换行处理） | the run-and-skip framework shared with the iOS shell tool (including the Windows line-ending handling)
+sys.path.insert(0, HERE); from d2rm_pack import ROOT, PY, MODS, say, die, run, step, game_layout, place_xlate, xlate_ready, xlate_prebuilt, read_shell, plat   # 共用 iOS 壳工具的执行与跳步框架（含 Windows 换行处理） | the run-and-skip framework shared with the iOS shell tool (including the Windows line-ending handling)
 
 
-def check_env(game):
+# 有预编的着色器翻译工具（--shell 给的壳 zip 里这个平台的那份，或环境变量 DM_XLATE_PREBUILT）就不用 .NET SDK：
+# 发布页的壳 zip 里带 NativeAOT 单文件版（Windows 的是 Tools/dmsh_xlate/win-x64/dmsh_xlate.exe），Windows 上不必装 .NET、也不必配 NuGet 源（#243）
+# With a prebuilt shader translator (this platform's copy in the shell zip given with --shell, or DM_XLATE_PREBUILT) the .NET SDK is not needed:
+# the release page's shell zip carries NativeAOT single files (on Windows Tools/dmsh_xlate/win-x64/dmsh_xlate.exe), so Windows needs neither .NET nor a NuGet source (#243)
+def check_env(game, z=None):
     bad = []
     for m in ('PIL', 'numpy', 'lz4', 'capstone'):
         try: __import__(m)
         except Exception: bad.append('Python 包 %s：%s -m pip install pillow numpy lz4 capstone' % (m, PY))
-    dotnet = shutil.which('dotnet') or (os.path.expanduser('~/.dotnet/dotnet') if os.path.exists(os.path.expanduser('~/.dotnet/dotnet')) else None)
-    if not dotnet: bad.append('.NET SDK（dotnet）：https://dotnet.microsoft.com/download')
+    dotnet = None
+    if not xlate_prebuilt(z):
+        dotnet = shutil.which('dotnet') or (os.path.expanduser('~/.dotnet/dotnet') if os.path.exists(os.path.expanduser('~/.dotnet/dotnet')) else None)
+        if not dotnet: bad.append('.NET SDK（dotnet）：https://dotnet.microsoft.com/download' + ('' if z else '；或者用 --shell 给出同一发布版的壳 zip（发布页的 D2RMobile-shell-build-input.zip），改用里面预编的翻译工具'))
     for t in ('spirv-opt', 'spirv-val'):
         if not shutil.which(t): bad.append('%s：Vulkan SDK（https://vulkan.lunarg.com/），Mac 上 brew install spirv-tools' % t)
     if shutil.which('spirv-opt') and b'--trim-capabilities' not in subprocess.run(['spirv-opt', '--help'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout:
@@ -53,12 +63,24 @@ def check_env(game):
     for f in ('ExeFS/main', 'ExeFS/sdk', 'RomFS/data/build_manifest.psv'):
         if not os.path.isfile(os.path.join(game, f)): bad.append('游戏文件 %s（在 %s 下没找到）' % (f, game))
     if bad: die('还缺 %d 项：\n  - %s' % (len(bad), '\n  - '.join(bad)))
-    if not os.environ.get('DOTNET_ROOT'):   # 翻译工具启动时自己找 .NET 运行时，理由见 d2rm_pack.check_env | the translation tool finds the .NET runtime itself at startup; see d2rm_pack.check_env for why
+    if dotnet and not os.environ.get('DOTNET_ROOT'):   # 翻译工具启动时自己找 .NET 运行时，理由见 d2rm_pack.check_env | the translation tool finds the .NET runtime itself at startup; see d2rm_pack.check_env for why
         import re
         r = subprocess.run([dotnet, '--list-runtimes'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         m = re.search(r'^Microsoft\.NETCore\.App \S+ \[(.*)[/\\]shared[/\\]Microsoft\.NETCore\.App\]', r.stdout.decode('utf-8', 'replace'), re.M)
         if m: os.environ['DOTNET_ROOT'] = m.group(1)
     return dotnet
+
+
+# --shell：打开壳 zip，只取顶层 Tools/ 里的预编工具（目前用的是着色器翻译工具），装进手机的东西不从壳里拿。
+# 壳与源码必须是同一个发布版：产物代号对不上就停（与 d2rm_pack.py 同一条规矩），免得用别的版本的翻译工具翻出对不上的着色器。
+# --shell: open the shell zip and use only the prebuilt tools in its top-level Tools/ (for now the shader translator); nothing that goes onto the phone comes from the shell.
+# Shell and source must be from the same release: a different product code stops here (the same rule as d2rm_pack.py), so a translator from another release cannot make mismatched shaders.
+def open_shell_tools(shell, P):
+    if not os.path.isfile(shell): die('没有这个壳文件：%s' % shell)
+    z, _, _, info, _ = read_shell(shell)
+    if info.get('PRODUCT') != P: die('壳与这份源码不是同一版：壳的产物代号是 %s，这份源码是 %s。请用与源码同一个发布版本的壳 zip' % (info.get('PRODUCT'), P))
+    if not xlate_prebuilt(z): say('壳里没有 %s 的预编着色器翻译工具，照旧用 .NET SDK 编' % plat())
+    return z
 
 
 def warm_seed_records(data):
@@ -112,13 +134,14 @@ def warm_seed(seed, shaders):
 
 
 def main():
-    args = sys.argv[1:]; T = 'android'; seed = None
+    args = sys.argv[1:]; T = 'android'; seed = None; shell = None
     while args and args[0].startswith('--') and len(args) >= 2:
         if args[0] == '--target': T = args[1]
         elif args[0] == '--warm-seed': seed = os.path.abspath(args[1])
+        elif args[0] == '--shell': shell = os.path.abspath(args[1])
         else: break
         args = args[2:]
-    if len(args) != 2 or T not in ('android', 'ohos'): sys.exit('用法：d2rm_android.py [--target ohos] [--warm-seed <预热种子>] <游戏文件目录> <输出目录>')
+    if len(args) != 2 or T not in ('android', 'ohos'): sys.exit('用法：d2rm_android.py [--target ohos] [--warm-seed <预热种子>] [--shell <壳 zip>] <游戏文件目录> <输出目录>')
     seed = warm_seed_load(seed)
     game, dst = (os.path.abspath(x) for x in args)
     for st in (sys.stdout, sys.stderr):
@@ -126,8 +149,9 @@ def main():
         except Exception: pass
     if not os.path.isdir(game): die('没有这个游戏文件目录：%s' % game)
     game = game_layout(game)
-    dotnet = check_env(game)
     P = open(os.path.join(DM, 'PRODUCT')).readline().strip()
+    z = open_shell_tools(shell, P) if shell else None
+    dotnet = check_env(game, z)
     romfs = os.path.join(game, 'RomFS'); stage = os.path.join(ROOT, 'build', 'pack', T); shutil.rmtree(stage, ignore_errors=True); os.makedirs(stage)
     final = os.path.join(dst, 'android') if T == 'android' else os.path.join(dst, 'harmony', 'dm')
     say('产物代号 %s；做好的文件夹放在 %s' % (P, final))
@@ -186,8 +210,8 @@ def main():
             if p: run([PY, os.path.join(HERE, 'dmx.py'), 'get', p, os.path.join(packs, os.path.basename(p))], env=e, what='取着色器包 ' + p)
     step('取着色器包（162 个）', lambda: os.path.isdir(packs) and len(os.listdir(packs)) == 162, get_packs)
     xl = os.path.join(ROOT, 'build', 'gfx', 'dmsh_xlate'); exe = os.path.join(xl, 'dmsh_xlate.exe' if os.name == 'nt' else 'dmsh_xlate')
-    step('编译着色器翻译工具', lambda: os.path.isfile(exe) and xlate_ready(xl),
-         lambda: place_xlate(xl) or run([dotnet, 'publish', os.path.join(GT, 'dmsh_xlate'), '-c', 'Release', '-o', xl, '-v', 'quiet'], what='编译着色器翻译工具'))
+    step('编译着色器翻译工具', lambda: os.path.isfile(exe) and xlate_ready(xl, z),
+         lambda: place_xlate(xl, z) or run([dotnet, 'publish', os.path.join(GT, 'dmsh_xlate'), '-c', 'Release', '-o', xl, '-v', 'quiet'], what='编译着色器翻译工具'))
     sh = os.path.join(stage, 'shaders'); t0 = time.time(); say('翻译全部着色器（约 2 分钟）')
     run([PY, os.path.join(GT, 'dmsh_vk.py'), packs, sh], env={'XLATE': exe, 'MAIN': os.path.join(game, 'ExeFS', 'main'), 'WORK': stage}, log=os.path.join(stage, 'shaders.log'), what='翻译着色器')
     q = os.path.join(stage, 'queries'); run([PY, os.path.join(GT, 'pack_builtin_queries.py'), '--output', q], what='编查询核')
