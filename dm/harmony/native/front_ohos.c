@@ -41,6 +41,22 @@ void front_android_set_window(void *win, int w, int h) {
         front_window_res_changed();
     }
 }
+// 启动时（自定义设置读盘前）就给出本机的 3D 比例缺省：读盘会调 dm_3d_scale_level_set → s3_phone_default()，后者只读一次 DM_3D_SCALE_DEFAULT；
+// 等到 front_game_res 再设就晚了，缺省会钉成 0.75（v2.3.5 合入后实测：营地 3D 0.75，NC33 是 0.53）。公式同下面 front_game_res 的原生像素出图。
+// Give this device's 3D scale default at startup, before the saved Custom settings are read: reading them calls dm_3d_scale_level_set → s3_phone_default(),
+// which reads DM_3D_SCALE_DEFAULT only once; setting it later in front_game_res is too late and the default sticks at 0.75 (measured after the v2.3.5 merge:
+// camp 3D 0.75, NC33 0.53). Same formula as the native-pixel output in front_game_res below.
+void front_ohos_early_scale_default(int performance_res) {
+    if (getenv("DM_3D_SCALE") || getenv("DM_3D_SCALE_DEFAULT")) return;
+    const char *nr = getenv("DM_NATIVE_RES");
+    int32_t w = 0, h = 0;
+    if (OH_NativeDisplayManager_GetDefaultDisplayWidth(&w) != 0 || OH_NativeDisplayManager_GetDefaultDisplayHeight(&h) != 0 || w <= 0 || h <= 0) { LOG("画面：启动时读不到屏幕尺寸，3D 缺省等出图时再定"); return; }
+    unsigned nh = (unsigned)(w < h ? w : h); char v[16];
+    if (performance_res || (nr && *nr == '0') || nh < 720) snprintf(v, sizeof v, "0.75");
+    else { double sc = 700.0 / nh; snprintf(v, sizeof v, "%.2f", sc < 0.5 ? 0.5 : sc > 0.75 ? 0.75 : sc); }
+    setenv("DM_3D_SCALE_DEFAULT", v, 0); setenv("DM_3D_SCALE_FLOOR", v, 0);
+    LOG("画面：启动时按屏幕 %dx%d 定 3D 缺省 %s", (int)w, (int)h, v);
+}
 // 当前窗口尺寸（同安卓 front_android.c）：呈现层原生尺寸上屏前核对比例 | Current window size (as Android's front_android.c): the presenter checks the aspect before native-size present
 int front_android_window_size(int *w, int *h) {
     if (!w || !h) return 0;

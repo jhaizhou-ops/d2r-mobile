@@ -277,6 +277,7 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     get_str(env, argv[0], g_files, sizeof g_files); get_str(env, argv[1], g_ext, sizeof g_ext); get_str(env, argv[2], g_src, sizeof g_src); get_str(env, argv[3], lg, sizeof lg);
     // 挂存档与选择覆盖层之前提供设置目录，使语言选择在本次启动生效。
     // Make saved preferences available before save mount and overlay selection.
+    { void front_ohos_early_scale_default(int performance_res); front_ohos_early_scale_default((experiment_flags() & 32768) != 0); }
     dm_custom_init(g_files);
     snprintf(g_runtime, sizeof g_runtime, "%s/dm", g_files); mkdirs(g_runtime);
     log_init();
