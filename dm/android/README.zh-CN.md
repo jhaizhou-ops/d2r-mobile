@@ -22,7 +22,7 @@ English: [README.md](README.md)
 python3 dm/tools/d2rm_android.py <Switch 版 3.3.94012 的 Update 目录> <输出目录>
 ```
 
-它改写游戏程序（安卓目标）、把全部着色器翻成 Vulkan 包、生成触屏覆盖层与几张数据表，写出 `<输出目录>/android/`。需要的工具见脚本开头（Python 包、.NET SDK、Vulkan SDK 里的 `spirv-opt` / `spirv-val` / `glslc`），缺什么它会逐项报。Windows 和 Apple 芯片的 Mac 上加 `--shell <同一版本的 D2RMobile-shell-build-input.zip>` 就用壳里预编的着色器翻译工具，不用装 .NET SDK。
+它改写游戏程序（安卓目标）、把全部着色器翻成 Vulkan 包、生成触屏覆盖层与几张数据表，写出 `<输出目录>/android/`。需要的工具见脚本开头（Python 包、.NET SDK、Vulkan SDK 里的 `spirv-opt` / `spirv-val` / `glslc`），缺什么它会逐项报。Windows 和 Apple 芯片的 Mac 上加 `--shell <同一版本的 D2RMobile-shell-build-input.zip>` 就用壳里预编的着色器翻译工具和贴图库，不用装 .NET SDK 和 clang。
 
 把这个 `android` 文件夹整个拷到手机的 `Download/S2X/D2R Mobile/` 下，游戏资源（`RomFS/data` 整个目录）拷成同一处的 `data`。打开 App：发现新的导入包就拷进内部目录 `files/dm/`（显示进度，第一次一两分钟），然后启动。导入包要与 App 同一版本（`pack_info.txt` 里的产物代号与 App 编入的相同），不同时 App 会说明。导入完，手机上的 `android` 文件夹可以删掉；导入包里有游戏内容，只给自己用。
 

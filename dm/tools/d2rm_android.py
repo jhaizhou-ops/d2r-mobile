@@ -8,10 +8,11 @@
 #   工作目录（缓存与中间产物）：环境变量 DM_ROOT，缺省 ~/dm-work；每一步做过就跳过
 #   --warm-seed <文件>：把预热种子放进包里的 shaders/（不给就不带；种子放在仓库外，免得被提交）。首次启动、还没有自己的管线列表时，引擎按种子先建好
 #     别的设备见过的管线，第一次进战斗不卡；见 dm/android/README.zh-CN.md「着色器包」一节。种子在读参数时就先核一遍（在不在、格式对不对）
-#   --shell <壳 zip>：发布页同一版本的 D2RMobile-shell-build-input.zip。用里面这个平台预编的着色器翻译工具（Windows、Apple 芯片 Mac 有），就不用装 .NET SDK；
+#   --shell <壳 zip>：发布页同一版本的 D2RMobile-shell-build-input.zip。用里面这个平台预编的着色器翻译工具与贴图解排布库（Windows、Apple 芯片 Mac 有），就不用装 .NET SDK 和 clang；
 #     只取 zip 顶层 Tools/ 里的工具，壳的产物代号必须与这份源码一致
 # 之后：把 android 文件夹整个拷到手机的 Download/S2X/D2R Mobile/ 下（和放游戏资源的 data 文件夹并排），打开 App 就会导入；导入完可以删掉这份。
-# 需要：Python 3.9+ 与 pillow numpy lz4 capstone；.NET SDK（编着色器翻译工具；给了 --shell 或 DM_XLATE_PREBUILT 就不用）；Vulkan SDK 里的 spirv-opt、spirv-val、glslc
+# 需要：Python 3.9+ 与 pillow numpy lz4 capstone；.NET SDK（编着色器翻译工具；给了 --shell 或 DM_XLATE_PREBUILT 就不用）；clang（编贴图解排布库；给了 --shell 或 DM_DESWIZZLE_LIB 就不用）；
+#   Vulkan SDK 里的 spirv-opt、spirv-val、glslc
 #   （Mac：brew install spirv-tools shaderc；Windows / Linux：LunarG Vulkan SDK；glslc 也可以用安卓 NDK 里的）。缺什么本工具开头会逐项报。
 # 它做的事与 d2rm_pack.py（iOS 壳）同一套：改写游戏程序换成安卓目标，着色器翻成 Vulkan 用的包（dm/gfx/tools/dmsh_vk.py）而不是 Metal 库。
 # 鸿蒙：d2rm_android.py --target ohos <游戏文件目录> <输出目录>，写出 <输出目录>/harmony/dm/：改写目标换成鸿蒙（out/ 与安卓不能共用），着色器包与安卓同一份，
@@ -26,10 +27,11 @@
 #   --warm-seed <file>: put the warm-up seed into the pack's shaders/ (none without the option; keep seeds outside the repository so they are not committed). On a first launch,
 #     before the engine has a pipeline list of its own, it builds the pipelines other devices saw from the seed, so the first fight does not stutter; see "Shader bundles" in
 #     dm/android/README.md. The seed is checked as soon as the arguments are read (that it exists and parses)
-#   --shell <shell zip>: D2RMobile-shell-build-input.zip from the release page of the same version. Its prebuilt shader translator for this platform (Windows and
-#     Apple-silicon Macs have one) is used, so the .NET SDK is not needed; only the tools in the zip's top-level Tools/ are used, and the shell's product code must match this source
+#   --shell <shell zip>: D2RMobile-shell-build-input.zip from the release page of the same version. Its prebuilt shader translator and texture deswizzle library for this platform
+#     (Windows and Apple-silicon Macs have them) are used, so neither the .NET SDK nor clang is needed; only the tools in the zip's top-level Tools/ are used, and the shell's product code must match this source
 # Then: copy the whole android folder to Download/S2X/D2R Mobile/ on the phone (next to the data folder with the game resources); opening the App imports it, and afterwards this copy can be deleted.
-# Needs: Python 3.9+ with pillow numpy lz4 capstone; the .NET SDK (to build the shader translation tool; not needed with --shell or DM_XLATE_PREBUILT); spirv-opt, spirv-val and glslc from the Vulkan SDK
+# Needs: Python 3.9+ with pillow numpy lz4 capstone; the .NET SDK (to build the shader translation tool; not needed with --shell or DM_XLATE_PREBUILT); clang (to build the texture
+#   deswizzle library; not needed with --shell or DM_DESWIZZLE_LIB); spirv-opt, spirv-val and glslc from the Vulkan SDK
 #   (Mac: brew install spirv-tools shaderc; Windows / Linux: the LunarG Vulkan SDK; glslc can also come from the Android NDK). The tool lists anything missing at the start.
 # It does the same as d2rm_pack.py (the iOS shell): the game program is rewritten for the Android target, and the shaders become the bundles Vulkan uses (dm/gfx/tools/dmsh_vk.py) instead of a Metal library.
 # HarmonyOS: d2rm_android.py --target ohos <game files directory> <output directory> writes <output directory>/harmony/dm/: the game program is rewritten for HarmonyOS (out/ cannot be shared with Android), the shader bundles are the same as Android's,
@@ -37,7 +39,7 @@
 import hashlib, os, shutil, struct, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__)); DM = os.path.dirname(HERE); IOS = os.path.join(DM, 'ios'); GT = os.path.join(DM, 'gfx', 'tools')
-sys.path.insert(0, HERE); from d2rm_pack import ROOT, PY, MODS, say, die, run, step, game_layout, place_xlate, xlate_ready, xlate_prebuilt, read_shell, plat   # 共用 iOS 壳工具的执行与跳步框架（含 Windows 换行处理） | the run-and-skip framework shared with the iOS shell tool (including the Windows line-ending handling)
+sys.path.insert(0, HERE); from d2rm_pack import ROOT, PY, MODS, say, die, run, step, game_layout, place_xlate, xlate_ready, xlate_prebuilt, read_shell, plat, place_deswizzle   # 共用 iOS 壳工具的执行与跳步框架（含 Windows 换行处理） | the run-and-skip framework shared with the iOS shell tool (including the Windows line-ending handling)
 
 
 # 有预编的着色器翻译工具（--shell 给的壳 zip 里这个平台的那份，或环境变量 DM_XLATE_PREBUILT）就不用 .NET SDK：
@@ -53,6 +55,13 @@ def check_env(game, z=None):
     if not xlate_prebuilt(z):
         dotnet = shutil.which('dotnet') or (os.path.expanduser('~/.dotnet/dotnet') if os.path.exists(os.path.expanduser('~/.dotnet/dotnet')) else None)
         if not dotnet: bad.append('.NET SDK（dotnet）：https://dotnet.microsoft.com/download' + ('' if z else '；或者用 --shell 给出同一发布版的壳 zip（发布页的 D2RMobile-shell-build-input.zip），改用里面预编的翻译工具'))
+    # 贴图解排布库：界面素材脚本（romfs_art.py 等）读游戏贴图要用。壳里有这个平台的预编版（Tools/deswizzle/<平台>/）就用它；
+    # 没有就由脚本当场用 clang 编（Windows 上 clang 还要 VS 的 C++ 工具，#243），所以在这里先查 clang，免得做到一半才失败
+    # Texture deswizzle library: the interface-art scripts (romfs_art.py and others) need it to read the game's textures. The shell's prebuilt copy for this platform
+    # (Tools/deswizzle/<platform>/) is used when there is one; otherwise the scripts build it with clang on the spot (on Windows clang also needs the VS C++ tools, #243),
+    # so clang is checked here rather than failing halfway through
+    have_dsw = place_deswizzle(z) if z else bool(os.environ.get('DM_DESWIZZLE_LIB'))
+    if not have_dsw and not shutil.which('clang'): bad.append('clang（界面素材脚本现编贴图解排布库用）：https://releases.llvm.org/' + ('' if z else '；或者用 --shell 给出同一发布版的壳 zip，改用里面预编的库'))
     for t in ('spirv-opt', 'spirv-val'):
         if not shutil.which(t): bad.append('%s：Vulkan SDK（https://vulkan.lunarg.com/），Mac 上 brew install spirv-tools' % t)
     if shutil.which('spirv-opt') and b'--trim-capabilities' not in subprocess.run(['spirv-opt', '--help'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout:

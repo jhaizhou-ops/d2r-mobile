@@ -24,6 +24,7 @@ The Android version works like the iOS shell: the release page has an **APK that
 - The source of this repository **from the same release as the APK** (the App checks and tells you if they differ)
 - Python 3.9 or later with these packages: `python3 -m pip install pillow numpy lz4 capstone unicorn`
 - The .NET SDK (to build the shader translation tool): <https://dotnet.microsoft.com/download>. **Not needed on Windows or an Apple silicon Mac** if you also download `D2RMobile-shell-build-input.zip` from the **same** release and pass it with `--shell` (see step 1): the tool then uses the prebuilt translator inside it.
+- `clang`, to build a small texture library the art scripts need (on Windows: LLVM plus Visual Studio's C++ tools). **Also not needed with `--shell`** on Windows or an Apple silicon Mac: the tool uses the prebuilt library in the zip.
 - `spirv-opt`, `spirv-val` and `glslc` from the Vulkan SDK: the [LunarG Vulkan SDK](https://vulkan.lunarg.com/) on Windows / Linux, `brew install spirv-tools shaderc` on macOS. `spirv-opt` must be new enough to support `--trim-capabilities` (the tool checks); the copy that ships with the Android NDK is too old, so do not let it come first on `PATH`. `glslc` from the Android NDK works too
 - About 2 GB of disk space: about 0.9 GB of caches and intermediate products (in `DM_ROOT`, default `~/dm-work`) and about 0.7 GB for the import pack
 
@@ -43,7 +44,7 @@ Without the .NET SDK (Windows or an Apple silicon Mac), add the release's shell 
 python3 dm/tools/d2rm_android.py --shell <path to D2RMobile-shell-build-input.zip> <game files directory> <output directory>
 ```
 
-The tool only takes the prebuilt shader translator from that zip's `Tools/` folder; the zip must come from the same release as the source (the tool stops if their product codes differ).
+The tool only takes the prebuilt shader translator and texture library from that zip's `Tools/` folder, so neither the .NET SDK nor clang is needed; the zip must come from the same release as the source (the tool stops if their product codes differ).
 
 `<game files directory>` is the `Update` directory of the Switch version 3.3.94012 (with `ExeFS` and `RomFS` in it). The tool rewrites the game program for Android, extracts and translates every shader, generates the touch overlay and a few data tables, and writes `<output directory>/android/`:
 
