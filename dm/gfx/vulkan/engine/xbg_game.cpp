@@ -104,6 +104,18 @@ __attribute__((weak)) void dm_cam_publish(const float vpo[16],const float ivpo[1
 #include <condition_variable>
 #include <set>
 #include "xbg_easu_spv.h"
+// Set by a presenter that uses the queue from another thread (vulkan_present.cpp, asynchronous present); called before every engine
+// queue submission. nullptr = synchronous present.
+extern "C" { void (*xbg_queue_barrier)(void)=nullptr; }
+// Same presenter: takes over the end-of-frame submission (the one made while presenting) and issues it on its thread right before the
+// present blit, in the same queue order. Returns a VkResult. Measured on Pura X camp: vkQueueSubmit of the frame is ~2.2 ms of driver time.
+extern "C" { int (*xbg_queue_submit_async)(VkQueue,uint32_t,const VkCommandBuffer*,VkFence)=nullptr; }
+// Same presenter: wait until no engine submission is deferred (handed over but not yet issued). Called before every wait on a slot fence:
+// waiting on a fence before its vkQueueSubmit never wakes on the Maleoon driver (11-26: every deferred-submit build hung 10 s at start).
+extern "C" { void (*xbg_fence_barrier)(void)=nullptr; }
+static inline void fence_barrier(){if(xbg_fence_barrier)xbg_fence_barrier();}
+static bool submit_defer=false;   // set only around the submit_slots() of xbg_present_texture_now
+static uint64_t ui_memo_skips=0;   // UI-shift draws whose projection binding is not a dynamic UBO (memo skipped)
 
 // H-08 exclusive timing hooks; absent on other platforms and standalone tests.
 #ifdef __OHOS__
@@ -796,7 +808,7 @@ uint64_t queued=0,waits=0,wait_ns=0;   // render thread only
 void run(){
     for(;;){Job j;{std::unique_lock<std::mutex> l(mu);cv.wait(l,[]{return stop || !jobs.empty();});if(jobs.empty())return;j=jobs.front();jobs.erase(jobs.begin());}
         const uint64_t timeout=std::max<uint64_t>(cfg.fence_timeout_ns,10000000000ull);
-        VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&j.fence,VK_TRUE,timeout);});
+        fence_barrier();VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&j.fence,VK_TRUE,timeout);});
         // 栅栏一直不亮而驱动又不报 DEVICE_LOST 时，这里只剩 VK_TIMEOUT；把它说清楚，别让崩在后面的检查里只留下一个 2。
         // When the fence never signals and the driver does not report DEVICE_LOST, all that is left here is VK_TIMEOUT; say so,
         // so the fatal check later does not leave just a 2 in the crash report.
@@ -962,7 +974,7 @@ void retire_slot(Slot &s){
     if(!s.pending)return;
     poolreset::finish(s);
     {CPU_SCOPE(Fence);bool busy=vkGetFenceStatus(cfg.device,s.fence)==VK_NOT_READY;uint64_t b0=busy?timing_clock():0;
-     VK(h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&s.fence,VK_TRUE,std::max<uint64_t>(cfg.fence_timeout_ns,10000000000ull));}));
+     fence_barrier();VK(h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&s.fence,VK_TRUE,std::max<uint64_t>(cfg.fence_timeout_ns,10000000000ull));}));
      if(busy){block_ns[sync_site]+=timing_clock()-b0;++block_calls[sync_site];}}
     ++perf.waits;
     if(s.prof){
@@ -1096,7 +1108,9 @@ void submit_slots(bool wait){
             vkCmdPipelineBarrier(s.pro,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,1,&after,0,nullptr,0,nullptr);
             VK(vkEndCommandBuffer(s.pro));cbs[0]=s.pro;cbs[1]=s.cmd;ncb=2;s.pro_ops.clear();}
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=ncb;si.pCommandBuffers=cbs;
-        {CPU_SCOPE(Submit);VK(h8_call(7,[&]{return vkQueueSubmit(cfg.queue,1,&si,s.fence);}));}++submit_by[sync_site];poolreset::queue(s);
+        if(submit_defer && xbg_queue_submit_async){CPU_SCOPE(Submit);VK(VkResult(xbg_queue_submit_async(cfg.queue,ncb,cbs,s.fence)));}   // issued by the present thread
+        else{if(xbg_queue_barrier)xbg_queue_barrier();   // asynchronous present: the present thread is done with the queue (see vulkan_present.cpp)
+        {CPU_SCOPE(Submit);VK(h8_call(7,[&]{return vkQueueSubmit(cfg.queue,1,&si,s.fence);}));}}++submit_by[sync_site];poolreset::queue(s);
         s.recording=false;s.pending=true;s.covers=submitted;s.hud_frame=hud::frame.load(std::memory_order_relaxed);slot_index^=1;++perf.submits;snapshot_reset();++slot_serial;
         pending_events.insert(pending_events.end(),recording_events.begin(),recording_events.end());recording_events.clear();
     }
@@ -1220,6 +1234,7 @@ void perf_frame(){
     if(tex_dirty){xbg_logf("NVN PERF texdirty tracked=%.1f checks=%.1f changed=%.1f",tex_dirty_tracked/f,tex_dirty_checks/f,tex_dirty_changed/f);tex_dirty_tracked=tex_dirty_checks=tex_dirty_changed=0;}
     if(vcache::enabled){xbg_logf("NVN PERF vcache hits=%.1f (%.2fMB) fills=%.1f (%.2fMB) refills=%.2f volatile=%llu untracked=%llu flushes=%llu entries=%zu arena=%.1fMB pools=%d",vcache::hits/f,vcache::hit_bytes/1048576.0/f,vcache::fills/f,vcache::fill_bytes/1048576.0/f,vcache::refills/f,(unsigned long long)vcache::volatiles,(unsigned long long)vcache::untracked,(unsigned long long)vcache::flushes,vcache::live(),vcache::arena_bytes()/1048576.0,[]{int live=0,used=0;uint64_t adds=0;if(nvn_dirty_slot_stats)nvn_dirty_slot_stats(&live,&used,&adds);return used;}());vcache::hits=vcache::hit_bytes=vcache::fills=vcache::fill_bytes=vcache::refills=0;}
     {static uint64_t pm=0,pe=0;xbg_logf("NVN PERF pipelines_new=%llu evicted=%llu warm_hits=%llu created=%llu create_ms=%.1f create_max_ms=%.1f warm_built=%llu warm_failed=%llu warm_ms=%.0f async_skips=%llu async_built=%llu",(unsigned long long)(pipeline_counts.misses-pm),(unsigned long long)(pipeline_counts.evictions-pe),(unsigned long long)warm::hits,(unsigned long long)warm::creates,warm::create_ns/1e6,warm::create_max_ns/1e6,(unsigned long long)warm::built.load(),(unsigned long long)warm::failed.load(),warm::build_ns.load()/1e6,(unsigned long long)warm::async_skips.exchange(0),(unsigned long long)warm::async_built.load());warm::hits=warm::creates=warm::create_ns=warm::create_max_ns=0;pm=pipeline_counts.misses;pe=pipeline_counts.evictions;}
+    xbg_logf("NVN PERF uimemo skips=%.1f",ui_memo_skips/f);ui_memo_skips=0;
     xbg_logf("NVN PERF setcache ab=%d hits=%.1f misses=%.1f template=%.1f plain=%.1f memo_hits=%.1f memo_misses=%.1f memo_front=%.1f why=texel%.1f/simg%.1f/dm%.1f/dynbuf%.1f/store%.1f",int(ab_frame_on),set_cache_hits/f,set_cache_misses/f,template_updates/f,plain_updates/f,desc_memo_hits/f,desc_memo_misses/f,memo_front_hits/f,desc_memo_why[0]/f,desc_memo_why[1]/f,desc_memo_why[2]/f,desc_memo_why[3]/f,desc_memo_why[4]/f);desc_memo_hits=desc_memo_misses=memo_front_hits=0;for(auto &w:desc_memo_why)w=0;xbg_logf("NVN PERF keydiff shader%.0f pool%.0f ubo%.0f uaddr%.0f size%.0f vp%.0f alpha%.0f drv%.0f tex%.0f samp%.0f saddr%.0f same%.0f new%.0f len%.0f",key_diff[0]/tf,key_diff[1]/tf,key_diff[2]/tf,key_diff[3]/tf,key_diff[4]/tf,key_diff[5]/tf,key_diff[6]/tf,key_diff[7]/tf,key_diff[8]/tf,key_diff[9]/tf,key_diff[10]/tf,key_diff[11]/tf,key_diff[12]/tf,key_diff[13]/tf);for(auto &k:key_diff)k=0;   // per timed frame
     xbg_logf("NVN PERF binds_skipped_per_frame=%.1f xmemo_hits=%.1f drops=%llu bumps=%llu/%llu/%llu/%llu/%llu pinned=%zu/%zu",binds_skipped/f,xmemo_hits/f,(unsigned long long)xmemo_drops,(unsigned long long)memo_bump[0],(unsigned long long)memo_bump[1],(unsigned long long)memo_bump[2],(unsigned long long)memo_bump[3],(unsigned long long)memo_bump[4],memo_pinned[0].size(),memo_pinned[1].size());binds_skipped=0;{char top[160]="";int at=0;bool used[32]={};
      for(int r=0;r<4;r++){int best=-1;for(int k=0;k<32;k++)if(!used[k] && offset_changed_at[k] && (best<0 || offset_changed_at[k]>offset_changed_at[best]))best=k;if(best<0)break;used[best]=true;at+=snprintf(top+at,sizeof(top)-size_t(at),"%s%d:%.1f",r?",":"",best,offset_changed_at[best]/f);}
@@ -3331,7 +3346,21 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
     // ktag (which part of the key each word is) only feeds the keydiff census, so it is filled on timed frames only (one in
     // perf_sample); a miss without tags skips the census. A/B target ktag tags every frame again.
     const bool tags=timing_now()!=nullptr || ab_off("ktag");
-    bool ok=desc_memo_enabled && !compute && !capture.active && !provenance_file && g_ui_moff==0;
+    // 真全屏界面下移的绘制（g_ui_moff != 0）以前一律不走记忆：投影常量另拷一份加偏移。这份拷贝只在 uniform_snapshot 里做，记忆命中时动态
+    // UBO 正是经 uniform_snapshot 按当前地址、当前偏移重拷的，所以界面投影那个绑定是动态 UBO 时命中照样正确；不是动态的（集合里存着旧拷贝）
+    // 仍不走记忆。Pura X 营地每帧约 770 笔界面绘制因此每次都整套重建描述符。DM_GFX_UI_MEMO=0 恢复旧行为。
+    // True-fullscreen UI-shift draws (g_ui_moff != 0) used to skip the memo: their projection constants are a separate shifted copy. That copy is made
+    // only in uniform_snapshot, and a memo hit re-copies every dynamic UBO through uniform_snapshot at the current address and shift, so a hit is
+    // correct when the UI projection binding is a dynamic UBO; a non-dynamic one (the set would hold an old copy) still skips the memo. In the Pura X
+    // camp about 770 UI draws per frame rebuilt their whole descriptor set every time. DM_GFX_UI_MEMO=0 restores the old behaviour.
+    static int ui_memo=-1;if(ui_memo<0){const char *e=getenv("DM_GFX_UI_MEMO");
+#ifdef __OHOS__
+        ui_memo=e&&*e?atoi(e)!=0:1;
+#else
+        ui_memo=e&&*e?atoi(e)!=0:0;
+#endif
+        xbg_logf("NVN descriptor memo for UI-shift draws=%d (DM_GFX_UI_MEMO)",ui_memo);}
+    bool ok=desc_memo_enabled && !compute && !capture.active && !provenance_file && (g_ui_moff==0 || ui_memo);
     if(ok){CPU_SCOPE(Descriptor);DescriptorRoot descriptor_measurement(&cpu_scope);DESC_SCOPE(MemoKeyAndCheck);
         static std::vector<DynUbo> dyn_ubos;dyn_ubos.clear();
         bool no_ubo=false;const unsigned dmode=dyn_mode_for(false,&no_ubo);memo_dyn_ok=dmode!=0 || no_ubo;
@@ -3348,6 +3377,7 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
                 for(unsigned element=0;element<b.count;element++){unsigned slot=b.slot+element;
                     switch(b.source){
                     case XBG_SOURCE_UNIFORM:case XBG_SOURCE_STORAGE:{if(slot>=16){ok=false;break;}auto r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][slot]:state.sb[ns][slot];
+                        if(g_ui_moff!=0 && r.address==g_ui_moff_addr && !(b.source==XBG_SOURCE_UNIFORM && UBO_DYN(dmode,b))){ok=false;++ui_memo_skips;break;}   // the shifted copy would be baked into the set
                         if(UBO_DYN(dmode,b) && b.source==XBG_SOURCE_UNIFORM && r.address && r.size){size_t copy=cam::bound(r.address,std::min<size_t>(r.size,b.bytes?b.bytes:65536),r.size,true);key.push_back(copy);if(tags)ktag.push_back(2);dyn_ubos.push_back({(uint64_t(b.binding)<<32)|element,r.address,copy});} // address only moves the dynamic offset
                         else{key.push_back(r.address);key.push_back(r.size);if(tags){ktag.push_back(b.source==XBG_SOURCE_UNIFORM?3:10);ktag.push_back(4);}}break;}
                     case XBG_SOURCE_SUPPORT:key.push_back((uint64_t(uint32_t(state.viewport.width))<<32)|uint32_t(state.viewport.height));key.push_back(state.color.alpha_func);if(tags){ktag.push_back(5);ktag.push_back(6);}break;
@@ -4825,7 +4855,7 @@ extern "C" int xbg_game_profile_cpu(uint64_t first_frame,uint32_t frame_count){
     xbg_logf("NVN CPU_TIMING armed first=%llu count=%u maxSeconds=60 clock=steady elapsed-not-thread-cpu",(unsigned long long)first_frame,frame_count);
     if(first_frame==1)timing_start();return 0;
 }
-extern "C" int xbg_game_shutdown(){gfx_drain();gfx_async_stop();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(!initialized)return 0;timing_report("shutdown-partial");provenance_close("SHUTDOWN");resolve_pending();submit_slots(true);save_pipeline_cache();pending_writebacks.clear();pending_reports.clear();pending_events.clear();recording_events.clear();epochs.clear();VkResult r=vkQueueWaitIdle(cfg.queue);if(r!=VK_SUCCESS)return r;wtrack::release();release_bc_history();
+extern "C" int xbg_game_shutdown(){gfx_drain();gfx_async_stop();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(!initialized)return 0;timing_report("shutdown-partial");provenance_close("SHUTDOWN");resolve_pending();submit_slots(true);save_pipeline_cache();pending_writebacks.clear();pending_reports.clear();pending_events.clear();recording_events.clear();epochs.clear();if(xbg_queue_barrier)xbg_queue_barrier();VkResult r=vkQueueWaitIdle(cfg.queue);if(r!=VK_SUCCESS)return r;wtrack::release();release_bc_history();
 #ifdef DM_H12_MEASURE
     bc_measure.close();
 #endif
@@ -4908,7 +4938,7 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
             XTRACE_COUNT("dm-legacy-slot", t-slots);XTRACE_COUNT("dm-legacy-covers", t->covers);
             XTRACE_COUNT("dm-legacy-completed", completed.load());
             VkFence f=t->fence;t->waiters.n.fetch_add(1);lock.unlock();
-            XTRACE_BEGIN("dm-legacy-wait");uint64_t b0=timing_clock();VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&f,VK_TRUE,remaining);});uint64_t b1=timing_clock();XTRACE_END();
+            XTRACE_BEGIN("dm-legacy-wait");fence_barrier();uint64_t b0=timing_clock();VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&f,VK_TRUE,remaining);});uint64_t b1=timing_clock();XTRACE_END();
             // 先释放 waiter 再等待完成/重锁；此后槽可被另一线程复用，不再读取 t。
             // Release the waiter before completion/relock waits; another thread may now reuse the slot, so never read t again.
             t->waiters.n.fetch_sub(1);
@@ -4937,14 +4967,14 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
         if(completion_path && !remaining)return fence<=completed;
         if(!completion_path && timeout!=UINT64_MAX){auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-begin).count();remaining=uint64_t(elapsed)>=timeout?0:timeout-uint64_t(elapsed);}
         bool busy=vkGetFenceStatus(cfg.device,slot.fence)==VK_NOT_READY;uint64_t b0=busy?timing_clock():0;
-        VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&slot.fence,VK_TRUE,remaining);});if(busy){block_ns[SITE_LEGACY_WAIT]+=timing_clock()-b0;++block_calls[SITE_LEGACY_WAIT];}
+        fence_barrier();VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&slot.fence,VK_TRUE,remaining);});if(busy){block_ns[SITE_LEGACY_WAIT]+=timing_clock()-b0;++block_calls[SITE_LEGACY_WAIT];}
         if(r==VK_TIMEOUT)return 0;VK(r);retire_slot(slot);
     }
     resolve_known_reports();if(pending_writebacks.empty()&&pending_reports.empty()){publish_completed(submitted);}
     return fence<=completed;
 }
-extern "C" void xbg_legacy_finish(){gfx_drain();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}need(initialized,"Queue finish before Vulkan initialization");++perf.why_finish;complete_all();VK(vkQueueWaitIdle(cfg.queue));}
-static void xbg_present_texture_now(const win_t *window,const tex_t *texture){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}preflight_cpu_reads();{SiteScope site(SITE_PRESENT);cur_op=61;TimingRoot timing_root;CPU_SCOPE(Other);need(initialized&&cfg.present,"Game presentation callback not installed");uint64_t present_begin=timing_clock();Image &im=get_image(texture,false);need(im.gpu_written,"Game tried to present a texture never rendered");Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);c.finish();submit_slots(false);int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r)xbg_fatalf("Game presentation failed: %d",r);++stats.presents;if(pass_prof_enabled && stats.presents.load()==pass_prof_frame)xbg_logf("NVN GPASS boundary frame=%llu slots=%u skipped_slots=%u reserved_queries=%u max_queries=%u max_slots=%u",(unsigned long long)pass_prof_frame,pass_prof_slots,pass_prof_skipped_slots,pass_prof_queries,pass_prof_query_limit,pass_prof_slot_limit);perf.present_cpu_ns+=timing_clock()-present_begin;perf_frame();if(provenance_file && stats.presents.load()>=provenance.target)provenance_close("END");if(capture.trace && stats.presents==capture.frame){capture_log("END frame=%llu events=%u bytes=%llu presentedSerial=%llu image=%p",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes,(unsigned long long)texture->serial,(void*)im.image);fclose(capture.trace);capture.trace=nullptr;capture.active=false;xbg_logf("NVN one-frame capture complete frame=%llu events=%u bytes=%llu",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes);}}timing_boundary();}
+extern "C" void xbg_legacy_finish(){gfx_drain();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}need(initialized,"Queue finish before Vulkan initialization");++perf.why_finish;complete_all();if(xbg_queue_barrier)xbg_queue_barrier();VK(vkQueueWaitIdle(cfg.queue));}
+static void xbg_present_texture_now(const win_t *window,const tex_t *texture){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}preflight_cpu_reads();{SiteScope site(SITE_PRESENT);cur_op=61;TimingRoot timing_root;CPU_SCOPE(Other);need(initialized&&cfg.present,"Game presentation callback not installed");uint64_t present_begin=timing_clock();Image &im=get_image(texture,false);need(im.gpu_written,"Game tried to present a texture never rendered");Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);c.finish();submit_defer=xbg_queue_submit_async!=nullptr;submit_slots(false);submit_defer=false;int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r)xbg_fatalf("Game presentation failed: %d",r);++stats.presents;if(pass_prof_enabled && stats.presents.load()==pass_prof_frame)xbg_logf("NVN GPASS boundary frame=%llu slots=%u skipped_slots=%u reserved_queries=%u max_queries=%u max_slots=%u",(unsigned long long)pass_prof_frame,pass_prof_slots,pass_prof_skipped_slots,pass_prof_queries,pass_prof_query_limit,pass_prof_slot_limit);perf.present_cpu_ns+=timing_clock()-present_begin;perf_frame();if(provenance_file && stats.presents.load()>=provenance.target)provenance_close("END");if(capture.trace && stats.presents==capture.frame){capture_log("END frame=%llu events=%u bytes=%llu presentedSerial=%llu image=%p",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes,(unsigned long long)texture->serial,(void*)im.image);fclose(capture.trace);capture.trace=nullptr;capture.active=false;xbg_logf("NVN one-frame capture complete frame=%llu events=%u bytes=%llu",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes);}}timing_boundary();}
 extern "C" void xbg_legacy_read_texels(const tex_t *t,unsigned level,unsigned layer,const NVNcopyRegion *r,uint8_t *dst,size_t row,size_t image){gfx_drain();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}preflight_cpu_reads();need(t&&r&&dst,"Invalid ReadTexels arguments");auto found=images.find(t->serial);if(found==images.end() || !found->second->gpu_written){int bw,bh,bpp=nvn_fmt_bpb(t->d.format,&bw,&bh);need(bpp && r->xoffset==0 && r->yoffset==0 && r->zoffset==0 && r->depth==1 && uint32_t(r->width)==std::max(1u,t->d.width>>level) && uint32_t(r->height)==std::max(1u,t->d.height>>level),"CPU ReadTexels partial region unsupported");need(!(t->d.flags&0x10),"Linear CPU ReadTexels not implemented");need(nvn_deswizzle(&t->d,level,layer,t->mem,dst,row)==0,"ReadTexels deswizzle failed");}
     else{p_copy_b2t p{};p.src=uint64_t(dst);p.tex=t;p.has_view=1;p.view.set_levels=p.view.set_layers=1;p.view.base_level=level;p.view.nlevels=1;p.view.min_layer=layer;p.view.nlayers=1;p.r=*r;int64_t old=state.copy_stride,old_image=state.copy_image_stride;state.copy_stride=row;state.copy_image_stride=image;copy_texture_buffer(p,true);state.copy_stride=old;state.copy_image_stride=old_image;}}
 

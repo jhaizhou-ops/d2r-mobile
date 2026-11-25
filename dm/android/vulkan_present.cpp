@@ -24,6 +24,9 @@
 #include <sched.h>
 #include <unistd.h>
 #include <time.h>
+#include <thread>
+#include <deque>
+#include <pthread.h>
 
 // H-08 exclusive timing hooks; absent on other platforms and standalone tests.
 #ifdef __OHOS__
@@ -36,6 +39,9 @@ struct H8Scope {explicit H8Scope(int){}};
 template<class F> static auto h8_call(int k,F f)->decltype(f()){H8Scope scope(k);return f();}
 
 extern "C" double dm_present_period(void);
+extern "C" void (*xbg_queue_barrier)(void);
+extern "C" int (*xbg_queue_submit_async)(VkQueue,uint32_t,const VkCommandBuffer*,VkFence);
+extern "C" void (*xbg_fence_barrier)(void);
 // 错过上屏节拍的帧数（晚于「上次期望时刻 + 周期」2 ms 以上）；自适应出图档按它降档 / 试升
 // Frames that missed their display slot (more than 2 ms later than "previous desired time + period"); the adaptive present tier steps down / probes up by it
 static std::atomic<uint64_t> dm_present_late{0};
@@ -223,12 +229,16 @@ void wait_window(){std::unique_lock<std::mutex> lock(window_mutex);window_cv.wai
 bool window_changed(){std::lock_guard<std::mutex> lock(window_mutex);return !desired||generation!=active_generation;}
 void wait_window_change(uint64_t bad){std::unique_lock<std::mutex> lock(window_mutex);window_cv.wait(lock,[bad]{return generation!=bad;});}
 void wait_resize(){std::unique_lock<std::mutex> lock(window_mutex);window_cv.wait_for(lock,std::chrono::milliseconds(16),[]{return generation!=active_generation;});}
-int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uint32_t height,const int32_t crop[4],int32_t){
+namespace apresent{void queue_issue(VkSemaphore acq,VkCommandBuffer cmd,VkSemaphore fin,VkFence done,VkSwapchainKHR sc,uint32_t index);void barrier();void flush_subs();}
+int present_now(VkImage source,VkFormat source_format,uint32_t width,uint32_t height,const int32_t crop[4],bool issue_async){
     std::unique_lock<std::mutex> render_lock(render_mutex,std::defer_lock);{H8Scope h8s(4);render_lock.lock();}
-    pin_update();
+    // Asynchronous: this frame's engine submissions are issued with the blit once it is recorded. Anything that can wait (a retry, the window,
+    // a rebuild, surface loss) first submits them here, so the GPU never waits on window / UI work for them.
+    auto flush=[&]{if(issue_async)apresent::flush_subs();};unsigned tries=0;
     VkFormatProperties sp;vkGetPhysicalDeviceFormatProperties(physical,source_format,&sp);if(!(sp.optimalTilingFeatures&VK_FORMAT_FEATURE_BLIT_SRC_BIT))return VK_ERROR_FORMAT_NOT_SUPPORTED;
     int x=0,y=0,w=int(width),h=int(height);if(crop&&crop[2]>0&&crop[3]>0){x=std::clamp(crop[0],0,w);y=std::clamp(crop[1],0,h);w=std::min(crop[2],int(width)-x);h=std::min(crop[3],int(height)-y);}if(w<=0||h<=0)return VK_ERROR_INITIALIZATION_FAILED;
     for(;;){
+    if(tries++)flush();
     // 画面比例与窗口比例一致时缓冲直接用出图尺寸（显示硬件放大到屏幕）；不一致时（真全屏的前端页 / 读取画面：画面 16:9 在窄屏里居中留边，
     // 见 front_android.c）缓冲取窗口尺寸，由下面的留边 blit 摆位置——否则合成器会把 16:9 的画面拉满整屏（上下没有黑边、人变瘦）。
     // Present at the output size when the picture aspect matches the window (the display hardware scales it up); when they differ (true fullscreen
@@ -245,9 +255,11 @@ int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uin
         vlog("Present at the window size %dx%d (picture %dx%d keeps its aspect; marker gfx-present-native) result=%d",win_w,win_h,w,h,g);}
     // 后台等待释放UI锁；保留同一源帧，恢复并真正呈现后才返回成功。
     // Suspend without the UI lock; keep this source frame until it is presented.
+    if(issue_async && window_changed())flush();
     wait_window();
     VkResult r;
     if(!surface||window_changed()){
+        flush();
         if((r=vkQueueWaitIdle(queue)))return r;
         r=VkResult(create_surface());
         if(r==VK_NOT_READY)continue;
@@ -255,6 +267,7 @@ int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uin
         if(r)return r;swap_dirty=true;
     }
     if(swap_dirty){
+        flush();
         if((r=vkQueueWaitIdle(queue)))return r;
         r=VkResult(create_swap());
         if(r==VK_NOT_READY||r==VK_ERROR_OUT_OF_DATE_KHR){wait_resize();continue;}
@@ -271,7 +284,7 @@ int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uin
     uint32_t index=0;XTRACE_BEGIN("dm-acquire");r=h8_call(6,[&]{return vkAcquireNextImageKHR(device,swapchain,50000000ull,acq,VK_NULL_HANDLE,&index);});XTRACE_END();
     if(r==VK_TIMEOUT||r==VK_NOT_READY)continue;
     if(r==VK_ERROR_OUT_OF_DATE_KHR){swap_dirty=true;wait_resize();continue;}
-    if(r==VK_ERROR_SURFACE_LOST_KHR){if((r=vkQueueWaitIdle(queue)))return r;uint64_t bad=active_generation;destroy_swap();wait_window_change(bad);continue;}
+    if(r==VK_ERROR_SURFACE_LOST_KHR){flush();if((r=vkQueueWaitIdle(queue)))return r;uint64_t bad=active_generation;destroy_swap();wait_window_change(bad);continue;}
     bool rebuild=r==VK_SUBOPTIMAL_KHR;if(r!=VK_SUCCESS&&!rebuild)return r;
     r=vkResetCommandPool(device,pool,0);if(r)return r;VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;if((r=vkBeginCommandBuffer(cmd,&bi)))return r;
     bool stamp=present_timing && overlap;if(stamp && !present_queries){VkQueryPoolCreateInfo q{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};q.queryType=VK_QUERY_TYPE_TIMESTAMP;q.queryCount=4;if(vkCreateQueryPool(device,&q,nullptr,&present_queries))stamp=false;
@@ -307,6 +320,8 @@ int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uin
     barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;barrier.newLayout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;barrier.dstAccessMask=0;vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,0,0,nullptr,0,nullptr,1,&barrier);
     if(stamp){vkCmdWriteTimestamp(cmd,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,present_queries,f*2+1);present_stamped[f]=true;}
     if((r=vkEndCommandBuffer(cmd)))return r;VkPipelineStageFlags stage=VK_PIPELINE_STAGE_TRANSFER_BIT;VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.waitSemaphoreCount=1;submit.pWaitSemaphores=&acq;submit.pWaitDstStageMask=&stage;submit.commandBufferCount=1;submit.pCommandBuffers=&cmd;submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&finished[index];
+    // 异步：提交与呈现交给 dm-present，本线程不等驱动 | Asynchronous: the submit and present go to dm-present; this thread does not wait for the driver
+    if(issue_async && overlap){apresent::queue_issue(acq,cmd,finished[index],done,swapchain,index);in_flight[f]=true;flight^=1;if(rebuild&&surface_properties_changed())swap_dirty=true;return 0;}
     if((r=h8_call(7,[&]{return vkQueueSubmit(queue,1,&submit,done);})))return r;in_flight[f]=true;VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};pi.waitSemaphoreCount=1;pi.pWaitSemaphores=&finished[index];pi.swapchainCount=1;pi.pSwapchains=&swapchain;pi.pImageIndices=&index;
 #ifdef __OHOS__
     // 期望上屏时刻（鸿蒙 SET_DESIRED_PRESENT_TIMESTAMP）：上屏节奏 = 上次期望时刻 + 一个出图档周期；早到的帧由合成器按时放出，翻译线程不等；
@@ -330,6 +345,95 @@ int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uin
     if((rebuild||pr==VK_SUBOPTIMAL_KHR)&&surface_properties_changed())swap_dirty=true;
     return 0;
     }
+}
+// 异步上屏（DM_PRESENT_ASYNC=1 或标记 gfx-present-async）：会等窗口 / 界面的部分（表面与交换链重建、获取、录 blit）仍在翻译线程上做，同步时一样；
+// 只把从不等界面的驱动调用交给 dm-present 线程：本帧引擎的帧末 vkQueueSubmit（DM_PRESENT_ASYNC_SUBMIT，缺省随开）、blit 的提交、期望上屏时刻和
+// vkQueuePresentKHR。营地剖析：帧末 vkQueueSubmit 约 2.2 ms 驱动时间，原来全在翻译线程上。只留一帧在途；引擎每次碰队列（提交、排空）前先等
+// dm-present 空闲（xbg_queue_barrier），所以队列上的顺序与同步完全相同，两线程也从不同时用 VkQueue。呈现返回的 OUT_OF_DATE / SURFACE_LOST /
+// SUBOPTIMAL 记下来，下一帧开头在翻译线程上按原逻辑处理（那一帧算掉了）。11-26 b4 的第一版把获取和重建也放到 dm-present，启动时卡死 10 s，已改成现在这样。
+// Asynchronous present (DM_PRESENT_ASYNC=1 or marker gfx-present-async): everything that can wait for the window / UI (surface and swapchain rebuilds,
+// acquire, recording the blit) stays on the translation thread, as in synchronous present; only driver calls that never wait for the UI go to the
+// dm-present thread: this frame's engine end-of-frame vkQueueSubmit (DM_PRESENT_ASYNC_SUBMIT, on with it by default), the blit submission, the
+// desired present time and vkQueuePresentKHR. Camp profile: the end-of-frame vkQueueSubmit is ~2.2 ms of driver time, all of it on the translation
+// thread before. One frame in flight; before every engine queue use (submit, drain) the engine waits for dm-present to be idle (xbg_queue_barrier),
+// so the queue order is exactly that of synchronous present and the two threads never use the VkQueue at the same time. OUT_OF_DATE / SURFACE_LOST /
+// SUBOPTIMAL from the present are recorded and handled with the original logic at the start of the next frame on the translation thread (that frame
+// is dropped). The first version (11-26 b4) also moved acquire and rebuilds to dm-present and hung for 10 s at start-up.
+namespace apresent {
+bool enabled=false,running=false,started=false,queued=false,lost=false,dirty=false,subopt=false;int error=0;
+std::mutex m;std::condition_variable cv;
+// Engine end-of-frame submissions handed over with this frame (issued first, in order); engine command buffers stay untouched until their fence.
+struct Sub{VkCommandBuffer cb[4];uint32_t n;VkFence fence;};std::vector<Sub> subs;
+struct Issue{VkSemaphore acq,fin;VkCommandBuffer cmd;VkFence done;VkSwapchainKHR sc;uint32_t index;};
+// Jobs run in order: a frame's engine submissions go out first (at the start of present, so they never wait for window / UI work), then its blit and present.
+struct Job{std::vector<Sub> subs;bool present=false;Issue issue{};};std::deque<Job> fifo;
+inline bool busy(){return running || !fifo.empty();}
+uint64_t jobs=0,slot_waits=0,barrier_waits=0,deferred=0;double slot_ns=0,barrier_ns=0,work_ns=0;
+inline double now_ns(){timespec ts;clock_gettime(CLOCK_MONOTONIC,&ts);return double(ts.tv_sec)*1e9+ts.tv_nsec;}
+void wait_idle(std::unique_lock<std::mutex> &l,double &ns,uint64_t &count){if(!busy())return;double t=now_ns();while(busy())cv.wait(l);ns+=now_ns()-t;++count;}
+int submit_subs(std::vector<Sub> &todo){int r=0;for(auto &u:todo){VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=u.n;si.pCommandBuffers=u.cb;XTRACE_BEGIN("dm-engine-submit");int e=h8_call(7,[&]{return vkQueueSubmit(queue,1,&si,u.fence);});XTRACE_END();if(e&&!r)r=e;}todo.clear();return r;}
+// Returns the present result (VK_SUCCESS / SUBOPTIMAL / an error); a submit error comes back as that error.
+int issue(const Issue &j){
+    int r=0;
+    VkPipelineStageFlags stage=VK_PIPELINE_STAGE_TRANSFER_BIT;VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.waitSemaphoreCount=1;submit.pWaitSemaphores=&j.acq;submit.pWaitDstStageMask=&stage;
+    submit.commandBufferCount=1;submit.pCommandBuffers=&j.cmd;submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&j.fin;
+    if((r=h8_call(7,[&]{return vkQueueSubmit(queue,1,&submit,j.done);})))return r;
+#ifdef __OHOS__
+    {static int on=-1;if(on<0){const char *e=getenv("DM_PRESENT_TS");on=!(e&&*e=='0');}static int64_t tgt;double per=dm_present_period();
+     if(on&&per>0&&active){timespec ts;clock_gettime(CLOCK_MONOTONIC,&ts);int64_t now=int64_t(ts.tv_sec)*1000000000+ts.tv_nsec,p=int64_t(per*1e9),next=tgt?tgt+p:now;
+      if(tgt&&now>tgt+p+2000000)dm_present_late.fetch_add(1,std::memory_order_relaxed);if(next<now)next=now;if(next>now+2*p)next=now+p;tgt=next;OH_NativeWindow_NativeWindowHandleOpt(active,SET_DESIRED_PRESENT_TIMESTAMP,next);}}
+#endif
+    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};pi.waitSemaphoreCount=1;pi.pWaitSemaphores=&j.fin;pi.swapchainCount=1;pi.pSwapchains=&j.sc;pi.pImageIndices=&j.index;
+    XTRACE_BEGIN("dm-queue-present");VkResult pr=h8_call(8,[&]{return vkQueuePresentKHR(queue,&pi);});XTRACE_END();
+    if(pr!=VK_SUCCESS && pr!=VK_SUBOPTIMAL_KHR){VkResult w=vkQueueWaitIdle(queue);if(w)return w;}   // teardown on the next frame requires an idle queue
+    return pr;
+}
+void worker(){
+    pthread_setname_np(pthread_self(),"dm-present");
+#ifdef __OHOS__
+    {void *q=dlopen("libqos.so",RTLD_NOW);auto set=q?reinterpret_cast<int(*)(int)>(dlsym(q,"OH_QoS_SetThreadQoS")):nullptr;int r=set?set(5):-1;vlog("NVN present thread QoS=USER_INTERACTIVE rc=%d tid=%d",r,int(gettid()));}
+#endif
+    std::unique_lock<std::mutex> l(m);
+    for(;;){
+        while(fifo.empty())cv.wait(l);
+        Job j=std::move(fifo.front());fifo.pop_front();running=true;
+        l.unlock();double t=now_ns();int r=submit_subs(j.subs);if(!r && j.present)r=issue(j.issue);double d=now_ns()-t;l.lock();
+        running=false;work_ns+=d;
+        if(r==VK_ERROR_SURFACE_LOST_KHR)lost=true;else if(r==VK_ERROR_OUT_OF_DATE_KHR)dirty=true;else if(r==VK_SUBOPTIMAL_KHR)subopt=true;else if(r && !error)error=r;
+        cv.notify_all();
+        if(j.present && ++jobs%300==0){vlog("NVN PERF apresent jobs=300 work_ms=%.2f slot_waits=%llu slot_wait_ms=%.2f barrier_waits=%llu barrier_wait_ms=%.2f deferred=%llu (per frame)",work_ns/300/1e6,(unsigned long long)slot_waits,slot_ns/300/1e6,(unsigned long long)barrier_waits,barrier_ns/300/1e6,(unsigned long long)deferred);
+            work_ns=slot_ns=barrier_ns=0;slot_waits=barrier_waits=deferred=0;}
+    }
+}
+void barrier(){std::unique_lock<std::mutex> l(m);wait_idle(l,barrier_ns,barrier_waits);}
+// Fence waiters (pool reset thread, retire, legacy waits): also wait for submissions still pending on the presenting thread.
+uint64_t fence_waits=0;void fence_barrier(){std::unique_lock<std::mutex> l(m);if(subs.empty() && !busy())return;++fence_waits;while(!subs.empty() || busy())cv.wait(l);}
+// Called by the engine instead of vkQueueSubmit for the submission made while presenting; issued by the next job (or synchronously, see present()).
+int submit(VkQueue q,uint32_t n,const VkCommandBuffer *cb,VkFence fence){
+    if(q!=queue || n>4)return int(VK_ERROR_INITIALIZATION_FAILED);
+    std::unique_lock<std::mutex> l(m);wait_idle(l,slot_ns,slot_waits);Sub u{};u.n=n;memcpy(u.cb,cb,n*sizeof *cb);u.fence=fence;subs.push_back(u);++deferred;return 0;}
+void queue_issue(VkSemaphore acq,VkCommandBuffer cmd,VkSemaphore fin,VkFence done,VkSwapchainKHR sc,uint32_t index){
+    std::lock_guard<std::mutex> l(m);Job j;j.subs.swap(subs);j.present=true;j.issue={acq,fin,cmd,done,sc,index};fifo.push_back(std::move(j));queued=true;cv.notify_all();}
+// On the presenting thread while dm-present is idle (present() waited for it and no job is queued yet).
+void flush_subs(){std::lock_guard<std::mutex> l(m);if(!subs.empty()){submit_subs(subs);cv.notify_all();}}
+}
+int present(void*,void*,VkImage source,VkFormat source_format,uint32_t width,uint32_t height,const int32_t crop[4],int32_t){
+    pin_update();
+    if(!apresent::enabled || !overlap)return present_now(source,source_format,width,height,crop,false);
+    bool was_lost,was_dirty,was_subopt;int err;
+    {std::unique_lock<std::mutex> l(apresent::m);apresent::wait_idle(l,apresent::slot_ns,apresent::slot_waits);
+     was_lost=apresent::lost;was_dirty=apresent::dirty;was_subopt=apresent::subopt;err=apresent::error;apresent::lost=apresent::dirty=apresent::subopt=false;apresent::error=0;apresent::queued=false;}
+    int r=err;
+    if(!r){
+        // The previous frame's present result, handled here the way synchronous present handles it right after vkQueuePresentKHR.
+        if(was_lost){apresent::flush_subs();std::unique_lock<std::mutex> rl(render_mutex);uint64_t bad=active_generation;destroy_swap();rl.unlock();wait_window_change(bad);}
+        if(was_dirty){swap_dirty=true;}
+        if(was_subopt){std::unique_lock<std::mutex> rl(render_mutex);if(surface_properties_changed())swap_dirty=true;}
+        r=present_now(source,source_format,width,height,crop,true);
+    }
+    // No job queued (an error, or a path that never reached the blit): issue this frame's engine submissions here, never leave them behind.
+    {std::lock_guard<std::mutex> l(apresent::m);if(!apresent::queued && !apresent::subs.empty()){int e=apresent::submit_subs(apresent::subs);apresent::cv.notify_all();if(e && !r)r=e;}}
+    return r;
 }
 }
 extern "C" void dm_android_vk_set_window(ANativeWindow *window){if(window)ANativeWindow_acquire(window);{std::lock_guard<std::mutex> l(window_mutex);if(desired)ANativeWindow_release(desired);desired=window;++generation;}window_cv.notify_all();}
@@ -404,6 +508,12 @@ extern "C" int dm_android_vk_initialize(const char *path,char *error,size_t byte
     if(overlap){if((r=vkCreateCommandPool(device,&cp,nullptr,&overlap_pool)))return fail("Present command pool",r);ca.commandPool=overlap_pool;if((r=vkAllocateCommandBuffers(device,&ca,&overlap_command)))return fail("Present command",r);
         if((r=vkCreateSemaphore(device,&sc,nullptr,&overlap_acquired)))return fail("Acquire semaphore",r);if((r=vkCreateFence(device,&fc,nullptr,&overlap_fence)))return fail("Present fence",r);}
     vlog("Present overlap=%d (marker gfx-present-overlap)",int(overlap));
+    {std::string dir=path;size_t cut=dir.find_last_of('/');apresent::enabled=false;if(FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-present-async").c_str(),"rb")){apresent::enabled=fgetc(m)!='0';fclose(m);}
+     else if(const char *e=getenv("DM_PRESENT_ASYNC"))apresent::enabled=*e=='1';
+     if(apresent::enabled && !apresent::started){apresent::started=true;std::thread(apresent::worker).detach();}
+     xbg_queue_barrier=apresent::enabled && overlap?apresent::barrier:nullptr;
+     {const char *e=getenv("DM_PRESENT_ASYNC_SUBMIT");bool sub=apresent::enabled && overlap && !(e&&*e=='0');xbg_queue_submit_async=sub?apresent::submit:nullptr;xbg_fence_barrier=sub?apresent::fence_barrier:nullptr;vlog("Present async engine submit=%d (DM_PRESENT_ASYNC_SUBMIT=0 keeps it on the translation thread)",int(sub));}
+     vlog("Present async=%d (marker gfx-present-async / DM_PRESENT_ASYNC; present thread dm-present, engine waits for it before each queue submit)",int(apresent::enabled));}
     shader_path=path;dm_vk_config config{};config.size=sizeof(config);config.game.size=sizeof(config.game);config.game.physical=physical;config.game.device=device;config.game.queue=queue;config.game.queue_family=family;config.game.enabled_core=features.features;config.game.enabled_shader_draw_parameters=draw.shaderDrawParameters;config.game.fence_timeout_ns=10000000000ull;config.game.shader_directory=shader_path.c_str();config.game.present=present;config.game.log=log_message;config.game.fatal=fatal;config.sampler_mirror_clamp_to_edge=mirror;config.has_window=has_window;config.display_hz=0; // Query actual display refresh in frontend; do not guess 60 Hz.
     int status=dm_vk_initialize(&config,error,bytes);if(!status)ready=true;else cleanup_initialization();return status;
 }

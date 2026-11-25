@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+extern "C" void (*xbg_queue_barrier)(void);   // defined in xbg_game.cpp
+
 namespace {
 struct Failure { VkResult result; std::string message; };
 void require(bool yes,const char *message) { if(!yes) throw Failure{VK_ERROR_INITIALIZATION_FAILED,message}; }
@@ -142,6 +144,7 @@ struct xbg_vk_renderer {
     int submit() {
         vkcheck(vkEndCommandBuffer(command),"vkEndCommandBuffer");vkcheck(vkResetFences(info.device,1,&fence),"vkResetFences");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&command;
+        if(xbg_queue_barrier)xbg_queue_barrier();
         vkcheck(vkQueueSubmit(info.queue,1,&si,fence),"vkQueueSubmit");pending=true;return xbg_vk_wait(this);
     }
 };
