@@ -1,0 +1,271 @@
+[
+  {
+    "file": "fixtures/stage-storage-negative/by-value-without-stage-in.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "explicit MSL stage-input semantics require stage_in",
+    "sha256": "a9be6f58b29c6361c2c40b340328d19448e4318da3b4f040cc5fbf45a2c72a93",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(Record input) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/unbound-record-pointer.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "explicit MSL stage-input semantics require stage_in",
+    "sha256": "1761dd607c58ea8e98887aece7301e0ce504ad99f849f031445fe1708422bd49",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(device Record *input) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/missing-buffer-binding.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "all buffer parameters require explicit buffer attributes",
+    "sha256": "7b3b0e76b478777501933ff7e2d0ad82583411b25abfc11233f01f63ecb5d3b0",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(constant Record *input, device float4 *output [[buffer(0)]]) { output[0] = input[0].value; }",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/duplicate-buffer-binding.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "duplicate or invalid Metal buffer binding",
+    "sha256": "36f2a5f3edea89dd70303f424178939a451e8f5f4b1d6d73487507b14a3d392e",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(constant Record *input [[buffer(0)]], device Record *output [[buffer(0)]]) { output[0].value = input[0].value; }",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/buffer-wrong-address-space.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "buffer attribute requires a device or constant pointer or reference",
+    "sha256": "2376d14c7b0779e12c2b743e306ee6119bc6c656a5256783c2cfe8f8947c8ae1",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(threadgroup Record *scratch [[buffer(0)]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/missing-threadgroup-binding.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "pointer arguments to kernel functions must reside in '__global', '__constant' or '__local' address space",
+    "sha256": "ab4d6d84b212c84d3a6b9b8816d8623666a3ab303524dc11b2ccb221c6206820",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(threadgroup Record *scratch, threadgroup float *other [[threadgroup(1)]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/duplicate-threadgroup-binding.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "missing, duplicate or invalid threadgroup resource binding",
+    "sha256": "59de798e4dce50962928348cebe33af7d90202c567090438f967e7cf33f7ffc4",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(threadgroup Record *scratch [[threadgroup(0)]], threadgroup Record *other [[threadgroup(0)]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/threadgroup-wrong-address-space.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "threadgroup resource attribute requires a threadgroup pointer or reference",
+    "sha256": "0b5e29f1a7b7c19a86b2c81f0a4eb46e0f2b554c97eddedb86a661f1aa67c373",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(device Record *scratch [[threadgroup(0)]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/threadgroup-wrong-stage.metal",
+    "entry": "main0",
+    "stage": "fragment",
+    "expected": "rejected",
+    "diagnostic": "threadgroup resource bindings require a compute kernel",
+    "sha256": "78ac4551c5026a805d6734d24f2be67b0b4fd17b1dcd4b770f36da934f7c2024",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "fragment float4 main0(threadgroup Record *scratch [[threadgroup(0)]]) { return scratch[0].value; }",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/threadgroup-conflicting-stage-in.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "threadgroup resource binding has unsupported additional attributes",
+    "sha256": "0fd3ff02320e791efc254281904d3653a3e77dffa53237c8fb401034b4fe834a",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(threadgroup Record *scratch [[threadgroup(0), stage_in]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/buffer-conflicting-stage-in.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "MSL stage_in requires one plain by-value shader interface record",
+    "sha256": "c47129a29ef43820274fda7772daf214b3a10631337048323fb68eaa0f38bb1c",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(device Record *input [[buffer(0), stage_in]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/buffer-conflicting-legacy-stage-input.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "explicit MSL stage-input semantics require stage_in",
+    "sha256": "d8ea3cb089f0ebc2574f27993cc84cec6d7fd89552b66204bd2d5b6e615fc295",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(device Record *input [[buffer(0), stage_input]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/buffer-conflicting-color.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "explicit MSL stage-input semantics require stage_in",
+    "sha256": "dd919f5ba136042658b05d34f5cc29b5bbd948d8399f8ef20c2135855a188e16",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(device Record *input [[buffer(0), color(0)]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/buffer-conflicting-depth.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "explicit MSL stage-input semantics require stage_in",
+    "sha256": "b522fa986a30d4b008f98801f301b790862db490841668e4e1459d1329c34740",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(device Record *input [[buffer(0), depth(any)]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/stage-storage-negative/buffer-conflicting-point-size.metal",
+    "entry": "main0",
+    "stage": "kernel",
+    "expected": "rejected",
+    "diagnostic": "explicit MSL stage-input semantics require stage_in",
+    "sha256": "88ac612e530f0b0bcf2016ad95112d2679ecaddc14fdcda50ba52eee544150ef",
+    "sourceLines": [
+      "// SPDX-License-Identifier: MIT",
+      "// Independently authored negative storage/interface fixture.",
+      "#include <metal_stdlib>",
+      "using namespace metal;",
+      "struct Record { float4 value [[attribute(0)]]; };",
+      "kernel void main0(device Record *input [[buffer(0), point_size]]) {}",
+      ""
+    ]
+  },
+  {
+    "file": "fixtures/msl-stage-record-threadgroup.metal",
+    "entry": "stage_record_threadgroup",
+    "stage": "kernel",
+    "expected": "compiled",
+    "sha256": "f4475a8a668fbf24f1c4b754dbd5fb30d74b934bd6802f7fa10b0734d341b5c5"
+  },
+  {
+    "file": "fixtures/msl-stage-record-buffers.metal",
+    "entry": "stage_record_buffers",
+    "stage": "kernel",
+    "expected": "compiled",
+    "sha256": "c99dbf7384190f672de1661efc56b38c6a43741c7b411da6c63fdea76f290de8"
+  }
+]

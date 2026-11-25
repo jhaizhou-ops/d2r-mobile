@@ -1,0 +1,24 @@
+{
+  "openssl": {
+    "repository": "https://github.com/openssl/openssl.git",
+    "version": "3.5.9",
+    "commit": "45e844fa2a14ec92d146bd8f5778ac130b6625fb",
+    "license": "Apache-2.0"
+  },
+  "emscripten": "4.0.20",
+  "resourceReadBytes": 65536,
+  "maxMappedFileBytes": 134217728,
+  "maxWasmMemoryBytes": 536870912,
+  "port": {
+    "repository": "https://github.com/lbr77/zsign-wasm.git",
+    "commit": "0fb14887c61716508088e365447ffdedf7a1837d",
+    "license": "MIT",
+    "upstreamMergeBase": "f3e6418b548fc59933863f3bdd4751f13659be00"
+  },
+  "zsign": {
+    "repository": "https://github.com/zhlynn/zsign.git",
+    "version": "1.1.3",
+    "commit": "9299685bab7ef99827e06e5dfda93af747386590",
+    "license": "MIT"
+  }
+}

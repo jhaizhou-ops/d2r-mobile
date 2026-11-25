@@ -1,0 +1,69 @@
+{
+  "oldReleaseCommit": "120fe55c02a5633476998a44f8c3c3c809fa48b0",
+  "v2ReleaseCommit": "b811b90172f4eb40ec1bc89d903308e0c5ab88d0",
+  "records": [
+    {
+      "path": "dm/gfx/nvn/nvn_refl.h",
+      "oldSha256": "fdc1444521057e5f3a7bfc517cdd270d3c8236cdc15982d39078458d90e4f115",
+      "v2Sha256": "fdc1444521057e5f3a7bfc517cdd270d3c8236cdc15982d39078458d90e4f115",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/gfx/nvn/nvn_refl.m",
+      "oldSha256": "9ee055721e662488033f16253db92d31d29d256c8d9e59de2fbe885906a3b8c7",
+      "v2Sha256": "9ee055721e662488033f16253db92d31d29d256c8d9e59de2fbe885906a3b8c7",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/gfx/nvn/nvn_mtl.m",
+      "oldSha256": "dbfedb63d36424eb8c7f451a3e1729f33fc07deb0392f8d7b08bdd99fa31e14f",
+      "v2Sha256": "fbb07ed4638c0ee7cdc6249acedcfccd1cbb1a881b85baa32b2d105de2d3aefd",
+      "byteIdentical": false,
+      "identicalAfterChineseOldApiTerminologyReplacement": false,
+      "shaderLoadBodyByteIdentical": true,
+      "libraryLoaderBodyByteIdentical": true
+    },
+    {
+      "path": "dm/tools/d2rm_pack.py",
+      "oldSha256": "d92fe5d3d2d42bf15aea2345f69a25ff0fa2ddf29de931e10156dff186c00a72",
+      "v2Sha256": "d92fe5d3d2d42bf15aea2345f69a25ff0fa2ddf29de931e10156dff186c00a72",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/tools/guest_dylib.py",
+      "oldSha256": "9bfe01372d1c3aea0fdcabcfc538e826d531b84d0da037bfd29c942208101527",
+      "v2Sha256": "9bfe01372d1c3aea0fdcabcfc538e826d531b84d0da037bfd29c942208101527",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/ios/tools/ios_metal.py",
+      "oldSha256": "ddaab68dee6a08860fb3cd8b4d7e4a5c9096409734a3e8dad8c60ba8773e5f29",
+      "v2Sha256": "ddaab68dee6a08860fb3cd8b4d7e4a5c9096409734a3e8dad8c60ba8773e5f29",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/gfx/nvn/shader_map.tsv",
+      "oldSha256": "419dae7adddbaba455045b1d121a01671fcb3bc82fc5d7d193593255df23c628",
+      "v2Sha256": "419dae7adddbaba455045b1d121a01671fcb3bc82fc5d7d193593255df23c628",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/gfx/nvn/shader_facts.tsv",
+      "oldSha256": "5f50b1d9934b2f4e85ebddbd62114c6f5acb94ae42b8509fcfc3486e7953f490",
+      "v2Sha256": "5f50b1d9934b2f4e85ebddbd62114c6f5acb94ae42b8509fcfc3486e7953f490",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/gfx/tools/dmsh_fetch.py",
+      "oldSha256": "ff53f64e8f35957336b7a6e6306ed70070ab4dbd401e14be3dbb797fecb20ae9",
+      "v2Sha256": "ff53f64e8f35957336b7a6e6306ed70070ab4dbd401e14be3dbb797fecb20ae9",
+      "byteIdentical": true
+    },
+    {
+      "path": "dm/host/hle_misc.c",
+      "oldSha256": "f7e8b1663e67fbc0e80653c9b82727b824d948ec9df245cca70378ccd8cc26b7",
+      "v2Sha256": "f7e8b1663e67fbc0e80653c9b82727b824d948ec9df245cca70378ccd8cc26b7",
+      "byteIdentical": true
+    }
+  ]
+}

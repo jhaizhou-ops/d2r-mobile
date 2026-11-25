@@ -1,0 +1,6 @@
+# 仅显式应用，绝不递归处理原生、供应商或生成代码。
+# Apply explicitly, never recursively to native/vendor/generated code.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+SortIncludes: Never

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Shader browser spike: unverified</title>
+  </head>
+  <body>
+    <h1>Developer-only synthetic compute spike</h1>
+    <p>
+      No game data. A successful response is not compatibility evidence until native parity and
+      SPIR-V validation pass.
+    </p>
+    <button id="run">Run synthetic EXIT fixture</button>
+    <pre id="status">Not run.</pre>
+    <script type="module">
+      import { code, job } from "./synthetic-fixture.mjs";
+      const status = document.querySelector("#status");
+      const button = document.querySelector("#run");
+      button.addEventListener("click", () => {
+        button.disabled = true;
+        status.textContent = "Starting browser .NET runtime…";
+        const worker = new Worker("./worker.mjs", { type: "module" });
+        const finish = (message) => {
+          clearTimeout(timer);
+          worker.terminate();
+          button.disabled = false;
+          status.textContent = message;
+        };
+        const timer = setTimeout(
+          () => finish("Timed out after 60 seconds; worker terminated. No parity established."),
+          60000,
+        );
+        worker.addEventListener("error", (event) =>
+          finish(`Worker startup failed: ${event.message}`),
+        );
+        worker.addEventListener("message", ({ data }) => {
+          if (data.requestId !== 1) return;
+          if (data.error) return finish(`Translation failed: ${data.error}`);
+          const blob = new Blob([JSON.stringify(data.result, null, 2)], {
+            type: "application/json",
+          });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = "browser-result.json";
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          finish(
+            "Result downloaded. Run native oracle, compare, and spirv-val before claiming this fixture passed.",
+          );
+        });
+        worker.postMessage({ requestId: 1, job, code });
+      });
+    </script>
+  </body>
+</html>

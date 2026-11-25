@@ -1,0 +1,18 @@
+; Authored synthetic fragment shader: writes scalar 1.0 at color 0.
+; Exercises --msl-pad-fragment-output. No game shader bytes.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %color
+OpExecutionMode %main OriginUpperLeft
+OpDecorate %color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%output = OpTypePointer Output %float
+%one = OpConstant %float 1
+%color = OpVariable %output Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+OpStore %color %one
+OpReturn
+OpFunctionEnd

@@ -1,0 +1,17 @@
+{
+  "sourceCommit": "b811b90172f4eb40ec1bc89d903308e0c5ab88d0",
+  "i18nExcludedKeys": [
+    "dmCustomVoiceZh",
+    "dmCustomVoiceZhHint",
+    "dmCustomVoiceEn",
+    "dmCustomVoiceEnHint"
+  ],
+  "i18nSha256": "43d032b91761530db45d3c01f9ccecd9d4df097f2dccf1014f8a47ce9ee70c1d",
+  "sources": {
+    "dm/ios/tools/gen_romfs_overlay.py": "0817ac0001cf34a38ed14de22aa82c5ed017bff3a06c8ba19ddfef4a8c1ea510",
+    "dm/ios/tools/touch_layout.py": "59430d1ac8846b90b103da68850563b5b24951e20066e476033c095226cd5411",
+    "dm/ios/tools/touch_strings.py": "9274abb546fa943835e5add7518fd418cceeb0e34b7cff35db1d99a106433622",
+    "dm/ios/tools/dm_i18n.py": "ab379e0656d13b9830ed88f528bd1dc407225c996650453f37bc0cfc258b796b",
+    "dm/i18n/ui_text.tsv": "086b2b11eea23cd67b0ce30a265f51dd1c5dec36160e56a86a74e949bca75e46"
+  }
+}
