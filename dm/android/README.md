@@ -36,7 +36,9 @@ It rewrites the game program for Android, translates every shader into a Vulkan
 bundle, generates the touch overlay and a few data tables, and writes
 `<output directory>/android/`. The tools it needs are listed at the top of the
 script (Python packages, the .NET SDK, and `spirv-opt` / `spirv-val` / `glslc`
-from the Vulkan SDK); it reports anything missing.
+from the Vulkan SDK); it reports anything missing. On Windows and Apple silicon Macs,
+`--shell <D2RMobile-shell-build-input.zip from the same release>` uses the shell's prebuilt shader
+translator and texture library, so neither the .NET SDK nor clang is needed.
 
 Copy the whole `android` folder to `Download/S2X/D2R Mobile/` on the phone, and
 your game resources (the whole `RomFS/data` directory) to `data` in the same
