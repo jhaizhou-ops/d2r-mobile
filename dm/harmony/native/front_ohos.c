@@ -41,6 +41,12 @@ void front_android_set_window(void *win, int w, int h) {
         front_window_res_changed();
     }
 }
+// 当前窗口尺寸（同安卓 front_android.c）：呈现层原生尺寸上屏前核对比例 | Current window size (as Android's front_android.c): the presenter checks the aspect before native-size present
+int front_android_window_size(int *w, int *h) {
+    if (!w || !h) return 0;
+    *w = atomic_load(&g_screen_w); *h = atomic_load(&g_screen_h);
+    return *w > 0 && *h > 0;
+}
 
 static _Atomic int g_refresh_millihz;
 void front_android_set_refresh(float hz) {
