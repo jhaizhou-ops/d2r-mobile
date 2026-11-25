@@ -186,7 +186,7 @@ static _Atomic float g_s3_set;
 static float s3_phone_default(void) {
     static float d = -1;
     if (d < 0) { const char *e = getenv("DM_3D_SCALE_DEFAULT"); float v = 0.75f;
-        if (e) { char *end; float x = strtof(e, &end); if (end != e && !*end && x >= 0.5f && x <= 1.0f) v = x; else LOG("【红】DM_3D_SCALE_DEFAULT 非法：%s（要求 0.5–1.0），按 0.75", e); }
+        if (e) { char *end; float x = strtof(e, &end); if (end != e && !*end && x >= 0.4f && x <= 1.0f) v = x; else LOG("【红】DM_3D_SCALE_DEFAULT 非法：%s（要求 0.4–1.0），按 0.75", e); }
         d = v; }
     return d;
 }
@@ -196,7 +196,7 @@ static float s3_phone_default(void) {
 static float s3_cfg(void) {
     static float env = -1;
     if (env < 0) { const char *e = getenv("DM_3D_SCALE"); float v = 0;
-        if (e) { char *end; v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); }
+        if (e) { char *end; v = strtof(e, &end); if (end == e || *end || !(v >= 0.4f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.4–1.0；0.4–0.5 配 EASU 放大用）", e); }
         env = v; }
     if (env > 0) return env;
     float s = atomic_load(&g_s3_set);

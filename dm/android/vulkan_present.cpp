@@ -363,6 +363,16 @@ extern "C" int dm_android_vk_initialize(const char *path,char *error,size_t byte
      for(size_t at=0;at<all.size();at+=900)vlog("Device extensions [%zu]: %s",at/900,all.substr(at,900).c_str());
      VkPhysicalDeviceExternalMemoryHostPropertiesEXT host{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};VkPhysicalDeviceProperties2 pr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};pr.pNext=&host;vkGetPhysicalDeviceProperties2(physical,&pr);
      vlog("Device %s api=%u.%u.%u driver=%#x minImportedHostPointerAlignment=%llu",pr.properties.deviceName,VK_VERSION_MAJOR(pr.properties.apiVersion),VK_VERSION_MINOR(pr.properties.apiVersion),VK_VERSION_PATCH(pr.properties.apiVersion),pr.properties.driverVersion,(unsigned long long)host.minImportedHostPointerAlignment);}
+#ifdef __OHOS__
+    // 诊断：华为 XEngine 在本机提供哪些 Vulkan 扩展（空域超分 XEG_spatial_upscale 等）。运行时 dlopen，不链接 libxengine，没有也不影响启动。
+    // Diagnostics: which Vulkan extensions Huawei XEngine offers on this device (spatial upscale XEG_spatial_upscale etc.). dlopen at run
+    // time, no link against libxengine, so its absence does not affect start-up.
+    {struct XegExt{char name[256];uint32_t version;};typedef VkResult(*Enum)(VkPhysicalDevice,uint32_t*,XegExt*);
+     void *lib=dlopen("libxengine.so",RTLD_NOW);Enum en=lib?reinterpret_cast<Enum>(dlsym(lib,"HMS_XEG_EnumerateDeviceExtensionProperties")):nullptr;
+     uint32_t xn=0;VkResult xr=en?en(physical,&xn,nullptr):VK_ERROR_EXTENSION_NOT_PRESENT;std::vector<XegExt> xe(xr==VK_SUCCESS?xn:0);if(xr==VK_SUCCESS&&xn)xr=en(physical,&xn,xe.data());
+     std::string names;for(uint32_t k=0;k<xn&&k<xe.size();k++){names+=xe[k].name;names+='/';names+=std::to_string(xe[k].version);names+=' ';}
+     vlog("XEngine lib=%d enumerate=%d result=%d count=%u extensions: %s",lib!=nullptr,en!=nullptr,int(xr),xn,names.c_str());}
+#endif
     std::vector<const char*> dext={VK_KHR_SWAPCHAIN_EXTENSION_NAME};if(mirror)dext.push_back(VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME);
     // Diagnostic (marker gfx-pipe-stats): the driver's per-pipeline statistics (VK_KHR_pipeline_executable_properties).
     VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pef{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};

@@ -103,6 +103,7 @@ __attribute__((weak)) void dm_cam_publish(const float vpo[16],const float ivpo[1
 #include <deque>
 #include <condition_variable>
 #include <set>
+#include "xbg_easu_spv.h"
 
 // H-08 exclusive timing hooks; absent on other platforms and standalone tests.
 #ifdef __OHOS__
@@ -2416,9 +2417,29 @@ bool front_rewrites(std::vector<uint32_t> &words,uint32_t stage,const std::strin
     bool inlined=inline_rewrite(words,key);quad_rewrite(words,stage,key.c_str(),loader);return inlined;
 }
 // Diagnostic (files/dm/spv-override/<key>.spv): this SPIR-V replaces the bundle's, for offline-optimized test modules.
+// 3D 放大换成 FSR 1 EASU（+ RCAS 式限幅锐化），替换游戏的 ps_upsample_p（键 52aac1f2306b8fc5，接口相同，见 shaders/easu_upsample.frag）。
+// DM_EASU：0 关（原版双线性 + 五点锐化），1 EASU + RCAS，2 只 EASU。缺省：鸿蒙 1，其他平台 0。spv-override 目录里的文件优先。
+// 3D upscale with FSR 1 EASU (+ RCAS-style limited sharpening) in place of the game's ps_upsample_p (key 52aac1f2306b8fc5, same
+// interface, see shaders/easu_upsample.frag). DM_EASU: 0 off (original bilinear + 5-tap sharpen), 1 EASU + RCAS, 2 EASU only.
+// Default: 1 on HarmonyOS, 0 elsewhere. A file in the spv-override directory wins.
+int easu_mode(){
+    static const int mode=[]{const char *e=getenv("DM_EASU");int m=e&&*e?atoi(e):
+#ifdef __OHOS__
+        1;
+#else
+        0;
+#endif
+        if(m<0||m>2)m=0;xbg_logf("NVN 3D upscale %s (DM_EASU=%d)",m==1?"EASU+RCAS":m==2?"EASU":"original",m);return m;}();
+    return mode;
+}
+bool builtin_override(const std::string &key,std::vector<uint32_t> &words){
+    if(key!="52aac1f2306b8fc5")return false;int m=easu_mode();if(!m)return false;
+    if(m==1)words.assign(xbg_easu_rcas_spv,xbg_easu_rcas_spv+sizeof xbg_easu_rcas_spv/4);else words.assign(xbg_easu_only_spv,xbg_easu_only_spv+sizeof xbg_easu_only_spv/4);
+    xbg_logf("NVN spv builtin %s %s words=%zu",key.c_str(),m==1?"easu+rcas":"easu",words.size());return true;
+}
 bool spv_override(const std::string &key,std::vector<uint32_t> &words){
     std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');std::string path=(cut==std::string::npos?dir:dir.substr(0,cut))+"/spv-override/"+key+".spv";
-    FILE *f=fopen(path.c_str(),"rb");if(!f)return false;fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);if(n<20 || n%4){fclose(f);return false;}
+    FILE *f=fopen(path.c_str(),"rb");if(!f)return builtin_override(key,words);fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);if(n<20 || n%4){fclose(f);return false;}
     std::vector<uint32_t> w(size_t(n)/4);bool ok=fread(w.data(),1,size_t(n),f)==size_t(n);fclose(f);if(!ok || w[0]!=0x07230203u)return false;
     words.swap(w);xbg_logf("NVN spv override %s words=%zu",key.c_str(),words.size());return true;
 }
