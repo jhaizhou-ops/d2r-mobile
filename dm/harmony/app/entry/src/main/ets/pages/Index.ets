@@ -8,8 +8,9 @@ import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 import { zlib, BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { display } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 import { IosOverlay } from '../components/IosOverlay';
+import { importGamePack, PackError, PackProgress, PackResult, PACK_CANCELLED } from '../data/GamePackImport';
 import { UI_TEXT_EN, UI_TEXT_ZH } from '../generated/UiText';
 
 interface InputRequest { id: number; title: string; sub: string; guide: string; initial: string; maxChars: number; nameRule: number; numericMax: number }
@@ -34,6 +35,9 @@ struct Index {
   @State experimentSaved: boolean = false;
   @State canImport: boolean = false;
   @State importing: string = '';
+  @State packBusy: boolean = false;
+  @State folderBusy: boolean = false;
+  private packCancel: boolean = false;
   private bundledRuntime: boolean = false;
   private fpsTimer: number = -1;
   private lastPresents: number = 0;
@@ -136,11 +140,66 @@ struct Index {
     }
     this.importing = ''; return true;
   }
+  // 导入单文件游戏包（.d2r，电脑上 dm/tools/d2r_gamepack.py 生成；大包拆成 .001、.002… 时一起选中）。见 data/GamePackImport.ets。
+  // Import a single-file game package (.d2r, made on the PC by dm/tools/d2r_gamepack.py; select all .001, .002, ... parts of a split one). See data/GamePackImport.ets.
+  private packMessage(e: PackError): string {
+    const zh = this.lang.startsWith('zh'), d = e.detail;
+    switch (e.code) {
+      case 'no_space': { const p = d.split(' '); return zh ? `手机空间不够：包 ${p[0]} GB，剩余 ${p[1]} GB（还要留 0.5 GB）` : `Not enough storage: package ${p[0]} GB, free ${p[1]} GB (0.5 GB more is needed)`; }
+      case 'not_pack': return zh ? '这不是暗黑2游戏包（.d2r）。请选电脑上 d2r_gamepack.py 生成的文件。' : 'This is not a Diablo II game package (.d2r). Pick the file made by d2r_gamepack.py.';
+      case 'truncated': return zh ? '游戏包不完整（文件被截断或分片没选全），请重新拷贝后再导入。' : 'The package is incomplete (truncated, or not all parts selected). Copy it again and retry.';
+      case 'unsafe_path': case 'unexpected_entry': case 'unsupported_entry': case 'bad_tar': return zh ? `游戏包内容不对（${e.code} ${d}），请重新生成。` : `Unexpected package content (${e.code} ${d}); please rebuild it.`;
+      case 'empty_pack': return zh ? '游戏包里没有游戏数据。' : 'The package contains no game data.';
+      case 'read_failed': return zh ? `读不了选中的文件：${d}` : `Cannot read the selected file: ${d}`;
+      default: return zh ? `导入失败（${e.code}）：${d}，请检查手机存储空间后重新导入` : `Import failed (${e.code}): ${d}. Check storage and retry.`;
+    }
+  }
+  private async importPack(): Promise<void> {
+    if (this.packBusy || this.folderBusy) { return; }
+    const zh = this.lang.startsWith('zh');
+    let uris: string[] = [];
+    try {
+      const opts = new picker.DocumentSelectOptions(); opts.maxSelectNumber = 32;
+      uris = await new picker.DocumentViewPicker(getContext(this) as common.UIAbilityContext).select(opts);
+      if (!uris || uris.length === 0) { return; }
+    } catch (e) { this.importing = zh ? '打不开文件选择器' : 'Cannot open the file picker'; return; }
+    this.packBusy = true; this.packCancel = false; this.importing = zh ? '正在读取游戏包…' : 'Reading the package…';
+    let win: window.Window | undefined = undefined;
+    try { win = await window.getLastWindow(getContext(this) as common.UIAbilityContext); await win.setWindowKeepScreenOn(true); } catch (e) { }
+    try {
+      const r: PackResult = await importGamePack(uris, this.files, this.bundledRuntime, (p: PackProgress) => {
+        const pct = p.total > 0 ? Math.floor(p.bytes * 100 / p.total) : 0;
+        this.importing = zh ? `正在导入游戏包：${pct}%（${Math.floor(p.bytes / 1048576)} / ${Math.floor(p.total / 1048576)} MB，${p.files} 个文件）`
+          : `Importing: ${pct}% (${Math.floor(p.bytes / 1048576)} / ${Math.floor(p.total / 1048576)} MB, ${p.files} files)`;
+      }, () => this.packCancel);
+      hilog.info(0xD2E0, 'XblImport', 'pack imported files=%{public}d data=%{public}d dm=%{public}d skippedDm=%{public}s', r.files, r.dataFiles, r.dmEntries, String(r.skippedDm));
+      if (this.started) {
+        // 游戏已经在跑：不再启动第二次；新数据下次打开时生效 | The game is already running: no second start; the new data takes effect next launch
+        this.importing = zh ? `导入完成（${r.files} 个文件）。请在游戏里保存并退出，再重新打开应用。` : `Imported (${r.files} files). Save and exit in the game, then reopen the app.`;
+        setTimeout(() => { if (!this.packBusy) { this.importing = ''; } }, 8000);
+      } else {
+        this.importing = zh ? '导入完成，正在启动…' : 'Imported, starting…'; this.error = ''; this.canImport = false;
+        this.boot(); this.importing = '';
+      }
+    } catch (e) {
+      const pe = e instanceof PackError ? e as PackError : new PackError('write_failed', JSON.stringify(e));
+      hilog.warn(0xD2E0, 'XblImport', 'pack import: %{public}s', pe.message);
+      this.importing = pe.code === PACK_CANCELLED ? (zh ? '已取消导入。已经完整写入的文件保留，重新导入即可补齐。' : 'Import cancelled. Files already written stay; import again to complete.') : this.packMessage(pe);
+    } finally {
+      this.packBusy = false;
+      if (win) { try { await win.setWindowKeepScreenOn(false); } catch (e) { } }
+    }
+  }
   // 导入游戏资源：选手机上的「D2R Mobile」文件夹（里面 data/ = 游戏数据，dm/ = 电脑上生成的运行包：out、shaders、overlay、ui-art），
   // 拷进本应用：data → files/romfs/data，dm/* → files/dm/*。拷完重新启动。不删源文件夹。
   // Import game resources: pick the "D2R Mobile" folder on the phone (data/ = game data, dm/ = runtime pack generated on the PC: out, shaders, overlay, ui-art),
   // copied into this app: data → files/romfs/data, dm/* → files/dm/*. Restart when done. The source folder is not deleted.
   private async importResources(): Promise<void> {
+    if (this.folderBusy || this.packBusy) { return; }
+    this.folderBusy = true;
+    try { await this.importFolder(); } finally { this.folderBusy = false; }
+  }
+  private async importFolder(): Promise<void> {
     try {
       const opts = new picker.DocumentSelectOptions(); opts.selectMode = picker.DocumentSelectMode.FOLDER; opts.maxSelectNumber = 1;
       const uris = await new picker.DocumentViewPicker(getContext(this) as common.UIAbilityContext).select(opts);
@@ -279,6 +338,8 @@ struct Index {
           Text(this.lang.startsWith('zh') ? '帧率为应用呈现计数；上屏稳定性以性能采样为准。' : 'FPS uses application present counts; display pacing requires a performance capture.')
             .fontSize(12).fontColor('#B7C2CF').width('100%')
           Button(this.lang.startsWith('zh') ? '查看最近日志' : 'Recent logs').width('100%').onClick(() => { this.readLog(); })
+          Button(this.lang.startsWith('zh') ? '导入或更新游戏包（.d2r）' : 'Import or update game package (.d2r)').width('100%')
+            .enabled(!this.packBusy && !this.folderBusy).onClick(() => { this.toolsOpen = false; this.importPack(); })
           if (this.showLog) {
             Scroll() { Text(this.logTail).fontSize(11).fontColor('#DCE4EE').copyOption(CopyOptions.LocalDevice).width('100%') }.height(150).width('100%')
           }
@@ -402,10 +463,14 @@ struct Index {
       if (!this.request && !this.toolsOpen && (this.error || this.importing)) {
         Column({ space: 16 }) {
           if (this.error) { Text(this.error).fontColor('#ffcdb98c').fontSize(16) }
-          if (this.canImport && !this.importing) {
+          if (this.canImport && !this.packBusy && !this.folderBusy) {
+            Button(this.lang.startsWith('zh') ? '导入游戏包（一个 .d2r 文件）' : 'Import game package (one .d2r file)').onClick(() => { this.importPack(); })
             Button('导入 data（可直接选 data 文件夹）').onClick(() => { this.importResources(); })
           }
           if (this.importing) { Text(this.importing).fontColor('#ffd8d0bc').fontSize(15) }
+          if (this.packBusy) {
+            Button(this.lang.startsWith('zh') ? '取消导入' : 'Cancel import').onClick(() => { this.packCancel = true; })
+          }
         }.padding(24).backgroundColor('#cc000000').borderRadius(8)
       }
       if (this.request) {
