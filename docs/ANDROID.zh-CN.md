@@ -22,7 +22,7 @@ English: [ANDROID.md](ANDROID.md)
 
 - 你自己购买的游戏的文件：Switch 版 1.0.34.0（对应 PC 版 3.3.94012）的 `ExeFS` 与 `RomFS`，见 [GAME_FILES.zh-CN.md](GAME_FILES.zh-CN.md)
 - 这个仓库的源码，**与 APK 是同一个发布版本**（App 会核对，不一致会直说）
-- Python 3.9 以上，以及这几个包：`python3 -m pip install pillow numpy lz4 capstone unicorn`
+- Python 3.9 以上，以及这几个包：`python3 -m pip install pillow numpy lz4 capstone`（DEPENDENCIES.md 里的 `unicorn` 只给开发者核对改写代码用，做导入包用不到）
 - .NET SDK（编着色器翻译工具）：<https://dotnet.microsoft.com/download>。**Windows 和 Apple 芯片的 Mac 上可以不装**：从**同一个**发布版本再下载 `D2RMobile-shell-build-input.zip`，用 `--shell` 交给工具（见第一步），它就改用里面预编的翻译工具。
 - `clang`：编界面素材脚本要用的一个小贴图库（Windows 上要装 LLVM 和 Visual Studio 的 C++ 工具）。**用 `--shell` 时同样不用装**（Windows 和 Apple 芯片的 Mac）：工具改用 zip 里预编的库。
 - Vulkan SDK 里的 `spirv-opt`、`spirv-val`、`glslc`：Windows / Linux 装 [LunarG Vulkan SDK](https://vulkan.lunarg.com/)；macOS `brew install spirv-tools shaderc`。`spirv-opt` 要新到支持 `--trim-capabilities`（工具会检查）；安卓 NDK 自带的那份太旧，别让它排在 `PATH` 前面。`glslc` 也可以用安卓 NDK 里的
