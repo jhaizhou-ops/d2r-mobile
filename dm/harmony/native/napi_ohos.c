@@ -365,7 +365,14 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     setenv("DM_GFX_READBACK_CACHED", "1", 0);    // 读回缓冲用带缓存内存（马良最佳实践）| readback buffers in host-cached memory (Maleoon best practice)
     setenv("DM_GFX_PIPE_MEMO", "1", 0); setenv("DM_GFX_QUAD_DERIVATIVES", "1", 0); setenv("DM_GFX_WARP32", "1", 0); setenv("DM_GFX_NAN_MINMAX", "1", 0);
     setenv("DM_GFX_NATIVE_BC", "0", 0);          // 马良不支持 BC 贴图（textureCompressionBC = 0），软解 | Maleoon has no BC textures (textureCompressionBC = 0): software decode
-    setenv("DM_GFX_ASYNC_POOL_RESET", "0", 0); setenv("DM_GFX_WB_SKIP", "0", 0);
+    // 与安卓一致的引擎开关（0.20.4 起；Pura X 营地翻译线程每帧 18.0 → 16.7 ms，画面逐张对照无差别）：关 1/32 帧的分段计时（每次约 4 ms、32 帧一顿），
+    // 顶点 / 索引快照跨帧常驻，贴图按写入才重哈希，命令池异步重置，跳过已被覆盖的写回，两项 SPIR-V 精简，着色器复用预热结果，整张上传放到提交前。
+    // Engine switches as on Android (from 0.20.4; Pura X camp translation thread 18.0 -> 16.7 ms per frame, screenshots identical): no 1-in-32-frame scope timing
+    // (about 4 ms each, a hitch every 32 frames), vertex / index snapshots kept across frames, textures rehashed only after writes, async command pool reset,
+    // skip write-backs already overwritten, two SPIR-V clean-ups, shaders reuse the warm-up results, whole uploads ahead of the submission.
+    setenv("DM_GFX_PERF_SAMPLE", "0", 0); setenv("DM_GFX_VCACHE", "1", 0); setenv("DM_GFX_TEX_DIRTY", "1", 0);
+    setenv("DM_GFX_ASYNC_POOL_RESET", "1", 0); setenv("DM_GFX_WB_SKIP", "1", 0);
+    setenv("DM_GFX_LDC_FOLD", "1", 0); setenv("DM_GFX_FORWARD_TEMPS", "1", 0); setenv("DM_GFX_SHADER_REUSE", "1", 0); setenv("DM_GFX_UPLOAD_PROLOGUE", "1", 0);
     setenv("DM_GFX_NOLOAD", "1", 0);             // 首绘可证全覆盖的通道不读入颜色附件 | colour attachments are not loaded in passes whose first draw provably covers them
     setenv("DM_PACE_ADAPT", "1", 0);             // 自适应出图档：游戏帧按撑得住的最高整除档均匀放行（hle_nvn.c）| adaptive present tier: game frames released evenly at the highest sustainable divisor tier (hle_nvn.c)
     // 完成通知（xbg_game.cpp completion_wait）与不持引擎锁等栅栏（gfx-legacy-waitall=0）在鸿蒙上是引擎缺省 | completion notification (xbg_game.cpp completion_wait)

@@ -46,6 +46,13 @@ void front_android_set_window(void *win, int w, int h) {
 // Give this device's 3D scale default at startup, before the saved Custom settings are read: reading them calls dm_3d_scale_level_set → s3_phone_default(),
 // which reads DM_3D_SCALE_DEFAULT only once; setting it later in front_game_res is too late and the default sticks at 0.75 (measured after the v2.3.5 merge:
 // camp 3D 0.75, NC33 0.53). Same formula as the native-pixel output in front_game_res below.
+// 大屏（平板 / PC）出图上限：原生像素出图的短边最多 DM_NATIVE_MAX（缺省 1440），超出的由上屏放大；3D 比例 = 700 / 出图高，夹在 0.40–0.75，
+// 让 3D 像素量在各种屏上都约等于 Pura X 的 700 行。原来夹在 0.5 起、出图不设上限：1600 高的平板 3D 800 行，4K 显示器出图 3840×2160、3D 1080 行。
+// Large screens (tablets / PCs): the native-pixel output's short side is at most DM_NATIVE_MAX (default 1440) and the presenter scales the rest; 3D scale =
+// 700 / output height clamped to 0.40-0.75, so the 3D pixel count stays near the Pura X's 700 lines on every screen. Before: clamped from 0.5 and no output cap,
+// so a 1600-tall tablet drew 3D at 800 lines and a 4K monitor output 3840x2160 with 3D at 1080 lines.
+static unsigned native_cap(unsigned nh) { const char *e = getenv("DM_NATIVE_MAX"); long m = e && *e ? strtol(e, NULL, 10) : 1440; if (m < 720) m = 720; return nh > (unsigned)m ? (unsigned)m : nh; }
+static void native_scale(unsigned nh, char *v, size_t n) { double sc = 700.0 / nh; snprintf(v, n, "%.2f", sc < 0.4 ? 0.4 : sc > 0.75 ? 0.75 : sc); }
 void front_ohos_early_scale_default(int performance_res) {
     if (getenv("DM_3D_SCALE") || getenv("DM_3D_SCALE_DEFAULT")) return;
     const char *nr = getenv("DM_NATIVE_RES");
@@ -53,7 +60,7 @@ void front_ohos_early_scale_default(int performance_res) {
     if (OH_NativeDisplayManager_GetDefaultDisplayWidth(&w) != 0 || OH_NativeDisplayManager_GetDefaultDisplayHeight(&h) != 0 || w <= 0 || h <= 0) { LOG("画面：启动时读不到屏幕尺寸，3D 缺省等出图时再定"); return; }
     unsigned nh = (unsigned)(w < h ? w : h); char v[16];
     if (performance_res || (nr && *nr == '0') || nh < 720) snprintf(v, sizeof v, "0.75");
-    else { double sc = 700.0 / nh; snprintf(v, sizeof v, "%.2f", sc < 0.5 ? 0.5 : sc > 0.75 ? 0.75 : sc); }
+    else native_scale(native_cap(nh), v, sizeof v);
     setenv("DM_3D_SCALE_DEFAULT", v, 0); setenv("DM_3D_SCALE_FLOOR", v, 0);
     LOG("画面：启动时按屏幕 %dx%d 定 3D 缺省 %s", (int)w, (int)h, v);
 }
@@ -420,9 +427,9 @@ static uint64_t front_window_res(int docked) {
             // 900 tall x 0.75 while UI text is sharp; measured about 2-3 FPS less on the Pura X (GPU 24 -> 27 ms). A DM_3D_SCALE given in dm/env is left alone
             const char *nr = getenv("DM_NATIVE_RES");
             const char *performance_res = getenv("DM_H12_PERFORMANCE_RES");
-            if ((!performance_res || *performance_res != '1') && (!nr || *nr != '0') && docked && nh >= 720) { unsigned nw = (unsigned)(llround(nh * aspect / 8) * 8); if (nw > 4096) { nw = 4096; nh = (unsigned)llround(4096 / aspect); }
-                if (!getenv("DM_3D_SCALE")) { double sc = 700.0 / nh; char v[16]; snprintf(v, sizeof v, "%.2f", sc < 0.5 ? 0.5 : sc > 0.75 ? 0.75 : sc); setenv("DM_3D_SCALE_DEFAULT", v, 0); setenv("DM_3D_SCALE_FLOOR", v, 0);
-                    LOG("画面：原生像素出图 %ux%u，3D 比例 %s", nw, nh, v); }
+            if ((!performance_res || *performance_res != '1') && (!nr || *nr != '0') && docked && nh >= 720) { unsigned full = nh; nh = native_cap(nh); unsigned nw = (unsigned)(llround(nh * aspect / 8) * 8); if (nw > 4096) { nw = 4096; nh = (unsigned)llround(4096 / aspect); }
+                if (!getenv("DM_3D_SCALE")) { char v[16]; native_scale(nh, v, sizeof v); setenv("DM_3D_SCALE_DEFAULT", v, 0); setenv("DM_3D_SCALE_FLOOR", v, 0);
+                    LOG("画面：原生像素出图 %ux%u（屏幕短边 %u，上限 %u），3D 比例 %s", nw, nh, full, native_cap(100000), v); }
                 return (uint64_t)nh << 32 | nw; }
             if (docked && !getenv("DM_3D_SCALE")) { setenv("DM_3D_SCALE_DEFAULT", "0.75", 0); setenv("DM_3D_SCALE_FLOOR", "0.75", 0); }
             unsigned bw = (unsigned)(llround((double)bh * aspect / 8) * 8); if (bw > 4096) bw = 4096;
