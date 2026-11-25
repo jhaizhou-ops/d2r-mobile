@@ -2418,17 +2418,14 @@ bool front_rewrites(std::vector<uint32_t> &words,uint32_t stage,const std::strin
 }
 // Diagnostic (files/dm/spv-override/<key>.spv): this SPIR-V replaces the bundle's, for offline-optimized test modules.
 // 3D 放大换成 FSR 1 EASU（+ RCAS 式限幅锐化），替换游戏的 ps_upsample_p（键 52aac1f2306b8fc5，接口相同，见 shaders/easu_upsample.frag）。
-// DM_EASU：0 关（原版双线性 + 五点锐化），1 EASU + RCAS，2 只 EASU。缺省：鸿蒙 1，其他平台 0。spv-override 目录里的文件优先。
+// DM_EASU：0 关（原版双线性 + 五点锐化），1 EASU + RCAS，2 只 EASU。缺省各平台都是 0：Pura X 实测 EASU 让野外升不上 60 帧档（0.20.2 A/B）。
+// spv-override 目录里的文件优先。
 // 3D upscale with FSR 1 EASU (+ RCAS-style limited sharpening) in place of the game's ps_upsample_p (key 52aac1f2306b8fc5, same
 // interface, see shaders/easu_upsample.frag). DM_EASU: 0 off (original bilinear + 5-tap sharpen), 1 EASU + RCAS, 2 EASU only.
-// Default: 1 on HarmonyOS, 0 elsewhere. A file in the spv-override directory wins.
+// Default 0 on every platform: on the Pura X, EASU kept the field from reaching the 60 fps tier (0.20.2 A/B).
+// A file in the spv-override directory wins.
 int easu_mode(){
-    static const int mode=[]{const char *e=getenv("DM_EASU");int m=e&&*e?atoi(e):
-#ifdef __OHOS__
-        1;
-#else
-        0;
-#endif
+    static const int mode=[]{const char *e=getenv("DM_EASU");int m=e&&*e?atoi(e):0;
         if(m<0||m>2)m=0;xbg_logf("NVN 3D upscale %s (DM_EASU=%d)",m==1?"EASU+RCAS":m==2?"EASU":"original",m);return m;}();
     return mode;
 }

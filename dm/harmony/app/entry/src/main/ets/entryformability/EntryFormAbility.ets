@@ -66,7 +66,7 @@ function prepareCard(filesDir: string, size: number): PreparedCard {
     if (hero.classIndex < 0 || hero.classIndex >= CLASSES_ZH.length) { continue; }
     const key = `class${hero.classIndex}`;
     if (card.data.formImages[key] !== undefined) { hero.img = `memory://${key}`; continue; }
-    for (const base of ['/dm/overlay/touchart/', '/touch-overlay/touchart/']) {
+    for (const base of ['/dm/ui-art/', '/dm/overlay/touchart/', '/touch-overlay/touchart/']) {
       try {
         const path = `${filesDir}${base}class_${hero.classIndex}.png`;
         if (!fileIo.accessSync(path)) { continue; }

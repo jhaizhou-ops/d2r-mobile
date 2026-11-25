@@ -175,6 +175,8 @@ def main():
         for n in ['lbl_main.png'] + ['lbl_f%d.png' % i for i in range(1, 9)] + ['sil_dm_native_skill_%d.png' % i for i in range(9)]:
             if not os.path.isfile(os.path.join(hud, n)): die('底栏素材里缺 %s（%s）' % (n, hud))
             shutil.copyfile(os.path.join(hud, n), os.path.join(stage, 'ui-art', n))
+        # 桌面服务卡片的职业头像 class_0..7.png（原版 HIREABLES 职业图标） | class portraits class_0..7.png for the home-screen card (the game's HIREABLES class icons)
+        run([PY, os.path.join(IOS, 'tools', 'gen_class_portraits.py'), romfs, os.path.join(stage, 'ui-art')], what='生成职业头像')
 
     # 四、着色器：取包 → 翻译工具 → 翻成 Vulkan 用的包；再加 4 个查询核（项目手写，现编）
     # 4. Shaders: get the packages → translation tool → translate into the bundles Vulkan uses; then add the 4 query kernels (written by the project, compiled here)
