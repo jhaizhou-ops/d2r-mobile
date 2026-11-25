@@ -1,17 +1,17 @@
-// 个人仓库 2–5 页。
+// 个人仓库 2–10 页。
 // 角色存档里的个人仓库格（玩家物品栏页 4）放「当前页」；另外 4 页的物品位流放侧文件 <角色>/<角色>.swpage（存档工作目录里的角色目录，随存档提交原子换入；
 // iCloud 同步按角色整个目录打包，侧文件跟着走，dm_cloudsync.c）。翻页在服务端拍里做（diag.c hud_tick 调 dm_pages_tick），全用原版函数：
 //   搬出 = 写位流 main+0x581b60 → 从物品栏摘下 0x55e430 → 通知客户端 0x642f70(…, 0x20, 4, 0, 页, y, x) → 释放 0x658be0；
 //   放回 = 读位流建物品 0x5793a0 + 0x6564e0（孔里的照原版复制物品 0x65a840 逐个建、0x64d080 镶回）→ 原版读档放物品 0x6f1940（按物品自带的页 / 格放进属主物品栏）
-//          → 通知客户端 0x642f70(…, 1, 2, 0, 页, 0, x | y << 16)（同收包 0x18 的处理 0x6d0050）。
-// 界面在 dm_cursor.c（个人页左右箭头、页码）。实测与坑：设计文档「个人仓库 2–5 页：实现与实测」。
-// Personal stash pages 2–5.
+//          → 通知客户端 0x642f70(…, 0, 2, 0, 页, 0, x | y << 16)（同原版整理 0x6de584：来源 0 = 不经光标；收包 0x18 的处理 0x6d0050 用的来源 1 = 从光标放下，客户端会清掉自己光标上的物品）。
+// 界面在 dm_cursor.c（个人页左右箭头、页码）。实测与坑：设计文档「个人仓库 2–5 页：实现与实测」（2026-11 起 10 页，见下面「个人仓库 2–10 页」）。
+// Personal stash pages 2–10.
 // The personal stash grid in the character save (player item container page 4) holds the "current page"; the item bitstreams of the other 4 pages go in the sidecar file <character>/<character>.swpage (in the character directory inside the save working directory, swapped in atomically with the save commit;
 // iCloud sync packs the whole directory per character, so the sidecar file goes along, dm_cloudsync.c). Page flips are done in the server tick (hud_tick in diag.c calls dm_pages_tick), using only original game functions:
 //   move out = write bitstream main+0x581b60 -> remove from the item container 0x55e430 -> notify the client 0x642f70(..., 0x20, 4, 0, page, y, x) -> free 0x658be0;
 //   put back = read bitstream and build item 0x5793a0 + 0x6564e0 (socketed ones are built one by one following the original game's item copy 0x65a840 and socketed back with 0x64d080) -> the original game's load-time item placement 0x6f1940 (puts it into the owner's item container by the item's own page / cell)
-//          -> notify the client 0x642f70(..., 1, 2, 0, page, 0, x | y << 16) (same as the handler 0x6d0050 for received packet 0x18).
-// UI is in dm_cursor.c (left / right arrows on the personal page, page number). Measurements and pitfalls: design doc 「个人仓库 2–5 页：实现与实测」(Personal stash pages 2–5: implementation and measurements).
+//          -> notify the client 0x642f70(..., 0, 2, 0, page, 0, x | y << 16) (same as the original sort 0x6de584: source 0 = not via the cursor; the handler 0x6d0050 for received packet 0x18 uses source 1 = put down from the cursor, which makes the client clear its own cursor item).
+// UI is in dm_cursor.c (left / right arrows on the personal page, page number). Measurements and pitfalls: design doc 「个人仓库 2–5 页：实现与实测」(Personal stash pages 2–5: implementation and measurements; 10 pages since 2026-11, see 'Personal stash pages 2–10' below).
 #include <time.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -81,11 +81,14 @@ int dm_blobs_have(const dm_blob *bl, int nb, const uint8_t *bits, int len) { int
     for (int i = 0; i < nb; i++) if (dm_memfind(bl[i].d, bl[i].n, bits + 8, (size_t)n)) return 1; return 0; }
 void dm_blobs_free(dm_blob *bl, int nb) { for (int i = 0; i < nb; i++) free(bl[i].d); }
 int dm_bits_simple(const uint8_t *bits, int len) { return len >= 4 && (bits[2] & 0x20); }   // 位流标志位 0x200000 = 简单物品（没有唯一编号） | Bitstream flag bit 0x200000 = simple item (no unique id)
-// ---------- 个人仓库 2–5 页 ----------
-// 角色存档里的个人仓库格（玩家物品栏页 4）放「当前页」；另外 4 页的物品位流放侧文件 <角色>/<角色>.swpage（存档工作目录里，随存档提交原子换入）。
+// ---------- 个人仓库 2–10 页 ----------
+// 角色存档里的个人仓库格（玩家物品栏页 4）放「当前页」；另外 9 页的物品位流放侧文件 <角色>/<角色>.swpage（存档工作目录里，随存档提交原子换入）。
 // 翻页（服务端拍）：当前格整页搬出（写位流 → 摘下 0x55e430 → 通知 → 释放）存进当前页的槽，再把目标页逐件建出来（含孔里的）按原格放回（读档放物品 0x6f1940），
-// 页码改成目标页，请游戏存盘。同原版共享页：第 1 页往左、第 5 页往右不动。
-// 落盘一致性（不变式：同一件物品只在一处——侧文件的页里，或原版存档里）：翻完一次、落盘前不接受下一次翻页，待定的只有「翻页前 / 后」两态。
+// 页码改成目标页，请游戏存盘。同原版共享页：第 1 页往左到最后一页、最后一页往右回第 1 页。
+// 翻页请求（L / R、箭头）累加成「目标页」：没有待定翻页就当拍直接翻到目标页（连按几下也只翻一次）；有待定翻页就等它证明完（实测翻页后 2–4 毫秒）再翻，不丢请求。
+// 手上拿着物品也照翻。放回的通知用来源 0（不经光标，同原版整理 0x6de584）：原先用来源 1（从光标放下，照收包 0x18），客户端每收到一件就清掉自己光标上的物品，
+//   实测翻页后客户端手上的物品没了、服务端光标还挂着（两端不一致，重开才回来）。
+// 落盘一致性（不变式：同一件物品只在一处——侧文件的页里，或原版存档里）：翻完一次、落盘前不做下一次翻页，待定的只有「翻页前 / 后」两态。
 // 翻页时留两份快照：搬出页 A（翻页前格里的）、目标页 B（放进格里的），每件带位置的完整位流；待定期间每次提交侧文件都带上这两份（待定记录）。
 // 提交前钩子先看事实：这次要提交的本角色档已不是翻页时那份（整份指纹 ≠ g_pH0，见 g_pH0 的注释）→ 翻页后序列化的 → 翻页后，不管格里是什么
 //   （从空页翻来、第一次存盘前就把件全拿走，格和翻页前一样也判得出）。拿不到这条事实时再看格：
@@ -93,11 +96,14 @@ int dm_bits_simple(const uint8_t *bits, int len) { return len >= 4 && (bits[2] &
 //   位置在位流里、一格只放得下一件，别处有同字节的复制品不影响（丢整页的病根）。
 // 进局读到待定记录：按格里实际的件同一规则落定（pages_resolve）。
 // 进局读侧文件时页里某件（有自己身份的）字节在原版存档里也有一份，只记不删（两件同字节是可能的，删了就是丢）
-// ---------- Personal stash pages 2–5 ----------
-// The personal stash grid in the character file (player inventory page 4) holds the 'current page'; the item bit streams of the other 4 pages live in the side file <character>/<character>.swpage (in the save working directory, swapped in atomically with each save commit).
+// ---------- Personal stash pages 2–10 ----------
+// The personal stash grid in the character file (player inventory page 4) holds the 'current page'; the item bit streams of the other 9 pages live in the side file <character>/<character>.swpage (in the save working directory, swapped in atomically with each save commit).
 // Page turn (server tick): the whole current grid is moved out (write bit stream -> remove 0x55e430 -> notify -> free) into the current page's slot, then the target page is built item by item (including socketed items) and put back in the original cells (load-and-place 0x6f1940),
-// the page number is set to the target page and the game is asked to save. Like the original shared pages: page 1 does not go left, page 5 does not go right.
-// On-disk consistency (invariant: an item is in exactly one place - a page in the side file, or the original save): after a turn, no further turn is accepted until it is on disk; the pending state is only 'before / after the turn'.
+// the page number is set to the target page and the game is asked to save. Like the original shared pages: left of page 1 is the last page, right of the last page is page 1.
+// Page turn requests (L / R, arrows) add up to a 'target page': with no pending turn, turn straight to the target in this tick (several presses still make one turn); with a pending turn, wait until it is proven (measured 2-4 ms after the turn) and then turn; no request is dropped.
+// Turning with an item in hand works too. The put-back notice uses source 0 (not via the cursor, same as the original sort 0x6de584): it used source 1 (put down from the cursor, as for received packet 0x18), and the client cleared its own cursor item on each one;
+//   measured, after a turn the item vanished from the client's hand while the server cursor still held it (the two sides disagreed until a restart).
+// On-disk consistency (invariant: an item is in exactly one place - a page in the side file, or the original save): after a turn, the next turn is not done until it is on disk; the pending state is only 'before / after the turn'.
 // At a turn two snapshots are kept: turned-away page A (grid before the turn) and target page B (placed into the grid), each item as the full bit stream with its position; while pending, every commit writes both with the side file (the pending record).
 // The pre-commit hook looks at the fact first: this character file about to be committed is no longer the copy from the turn (whole-file fingerprint != g_pH0, see the g_pH0 comment) -> serialized after the turn -> after, whatever the grid holds
 //   (also correct when turning from an empty page and taking everything out before the first save, where the grid looks the same as before). Without the fact, look at the grid:
@@ -105,12 +111,48 @@ int dm_bits_simple(const uint8_t *bits, int len) { return len >= 4 && (bits[2] &
 //   The position is in the bit stream and a cell holds only one item, so same-byte copies elsewhere do not matter (the root cause of losing a whole page).
 // On entering the game with a pending record: settle it by the actual items in the grid with the same rule (pages_resolve).
 // When reading the side file on entry, an item (with its own identity) whose bytes also exist in the original save is logged, not removed (two items with the same bytes are possible; removing one loses it)
-#define PGN 5
+// 侧文件格式：头 8 字节 SWPG、版本、当前页、有没有待定翻页记录（版本 2 起）、页数（版本 3）；接着逐页件数 + 件，有待定就再跟待定记录。
+//   版本 1 / 2 = 5 页（第 8 字节是 0）；版本 3 = 第 8 字节给页数。读：页数多于 PGN_MAX（以后更大上限的程序写的）→ 只读不写、不翻页，免得写回时丢掉多出的页。
+//   写：第 6–10 页都空、当前页和待定的两页都在前 5 页 → 照旧写版本 2（5 页，与 5 页的程序逐字节相同，旧程序照样读得懂）；否则写版本 3。
+//   5 页的程序读到版本 3 会当成坏文件（读到 0 件），之后一翻页就把侧文件写成只剩格里那页——同一份存档的所有设备都要用 10 页的程序
+// Side file format: 8-byte header SWPG, version, current page, whether a pending turn record follows (version 2 on), page count (version 3); then per page an item count + items, then the pending record if any.
+//   Version 1 / 2 = 5 pages (byte 8 is 0); version 3 = byte 8 holds the page count. Read: more pages than PGN_MAX (written by a future program with a higher cap) -> read-only, no write and no turns, so a write-back cannot drop the extra pages.
+//   Write: pages 6-10 all empty and the current page and both pending pages within the first 5 -> write version 2 as before (5 pages, byte-identical to the 5-page program, which can still read it); otherwise version 3.
+//   A 5-page program reads version 3 as a bad file (0 items), and its next turn writes the side file with only the grid's page - every device on the same saves needs the 10-page program
+// 页数可调：自定义目录里 stash_pages.txt 的 personal_pages=<页数>（缺省 5 = 原版，1..PGN_MAX），每次进局读。本角色实际用的页数 g_pgn =
+//   max(设定, 侧文件里最后一页有件的页号, 当前页, 待定翻页的两页)——调小时有件的页不会消失：清空最后几页后下次进局才缩到设定值
+// Adjustable page count: personal_pages=<pages> in stash_pages.txt in the custom directory (default 5 = original, 1..PGN_MAX), read on every run entry. The count this character actually uses, g_pgn =
+//   max(setting, last page in the side file that holds items, current page, both pages of a pending turn) - lowering it never makes a page with items disappear: it shrinks to the setting on the next entry after the last pages are emptied
+#define PGN_MAX 64
+#define PGN_DEF 5
+#define PGN_OLD 5   // 版本 1 / 2 的页数 | Page count of versions 1 / 2
+int dm_custom_num(const char *file, const char *key, int def);   // dm_custom.c
+static int pg_setting(void) { int v = dm_custom_num("stash_pages.txt", "personal_pages", PGN_DEF); return v < 1 ? 1 : v > PGN_MAX ? PGN_MAX : v; }
+// 翻页目标：cur 当前页、want 已排着的目标（-1 = 没排）、delta 这次新来的步数（L = -1、R = +1，可累加），回绕（同原版共享页：第 1 页往左到最后一页）；返回新的目标（等于 cur = 不用翻）
+// Turn target: cur = current page, want = target already queued (-1 = none), delta = steps just requested (L = -1, R = +1, they add up), wrapping around (like the original shared pages: left of page 1 is the last page); returns the new target (equal to cur = no turn needed)
+static int pg_next_target(int cur, int want, int delta, int n) { int t = ((want < 0 ? cur : want) + delta) % n; return t < 0 ? t + n : t; }
+// 提交前核对的判定（规则见上面「落盘一致性」）：dn = 本角色档字节数（0 = 读不到）；nA / nB = 搬出页 / 目标页快照件数，na / nb = 其中在角色档里找到的件数；h / H0 = 角色档指纹 / 翻页时记的指纹（0 = 没记）。
+// 翻页后（PGV_AFTER，why 给理由）/ 读不到角色档（PGV_UNREAD）/ 格里是搬出页（PGV_WAIT_A）/ 从空页翻来、格里还没有目标页的件（PGV_WAIT_EMPTY）；后三种都要等下一次存盘
+// Pre-commit verdict (rules under 'On-disk consistency' above): dn = byte count of this character's file (0 = unreadable); nA / nB = item counts of the turned-away / target snapshots, na / nb = how many of them were found in the character file; h / H0 = character file fingerprint / the one recorded at the turn (0 = none).
+// After the turn (PGV_AFTER, why gives the reason) / character file unreadable (PGV_UNREAD) / grid is the turned-away page (PGV_WAIT_A) / turned from an empty page and the grid has none of the target items yet (PGV_WAIT_EMPTY); the last three wait for the next save
+enum { PGV_AFTER, PGV_UNREAD, PGV_WAIT_A, PGV_WAIT_EMPTY };
+static int pg_verdict(size_t dn, int nA, int nB, int na, int nb, uint64_t h, uint64_t H0, const char **why) {
+    *why = NULL; int isA = na == nA, isB = nb == nB;   // 快照里的件都在格里（快照为空时：格里一件快照里的都没有） | All items of the snapshot are in the grid (for an empty snapshot: none of its items are in the grid)
+    if (!dn) return PGV_UNREAD;
+    if (!nA && !nB) { *why = "两页都空，不涉及物品"; return PGV_AFTER; }
+    if (H0 && h != H0) { *why = "角色档已不是翻页时那份（翻页时没有在途的存盘，之后的只能是翻页后序列化的）"; return PGV_AFTER; }   // 事实，不看格：翻页后又把件全拿走也判得出 | A fact, independent of the grid: also correct when everything was taken out after the turn
+    if (isB && nB) { *why = "格里是目标页"; return PGV_AFTER; }
+    if (isA && nA) return PGV_WAIT_A;
+    if (!nA && !nb) return PGV_WAIT_EMPTY;
+    *why = "格里既不是搬出页也不是目标页（翻页后又动过格）"; return PGV_AFTER;
+}
 typedef struct { uint8_t x, y; uint16_t len; uint8_t *bits; } pitem;
 typedef struct { int n; pitem *it; } ppage;
-static ppage g_pp[PGN]; static int g_pcur, g_pload; static char g_pchar[64];
+static ppage g_pp[PGN_MAX]; static int g_pcur, g_pload, g_pgn = PGN_DEF; static char g_pchar[64];   // g_pgn = 本角色用的页数（见 PGN_MAX 上面） | g_pgn = page count used by this character (see above PGN_MAX)
 static int g_ppend, g_pdirty;   // 待定翻页：[0] 搬出的、[1] 搬进的；g_pdirty = 进局去重改了页，下次提交要写 | Pending flip: [0] moved out, [1] moved in; g_pdirty = dedup on entering the run changed a page, to be written on the next commit
-static uint64_t g_pmade; static int g_pmore; static char g_pstash[64];   // 翻页时已提交过几次、翻页后 [G+0x5800] 的值、之后看到过真的序列化、钩子要再请一次存盘、共享仓库名 | Number of commits already made at flip time, the value of [G+0x5800] after the flip, a real serialization has been seen since, the hook needs to request another save, shared stash name
+static int g_pro, g_pwant = -1;   // g_pro = 侧文件页数多于 PGN_MAX：只读（不翻、不写）；g_pwant = 排着的目标页（-1 = 没有），只在服务端拍里读写 | g_pro = side file has more pages than PGN_MAX: read-only (no turns, no writes); g_pwant = queued target page (-1 = none), read and written only in the server tick
+static uint64_t g_pmade, g_pflip_ns; static int g_pmore; static char g_pstash[64];   // 翻页时已提交过几次、上次翻页的单调时刻（读数：翻页到证明用了多久）、钩子要再请一次存盘、共享仓库名 | Number of commits already made at flip time, monotonic time of the last flip (readout: how long from the flip to its proof), the hook needs to request another save, shared stash name
+uint32_t dm_hud_held(void);   // dm_hud.c：客户端手上物品 id（0 = 空） | dm_hud.c: id of the item in the client's hand (0 = empty)
 uint64_t dm_fs_commit_count(void); const char *dm_stash_name(uint8_t *b);
 static _Atomic int g_preq, g_pcur_pub;
 // 待定翻页记录（翻完、侧文件还没按「翻页后」落定之前）：每次提交都随侧文件写下去，进局时拿仓库格的实际内容和两份整页快照比、落定（pages_resolve）。
@@ -128,7 +170,8 @@ static int g_pfrom, g_pto; static uint64_t g_pH0; static ppage g_pA, g_pB, g_pS0
 //   也不用档头时刻对墙钟：玩家改系统时间 / 网络对时往回拨会颠倒先后。
 // g_ser_infl：服务端拍看到序列化（[G+0x5800] 变成真时刻；与翻页同在服务端拍上，先后确定），且这一拍窗口里角色档还没写完 → 在途；之后看到角色档写完（hle_fs 的序号更大）→ 不在途。
 //   假「在途」只多等，安全；假「不在途」要「上一次存盘的角色档恰好在这一拍才写完、这一次的还没写」——存盘间隔秒级、写盘毫秒级，不会同拍。
-// g_ser_sec：最近一次看到序列化那一拍的用户时钟秒；同一秒里翻页前刚存过就顺延到下一秒（只防「翻页后同秒再存、内容逐字节相同」，用相等判、改时钟不会长卡）
+// 不再等「这一秒刚存过盘」：翻页后同一秒再存出与 g_pH0 逐字节相同的档，只可能是搬出页为空（物品有唯一编号、位流带位置），那时上面按格判成「从空页翻来、还没有目标页的件」，
+//   再请一次存盘，下一秒的档指纹就不同了——只多等一次存盘，不会判成「翻页前」。原先这一等让连着翻页每次顺延到下一秒（约 1 秒的慢）
 // How 'this character file was serialized after the page turn' is proven (a fact; no counting, no wall clock):
 //   If at the turn no character file is serialized but not yet written (g_ser_infl = 0), the pre-turn content can only be the d2s now in the working directory; record its whole-file fingerprint g_pH0.
 //   A later committed character file whose fingerprint != g_pH0 can only have been serialized after the turn. g_pH0 = 0 means the fact was not available at the turn (deferral timed out); judge by the grid only.
@@ -137,9 +180,10 @@ static int g_pfrom, g_pto; static uint64_t g_pH0; static ppage g_pA, g_pB, g_pS0
 //   Not the header time against the wall clock either: the player changing the system time / network time sync going back would reverse the order.
 // g_ser_infl: the server tick sees a serialization ([G+0x5800] became a real time; on the same server tick as page turns, so the order is fixed) and the character file has not finished writing within this tick's window -> in flight; once a finished write is seen (a larger hle_fs number) -> not in flight.
 //   A false 'in flight' only waits longer, which is safe; a false 'not in flight' would need the previous save's character file to finish exactly in this tick while this one is not yet written - saves are seconds apart and writes take milliseconds, so not in the same tick.
-// g_ser_sec: user clock second of the tick where the last serialization was seen; if a save happened earlier in the same second, defer the turn to the next second (only guards against a byte-identical save later in the same second; compared for equality, so clock changes cannot stall it for long)
-static int g_ser_infl; static uint64_t g_ser_seq; static int64_t g_ser_sec = -1; static uint32_t g_ser_tq, g_tq_now;
-int64_t dm_user_clock(void); int dm_user_clock_fixed(void); uint64_t dm_seq_next(void); uint64_t dm_fs_d2s_wseq(void);   // hle_time.c / hle_fs.c
+// No more waiting for 'a save happened in this second': a save after the turn in the same second that is byte-identical to g_pH0 is only possible when the turned-away page is empty (items have unique ids and the bit stream carries the position); the grid rule above then says 'turned from an empty page, no target items yet',
+//   requests another save, and the next second's file has a different fingerprint - one extra save at most, never judged 'before'. That wait used to defer every quick turn to the next second (the ~1 s slowness)
+static int g_ser_infl; static uint64_t g_ser_seq; static uint32_t g_ser_tq, g_tq_now;
+uint64_t dm_seq_next(void); uint64_t dm_fs_d2s_wseq(void);   // hle_time.c / hle_fs.c
 // 给 iCloud 并回：0 = 没有在途的存盘（放件时可记指纹）；1 = 在途、50 拍内（等）；2 = 在途超过 50 拍还没见写完（不等了，这次拿不到「放好后序列化」的事实，只认在存档里找到）
 // For the iCloud merge: 0 = no save in flight (a fingerprint can be taken at placement); 1 = in flight, within 50 ticks (wait); 2 = in flight for more than 50 ticks with no finished write seen (stop waiting; the 'serialized after placing' fact is not available this time, only 'found in the saves' counts)
 int dm_ser_state(void) { return !g_ser_infl ? 0 : g_tq_now - g_ser_tq < 50 ? 1 : 2; }
@@ -150,12 +194,15 @@ static uint8_t *d2s_read(const char *wd, size_t *n) {   // 工作目录里本角
     fseek(f, 0, SEEK_END); long L = ftell(f); fseek(f, 0, SEEK_SET); d = L > 0 && L < (16 << 20) ? malloc((size_t)L) : NULL; *n = d ? fread(d, 1, (size_t)L, f) : 0; fclose(f);
     if (!*n) { free(d); d = NULL; } return d; }
 int dm_pages_cur(void) { return atomic_load(&g_pcur_pub); }   // 界面读：当前第几页（0 起） | UI read: the current page number (0-based)
-int dm_pages_count(void) { return PGN; }
-void dm_pages_request_flip(int dir) { atomic_store(&g_preq, dir < 0 ? -1 : 1); }
+static _Atomic int g_pgn_pub = PGN_DEF;
+int dm_pages_count(void) { return atomic_load(&g_pgn_pub); }   // 界面读：本角色几页 | UI read: how many pages this character has
+static _Atomic int g_pflips;   // 翻过几次（界面看它变了 = 刚翻过页，dm_cursor.c 重设光标图） | Number of turns done (the UI sees it change = a turn just happened; dm_cursor.c resets the cursor picture)
+int dm_pages_flips(void) { return atomic_load(&g_pflips); }
+void dm_pages_request_flip(int dir) { atomic_fetch_add(&g_preq, dir < 0 ? -1 : 1); }   // 累加，服务端拍取走（连按几下 = 几步） | Accumulated and taken by the server tick (several presses = several steps)
 static void ppage_free(ppage *p) { for (int i = 0; i < p->n; i++) free(p->it[i].bits); free(p->it); p->n = 0; p->it = NULL; }
 static void pitem_dup(ppage *p, const pitem *it) { uint8_t *c = malloc(it->len); pitem *m = realloc(p->it, sizeof(pitem) * (size_t)(p->n + 1)); if (m) p->it = m; if (!c || !m) { free(c); return; } memcpy(c, it->bits, it->len); p->it[p->n] = *it; p->it[p->n++].bits = c; }
 static void pend_clear(void) { ppage_free(&g_pA); ppage_free(&g_pB); ppage_free(&g_pS0); }
-static void pages_clear(void) { pend_clear(); for (int i = 0; i < PGN; i++) ppage_free(&g_pp[i]); g_pcur = 0; g_ppend = 0; g_pdirty = 0; atomic_store(&g_pcur_pub, 0); }
+static void pages_clear(void) { pend_clear(); for (int i = 0; i < PGN_MAX; i++) ppage_free(&g_pp[i]); g_pcur = 0; g_ppend = 0; g_pdirty = 0; g_pro = 0; g_pwant = -1; g_pgn = pg_setting(); atomic_store(&g_pcur_pub, 0); atomic_store(&g_pgn_pub, g_pgn); }
 static void pages_path(char *p, size_t n, const char *wd) { snprintf(p, n, "%s/%s/%s.swpage", wd, g_pchar, g_pchar); }
 static int ppage_read(FILE *f, ppage *p) {   // 一页：件数 u16，每件 x、y、长度 u16、位流；读坏返回 −1（读好的件留着） | One page: item count u16, then per item x, y, length u16, bit stream; returns -1 on a bad read (items read so far are kept)
     uint8_t c[2]; if (fread(c, 1, 2, f) != 2) return -1; int n = *(uint16_t *)c; if (!n) return 0;
@@ -196,37 +243,44 @@ static void pages_resolve(uint8_t *b, uint64_t player) {
 static void pages_load(uint8_t *b, uint64_t player) {   // 进局读一次（工作目录里的那份 = 上次提交的） | Read once on entering a run (the copy in the working directory = the last committed one)
     pages_clear(); const char *wd = dm_save_workdir(); if (!wd || !g_pchar[0]) return;
     char p[1200]; pages_path(p, sizeof p, wd); FILE *f = fopen(p, "rb"); if (!f) { LOG("个人仓库：%s 还没有翻过页（只有第 1 页）", g_pchar); return; }
-    uint8_t h[8]; int bad = 0, tot = 0, pend = 0;   // 头：SWPG、版本（1 / 2）、当前页、有没有待定翻页记录（版本 2） | Header: SWPG, version (1 / 2), current page, whether a pending page turn record follows (version 2)
-    if (fread(h, 1, 8, f) != 8 || memcmp(h, "SWPG", 4) || (h[4] != 1 && h[4] != 2) || h[5] >= PGN) bad = 1;
-    else { g_pcur = h[5]; pend = h[4] == 2 && h[6];
-        for (int pg = 0; pg < PGN && !bad; pg++) { if (ppage_read(f, &g_pp[pg])) bad = 1; tot += g_pp[pg].n; }
-        if (!bad && pend) { uint8_t ft[2]; if (fread(ft, 1, 2, f) != 2 || ft[0] >= PGN || ft[1] >= PGN || fread(&g_pH0, 8, 1, f) != 1 || ppage_read(f, &g_pA) || ppage_read(f, &g_pB) || ppage_read(f, &g_pS0)) bad = 1; else { g_pfrom = ft[0]; g_pto = ft[1]; } } }
+    uint8_t h[8]; int bad = 0, tot = 0, pend = 0, fn = 0;   // 头：SWPG、版本（1 / 2 / 3）、当前页、有没有待定翻页记录（版本 2 起）、页数（版本 3；1 / 2 是 5 页）；格式见 PGN_MAX 上面 | Header: SWPG, version (1 / 2 / 3), current page, whether a pending page turn record follows (version 2 on), page count (version 3; 1 / 2 have 5 pages); format above PGN_MAX
+    if (fread(h, 1, 8, f) != 8 || memcmp(h, "SWPG", 4)) bad = 1; else if (h[4] == 1 || h[4] == 2) fn = PGN_OLD; else if (h[4] == 3) fn = h[7]; else bad = 1;
+    if (!bad && fn > PGN_MAX) { fclose(f); g_pro = 1; LOG("【红】个人仓库：%s 有 %d 页（这个程序最多 %d 页，是更新的程序写的）→ 只读：不翻页、不写，免得丢掉多出的页", p, fn, PGN_MAX); return; }
+    if (!bad && (fn < 1 || h[5] >= fn)) bad = 1;
+    if (!bad) { g_pcur = h[5]; pend = h[4] >= 2 && h[6];
+        for (int pg = 0; pg < fn && !bad; pg++) { if (ppage_read(f, &g_pp[pg])) bad = 1; tot += g_pp[pg].n; }   // fn 之后的页空着（5 页的文件读进 10 页） | Pages from fn on stay empty (a 5-page file read into 10 pages)
+        if (!bad && pend) { uint8_t ft[2]; if (fread(ft, 1, 2, f) != 2 || ft[0] >= fn || ft[1] >= fn || fread(&g_pH0, 8, 1, f) != 1 || ppage_read(f, &g_pA) || ppage_read(f, &g_pB) || ppage_read(f, &g_pS0)) bad = 1; else { g_pfrom = ft[0]; g_pto = ft[1]; } } }
     fclose(f);
     if (bad) { LOG("【红】个人仓库：%s 坏了（读到 %d 件），只用读好的部分", p, tot); if (pend) { LOG("【红】个人仓库：待定翻页记录没读全，不落定（按已读的页槽）"); pend_clear(); pend = 0; } }
     if (pend) pages_resolve(b, player);
     { dm_blob bl[64]; int nb = dm_save_blobs(wd, g_pstash, bl, 64), drop = 0;   // 去重：页里有自己身份的那件，字节已在原版存档里 = 复制，从页里去掉（下次提交写回） | Dedup: an item in a page that has its own identity and whose bytes are already in the original save = a duplicate; remove it from the page (written back on the next commit)
-      for (int pg = 0; pg < PGN; pg++) for (int i = 0; i < g_pp[pg].n; ) { pitem *it = &g_pp[pg].it[i];
+      for (int pg = 0; pg < PGN_MAX; pg++) for (int i = 0; i < g_pp[pg].n; ) { pitem *it = &g_pp[pg].it[i];
           // 只记不删：原先当成复制从侧文件删掉，可字节相同的另一份也可能是别处还回来的复制品（iCloud 并回没划掉、每次进局再还一份），
           // 删掉的反而是玩家放进个人仓库的那份原件（个人仓库清空）。复制的来源已在源头堵上（翻页待定记录落定、并回清单按全部存档划掉），这里只留读数
           // Log only, do not remove: these used to be removed from the side file as duplicates, but the other same-byte copy may itself be a duplicate returned from elsewhere (the iCloud merge not crossing it off and returning another copy on every entry),
           // so what got removed was the original the player had put in the personal stash (personal stash emptied). The sources of duplication are closed at the root (pending page turns settled, merge list crossed off against all saves); only the reading is kept here
           if (!dm_bits_simple(it->bits, it->len) && dm_blobs_have(bl, nb, it->bits, it->len)) { LOG("【红】个人仓库：第 %d 页格 %d,%d 那件的字节在原版存档里也有一份（不删，只记）", pg + 1, it->x, it->y); drop++; } i++; }
       dm_blobs_free(bl, nb); (void)drop; }   // 只记不删：页槽没改，不因此回写（落定翻页设的 g_pdirty 保留） | Log only, do not remove: the page slots did not change, so no write-back for this (g_pdirty set by settling a turn is kept)
-    atomic_store(&g_pcur_pub, g_pcur); tot = 0; for (int pg = 0; pg < PGN; pg++) tot += g_pp[pg].n;   // 落定后重数 | Recount after settling
+    atomic_store(&g_pcur_pub, g_pcur); tot = 0; for (int pg = 0; pg < PGN_MAX; pg++) tot += g_pp[pg].n;   // 落定后重数 | Recount after settling
+    { int set = g_pgn, need = g_pcur + 1; for (int pg = 0; pg < PGN_MAX; pg++) if (g_pp[pg].n && pg + 1 > need) need = pg + 1;   // 本角色页数 = max(设定, 有件的最后一页, 当前页) | This character's page count = max(setting, last page with items, current page)
+      if (need > g_pgn) g_pgn = need; atomic_store(&g_pgn_pub, g_pgn);
+      if (g_pgn > set) LOG("个人仓库：设定 %d 页，但第 %d 页还有物品 / 是当前页 → 这次用 %d 页（清空后下次进局缩回设定）", set, g_pgn, g_pgn); }
     LOG("个人仓库：%s 当前第 %d 页，另外几页共 %d 件", g_pchar, g_pcur + 1, tot);
 }
 static int pages_save(const char *wd) {   // 写进工作目录（临时文件再改名）；只在提交前钩子里调 | Write into the working directory (temp file then rename); called only in the pre-commit hook
     char p[1200], t[1210]; pages_path(p, sizeof p, wd); snprintf(t, sizeof t, "%s.tmp", p);
+    if (g_pro) return -1;   // 只读（侧文件页数多于 PGN_MAX） | Read-only (side file has more pages than PGN_MAX)
+    int fn = g_pcur < PGN_OLD && (!g_ppend || (g_pfrom < PGN_OLD && g_pto < PGN_OLD)) ? PGN_OLD : g_pgn;   // 后几页都空就照旧写 5 页的版本 2（格式见 PGN_MAX 上面） | With the later pages all empty, write the 5-page version 2 as before (format above PGN_MAX)
+    for (int pg = PGN_OLD; pg < PGN_MAX && fn == PGN_OLD; pg++) if (g_pp[pg].n) fn = g_pgn > PGN_OLD ? g_pgn : PGN_OLD;   // 有件就写版本 3、写满本角色的页数 | With items there: version 3 with this character's page count
     FILE *f = fopen(t, "wb"); if (!f) return -1;
-    uint8_t h[8] = { 'S', 'W', 'P', 'G', 2, (uint8_t)g_pcur, (uint8_t)(g_ppend ? 1 : 0), 0 }; int ok = fwrite(h, 1, 8, f) == 8;
-    for (int pg = 0; pg < PGN && ok; pg++) ok = ppage_write(f, &g_pp[pg]);
+    uint8_t h[8] = { 'S', 'W', 'P', 'G', (uint8_t)(fn == PGN_OLD ? 2 : 3), (uint8_t)g_pcur, (uint8_t)(g_ppend ? 1 : 0), (uint8_t)(fn == PGN_OLD ? 0 : fn) }; int ok = fwrite(h, 1, 8, f) == 8;
+    for (int pg = 0; pg < fn && ok; pg++) ok = ppage_write(f, &g_pp[pg]);
     if (ok && g_ppend) { uint8_t ft[2] = { (uint8_t)g_pfrom, (uint8_t)g_pto }; ok = fwrite(ft, 1, 2, f) == 2 && fwrite(&g_pH0, 8, 1, f) == 1 && ppage_write(f, &g_pA) && ppage_write(f, &g_pB) && ppage_write(f, &g_pS0); }
     ok = fclose(f) == 0 && ok; if (!ok || rename(t, p)) { remove(t); LOG("【红】个人仓库：写 %s 失败", p); return -1; }
     return 0;
 }
-static void pages_flip(uint8_t *b, uint64_t G, uint64_t player, int dir) {
-    if (g_ppend) { LOG("个人仓库：上一次翻页还没落盘，这次不翻"); return; }
-    int tgt = g_pcur + dir; if (tgt < 0 || tgt >= PGN) return;   // 不回绕（同原版共享页） | No wrap-around (same as the original game's shared pages)
+static void pages_flip(uint8_t *b, uint64_t G, uint64_t player, int tgt) {   // 直接翻到第 tgt 页（0 起）；调用方保证没有待定翻页 | Turn straight to page tgt (0-based); the caller makes sure no turn is pending
+    if (g_ppend || g_pro || tgt < 0 || tgt >= g_pgn || tgt == g_pcur) return;
     uint64_t t0 = pf_now(); pend_clear();
     uint64_t inv = *(uint64_t *)(player + 0x90), it = inv && *(uint32_t *)inv == 0x01020304 ? *(uint64_t *)(inv + 0x10) : 0, list[256]; int n = 0;
     for (int k = 0; it && k < 2048 && n < 256; k++) { uint64_t d = *(uint64_t *)(it + 0x10); if (!d) break; if (*(uint32_t *)(it + 0xc) == 0 && *(uint8_t *)(d + 0x55) == 4) list[n++] = it; it = *(uint64_t *)(d + 0xb0); }
@@ -241,17 +295,19 @@ static void pages_flip(uint8_t *b, uint64_t G, uint64_t player, int dir) {
     ppage left = { 0, g_pp[tgt].n ? calloc((size_t)g_pp[tgt].n, sizeof(pitem)) : NULL };
     for (int i = 0; i < g_pp[tgt].n; i++) { pitem *pi = &g_pp[tgt].it[i]; uint64_t nu = dm_item_make(b, G, 0, pi->bits, pi->len, NULL), nd = nu ? *(uint64_t *)(nu + 0x10) : 0, ip = nu ? *(uint64_t *)(nu + 0x38) : 0;
         if (nd && ip) { *(uint8_t *)(nd + 0x55) = 4; *(int32_t *)(ip + 0x10) = pi->x; *(int32_t *)(ip + 0x14) = pi->y; uint64_t one = nu, ox = 0; ((int (*)(uint64_t, uint64_t, uint64_t *, uint64_t *))(b + 0x6f1940))(G, player, &one, &ox); }
-        if (nd && *(uint64_t *)(nd + 0xa0)) { ((void (*)(uint64_t, uint64_t, uint64_t, int, int, int, int, int, uint64_t))(b + 0x642f70))(G, player, nu, 1, 2, 0, 4, 0, (uint64_t)pi->x | (uint64_t)pi->y << 16); pitem_dup(&g_pB, pi); free(pi->bits); keep++; }
+        if (nd && *(uint64_t *)(nd + 0xa0)) { ((void (*)(uint64_t, uint64_t, uint64_t, int, int, int, int, int, uint64_t))(b + 0x642f70))(G, player, nu, 0, 2, 0, 4, 0, (uint64_t)pi->x | (uint64_t)pi->y << 16); pitem_dup(&g_pB, pi); free(pi->bits); keep++; }
         else { if (nu) ((void (*)(uint64_t, uint64_t))(b + 0x658be0))(G, nu); left.it[left.n++] = *pi; LOG("【红】个人仓库：第 %d 页第 %d 件放不回格 %d,%d，留在侧文件里", tgt + 1, i + 1, pi->x, pi->y); } }
     free(g_pp[tgt].it); g_pp[tgt] = left;   // 放不回的（不该有）留在目标页槽里，下次翻走时和格里的一起存 | Items that cannot be put back (should not happen) stay in the target page slot and are saved together with those in the grid on the next flip away
     for (int i = 0; i < out.n; i++) pitem_dup(&g_pA, &out.it[i]);   // 格里搬出的（并进残留之前） | Moved out of the grid (before merging leftovers)
     for (int i = 0; i < g_pp[g_pcur].n; i++) pitem_dup(&g_pS0, &g_pp[g_pcur].it[i]);
     if (g_pp[g_pcur].n) { LOG("【红】个人仓库：第 %d 页槽里有 %d 件放不回的，并进这次搬出的", g_pcur + 1, g_pp[g_pcur].n); pitem *m = realloc(out.it, sizeof(pitem) * (size_t)(out.n + g_pp[g_pcur].n)); if (m) { out.it = m; memcpy(out.it + out.n, g_pp[g_pcur].it, sizeof(pitem) * (size_t)g_pp[g_pcur].n); out.n += g_pp[g_pcur].n; free(g_pp[g_pcur].it); g_pp[g_pcur].it = NULL; g_pp[g_pcur].n = 0; } }
     g_pp[g_pcur] = out; int from = g_pcur; g_pfrom = from; g_pto = tgt; { const char *wd = dm_save_workdir(); size_t dn = 0; uint8_t *d = !g_ser_infl && wd ? d2s_read(wd, &dn) : NULL; g_pH0 = d ? dm_fnv64(d, dn) : 0; free(d); } g_pcur = tgt; g_ppend = 1; atomic_store(&g_pcur_pub, g_pcur);
-    ((void (*)(uint64_t, int))(b + 0x5cadb0))(player, 1);
+    uint64_t held = inv && *(uint32_t *)inv == 0x01020304 ? *(uint64_t *)(inv + 0x40) : 0;   // 服务端光标物品（物品栏 +0x40，同 diag.c） | Server cursor item (inventory +0x40, same as diag.c)
+    ((void (*)(uint64_t, int))(b + 0x5cadb0))(player, 1);   // 置 [单位+0x124] |= 0x2000、挂进所在房间的更新单（玩家单位发给客户端） | Sets [unit+0x124] |= 0x2000 and puts it on its room's update list (the player unit is sent to the client)
     int sv = getenv("DM_TEST_PG_NOSAVE") ? -9 : dm_request_save();   // 测试开关 DM_TEST_PG_NOSAVE=1：翻完不请存盘（配合杀进程验「翻页后、落盘前」掉电） | Test switch DM_TEST_PG_NOSAVE=1: do not request a save after flipping (combine with killing the process to verify power loss "after the page flip, before persisting")
-    g_pmade = dm_fs_commit_count(); g_pmore = 0;
-    LOG("个人仓库：第 %d → %d 页，搬出 %d 件、放回 %d 件，用时 %.2f 毫秒；请游戏存盘 → %d", from + 1, tgt + 1, n, keep, (pf_now() - t0) / 1e6, sv);
+    g_pmade = dm_fs_commit_count(); g_pmore = 0; g_pflip_ns = pf_now(); atomic_fetch_add(&g_pflips, 1);
+    LOG("个人仓库：第 %d → %d 页，搬出 %d 件、放回 %d 件，用时 %.2f 毫秒；请游戏存盘 → %d；手上：客户端 id %u，服务端 %s（id %u）", from + 1, tgt + 1, n, keep, (pf_now() - t0) / 1e6, sv,
+        dm_hud_held(), held ? "拿着" : "空", held ? *(uint32_t *)(held + 8) : 0);
     if (getenv("DM_TEST_PG_TAKE")) {   // 测试开关 DM_TEST_PG_TAKE=1：翻完当拍（第一次存盘前）把格里的件全部拿走（摘下 → 通知 → 释放，同卖掉），验「翻页后又把东西全拿走」不被当成翻页前 | Test switch DM_TEST_PG_TAKE=1: in the tick of the turn (before the first save) take every item out of the grid (remove -> notify -> free, same as selling), to check that 'took everything out after the turn' is not mistaken for 'before the turn'
         uint64_t iv = *(uint64_t *)(player + 0x90), x = iv && *(uint32_t *)iv == 0x01020304 ? *(uint64_t *)(iv + 0x10) : 0, tk[256]; int m = 0;
         for (int k = 0; x && k < 2048 && m < 256; k++) { uint64_t d = *(uint64_t *)(x + 0x10); if (!d) break; if (*(uint32_t *)(x + 0xc) == 0 && *(uint8_t *)(d + 0x55) == 4) tk[m++] = x; x = *(uint64_t *)(d + 0xb0); }
@@ -262,7 +318,7 @@ static void pages_flip(uint8_t *b, uint64_t G, uint64_t player, int dir) {
 static void pages_pre_commit(const char *wd) {   // 提交前钩子（持 g_pmu 调），规则见文件头「落盘一致性」 | Pre-commit hook (called holding g_pmu); for the rules see "On-disk consistency" in the file header
     { static int kill = -1; if (kill < 0) { const char *e = getenv("DM_TEST_PG_KILL"); kill = e ? atoi(e) : 0; }   // 测试开关 DM_TEST_PG_KILL=<n>：本局翻过页后，到翻页后第 n 次提交前直接结束进程（验任意时刻被杀：重进后不丢不重） | Test switch DM_TEST_PG_KILL=<n>: after a page turn in this session, exit the process right before the n-th commit after the turn (checks being killed at any moment: nothing lost or duplicated after re-entering)
       if (kill && g_pmade && dm_fs_commit_count() + 1 == g_pmade + (uint64_t)kill) { LOG("DM_TEST_PG_KILL：翻页后第 %d 次提交前结束进程（%s）", kill, g_ppend ? "翻页待定" : "翻页已落定"); fflush(stderr); _exit(9); } }
-    if (!g_pload || !g_pchar[0] || (!g_ppend && !g_pdirty)) return;
+    if (!g_pload || !g_pchar[0] || g_pro || (!g_ppend && !g_pdirty)) return;
     if (!g_ppend) { if (pages_save(wd) == 0) { g_pdirty = 0; LOG("个人仓库：进局后改过的页槽（去重 / 落定上次的翻页）随这次提交落盘"); } return; }
     // 只看这次要提交的本角色档里的个人仓库格：搬出页快照（A）与目标页快照（B）每件带位置的完整位流（简单物品也算）是否都在。
     // 位置在位流里，同一格只放得下一件，所以别处（共享仓库 / 别的角色 / 背包）有同字节的复制品不影响判断。
@@ -279,16 +335,12 @@ static void pages_pre_commit(const char *wd) {   // 提交前钩子（持 g_pmu 
     for (int i = 0; d && i < g_pA.n; i++) na += dm_memfind(d, dn, g_pA.it[i].bits, g_pA.it[i].len) != NULL;
     for (int i = 0; d && i < g_pB.n; i++) nb += dm_memfind(d, dn, g_pB.it[i].bits, g_pB.it[i].len) != NULL;
     uint64_t h = d ? dm_fnv64(d, dn) : 0; free(d);
-    int isA = na == g_pA.n, isB = nb == g_pB.n;   // 快照里的件都在格里（快照为空时：格里一件快照里的都没有） | All items of the snapshot are in the grid (for an empty snapshot: none of its items are in the grid)
-    if (!dn) { g_pmore = 1; LOG("【红】个人仓库：提交前核对 #%llu —— 读不到本角色档 %s，等下一次", (unsigned long long)cno, cp); }
-    else if (!g_pA.n && !g_pB.n) why = "两页都空，不涉及物品";
-    else if (g_pH0 && h != g_pH0) why = "角色档已不是翻页时那份（翻页时没有在途的存盘，之后的只能是翻页后序列化的）";   // 事实，不看格：翻页后又把件全拿走也判得出 | A fact, independent of the grid: also correct when everything was taken out after the turn
-    else if (isB && g_pB.n) why = "格里是目标页";
-    else if (isA && g_pA.n) { g_pmore = 1; LOG("个人仓库：提交前核对 #%llu —— 格里是搬出页（%d / %d 件都在）→ 角色档是翻页前的，等翻页后的存档", (unsigned long long)cno, na, g_pA.n); }
-    else if (!g_pA.n && !nb) { g_pmore = 1; LOG("个人仓库：提交前核对 #%llu —— 从空页翻来、格里还没有目标页的件（0 / %d）→ 像是翻页前的，等翻页后的存档", (unsigned long long)cno, g_pB.n); }
-    else why = "格里既不是搬出页也不是目标页（翻页后又动过格）";
+    int v = pg_verdict(dn, g_pA.n, g_pB.n, na, nb, h, g_pH0, &why);
+    if (v == PGV_UNREAD) { g_pmore = 1; LOG("【红】个人仓库：提交前核对 #%llu —— 读不到本角色档 %s，等下一次", (unsigned long long)cno, cp); }
+    else if (v == PGV_WAIT_A) { g_pmore = 1; LOG("个人仓库：提交前核对 #%llu —— 格里是搬出页（%d / %d 件都在）→ 角色档是翻页前的，等翻页后的存档", (unsigned long long)cno, na, g_pA.n); }
+    else if (v == PGV_WAIT_EMPTY) { g_pmore = 1; LOG("个人仓库：提交前核对 #%llu —— 从空页翻来、格里还没有目标页的件（0 / %d）→ 像是翻页前的，等翻页后的存档", (unsigned long long)cno, g_pB.n); }
     if (why) { g_ppend = 0;   // 先清待定再写：这次写的是不带待定记录的定稿 | Clear the pending state before writing: this write is the final version without the pending record
-        if (pages_save(wd) == 0) { pend_clear(); g_pdirty = 0; g_pmore = 0; LOG("个人仓库：提交前核对 #%llu —— %s → 翻页后，侧文件随这次提交落盘（当前第 %d 页）", (unsigned long long)cno, why, g_pcur + 1); }
+        if (pages_save(wd) == 0) { pend_clear(); g_pdirty = 0; g_pmore = 0; LOG("个人仓库：提交前核对 #%llu —— %s → 翻页后，侧文件随这次提交落盘（当前第 %d 页；翻页后 %.0f 毫秒证明）", (unsigned long long)cno, why, g_pcur + 1, g_pflip_ns ? (pf_now() - g_pflip_ns) / 1e6 : -1.0); }
         else g_ppend = 1; }
     else if (pages_save(wd) == 0) LOG("个人仓库：提交前核对 #%llu —— 还没证明，侧文件带待定翻页记录随这次提交落盘（第 %d → %d 页，搬出 %d 件、搬进 %d 件）", (unsigned long long)cno, g_pfrom + 1, g_pto + 1, g_pA.n, g_pB.n);
 }
@@ -316,20 +368,20 @@ static void pg_sock_test(uint64_t G, uint64_t player, uint8_t *b, uint32_t tq) {
     LOG("镶孔测试：背包里没有能镶的装备（%d 件装备、%d 颗宝石）", nq, ng);
 }
 void dm_pages_tick(uint64_t G, uint64_t player, uint8_t *b) {   // 服务端拍（diag.c hud_tick）；不在局内 player 为 0 | Server tick (hud_tick in diag.c); player is 0 when not in a run
-    static uint64_t lp; if (!player) { lp = 0; g_pload = 0; return; }
+    static uint64_t lp; if (!player) { lp = 0; g_pload = 0; g_pwant = -1; atomic_store(&g_preq, 0); return; }   // 出局：排着的目标作废 | Left the run: the queued target is dropped
     uint32_t tq = *(uint32_t *)(G + 0x170);
     if (player != lp) { lp = player; uint64_t pd = *(uint64_t *)(player + 0x10); pthread_mutex_lock(&g_pmu); strlcpy(g_pchar, pd ? (const char *)pd : "", sizeof g_pchar);
         { const char *sn = dm_stash_name(b); strlcpy(g_pstash, sn ? sn : "", sizeof g_pstash); } pages_load(b, player); g_pload = 1; pthread_mutex_unlock(&g_pmu); }
     { pthread_mutex_lock(&g_pmu);
       { static uint64_t pv, tick_seq; uint64_t v = *(uint64_t *)(G + 0x5800), w = dm_fs_d2s_wseq();   // [G+0x5800] 变成真时刻 = 游戏序列化了（请存盘时我们拨成 1） | [G+0x5800] became a real time = the game serialized (we set it to 1 when requesting a save)
-        if (v != pv) { if (v > 1 && pv) { g_ser_sec = dm_user_clock(); g_ser_infl = !(w > tick_seq); g_ser_seq = dm_seq_next(); g_ser_tq = tq; } pv = v; }   // 从 0 变过来是进局开始计时，不是序列化 | A change from 0 is the game starting its timer on entry, not a serialization
+        if (v != pv) { if (v > 1 && pv) { g_ser_infl = !(w > tick_seq); g_ser_seq = dm_seq_next(); g_ser_tq = tq; } pv = v; }   // 从 0 变过来是进局开始计时，不是序列化 | A change from 0 is the game starting its timer on entry, not a serialization
         if (g_ser_infl && w > g_ser_seq) g_ser_infl = 0;   // 看到序列化之后角色档写完了 | The character file finished writing after the serialization was seen
         tick_seq = dm_seq_next(); g_tq_now = tq; }
       int more = g_pmore; g_pmore = 0; pthread_mutex_unlock(&g_pmu); if (more && !getenv("DM_TEST_PG_NOSAVE")) { int r = dm_request_save(); LOG("个人仓库：翻页还没证明，再请一次存盘 → %d", r); } }
     pg_sock_test(G, player, b, tq);
-    int dir = atomic_exchange(&g_preq, 0);
+    int dir = atomic_exchange(&g_preq, 0);   // 这一拍新来的步数（可正可负） | Steps requested since the last tick (may be negative)
     const char *e = getenv("DM_TEST_PG_GO");   // 测试开关 DM_TEST_PG_GO=<拍>:<方向>[,<拍>:<方向>…]：到拍翻页（+1 下一页 / -1 上一页） | Test switch DM_TEST_PG_GO=<tick>:<direction>[,<tick>:<direction>...]: flip the page at that tick (+1 next page / -1 previous page)
-    if (e) { char buf[128]; strlcpy(buf, e, sizeof buf); for (char *sv, *t = strtok_r(buf, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) { int at = 0, dv = 0; if (sscanf(t, "%d:%d", &at, &dv) == 2 && (uint32_t)at == tq) dir = dv; } }
+    if (e) { char buf[128]; strlcpy(buf, e, sizeof buf); for (char *sv, *t = strtok_r(buf, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) { int at = 0, dv = 0; if (sscanf(t, "%d:%d", &at, &dv) == 2 && (uint32_t)at == tq) dir += dv; } }
     { const char *ce = getenv("DM_TEST_CLOCK_AT");   // 测试开关 DM_TEST_CLOCK_AT=<拍>:<秒>[,…]：到拍把游戏用户时钟拨若干秒（负数往回拨），验改系统时间不丢不重 | Test switch DM_TEST_CLOCK_AT=<tick>:<seconds>[,...]: at the tick, shift the game's user clock by that many seconds (negative = back), to check that changing the system time neither loses nor duplicates items
       if (ce) { void dm_test_clock_shift(int64_t d); char buf[128]; strlcpy(buf, ce, sizeof buf); for (char *sv, *t = strtok_r(buf, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) { int at = 0; long long dv = 0; if (sscanf(t, "%d:%lld", &at, &dv) == 2 && (uint32_t)at == tq) dm_test_clock_shift(dv); } } }
     const char *lg = getenv("DM_TEST_PG_LOG");   // 测试开关 DM_TEST_PG_LOG=<拍>[,<拍>…]：到拍把个人仓库格里每件的物品码 / 格 / 孔里件数打出来（回归比对用） | Test switch DM_TEST_PG_LOG=<tick>[,<tick>...]: at that tick, print the item code / cell / socketed item count of every item in the personal stash grid (for regression comparison)
@@ -339,13 +391,22 @@ void dm_pages_tick(uint64_t G, uint64_t player, uint8_t *b) {   // 服务端拍�
             if (*(uint32_t *)(it + 0xc) == 0 && *(uint8_t *)(d + 0x55) == 4) { uint32_t c = ((uint32_t (*)(uint64_t))(b + 0x570260))(it); n++; LOG("个人仓库读数：拍 %u %.3s 格 %d,%d 孔里 %d 件", tq, (const char *)&c, pp ? *(int32_t *)(pp + 0x10) : -1, pp ? *(int32_t *)(pp + 0x14) : -1, item_kids(it)); }
             it = *(uint64_t *)(d + 0xb0); }
         LOG("个人仓库读数：拍 %u 第 %d 页，格里 %d 件", tq, g_pcur + 1, n); } }
-    // 翻页顺延（至多 50 拍）：有在途的存盘（已序列化、角色档还没写完）就等它写完，翻页时才能记下唯一的「翻页前那份」指纹（通常几毫秒）；
-    // 这一秒里刚存过盘也等到下一秒（固定时钟局不等），免得翻页后同一秒再存出逐字节相同的档、指纹分不开
-    // Page turn deferral (at most 50 ticks): if a save is in flight (serialized, character file not yet written), wait for the write so the turn can record the unique pre-turn fingerprint (usually a few milliseconds);
-    // if a save already happened in this second, also wait for the next second (not with a fixed clock), so a save later in the same second cannot produce a byte-identical file whose fingerprint cannot be told apart
-    { static int hold; static uint32_t hq; if (dir) { hold = dir; hq = tq; }
-      if (hold) { if ((dm_ser_state() == 1 || (g_ser_sec == dm_user_clock() && !dm_user_clock_fixed())) && tq - hq < 50) dir = 0; else { if (tq != hq) LOG("个人仓库：翻页顺延了 %u 拍（等存盘写完 / 这一秒刚存过盘）%s", tq - hq, g_ser_infl ? "，到上限存盘还在写：这次照翻、只按格判" : ""); dir = hold; hold = 0; } } }
-    if (dir) { pthread_mutex_lock(&g_pmu); pages_flip(b, G, player, dir); pthread_mutex_unlock(&g_pmu); }
+    // 翻页：新来的步数并进目标页（g_pwant）。目标 = 当前页就不翻。
+    // 有待定翻页就等它证明（提交前钩子落定后下一拍再翻，不丢请求）。有在途的存盘（已序列化、角色档还没写完）也等它写完（至多 50 拍，通常几毫秒），
+    // 翻页时才能记下唯一的「翻页前那份」指纹；不再等「这一秒刚存过盘」（理由见 g_ser_infl 上面）
+    // Turning: new steps are added into the target page (g_pwant). Target = current page means no turn.
+    // With a pending turn, wait until it is proven (the pre-commit hook settles it and the turn happens on a later tick; no request is dropped). With a save in flight (serialized, character file not yet written), also wait for the write (at most 50 ticks, usually a few ms)
+    // so the turn can record the unique pre-turn fingerprint; no more waiting for 'a save happened in this second' (reason above g_ser_infl)
+    { static uint32_t hq; static int holding; pthread_mutex_lock(&g_pmu);
+      if (dir && g_pro) { LOG("个人仓库：侧文件只读（页数多于 %d），不翻页", PGN_MAX); dir = 0; }
+      if (dir) { int was = g_pwant; g_pwant = pg_next_target(g_pcur, g_pwant, dir, g_pgn); if (g_ppend && g_pwant != was) LOG("个人仓库：上一次翻页还没证明，目标排成第 %d 页（证明后直接翻过去）", g_pwant + 1); }
+      if (g_pwant == g_pcur) g_pwant = -1;
+      if (g_pwant < 0) holding = 0;
+      if (g_pwant >= 0 && !g_ppend) {
+          if (!holding) { holding = 1; hq = tq; }
+          if (dm_ser_state() != 1 || tq - hq >= 50) { if (tq != hq) LOG("个人仓库：翻页顺延了 %u 拍（等存盘写完）%s", tq - hq, g_ser_infl ? "，到上限存盘还在写：这次照翻、只按格判" : "");
+              int tgt = g_pwant; g_pwant = -1; holding = 0; pages_flip(b, G, player, tgt); } }
+      pthread_mutex_unlock(&g_pmu); }
 }
 static void pages_hook(const char *wd) { pthread_mutex_lock(&g_pmu); pages_pre_commit(wd); pthread_mutex_unlock(&g_pmu); }
 __attribute__((constructor)) static void pages_hook_install(void) { extern void (*g_dm_pre_commit_hook[5])(const char *); g_dm_pre_commit_hook[0] = pages_hook; }
