@@ -26,12 +26,21 @@
 #include <dlfcn.h>
 #include <graphics_game_sdk/opengtx_base.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <stdio.h>
 
 void front_pin_fast(const char *who);
 void front_gtx_register(int who);
 static void *_Atomic g_window;
 static _Atomic int g_screen_w, g_screen_h;
-void front_android_set_window(void *win, int w, int h) { atomic_store(&g_window, win); if (w > 0 && h > 0) { atomic_store(&g_screen_w, w); atomic_store(&g_screen_h, h); } }
+static void front_window_res_changed(void);
+void front_android_set_window(void *win, int w, int h) {
+    atomic_store(&g_window, win);
+    if (win && w > 0 && h > 0) {
+        atomic_store(&g_screen_w, w); atomic_store(&g_screen_h, h);
+        front_window_res_changed();
+    }
+}
 
 static _Atomic int g_refresh_millihz;
 void front_android_set_refresh(float hz) {
@@ -114,7 +123,7 @@ void front_run(void (*guest)(void)) {
 }
 
 // 把调用线程绑到最高主频的那组核（Pura X：cpu10–11 2.5 GHz；调度器把翻译线程放在 2.15 GHz 的中核、游戏线程常在 1.6 GHz 的小核）。
-// DM_PIN_FAST=0 关；=十六进制掩码 指定核
+// DM_PIN_FAST=0 关；=max 自动选最高标称频率组；=十六进制掩码 指定核
 // Pin the calling thread to the cores with the highest max frequency (Pura X: cpu at 2.5 GHz; the scheduler kept the translation thread on 2.15 GHz mid cores
 // and the game thread often on 1.6 GHz little cores). DM_PIN_FAST=0 disables; =hex mask picks the cores
 void front_pin_keep(unsigned mask);
@@ -122,17 +131,20 @@ void front_pin_fast(const char *who) {
     // 先走系统 QoS（鸿蒙的正路：系统按 QoS 把线程排到快核；直接改可用核会被系统每帧改回中核，实测上千次）
     // System QoS first (the HarmonyOS way: the system places threads on fast cores by QoS; setting affinity directly is reverted to mid cores by the system every frame, measured thousands of times)
     { const char *q = getenv("DM_QOS"); if (!(q && *q == '0')) { int r = OH_QoS_SetThreadQoS(QOS_USER_INTERACTIVE); LOG("QoS：%s（线程 %d）→ USER_INTERACTIVE，结果 %d", who, (int)gettid(), r); } }
-    const char *e = getenv("DM_PIN_FAST"); unsigned mask = 0;
+    const char *e = getenv("DM_PIN_FAST"); unsigned mask = 0; long nominal_best = 0;
     if (!e || !*e || (*e == '0' && !e[1])) return;   // 硬绑核只在显式给掩码时做 | hard affinity only with an explicit mask
     mask = (unsigned)strtoul(e, NULL, 16);
     if (!mask) { long best = 0, all = 0;
         for (int c = 0; c < 32; c++) { char p[96]; snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c); FILE *f = fopen(p, "r"); if (!f) continue;
             long v = 0; if (fscanf(f, "%ld", &v) == 1 && v > 0) { all |= 1L << c; if (v > best) { best = v; mask = 0; } if (v == best) mask |= 1u << c; } fclose(f); }
-        if ((long)mask == all) mask = 0; }
-    if (!mask) return;
+        nominal_best = best; if ((long)mask == all) mask = 0; }
+    if (!mask) { LOG("H09 affinity who=%s unavailable-or-homogeneous nominal_khz=%ld", who, nominal_best); return; }
     cpu_set_t set; CPU_ZERO(&set); for (int c = 0; c < 32; c++) if (mask >> c & 1) CPU_SET(c, &set);
     int r = sched_setaffinity(0, sizeof set, &set);
     LOG("绑核：%s（线程 %d）→ 掩码 %#x，结果 %d", who, (int)gettid(), mask, r);
+    cpu_set_t actual; CPU_ZERO(&actual); int read_rc = sched_getaffinity(0, sizeof actual, &actual); unsigned actual_mask = 0;
+    if (!read_rc) for (int c = 0; c < 32; c++) if (CPU_ISSET(c, &actual)) actual_mask |= 1u << c;
+    LOG("H09 affinity who=%s tid=%d nominal_khz=%ld requested=%#x set_rc=%d actual=%#x get_rc=%d", who, (int)gettid(), nominal_best, mask, r, actual_mask, read_rc);
     static __thread unsigned kept; kept = r ? 0 : mask;
     front_pin_keep(kept);
 }
@@ -166,6 +178,7 @@ static struct {
 } g_gtx;
 static pthread_mutex_t g_gtx_mu = PTHREAD_MUTEX_INITIALIZER;
 static void gtx_temp(OpenGTX_TempLevel level) { LOG("OpenGTX：设备温度档位 %d", (int)level); }
+static void gtx_config_fill(OpenGTX_ConfigDescription *c);
 static void gtx_try_activate(void) {   // 主线程和渲染线程都登记了才建上下文 | create the context only once both the main and render threads are registered
     if (g_gtx.active || !g_gtx.main_tid || !g_gtx.render_tid) return;
     const char *e = getenv("DM_OPENGTX"); if (e && *e == '0') return;
@@ -180,9 +193,18 @@ static void gtx_try_activate(void) {   // 主线程和渲染线程都登记了�
     if (!g_gtx.create || !g_gtx.config || !g_gtx.activate) { LOG("OpenGTX：接口不全，跳过"); return; }
     g_gtx.ctx = g_gtx.create(gtx_temp);
     if (!g_gtx.ctx) { LOG("OpenGTX：设备不支持（CreateContext 返回空），跳过"); return; }
+    OpenGTX_ConfigDescription c; gtx_config_fill(&c);
+    OpenGTX_ErrorCode r1 = g_gtx.config(g_gtx.ctx, &c), r2 = r1 == OPENGTX_SUCCESS ? g_gtx.activate(g_gtx.ctx) : r1;
+    LOG("OpenGTX：主线程 %d 渲染线程 %d 关键线程 %d 个，目标 60 FPS，分辨率 %dx%d → 配置 %d 激活 %d", g_gtx.main_tid, g_gtx.render_tid, g_gtx.nkeys,
+        c.resolutionMaxValue.width, c.resolutionMaxValue.height, (int)r1, (int)r2);
+    if (r2 == OPENGTX_SUCCESS) g_gtx.active = 1;
+}
+static void gtx_config_fill(OpenGTX_ConfigDescription *cp) {
     OpenGTX_ConfigDescription c; memset(&c, 0, sizeof c);
     c.mode = SCENE_MODE; c.targetFPS = 60;
-    c.packageName = (char *)"com.xiao.boluo"; c.appVersion = (char *)"0.14.0";
+    const char *bundle = getenv("DM_BUNDLE_NAME"), *version = getenv("DM_APP_VERSION");
+    c.packageName = (char *)(bundle && *bundle ? bundle : "com.xiao.boluo");
+    c.appVersion = (char *)(version && *version ? version : "0");
     c.engineType = OTHERS_ENGINE; c.engineVersion = (char *)"dm"; c.gameType = RPG; c.pictureQualityMaxLevel = FHD;
     int dm = atomic_load(&g_screen_w), sh = atomic_load(&g_screen_h);
     c.resolutionMaxValue.height = sh > dm ? dm : sh; c.resolutionMaxValue.width = sh > dm ? sh : dm;
@@ -190,10 +212,7 @@ static void gtx_try_activate(void) {   // 主线程和渲染线程都登记了�
     c.gameMainThreadId = g_gtx.main_tid; c.gameRenderThreadId = g_gtx.render_tid;
     for (int i = 0; i < 5; i++) c.gameKeyThreadIds[i] = i < g_gtx.nkeys ? g_gtx.key_tids[i] : 0;
     c.vulkanSupport = true;
-    OpenGTX_ErrorCode r1 = g_gtx.config(g_gtx.ctx, &c), r2 = r1 == OPENGTX_SUCCESS ? g_gtx.activate(g_gtx.ctx) : r1;
-    LOG("OpenGTX：主线程 %d 渲染线程 %d 关键线程 %d 个，目标 60 FPS，分辨率 %dx%d → 配置 %d 激活 %d", g_gtx.main_tid, g_gtx.render_tid, g_gtx.nkeys,
-        c.resolutionMaxValue.width, c.resolutionMaxValue.height, (int)r1, (int)r2);
-    if (r2 == OPENGTX_SUCCESS) g_gtx.active = 1;
+    *cp = c;
 }
 // ---- FAST Kit 调度优化（PerfHint，API 26）：装载期向系统声明场景并点名线程（游戏主线程、翻译线程、关键线程），由系统给这些线程加调度 / 频率。
 // 启动：渲染线程登记后起 APP_LAUNCH（LONG，最长 60 s），主菜单出来（MainMenuButtonRibbon）结束；每次进局 / 切图的读取画面：PAGE_LOAD（MEDIUM，最长 10 s），撤下结束。
@@ -203,6 +222,7 @@ static void gtx_try_activate(void) {   // 主线程和渲染线程都登记了�
 // run / area loading screen: PAGE_LOAD (MEDIUM, at most 10 s), ended when it is taken down. Loaded at run time with dlopen: skipped when unsupported; rate limits (interval too
 // short etc.) are only logged. DM_PERFHINT=0 disables.
 #include <FASTKit/scheduling_optimization.h>
+#include <time.h>
 static struct {
     int tried, launch_on, load_on;
     HMS_FAST_SchedulingOptimization_ErrorCode (*create)(HMS_FAST_PerfHintConfigBuilder **);
@@ -230,11 +250,22 @@ static void ph_send(HMS_FAST_SchedulingOptimization_SceneType type, int begin, H
     if (!ph_ready()) return;
     int tids[8], n = 0; if (g_gtx.main_tid) tids[n++] = g_gtx.main_tid; if (g_gtx.render_tid) tids[n++] = g_gtx.render_tid;
     for (int i = 0; i < g_gtx.nkeys && n < 8; i++) tids[n++] = g_gtx.key_tids[i];
+    const char *no_tids = getenv("DM_PERFHINT_NO_TIDS");
+    if (no_tids && *no_tids == '1') n = 0; // H-02: keep scene hints, avoid mixing thread QoS owners.
+    static double scene_started[10]; // ph_send callers hold g_gtx_mu.
+    struct timespec ts;
+    double at = clock_gettime(CLOCK_MONOTONIC, &ts) == 0 ? ts.tv_sec + ts.tv_nsec * 1e-9 : -1;
+    int slot = (int)type; double elapsed_ms = -1;
+    if (slot > 0 && slot < 10) {
+        if (begin) scene_started[slot] = at;
+        else { if (at >= 0 && scene_started[slot] > 0) elapsed_ms = (at - scene_started[slot]) * 1000;
+               scene_started[slot] = 0; }
+    }
     HMS_FAST_PerfHintConfigBuilder *b = NULL; HMS_FAST_PerfHintConfig *c = NULL; int r = g_ph.create(&b);
     if (!r) r = g_ph.type(b, type); if (!r) r = g_ph.state(b, begin ? HMS_FAST_BEGIN : HMS_FAST_END); if (!r) r = g_ph.dur(b, dur);
     if (!r && n) r = g_ph.tids(b, tids, (uint32_t)n); if (!r) r = g_ph.build(b, &c); if (!r) r = g_ph.hint(c);
     if (c && g_ph.free_cfg) g_ph.free_cfg(c); if (b && g_ph.destroy) g_ph.destroy(b);
-    LOG("PerfHint：%s %s（%d 个线程）→ %d", what, begin ? "开始" : "结束", n, r);
+    LOG("PerfHint：%s %s（%d 个线程）→ %d at=%.6f elapsed_ms=%.3f", what, begin ? "开始" : "结束", n, r, at, elapsed_ms);
 }
 void dm_platform_menu_ready(void) { pthread_mutex_lock(&g_gtx_mu); if (g_ph.launch_on) { g_ph.launch_on = 0; ph_send(HMS_FAST_APP_LAUNCH, 0, HMS_FAST_LONG, "启动"); } pthread_mutex_unlock(&g_gtx_mu); }
 // who：0 游戏主线程 1 渲染（翻译）线程 2 其他关键线程（出图 / 音频）| who: 0 game main thread, 1 render (translation) thread, 2 other key threads (present / audio)
@@ -247,7 +278,74 @@ void front_gtx_register(int who) {
     pthread_mutex_unlock(&g_gtx_mu);
 }
 // 场景：1 局内 2 读取 3 前端页 | Scene: 1 in a run 2 loading 3 front-end pages
+// 关键线程：进局 8 秒后按 3 秒内 CPU 时间挑本进程最忙的 3 条（主线程、渲染线程以外）登记给 OpenGTX，重发配置。
+// Mate90 实测（温控 4）：除主线程 / 翻译线程外还有两条未命名线程各占进程 CPU 约 12%，原先 0 条关键线程，系统不知道要照顾它们。DM_GTX_KEYS=0 关。
+// Key threads: 8 s into the first run, pick the 3 busiest other threads of this process by CPU time over 3 s, register them with OpenGTX and resend the configuration.
+// Measured on the Mate90 (thermal 4): besides the main / translation threads two unnamed threads each took ~12% of process CPU, and 0 key threads were registered. DM_GTX_KEYS=0 disables.
+static uint64_t task_cpu_ticks(int tid) {
+    char p[64], b[512]; snprintf(p, sizeof p, "/proc/self/task/%d/stat", tid); FILE *f = fopen(p, "r"); if (!f) return 0;
+    size_t n = fread(b, 1, sizeof b - 1, f); fclose(f); b[n] = 0;
+    char *s = strrchr(b, ')'); if (!s) return 0;   // comm 可含空格：从最后一个 ')' 后数字段 | comm may contain spaces: count fields after the last ')'
+    unsigned long long ut = 0, st = 0; int field = 2; for (char *q = s + 1; *q && field < 15; q++) if (*q == ' ') { field++; if (field == 14) ut = strtoull(q + 1, NULL, 10); else if (field == 15) st = strtoull(q + 1, NULL, 10); }
+    return ut + st;
+}
+static void *gtx_keys_main(void *arg) {
+    (void)arg; sleep(8);
+    enum { MAXT = 256 }; int tids[MAXT], n = 0; uint64_t c0[MAXT];
+    DIR *d = opendir("/proc/self/task"); struct dirent *e;
+    while (d && (e = readdir(d)) && n < MAXT) { int t = atoi(e->d_name); if (t > 0 && t != g_gtx.main_tid && t != g_gtx.render_tid) { tids[n] = t; c0[n] = task_cpu_ticks(t); n++; } }
+    if (d) closedir(d);
+    sleep(3);
+    int best[3] = {0}; uint64_t bc[3] = {0};
+    for (int i = 0; i < n; i++) { uint64_t c = task_cpu_ticks(tids[i]), dc = c > c0[i] ? c - c0[i] : 0;
+        for (int k = 0; k < 3; k++) if (dc > bc[k]) { for (int m = 2; m > k; m--) { bc[m] = bc[m-1]; best[m] = best[m-1]; } bc[k] = dc; best[k] = tids[i]; break; } }
+    pthread_mutex_lock(&g_gtx_mu);
+    char line[256]; int at = 0;
+    for (int k = 0; k < 3 && g_gtx.nkeys < 5; k++) if (best[k] && bc[k] >= 30) {   // ≥ 30 tick / 3 s ≈ 10% 一核 | ≥ 30 ticks per 3 s ≈ 10% of a core
+        g_gtx.key_tids[g_gtx.nkeys++] = best[k];
+        char p[64], comm[32] = "?"; snprintf(p, sizeof p, "/proc/self/task/%d/comm", best[k]); FILE *f = fopen(p, "r"); if (f) { if (fgets(comm, sizeof comm, f)) comm[strcspn(comm, "\n")] = 0; fclose(f); }
+        at += snprintf(line + at, sizeof line - at, " %d(%s,%llu)", best[k], comm, (unsigned long long)bc[k]); }
+    if (g_gtx.active == 1 && g_gtx.nkeys) {
+        OpenGTX_ConfigDescription c; gtx_config_fill(&c); OpenGTX_ErrorCode r = g_gtx.config(g_gtx.ctx, &c);
+        LOG("OpenGTX：关键线程 %d 个%s → 重发配置 %d", g_gtx.nkeys, line, (int)r);
+    } else LOG("OpenGTX：关键线程未登记（激活 %d，候选%s）", g_gtx.active, at ? line : " 无");
+    pthread_mutex_unlock(&g_gtx_mu);
+    return NULL;
+}
+
+// H-08: passive, single-core-100% CPU readings every ten seconds while in game.
+static _Atomic int h8_scene;
+extern int dm_h8_enabled(void);
+typedef struct {int tid,core;uint64_t ticks;char comm[64];} h8_task;
+static int h8_read_tasks(h8_task *v,int cap){
+    DIR *d=opendir("/proc/self/task");if(!d)return 0;struct dirent *e;int n=0;
+    while((e=readdir(d)) && n<cap){int tid=atoi(e->d_name);if(tid<=0)continue;char path[96],b[2048];snprintf(path,sizeof path,"/proc/self/task/%d/stat",tid);FILE *f=fopen(path,"r");if(!f)continue;size_t z=fread(b,1,sizeof b-1,f);fclose(f);b[z]=0;char *l=strchr(b,'('),*r=strrchr(b,')');if(!l||!r)continue;
+        h8_task t={.tid=tid,.core=-1};size_t cn=(size_t)(r-l-1);if(cn>=sizeof t.comm)cn=sizeof t.comm-1;memcpy(t.comm,l+1,cn);t.comm[cn]=0;
+        char *save=NULL,*q=strtok_r(r+2," ",&save);int field=3;while(q){if(field==14||field==15)t.ticks+=strtoull(q,NULL,10);if(field==39)t.core=atoi(q);q=strtok_r(NULL," ",&save);field++;}v[n++]=t;
+    }closedir(d);return n;
+}
+static double h8_secs(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec/1e9;}
+static void *h8_sampler(void *arg){(void)arg;pthread_setname_np(pthread_self(),"h08-sampler");
+    h8_task before[512],after[512];int bn=h8_read_tasks(before,512);double at=h8_secs();long hz=sysconf(_SC_CLK_TCK);
+    for(;;){sleep(10);int an=h8_read_tasks(after,512);double now=h8_secs(),dt=now-at;
+        if(atomic_load(&h8_scene)==1 && hz>0 && dt>0){
+            int main,render;pthread_mutex_lock(&g_gtx_mu);main=g_gtx.main_tid;render=g_gtx.render_tid;pthread_mutex_unlock(&g_gtx_mu);
+            double cpu[512]={0};int picks[5]={-1,-1,-1,-1,-1};
+            for(int i=0;i<an;i++){for(int j=0;j<bn;j++)if(after[i].tid==before[j].tid && after[i].ticks>=before[j].ticks){cpu[i]=100.0*(after[i].ticks-before[j].ticks)/hz/dt;break;}
+                if(after[i].tid==main)picks[0]=i;if(after[i].tid==render)picks[1]=i;if(!strcmp(after[i].comm,"gpu-work-server"))picks[4]=i;}
+            for(int k=2;k<=3;k++)for(int i=0;i<an;i++){if(i==picks[0]||i==picks[1]||i==picks[4]||(k==3&&i==picks[2])||strncmp(after[i].comm,"Thread_",7))continue;if(picks[k]<0||cpu[i]>cpu[picks[k]])picks[k]=i;}
+            const char *roles[]={"main","translate","game_busy1","game_busy2","gpu-work-server"};
+            for(int k=0;k<5;k++){int i=picks[k];if(i<0){LOG("H08 thread role=%s unavailable",roles[k]);continue;}h8_task *t=&after[i];char path[128],freq[64]="unreadable";snprintf(path,sizeof path,"/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq",t->core);FILE *f=fopen(path,"r");if(f){long khz;if(fscanf(f,"%ld",&khz)==1)snprintf(freq,sizeof freq,"%ld",khz);fclose(f);}int dm_thermal_now(void);LOG("H08 thread mono_s=%.3f interval_s=%.3f thermal=%d role=%s tid=%d comm=%s cpu_pct=%.2f core=%d freq_khz=%s",now,dt,dm_thermal_now(),roles[k],t->tid,t->comm,cpu[i],t->core,freq);}
+        }
+        memcpy(before,after,sizeof(h8_task)*an);bn=an;at=now;
+    }return NULL;
+}
+
 void front_gtx_scene(int scene) {
+    atomic_store(&h8_scene,scene);
+    if(scene==1 && dm_h8_enabled()){static int started;if(!started){pthread_t t;if(!pthread_create(&t,NULL,h8_sampler,NULL)){started=1;pthread_detach(t);}}}
+    if (scene == 1) { static int keys_started; const char *k = getenv("DM_GTX_KEYS");
+        if (!keys_started && g_gtx.active == 1 && !(k && *k == '0')) { keys_started = 1; pthread_t th; if (!pthread_create(&th, NULL, gtx_keys_main, NULL)) pthread_detach(th); } }
     { static int last; if (scene != last) { pthread_mutex_lock(&g_gtx_mu);   // 读取画面进出：PerfHint PAGE_LOAD | loading screen in / out: PerfHint PAGE_LOAD
         if (scene == 2 && !g_ph.load_on) { if (g_ph.launch_on) { g_ph.launch_on = 0; ph_send(HMS_FAST_APP_LAUNCH, 0, HMS_FAST_LONG, "启动"); } g_ph.load_on = 1; ph_send(HMS_FAST_PAGE_LOAD, 1, HMS_FAST_MEDIUM, "读取画面"); }
         else if (scene != 2 && g_ph.load_on) { g_ph.load_on = 0; ph_send(HMS_FAST_PAGE_LOAD, 0, HMS_FAST_MEDIUM, "读取画面"); }
@@ -279,15 +377,14 @@ int front_ohos_full(void) { return g_full; }
 
 // 游戏输出分辨率：同 iOS 规则（屏比 16:9 窄 → 真全屏，按屏幕比例出）；高度沿用安卓的 900 / 720 档（像素不跟屏幕原生走，省 GPU）。DM_GAME_RES 钉住
 // Game output resolution: same rule as iOS (screen narrower than 16:9 → true fullscreen at the screen aspect); the height keeps Android's 900 / 720 profiles (not native pixels, to save GPU). DM_GAME_RES pins it
-uint64_t front_game_res(int docked) {
+static uint64_t front_window_res(int docked) {
     unsigned w, h; const char *e = getenv("DM_GAME_RES");
     if (e && sscanf(e, "%ux%u", &w, &h) == 2) return docked ? (uint64_t)h << 32 | w : (uint64_t)(h * 4 / 5) << 32 | (w * 4 / 5 + 3) / 4 * 4;
     int dm = atomic_load(&g_screen_w), sh = atomic_load(&g_screen_h);
     unsigned bh = docked ? 900 : 720;
     if (dm > 0 && sh > 0) {
         double aspect = dm > sh ? (double)dm / sh : (double)sh / dm;   // 横屏比例（窗口首次报尺寸时可能还是竖屏）| landscape aspect (the first window size may still be portrait)
-        static int decided;
-        if (!decided) { decided = 1;
+        if (!g_full) {
             if (aspect < 16.0 / 9 - 0.01) { const char *fu = getenv("DM_IPAD_FULL");
                 if (!fu || atoi(fu)) { g_full = 1; dm_uiscreen_enable(DM_UISCREEN_BOTTOM); xbg_set_ui_rect_fn(ui_rect_frac);
                     LOG("画面：屏幕 %dx%d（比例 %.3f）比 16:9 窄 → 真全屏：局内铺满、界面按 16:9 贴底，前端 16:9 居中留边", dm, sh, aspect); } } }
@@ -300,7 +397,8 @@ uint64_t front_game_res(int docked) {
             // Native-pixel output (on by default, DM_NATIVE_RES=0 falls back to 900 tall): 3D scale = 700 / screen height (clamped to 0.5-0.75, as d2r-harmonyos), so the 3D pixel count matches
             // 900 tall x 0.75 while UI text is sharp; measured about 2-3 FPS less on the Pura X (GPU 24 -> 27 ms). A DM_3D_SCALE given in dm/env is left alone
             const char *nr = getenv("DM_NATIVE_RES");
-            if ((!nr || *nr != '0') && docked && nh >= 720) { unsigned nw = (unsigned)(llround(nh * aspect / 8) * 8); if (nw > 4096) { nw = 4096; nh = (unsigned)llround(4096 / aspect); }
+            const char *performance_res = getenv("DM_H12_PERFORMANCE_RES");
+            if ((!performance_res || *performance_res != '1') && (!nr || *nr != '0') && docked && nh >= 720) { unsigned nw = (unsigned)(llround(nh * aspect / 8) * 8); if (nw > 4096) { nw = 4096; nh = (unsigned)llround(4096 / aspect); }
                 if (!getenv("DM_3D_SCALE")) { double sc = 700.0 / nh; char v[16]; snprintf(v, sizeof v, "%.2f", sc < 0.5 ? 0.5 : sc > 0.75 ? 0.75 : sc); setenv("DM_3D_SCALE_DEFAULT", v, 0); setenv("DM_3D_SCALE_FLOOR", v, 0);
                     LOG("画面：原生像素出图 %ux%u，3D 比例 %s", nw, nh, v); }
                 return (uint64_t)nh << 32 | nw; }
@@ -310,6 +408,45 @@ uint64_t front_game_res(int docked) {
         }
     }
     return docked ? 900ull << 32 | 1600 : 720ull << 32 | 1280;
+}
+
+// The game cannot grow its window texture after boot. The installed display API
+// describes current displays, not a guaranteed maximum across every fold state.
+// Keep the first valid startup capacity; larger windows fit inside it, without
+// guessing a panel size or allocating an unmeasured 2160-high render target.
+static _Atomic uint64_t g_window_res_cap, g_window_res_now;
+static uint64_t front_res_fit(uint64_t size, uint64_t cap) {
+    uint32_t w = (uint32_t)size, h = (uint32_t)(size >> 32);
+    uint32_t cw = (uint32_t)cap, ch = (uint32_t)(cap >> 32);
+    if (!w || !h || !cw || !ch || (w <= cw && h <= ch)) return size;
+    if ((uint64_t)cw * h <= (uint64_t)ch * w) { h = (uint32_t)((uint64_t)h * cw / w); w = cw; }
+    else { w = (uint32_t)((uint64_t)w * ch / h); h = ch; }
+    w &= ~7u; h &= ~1u;
+    return (uint64_t)(h ? h : 2) << 32 | (w ? w : 8);
+}
+uint64_t front_game_res(int docked) {
+    uint64_t size = front_window_res(docked);
+    unsigned ew, eh; const char *e = getenv("DM_GAME_RES");
+    if (e && sscanf(e, "%ux%u", &ew, &eh) == 2) return size;
+    uint64_t cap = atomic_load(&g_window_res_cap);
+    if (!cap) {
+        if (!docked || atomic_load(&g_screen_w) <= 0 || atomic_load(&g_screen_h) <= 0) return size;
+        uint64_t empty = 0; atomic_compare_exchange_strong(&g_window_res_cap, &empty, size);
+        cap = atomic_load(&g_window_res_cap);
+    }
+    size = front_res_fit(size, cap);
+    if (docked) atomic_store(&g_window_res_now, size);
+    return docked && !dm_uiscreen_res_live() ? cap : size;
+}
+static void front_window_res_changed(void) {
+    if (!atomic_load(&g_window_res_cap)) return; // Do not freeze capacity before game startup.
+    uint64_t old = atomic_load(&g_window_res_now);
+    front_game_res(1);
+    uint64_t now = atomic_load(&g_window_res_now), cap = atomic_load(&g_window_res_cap);
+    if (!old || old == now || !dm_uiscreen_res_live()) return;
+    LOG("Window resized: output %ux%u -> %ux%u, startup capacity %ux%u; notify game", (unsigned)old, (unsigned)(old >> 32),
+        (unsigned)now, (unsigned)(now >> 32), (unsigned)cap, (unsigned)(cap >> 32));
+    void dm_oe_res_changed(void); dm_oe_res_changed();
 }
 
 // 游戏视图矩形（触控层 / 自绘底栏 / 技能钮都在它里面），同 front_ios.m letterbox_rect；输入输出单位与 ArkTS 一致（vp）

@@ -27,6 +27,9 @@
 #include "nvn_mtl.h"
 #include "nvn_pace.h"
 #include "nvn_adaptive_pace.h"
+#ifdef __OHOS__
+#include "nvn_pace_hysteresis.h"
+#endif
 #include "../../host/front.h"
 #include "nvn_dirty.h"
 #include <mach/mach_time.h>
@@ -466,6 +469,74 @@ static void gw_report(void) {
     LOG("[nvn] 游戏等 GPU（300 帧）：SyncWait %.2f 次/帧（已完成 %.2f，其中取图同步 %.2f），共 %.2f ms/帧，平均落后最新提交 %.2f 次；读事件 %.2f 次/帧，共 %.2f ms/帧",
         sn / 300.0, hit / 300.0, an / 300.0, sns / 300e6, sn ? (double)lag / sn : 0, en / 300.0, ens / 300e6);
 }
+
+// H-08: default-off, per-thread exclusive intervals. No cross-lane summation.
+enum { H8_SLOT, H8_XWAIT, H8_FENCE, H8_PACE, H8_LOCK, H8_IDLE, H8_ACQUIRE, H8_SUBMIT, H8_PRESENT, H8_LIFECYCLE, H8_N };
+static int h8_enabled; static pthread_once_t h8_once = PTHREAD_ONCE_INIT;
+static void h8_init(void) {
+#ifdef __OHOS__
+    const char *e = getenv("DM_FRAME_SPLIT"); h8_enabled = e && atoi(e);
+#endif
+}
+int dm_h8_enabled(void) { pthread_once(&h8_once,h8_init); return h8_enabled; }
+static uint64_t h8_clock(int cpu) { struct timespec t; if(clock_gettime(cpu ? CLOCK_THREAD_CPUTIME_ID : CLOCK_MONOTONIC,&t))return 0; return (uint64_t)t.tv_sec*1000000000ull+t.tv_nsec; }
+typedef struct { int role,depth; unsigned n; uint64_t pw,pc,first_cpu,first_tagcpu,handoff_cpu,handoff_tagcpu; int first;
+    uint64_t w[H8_N],c[H8_N],calls[H8_N]; struct {int k; uint64_t w,c,cw,cc;} stack[32];
+    double samples[H8_N+5][300]; unsigned invalid,negative_offcpu; double max_cpu_overlap;
+} h8_state;
+static __thread h8_state *h8;
+void dm_h8_role(int role) { if(!dm_h8_enabled())return; if(!h8)h8=calloc(1,sizeof(*h8)); if(h8){h8->role=role;if(!h8->pw){struct timespec wall_res={0},cpu_res={0};clock_getres(CLOCK_MONOTONIC,&wall_res);clock_getres(CLOCK_THREAD_CPUTIME_ID,&cpu_res);LOG("H08 clocks lane=%d wall_resolution_ns=%ld cpu_resolution_ns=%ld negative_residuals_retained=1",role,wall_res.tv_nsec,cpu_res.tv_nsec);}} }
+int dm_h8_enter(int kind) {
+    if(!dm_h8_enabled() || !h8)return 0;
+    if(h8->depth==32){h8->invalid++;return 0;}
+    int i=h8->depth++; h8->stack[i].k=kind; h8->stack[i].cw=h8->stack[i].cc=0;
+    h8->stack[i].w=h8_clock(0);h8->stack[i].c=h8_clock(1);return 1;
+}
+void dm_h8_leave(int active) {
+    if(!active)return; uint64_t c=h8_clock(1),w=h8_clock(0); int i=--h8->depth,k=h8->stack[i].k;
+    uint64_t dw=w-h8->stack[i].w,dc=c-h8->stack[i].c;
+    if(dw<h8->stack[i].cw || dc<h8->stack[i].cc){h8->invalid++;return;}
+    h8->calls[k]++;h8->w[k]+=dw-h8->stack[i].cw;h8->c[k]+=dc-h8->stack[i].cc;
+    if(i){h8->stack[i-1].cw+=dw;h8->stack[i-1].cc+=dc;}
+}
+static int h8_lock(pthread_mutex_t *m) {int a=dm_h8_enter(H8_LOCK);int r=pthread_mutex_lock(m);dm_h8_leave(a);return r;}
+static int h8_cond(int k,pthread_cond_t *c,pthread_mutex_t *m,const struct timespec *t) {int a=dm_h8_enter(k);int r=t?pthread_cond_timedwait(c,m,t):pthread_cond_wait(c,m);dm_h8_leave(a);return r;}
+static void h8_handoff(void){if(!h8)return;h8->handoff_cpu=h8_clock(1);h8->handoff_tagcpu=0;for(int k=0;k<H8_N;k++)h8->handoff_tagcpu+=h8->c[k];}
+static void h8_first_submit(void) {if(!h8 || !h8->handoff_cpu || h8->first)return;h8->first=1;h8->first_cpu=h8_clock(1)-h8->handoff_cpu;h8->first_tagcpu=0;for(int k=0;k<H8_N;k++)h8->first_tagcpu+=h8->c[k];h8->first_tagcpu-=h8->handoff_tagcpu;}
+static int h8_cmp(const void *a,const void *b){double x=*(const double*)a,y=*(const double*)b;return (x>y)-(x<y);}
+extern int dm_thermal_now(void);
+void dm_h8_frame(int role,uint64_t frame) {
+    dm_h8_role(role);if(!h8)return;uint64_t w=h8_clock(0),c=h8_clock(1);
+#ifdef DM_H12_MEASURE
+    if (!(frame & 15)) {
+        extern uint64_t dm_h12_ruler_ns(void);
+        uint64_t ns = dm_h12_ruler_ns();
+        LOG("H12 ruler lane=%d tid=%d frame=%llu mono_ns=%llu cpu_ns=%llu ruler_ns=%llu thermal=%d",
+            role, (int)gettid(), (unsigned long long)frame, (unsigned long long)w,
+            (unsigned long long)c, (unsigned long long)ns, dm_thermal_now());
+    }
+#endif
+    if(h8->pw){
+        unsigned n=h8->n;double sumw=0,sumc=0;
+        for(int k=0;k<H8_N;k++){h8->samples[k][n]=h8->w[k]/1e6;sumw+=h8->samples[k][n];sumc+=h8->c[k]/1e6;}
+        double wall=(w-h8->pw)/1e6,cpu=(c-h8->pc)/1e6,own=cpu-sumc;
+        h8->samples[H8_N][n]=wall;h8->samples[H8_N+1][n]=own;
+        h8->samples[H8_N+2][n]=wall-sumw-own; // explicit unclassified off-CPU, never labelled game work
+        h8->samples[H8_N+3][n]=cpu;
+        h8->samples[H8_N+4][n]=h8->first?(h8->first_cpu-h8->first_tagcpu)/1e6:own;
+        if(h8->depth || own < -0.01)h8->invalid++;
+        if(wall-sumw-own<0){h8->negative_offcpu++;double overlap=-(wall-sumw-own);if(overlap>h8->max_cpu_overlap)h8->max_cpu_overlap=overlap;}
+        if(++h8->n==300){
+            const char *names[]={"slot_wait","translation_wait","fence_wait","pacing_wait","lock_wait","idle_wait","acquire","vk_submit","vk_present","lifecycle_wait","frame","outside_cpu","unclassified_offcpu","total_cpu","before_submit_cpu"};
+            unsigned over33=0;double sumfr=0;for(int j=0;j<300;j++){double ms=h8->samples[H8_N][j];sumfr+=ms;over33+=ms>=33.0;}
+            LOG("H08 window lane=%d frame=%llu n=300 thermal=%d invalid=%u partition=exclusive mono_s=%.6f negative_offcpu=%u max_cpu_overlap_ms=%.6f strict_ge33_n=%u generated_fps=%.4f",role,(unsigned long long)frame,dm_thermal_now(),h8->invalid,w/1e9,h8->negative_offcpu,h8->max_cpu_overlap,over33,sumfr>0?300000.0/sumfr:0);
+            for(int k=0;k<H8_N+5;k++){double v[300],sum=0;memcpy(v,h8->samples[k],sizeof v);for(int j=0;j<300;j++)sum+=v[j];qsort(v,300,sizeof(double),h8_cmp);LOG("H08 part lane=%d frame=%llu name=%s mean_ms=%.4f p50_ms=%.4f p95_ms=%.4f min_ms=%.4f max_ms=%.4f calls=%llu",role,(unsigned long long)frame,names[k],sum/300,v[150],v[285],v[0],v[299],(unsigned long long)(k<H8_N?h8->calls[k]:0));}
+            h8->n=0;h8->invalid=0;h8->negative_offcpu=0;h8->max_cpu_overlap=0;memset(h8->calls,0,sizeof h8->calls);
+        }
+    }
+    h8->pw=w;h8->pc=c;h8->first=0;memset(h8->w,0,sizeof h8->w);memset(h8->c,0,sizeof h8->c);
+}
+
 static int x_wait_sub(uint64_t sub, uint64_t timeout);
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     const sync_t *o = (const sync_t *)s;
@@ -476,7 +547,7 @@ NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     // 目标提交还没翻译到：先在翻译队列上睡等（不去反复抢引擎锁），再问引擎 GPU 做完没有
     // Target submit not yet translated: sleep on the translation queue first (instead of repeatedly taking the engine lock), then ask the engine whether the GPU is done
     XTRACE_BEGIN("dm-game-syncwait"); XTRACE_COUNT("dm-game-wait-target", o->fence); uint64_t t0 = now_ns(); int ok = !timeout || x_wait_sub(o->fence, timeout);
-    if (ok) { uint64_t used = now_ns() - t0; ok = mtl_wait(o->fence, timeout >= 3600000000000ull ? timeout : used >= timeout ? 0 : timeout - used); }
+    if (ok) { uint64_t used = now_ns() - t0; int h8a=dm_h8_enter(H8_FENCE); ok = mtl_wait(o->fence, timeout >= 3600000000000ull ? timeout : used >= timeout ? 0 : timeout - used); dm_h8_leave(h8a); }
     atomic_fetch_add(&g_gw_sync_ns, now_ns() - t0); XTRACE_END();
     return ok ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 #else
@@ -880,12 +951,12 @@ static _Atomic uint64_t g_nvn_ns;   // 本帧在提交 / 出图里花的宿主�
 static pthread_mutex_t g_susp_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_susp_cv = PTHREAD_COND_INITIALIZER;
 static int g_susp, g_inflight_api;
-static void gfx_enter(void) { pthread_mutex_lock(&g_susp_mu); while (g_susp) pthread_cond_wait(&g_susp_cv, &g_susp_mu); g_inflight_api++; pthread_mutex_unlock(&g_susp_mu); }
-static void gfx_leave(void) { pthread_mutex_lock(&g_susp_mu); g_inflight_api--; pthread_cond_broadcast(&g_susp_cv); pthread_mutex_unlock(&g_susp_mu); }
+static void gfx_enter(void) { h8_lock(&g_susp_mu); while (g_susp) h8_cond(H8_LIFECYCLE,&g_susp_cv,&g_susp_mu,NULL); g_inflight_api++; pthread_mutex_unlock(&g_susp_mu); }
+static void gfx_leave(void) { h8_lock(&g_susp_mu); g_inflight_api--; pthread_cond_broadcast(&g_susp_cv); pthread_mutex_unlock(&g_susp_mu); }
 void dm_gfx_suspend(int on) {
-    pthread_mutex_lock(&g_susp_mu);
+    h8_lock(&g_susp_mu);
     g_susp = on != 0;
-    if (on) while (g_inflight_api) pthread_cond_wait(&g_susp_cv, &g_susp_mu);
+    if (on) while (g_inflight_api) h8_cond(H8_LIFECYCLE,&g_susp_cv,&g_susp_mu,NULL);
     else pthread_cond_broadcast(&g_susp_cv);
     pthread_mutex_unlock(&g_susp_mu);
     if (on) { x_drain(); mtl_drain(); LOG("[nvn] 图形挂起：在途 GPU 工作已清空"); } else LOG("[nvn] 图形恢复");
@@ -949,7 +1020,7 @@ static void x_run(const xjob *j, uint64_t job) {
 #ifdef __OHOS__
         { void front_gtx_frame(void); front_gtx_frame(); }
 #endif
-        XTRACE_BEGIN("dm-x-present"); uint64_t tk = mtl_present(j->tex, j->period, j->crop); XTRACE_END(); pthread_mutex_lock(&g_xmu); g_xtk[job % XTK].job = job; g_xtk[job % XTK].tk = tk; pthread_mutex_unlock(&g_xmu); }
+        XTRACE_BEGIN("dm-x-present"); uint64_t tk = mtl_present(j->tex, j->period, j->crop); XTRACE_END(); h8_lock(&g_xmu); g_xtk[job % XTK].job = job; g_xtk[job % XTK].tk = tk; pthread_mutex_unlock(&g_xmu); }
     else {
         XTRACE_BEGIN("dm-x-frame");
         // 按同一线程的累计CPU差统计整个翻译帧（回放、出图均含）；不把GPU/交换链等待当CPU负载。
@@ -960,6 +1031,7 @@ static void x_run(const xjob *j, uint64_t job) {
             if (!cpu || cpu < sample.previous) atomic_store(&g_pa_xcpu_ms, -1);   // 读钟失败/重置后不沿用旧负载 | Do not retain stale load after clock failure/reset
             if (nvn_frame_cpu_sample(&sample, cpu, &ms)) atomic_store(&g_pa_xcpu_ms, ms);
         }
+        dm_h8_frame(1,j->frame);
         mtl_set_frame(j->frame);
         // 翻译线程与游戏主线程同级：时间约束（实时）线程，周期 = 出图周期，计算量按本线程每帧 CPU 的 p90 自动声明（同取图处的主线程；确定性时钟下不声明）
         // The translation thread has the same standing as the game main thread: a time-constraint (real-time) thread, period = present period, computation declared automatically from the p90 of this thread's per-frame CPU (same as the main thread at acquire; not declared under the deterministic clock)
@@ -969,7 +1041,7 @@ static void x_run(const xjob *j, uint64_t job) {
     }
 }
 static void *x_thread(void *a) {
-    (void)a;
+    (void)a; dm_h8_role(1);
 #ifdef __APPLE__
     pthread_setname_np("nvn-translate");
 #else
@@ -982,13 +1054,13 @@ static void *x_thread(void *a) {
 #endif
 #endif
     g_x_port = pthread_mach_thread_np(pthread_self());
-    pthread_mutex_lock(&g_xmu);
+    h8_lock(&g_xmu);
     for (;;) {
-        while (g_xq_done == g_xq_in) pthread_cond_wait(&g_xcv, &g_xmu);
+        while (g_xq_done == g_xq_in) h8_cond(H8_IDLE,&g_xcv,&g_xmu,NULL);
         uint64_t job = g_xq_done + 1; xjob j = g_xq[job % XQ];
         pthread_mutex_unlock(&g_xmu);
         x_run(&j, job);
-        pthread_mutex_lock(&g_xmu);
+        h8_lock(&g_xmu);
         g_xq_done = job; XTRACE_COUNT("dm-x-done-job", job);
         if (j.kind == XJ_SUBMIT) { g_xsub_done = j.sub; XTRACE_COUNT("dm-x-sub-done", g_xsub_done); } pthread_cond_broadcast(&g_xcv);
     }
@@ -1007,8 +1079,8 @@ static void x_start(void) {
 }
 static uint64_t x_push(xjob *j) {   // 返回任务号 | Returns the job number
     static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, x_start);
-    pthread_mutex_lock(&g_xmu);
-    while (g_xq_in - g_xq_done >= XQ) pthread_cond_wait(&g_xcv, &g_xmu);
+    h8_lock(&g_xmu);
+    while (g_xq_in - g_xq_done >= XQ) h8_cond(H8_SLOT,&g_xcv,&g_xmu,NULL);
     if (j->kind == XJ_SUBMIT) j->sub = atomic_fetch_add(&g_x_subs, 1) + 1;
     uint64_t job = ++g_xq_in;
 #ifdef __OHOS__
@@ -1017,14 +1089,14 @@ static uint64_t x_push(xjob *j) {   // 返回任务号 | Returns the job number
     XTRACE_COUNT("dm-x-enqueue-job", job); XTRACE_COUNT("dm-x-enqueue-kind", j->kind);
     XTRACE_COUNT("dm-x-enqueue-sub", j->sub); XTRACE_COUNT("dm-x-enqueue-frame", j->frame);
     if (g_x_sync) {   // 当场执行：单线程提交时与旧路径同序 | Run in place: with single-thread submission the order is the same as the old path
-        pthread_mutex_unlock(&g_xmu); x_run(j, job); pthread_mutex_lock(&g_xmu);
+        pthread_mutex_unlock(&g_xmu); x_run(j, job); h8_lock(&g_xmu);
         g_xq_done = job; XTRACE_COUNT("dm-x-done-job", job); pthread_cond_broadcast(&g_xcv);
     } else { g_xq[job % XQ] = *j; pthread_cond_broadcast(&g_xcv); }
     pthread_mutex_unlock(&g_xmu);
     return job;
 }
-static void x_wait(uint64_t job) { pthread_mutex_lock(&g_xmu); while (g_xq_done < job) pthread_cond_wait(&g_xcv, &g_xmu); pthread_mutex_unlock(&g_xmu); }
-static void x_drain(void) { pthread_mutex_lock(&g_xmu); uint64_t job = g_xq_in; pthread_mutex_unlock(&g_xmu); x_wait(job); }
+static void x_wait(uint64_t job) { h8_lock(&g_xmu); while (g_xq_done < job) h8_cond(H8_XWAIT,&g_xcv,&g_xmu,NULL); pthread_mutex_unlock(&g_xmu); }
+static void x_drain(void) { h8_lock(&g_xmu); uint64_t job = g_xq_in; pthread_mutex_unlock(&g_xmu); x_wait(job); }
 static uint64_t x_fence(void) { return atomic_load(&g_x_subs); }
 // 等翻译线程把第 sub 次提交翻完（栅栏值 ≤ 已翻译数才去问引擎）；timeout 纳秒，超时返回 0。同步翻译模式提交当场执行，不用等
 // Wait until the translation thread has translated submit number `sub` (the engine is asked about a fence only once it has been translated); timeout in ns, returns 0 on timeout.
@@ -1032,23 +1104,24 @@ static uint64_t x_fence(void) { return atomic_load(&g_x_subs); }
 static int x_wait_sub(uint64_t sub, uint64_t timeout) {
     if (g_x_sync) return 1;
     XTRACE_BEGIN("dm-x-wait-sub"); XTRACE_COUNT("dm-x-wait-target", sub);
-    pthread_mutex_lock(&g_xmu); int ok = 1;
+    h8_lock(&g_xmu); int ok = 1;
     XTRACE_COUNT("dm-x-wait-done-in", g_xsub_done);
     if (g_xsub_done < sub) {
-        if (timeout >= 3600000000000ull) while (g_xsub_done < sub) pthread_cond_wait(&g_xcv, &g_xmu);
+        if (timeout >= 3600000000000ull) while (g_xsub_done < sub) h8_cond(H8_XWAIT,&g_xcv,&g_xmu,NULL);
         else { struct timespec d; clock_gettime(CLOCK_REALTIME, &d); uint64_t ns = (uint64_t)d.tv_nsec + timeout % 1000000000ull; d.tv_sec += (time_t)(timeout / 1000000000ull + ns / 1000000000ull); d.tv_nsec = (long)(ns % 1000000000ull);
-            while (g_xsub_done < sub) if (pthread_cond_timedwait(&g_xcv, &g_xmu, &d)) { ok = g_xsub_done >= sub; break; } }
+            while (g_xsub_done < sub) if (h8_cond(H8_XWAIT,&g_xcv,&g_xmu,&d)) { ok = g_xsub_done >= sub; break; } }
     }
     XTRACE_COUNT("dm-x-wait-done-out", g_xsub_done);
     pthread_mutex_unlock(&g_xmu); XTRACE_END(); return ok;
 }
 static uint64_t x_present_ticket(uint64_t job) {   // 出图任务执行完后换来的出图线程票号（0 = 那次出图被丢弃，不用等） | Present thread ticket obtained after the present job runs (0 = that present was dropped, nothing to wait for)
     x_wait(job);
-    pthread_mutex_lock(&g_xmu); uint64_t tk = g_xtk[job % XTK].job == job ? g_xtk[job % XTK].tk : 0; int lost = g_xtk[job % XTK].job != job; pthread_mutex_unlock(&g_xmu);
+    h8_lock(&g_xmu); uint64_t tk = g_xtk[job % XTK].job == job ? g_xtk[job % XTK].tk : 0; int lost = g_xtk[job % XTK].job != job; pthread_mutex_unlock(&g_xmu);
     if (lost) { static int red; if (!red++) LOG("【红】翻译队列：出图任务 %llu 的票号已被覆盖（票号表 %d 项不够），这次取图不等出图线程", (unsigned long long)job, XTK); }
     return tk;
 }
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
+    h8_first_submit();
     gfx_enter();
     ((queue_t *)q)->submits++;
     xjob j = {XJ_SUBMIT, n, n > 0 ? malloc((size_t)n * sizeof *h) : NULL};   // 句柄数组是游戏的，入队时拷一份 | The handle array belongs to the game; copy it when enqueuing
@@ -1265,8 +1338,12 @@ static void tsummary(uint64_t frame) {
           v[(k * 5) / 100], v[k / 2], v[(k * 95) / 100 < k ? (k * 95) / 100 : k - 1], v[(k * 99) / 100 < k ? (k * 99) / 100 : k - 1], fp, br, dm_thermal_now()); }
       g_presn = 0; }
     { static uint64_t pi, pc, pd, pf; uint64_t ci = atomic_load(&g_cum_sub_instr), cc = atomic_load(&g_cum_sub_cpu_ns), ps_, dr_; mtl_stats(&ps_, &dr_);   // 翻译层 | translation layer
+#ifdef __OHOS__
+      if (pf && frame > pf && dr_ > pd) LOG("[nvn] 翻译 至帧 %llu：每帧 CPU %.3f ms，每帧绘制 %.0f（指令计数不可用）",frame,(cc-pc)/1e6/(double)(frame-pf),(double)(dr_-pd)/(double)(frame-pf));
+#else
       if (pf && frame > pf && dr_ > pd) LOG("[nvn] 翻译 至帧 %llu：每次绘制 %.0f 条指令，每帧提交 %.2f M 条 / CPU %.3f ms，每帧绘制 %.0f", frame,
           (double)(ci - pi) / (double)(dr_ - pd), (ci - pi) / 1e6 / (double)(frame - pf), (cc - pc) / 1e6 / (double)(frame - pf), (double)(dr_ - pd) / (double)(frame - pf));
+#endif
       { static uint64_t py, pk, pw; uint64_t cy = atomic_load(&g_cum_sub_cyc), ck = atomic_load(&g_cum_sub_sys_ns), cw = atomic_load(&g_cum_sub_wall_ns);
         if (pf && frame > pf && ci > pi && cy > py) { double nf = (double)(frame - pf), cyc = (double)(cy - py), cpu = (double)(cc - pc);
           qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0; pthread_get_qos_class_np(pthread_self(), &qc, &rp);
@@ -1368,7 +1445,9 @@ static void rt_comp_tick(rt_decl *d, uint64_t period_ns) {   // 在被声明的�
 static void sleep_until_ns(uint64_t dl) {   // 单调时钟上的绝对时刻 | absolute time on the monotonic clock
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     uint64_t now = now_ns(); if (dl <= now) return;
+    int h8a=dm_h8_enter(H8_PACE);
     mach_wait_until(mach_absolute_time() + (dl - now) * tb.denom / tb.numer);
+    dm_h8_leave(h8a);
 }
 // 出图固定 60 Hz：自适应机制在 24/24 份真机日志第 60 帧退档且不再回升，本期先以 60 帧为硬底。
 // DM_PRESENT_HZ=0（不限帧率）只作显式的性能剖析开关：游戏部分界面逻辑按帧计数（同存档不限帧率时
@@ -1431,9 +1510,32 @@ static void pace_adapt_tick(double screen_hz) {
     // 游戏侧取本线程 CPU 时间（不含任何等待）：墙钟减节拍等待会把下游等待（合成器按时放帧 → 翻译线程等交换链 → 游戏等翻译）算进去，形成越降越慢的正反馈
     // Game side uses this thread's CPU time (no waits at all): wall clock minus pacing wait would count downstream waits (compositor releasing frames on time → translation waits for
     // the swapchain → game waits for translation), a positive feedback loop that keeps lowering the tier
+    static unsigned wn, skip, misses_local; static int probing; static uint64_t late0, stable_since, backoff = 3000000000ull;
+#ifdef __OHOS__
+    static int hyst = -1, trace, gap_reset; static unsigned trace_windows;
+    static nvn_pace_hysteresis hs;
+    if (hyst < 0) { const char *e = getenv("DM_PACE_HYSTERESIS"), *t = getenv("DM_PACE_HYSTERESIS_TRACE"), *g = getenv("DM_PACE_GAP_RESET"); hyst = e && !strcmp(e,"1"); trace = t && !strcmp(t,"1"); gap_reset = !(g && !strcmp(g,"0")); LOG("[nvn] pace_gap_reset=%d", gap_reset); if (hyst) LOG("[nvn] pace hysteresis enabled: tier evidence is CPU submit-late proxy, not actual display timestamps; trace limit=30 windows"); }
+#endif
     uint64_t now = now_ns(), cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID); static uint64_t pcpu; g_pa_wait = 0;
-    if (!g_pa_last || !pcpu || !cpu || cpu < pcpu) { g_pa_last = now; pcpu = cpu; return; }   // 差值前校验，避免无符号下溢 | Validate before unsigned subtraction
+    if (!g_pa_last || !pcpu || !cpu || cpu < pcpu) {
+#ifdef __OHOS__
+        if (hyst) {
+            nvn_pace_hysteresis_reset(&hs); wn = misses_local = 0; late0 = dm_present_late_count();
+            if (probing) skip = 20;
+        }
+#endif
+        g_pa_last = now; pcpu = cpu; return;
+    }   // 差值前校验，避免无符号下溢 | Validate before unsigned subtraction
     double iv = (now - g_pa_last) / 1e6, busy = (cpu - pcpu) / 1e6; g_pa_last = now; pcpu = cpu;
+#ifdef __OHOS__
+    // 停顿（读取画面等）期间平台累计的迟到上屏不能算进恢复后的窗口，否则误降档；缺省清，DM_PACE_GAP_RESET=0 退回旧行为
+    // Late presents accumulated during a stall (loading etc.) must not count against the recovered window, or the tier drops spuriously; on by default, DM_PACE_GAP_RESET=0 restores the old behaviour
+    if ((hyst || gap_reset) && (iv > 250 || (g_pa_screen_hz > 0 && screen_hz != g_pa_screen_hz))) {
+        nvn_pace_hysteresis_reset(&hs); wn = misses_local = 0; late0 = dm_present_late_count();
+        // Start a fresh observation after discontinuity; preserve probe/backoff policy.
+        if (probing) skip = 20;
+    }
+#endif
     if (iv > 250) return;   // 读取画面 / 卡住的帧不计 | loading-screen / stuck frames are not counted
     g_pa_ema += (busy - g_pa_ema) / 16;
     // 同步翻译运行在游戏线程上，其CPU已含在游戏帧CPU里，不再作为另一条流水线重复统计。
@@ -1451,19 +1553,40 @@ static void pace_adapt_tick(double screen_hz) {
     // (Mate90: GPU 15 → 28 ms), so a load-based step-up never fires again (DVFS lock-in). Step down: >= 6 of the last 60 frames missed their slot; step up: after a stable period try
     // the faster tier, skip 20 frames while clocks ramp, then judge 60 frames; >= 4 misses reverts and doubles the next probe interval (from 3 s, at most 60 s). Misses come from the
     // platform present counter (dm_present_late_count); without it, a game frame interval 25% over the period counts as a miss.
-    static unsigned wn, skip, misses_local; static int probing; static uint64_t late0, stable_since, backoff = 3000000000ull;
     uint64_t lc = dm_present_late_count ? dm_present_late_count() : 0;
     if (!dm_present_late_count && iv > per * 1.25) misses_local++;
     if (!stable_since) { stable_since = now; late0 = lc; }
+#ifdef __OHOS__
+    if (hyst && lc < late0) { nvn_pace_hysteresis_reset(&hs); wn = misses_local = 0; late0 = lc; }
+#endif
     if (skip) { skip--; late0 = lc; wn = 0; misses_local = 0; return; }
     if (++wn < 60) return;
     unsigned misses = dm_present_late_count ? (unsigned)(lc - late0) : misses_local; wn = 0; late0 = lc; misses_local = 0;
+    int down = misses >= 6;
+#ifdef __OHOS__
+    if (hyst) {
+        if (probing) nvn_pace_hysteresis_reset(&hs);
+        else down = nvn_pace_hysteresis_down(&hs, misses);
+        if (trace && trace_windows < 30) {
+            ++trace_windows;
+            LOG("[nvn] pace hysteresis window=%u submit-late-proxy=%u/60ticks hz=%.2f fps=%.2f probe=%d pending=%u down=%d backoff_s=%.0f", trace_windows, misses, screen_hz, screen_hz/g_pa_k, probing, hs.bad_windows, down, backoff/1e9);
+        }
+    }
+    int prior_k = g_pa_k;
+#endif
     if (probing) {
         probing = 0; stable_since = now;
         if (misses >= 4 && g_pa_k < kmax) { g_pa_k++; backoff = backoff * 2 > 60000000000ull ? 60000000000ull : backoff * 2; LOG("[nvn] 出图档 试升失败，退回 %.1f FPS（60 帧错过 %u 帧；下次 %.0f s 后再试）", screen_hz / g_pa_k, misses, backoff / 1e9); }
         else { backoff = 3000000000ull; LOG("[nvn] 出图档 ↑ %.1f FPS 站稳（60 帧错过 %u 帧；游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", screen_hz / g_pa_k, misses, g_pa_ema, cm, gm); }
-    } else if (misses >= 6 && g_pa_k < kmax) { g_pa_k++; stable_since = now; LOG("[nvn] 出图档 ↓ %.1f FPS（60 帧错过 %u 帧；游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", screen_hz / g_pa_k, misses, g_pa_ema, cm, gm); }
-    else if (g_pa_k > kmin && now - stable_since > backoff) { g_pa_k--; probing = 1; skip = 20; LOG("[nvn] 出图档 试升 %.1f FPS", screen_hz / g_pa_k); }
+    } else if (down && g_pa_k < kmax) { g_pa_k++; stable_since = now; LOG("[nvn] 出图档 ↓ %.1f FPS（60 帧错过 %u 帧；游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", screen_hz / g_pa_k, misses, g_pa_ema, cm, gm); }
+    else if (g_pa_k > kmin && now - stable_since > backoff
+#ifdef __OHOS__
+             && (!hyst || hs.bad_windows == 0)
+#endif
+    ) { g_pa_k--; probing = 1; skip = 20; LOG("[nvn] 出图档 试升 %.1f FPS", screen_hz / g_pa_k); }
+#ifdef __OHOS__
+    if (hyst && prior_k != g_pa_k) nvn_pace_hysteresis_reset(&hs);
+#endif
     (void)need; (void)per;
 }
 static uint64_t present_period(const win_t *o) {
@@ -1482,6 +1605,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     present_cfg(o);
     gfx_enter();
     uint64_t t0 = now_ns();
+    dm_h8_frame(0,g_frame);
     if (idx >= 0 && idx < o->ntex && idx < 4) {   // 只入队，立即返回；ticket 存翻译队列的任务号 | Enqueue only and return at once; ticket holds the translation queue's job number
         xjob j = {XJ_PRESENT, 0, NULL, snap_tex(o->tex[idx]), present_period(o) / 1e9}; memcpy(j.crop, o->crop, sizeof j.crop);
         o->ticket[idx] = x_push(&j); }
@@ -1601,5 +1725,5 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         dm_perf_present(a_ < 0 ? -1 : (a_ > 0 && b_ > 0 ? (a_ - b_) * 1e3 : 0));   // 上屏间隔另存一圈，tsummary 每 300 帧报掉帧（M1 判据） | on-screen present intervals are also kept in a separate ring; tsummary reports dropped frames every 300 frames (M1 criterion)
         if (a_ > 0) trow(f - 8, "@pres_at_ms", a_ * 1e3 - g_t0_ns / 1e6); }   // 上屏时刻（进程起点 ms；presentedTime 与 mach_absolute_time 同基） | on-screen present time (ms since process start; presentedTime shares a time base with mach_absolute_time)
     if (f >= 8 && slow_on()) slow_emit(f - 8);
-    prev_out = now_ns();
+    prev_out = now_ns(); h8_handoff();
 }

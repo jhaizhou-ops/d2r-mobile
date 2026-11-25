@@ -1,3 +1,7 @@
+#include "frame_rate_ohos.h"
+#if defined(DM_OHOS_SIGNED_GUEST)
+#include "signed_guest_image.h"
+#endif
 // 鸿蒙 App 入口（NAPI，ArkTS 侧见 dm/harmony/app/entry/src/main/ets）：对应安卓 jni_android.c + text_input_jni.c + touch_android_jni.c。
 // 启动、目录、日志、生命周期、触控、起名输入框的逻辑与安卓一一对应；平台无关的部分（呈现、触控状态机、前端接口、overlay 校验）直接复用 dm/android。
 //   start(files, ext, src, lang)：备好目录与环境变量，校验改写产物 / 着色器 / overlay，起宿主线程跑 dm_main
@@ -13,6 +17,8 @@
 #include "../../host/dm_actions.h"
 #include "../../android/vulkan_present.h"
 #include "touch_ohos.h"
+#include "gamepad_ohos.h"
+#include "haptics_ohos.h"
 #include "../../host/dm_i18n.h"
 #include "../../host/dm_custom.h"
 #include "../../android/lifecycle_dispatch.h"
@@ -37,6 +43,7 @@ extern _Atomic int g_fe_name_no_accept;
 
 static char g_files[1024], g_ext[1024], g_src[1024], g_runtime[1100];
 static FILE *g_logf;
+static int g_started; // ArkUI thread only; reset only for pre-Vulkan payload failure.
 
 // ---- 生命周期：同安卓，UI 只入队，挂起在原生线程上做 | Lifecycle: as Android, the UI only enqueues ----
 static dm_lifecycle_dispatch g_lifecycle;
@@ -113,8 +120,11 @@ out:
     free(r);
 }
 static void call_boot_failed(napi_env env, napi_value js, void *ctx, void *data) {
+    dm_ohos_frame_rate_running(0);
     (void)ctx; if (!env) return;
-    napi_value code, undef; napi_create_int32(env, (int)(intptr_t)data, &code); napi_get_undefined(env, &undef);
+    int failure = (int)(intptr_t)data;
+    if (failure == -9 || failure == -10 || failure == -13) g_started = 0;
+    napi_value code, undef; napi_create_int32(env, failure, &code); napi_get_undefined(env, &undef);
     napi_call_function(env, undef, js, 1, &code, NULL);
 }
 void front_android_boot_failed(int code) {
@@ -170,8 +180,34 @@ static napi_value js_text_result(napi_env env, napi_callback_info info) {
     return undefined(env);
 }
 
+// Full resource hashes can take seconds on large texture packs. Run them on the
+// host worker before Vulkan or guest execution; retain the exact failure codes.
+static int validate_runtime_payload(void) {
+    char required[1300];
+    LOG("boot: worker payload validation begin");
+    snprintf(required, sizeof required, "%s/overlay", g_runtime);
+    char reason[256];
+    dm_overlay_result ov = dm_overlay_validate(required, DM_OVERLAY_SOURCE_SHA256, reason, sizeof reason);
+    if (ov == DM_OVERLAY_OK) ov = dm_overlay_require_touch_art(required, reason, sizeof reason);
+    if (ov != DM_OVERLAY_OK) { LOG("boot: overlay rejected (%d): %s", ov, reason); return ov == DM_OVERLAY_MISSING ? -9 : -10; }
+    setenv("DM_ROMFS_OVERLAY", required, 1);
+#if defined(DM_OHOS_SIGNED_GUEST)
+    char signed_dir[1200], signed_error[512];
+    snprintf(signed_dir, sizeof signed_dir, "%s/out", g_runtime);
+    if (!dm_signed_guest_prepare(signed_dir, signed_error, sizeof signed_error)) {
+        LOG("boot: signed native image check failed: %s", signed_error);
+        return -13;
+    }
+    LOG("boot: signed native images verified; anonymous executable memory is not required");
+#endif
+    LOG("boot: worker payload validation complete");
+    return 0;
+}
+
 static void *host_thread(void *arg) {
     (void)arg;
+    int payload_rc = validate_runtime_payload();
+    if (payload_rc) { front_android_boot_failed(payload_rc); return NULL; }
     char out[1200]; snprintf(out, sizeof out, "%s/out", g_runtime);
     char shaders[1200], error[512] = {0}; snprintf(shaders, sizeof shaders, "%s/shaders", g_runtime);
     int graphics_rc = dm_android_vk_initialize(shaders, error, sizeof error);
@@ -208,8 +244,35 @@ __attribute__((weak)) int dm_derived_reload(void);
 
 // start(files, ext, src, lang) → 链接的资源文件数（>0）或负数错误码（同安卓 nativeStart）
 // start(files, ext, src, lang) → number of linked resource files (>0) or a negative error code (as Android nativeStart)
+// Bounded local diagnostics; only known flags, never arbitrary environment writes.
+static int experiment_flags(void) {
+    if (!*g_files) return 0;
+    char path[1200]; snprintf(path, sizeof path, "%s/experience-flags", g_files);
+    FILE *f = fopen(path, "r"); int flags = 0;
+    if (f) { if (fscanf(f, "%d", &flags) != 1 || flags < 0 || flags > 262143) flags = 0; fclose(f); }
+    return flags;
+}
+extern int xbg_game_profile_details_live(uint32_t frame_count,uint32_t mask);
+static napi_value js_profile_descriptors(napi_env env, napi_callback_info info) {
+    (void)info; return ret_int(env, xbg_game_profile_details_live(60,3));
+}
+static napi_value js_experiment_flags(napi_env env, napi_callback_info info) {
+    (void)info; return ret_int(env, experiment_flags());
+}
+static napi_value js_set_experiment_flags(napi_env env, napi_callback_info info) {
+    ARGS(1); int32_t flags = -1;
+    if (argc != 1 || napi_get_value_int32(env, argv[0], &flags) != napi_ok || flags < 0 || flags > 262143 || !*g_files) return ret_int(env, -1);
+    char path[1200], tmp[1210]; snprintf(path, sizeof path, "%s/experience-flags", g_files); snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w"); if (!f) return ret_int(env, -2);
+    int ok = fprintf(f, "%d\n", flags) > 0;
+    if (fflush(f) || fsync(fileno(f))) ok = 0;
+    if (fclose(f)) ok = 0;
+    if (!ok || rename(tmp, path)) { unlink(tmp); return ret_int(env, -3); }
+    return ret_int(env, 0);
+}
+
 static napi_value js_start(napi_env env, napi_callback_info info) {
-    ARGS(4); static int started; if (started) return ret_int(env, 0);
+    ARGS(4); if (g_started) return ret_int(env, 0);
     char lg[64] = {0};
     get_str(env, argv[0], g_files, sizeof g_files); get_str(env, argv[1], g_ext, sizeof g_ext); get_str(env, argv[2], g_src, sizeof g_src); get_str(env, argv[3], lg, sizeof lg);
     // 挂存档与选择覆盖层之前提供设置目录，使语言选择在本次启动生效。
@@ -259,6 +322,33 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     { char ef[1200], ln[512]; snprintf(ef, sizeof ef, "%s/env", g_runtime); FILE *f = fopen(ef, "rb");
       while (f && fgets(ln, sizeof ln, f)) { ln[strcspn(ln, "\r\n")] = 0; char *eq = strchr(ln, '='); if (ln[0] == '#' || !eq || eq == ln) continue; *eq = 0; setenv(ln, eq + 1, 1); LOG("boot: env %s=%s", ln, eq + 1); }
       if (f) fclose(f); }
+    { int flags = experiment_flags();
+      // 60 帧 GPU 预算缺省开（D-01 Pura 温控 5 同档：开 30 帧均匀、关 20–30 帧跳动）；位 1 改为关闭对照 | GPU budget on by default (D-01, Pura thermal 5: on = even 30, off = 20-30 jumping); bit 1 now turns it off
+      setenv("DM_3D_SCALE_GPU_BUDGET", (flags & 1) ? "0" : "1", 1);
+      setenv("DM_GFX_LOAD_CLEAR", (flags & 2) ? "0" : "1", 1);
+      setenv("DM_GTX_KEYS", (flags & 8) ? "1" : "0", 1);
+      setenv("DM_PRESENT_NATIVE", (flags & 256) ? "1" : "0", 1);
+      setenv("DM_GFX_IMAGE_FRONT", (flags & 4096) ? "1" : "0", 1);
+      setenv("DM_GFX_WHOLE_SET", (flags & 16384) ? "1" : "0", 1);
+      setenv("DM_H12_PERFORMANCE_RES", (flags & 32768) ? "1" : "0", 1);
+      setenv("DM_GFX_BC_REUPLOAD_SKIP", (flags & 65536) ? "1" : "0", 1);
+      LOG("boot: image_lookup_front=%d", !!(flags & 4096));
+      setenv("DM_FRAME_SPLIT", (flags & 512) ? "1" : "0", 1);
+      LOG("boot: frame_split=%d", !!(flags & 512));
+      // H-09 C passed same-binary thermal-3/4 gates; bit1024 now disables the default request policy.
+      setenv("DM_PIN_FAST", (flags & 1024) ? "0" : "max", 1);
+      LOG("boot: pin_fast_experiment=%d policy=highest-nominal-frequency", !(flags & 1024));
+      // H-10: stale late-present counts are cleared after stalls by default; bit2048 disables it.
+      setenv("DM_PACE_GAP_RESET", (flags & 2048) ? "0" : "1", 1);
+      LOG("boot: pace_gap_reset=%d", !(flags & 2048));
+      LOG("boot: present_native=%d", !!(flags & 256));
+      setenv("DM_RATE_RANGE", (flags & 64) ? "2" : (flags & 32) ? "1" : "0", 1);
+      setenv("DM_PACE_REF60", (flags & 128) ? "0" : "1", 1);
+      LOG("boot: rate_range=%d pace_ref60=%d", (flags & 64) ? 2 : (flags & 32) ? 1 : 0, !(flags & 128));
+      setenv("DM_PERFHINT_NO_TIDS", (flags & 16) ? "1" : "0", 1);
+      setenv("DM_PACE_HYSTERESIS", (flags & 4) ? "1" : "0", 1);
+      setenv("DM_PACE_HYSTERESIS_TRACE", (flags & 4) ? "1" : "0", 1);
+      LOG("boot: experience flags=%d budget=%d loadclear=%d hysteresis=%d gtx_keys=%d perfhint_no_tids=%d", flags, !(flags & 1), !(flags & 2), !!(flags & 4), !!(flags & 8), !!(flags & 16)); }
     // 鸿蒙缺省值（都只在环境里没有时设；dm/env 与标记文件仍可逐项改）。Pura X / Mate90 实测依据见 dm/harmony/README.md 的性能一节
     // HarmonyOS defaults (each set only when absent; dm/env and the marker files still override). Measurements on the Pura X / Mate90: see the performance section of dm/harmony/README.md
     setenv("DM_3D_SCALE_GPU", "1", 0);   // 动态 3D 比例按 GPU 耗时调（发热后 GPU 成瓶颈时降，最低 0.40）| dynamic 3D scale driven by GPU time (lowered when the hot GPU becomes the bottleneck, floor 0.40)
@@ -296,24 +386,28 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     snprintf(required, sizeof required, "%s/derived.tsv", g_runtime);
     setenv("DM_DERIVED", required, 1);
     if (dm_derived_reload && dm_derived_reload()) { LOG("boot: derived tables incomplete (%s)", required); return ret_int(env, -12); }
-    snprintf(required, sizeof required, "%s/overlay", g_runtime);
-    char reason[256];
-    dm_overlay_result ov = dm_overlay_validate(required, DM_OVERLAY_SOURCE_SHA256, reason, sizeof reason);
-    if (ov == DM_OVERLAY_OK) ov = dm_overlay_require_touch_art(required, reason, sizeof reason);
-    if (ov != DM_OVERLAY_OK) { LOG("boot: overlay rejected (%d): %s", ov, reason); return ret_int(env, ov == DM_OVERLAY_MISSING ? -9 : -10); }
-    setenv("DM_ROMFS_OVERLAY", required, 1);
     if (!lifecycle_ready()) return ret_int(env, -8);
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8u << 20);
     pthread_t th; int rc = pthread_create(&th, &a, host_thread, NULL); pthread_attr_destroy(&a);
-    if (!rc) { started = 1; pthread_detach(th); }
+    if (!rc) { g_started = 1; pthread_detach(th); dm_ohos_gamepad_start(); dm_ohos_frame_rate_running(1); }
     return ret_int(env, rc ? -1 : n);
 }
 
 // 0 失焦，1 后台，2 前台，3 激活（同安卓） | 0 unfocused, 1 background, 2 foreground, 3 active (as Android)
 static napi_value js_focus(napi_env env, napi_callback_info info) {
     ARGS(1); int32_t ev = 0; napi_get_value_int32(env, argv[0], &ev);
+    dm_ohos_gamepad_focus(ev == 2 || ev == 3);
+    dm_ohos_frame_rate_focus(ev == 2 || ev == 3);
+    dm_ohos_haptics_focus(ev == 2 || ev == 3);
     dm_ohos_touch_focus(ev == 2 || ev == 3);
     if (lifecycle_ready()) dm_lifecycle_post(&g_lifecycle, ev);
+    return undefined(env);
+}
+static napi_value js_touch_cancel(napi_env env, napi_callback_info info) { (void)info; dm_ohos_touch_cancel(); return undefined(env); }
+static napi_value js_app_identity(napi_env env, napi_callback_info info) {
+    ARGS(2); char bundle[256] = {0}, version[96] = {0};
+    get_str(env, argv[0], bundle, sizeof bundle); get_str(env, argv[1], version, sizeof version);
+    if (*bundle && *version) { setenv("DM_BUNDLE_NAME", bundle, 1); setenv("DM_APP_VERSION", version, 1); }
     return undefined(env);
 }
 static napi_value js_refresh(napi_env env, napi_callback_info info) { ARGS(1); double hz = 0; napi_get_value_double(env, argv[0], &hz); front_android_set_refresh((float)hz); return undefined(env); }
@@ -321,6 +415,7 @@ static napi_value js_refresh(napi_env env, napi_callback_info info) { ARGS(1); d
 static napi_value js_touch_event(napi_env env, napi_callback_info info) {
     ARGS(4); int32_t phase = 0, id = 0; double x = 0, y = 0;
     napi_get_value_int32(env, argv[0], &phase); napi_get_value_int32(env, argv[1], &id); napi_get_value_double(env, argv[2], &x); napi_get_value_double(env, argv[3], &y);
+    if (phase == 0) dm_ohos_gamepad_touched();
     dm_ohos_touch_event(phase, id, (float)x, (float)y); return undefined(env);
 }
 // touchScreen(w, h, safeLeft, safeRight, safeBottom)：整个窗口（vp）| whole window (vp)
@@ -346,6 +441,12 @@ static napi_value js_ui_text(napi_env env, napi_callback_info info) {
 // Whether the system allows executable memory under release signing (AGC distribution) is confirmed on device with this; the result is shown on the start / error page.
 #include <sys/mman.h>
 static napi_value js_exec_probe(napi_env env, napi_callback_info info) {
+#if defined(DM_OHOS_SIGNED_GUEST)
+    (void)info;
+    napi_value out;
+    napi_create_string_utf8(env, "uses signed native libraries; anonymous execution is not required", NAPI_AUTO_LENGTH, &out);
+    return out;
+#else
     (void)info; char r[96];
     uint32_t *pg = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (pg == MAP_FAILED) snprintf(r, sizeof r, "mmap errno %d", errno);
@@ -358,6 +459,7 @@ static napi_value js_exec_probe(napi_env env, napi_callback_info info) {
     }
     LOG("boot: 可执行内存自检 %s", r);
     napi_value out; napi_create_string_utf8(env, r, NAPI_AUTO_LENGTH, &out); return out;
+#endif
 }
 // 调试帧率：已出图帧数（nvn_vk.c mtl_present_count），ArkTS 每秒取差值显示 | Debug FPS: presented frame count; ArkTS shows the per-second difference
 uint64_t mtl_present_count(void);
@@ -366,6 +468,7 @@ static napi_value js_present_count(napi_env env, napi_callback_info info) {
 }
 // ---- XComponent 窗口回调 → 呈现层（同安卓 nativeSurface） | XComponent window callbacks → presenter (as Android nativeSurface) ----
 static void surface_set(OH_NativeXComponent *c, void *window) {
+    dm_ohos_frame_rate_surface(c, window != NULL);
     uint64_t w = 0, h = 0;
     if (window) OH_NativeXComponent_GetXComponentSize(c, window, &w, &h);
     dm_android_vk_set_window((ANativeWindow *)window);
@@ -378,11 +481,18 @@ static void on_destroyed(OH_NativeXComponent *c, void *window) { (void)window; s
 static void on_touch(OH_NativeXComponent *c, void *window) { (void)c; (void)window; }   // 触控走 ArkTS 覆盖层 | touch goes through the ArkTS overlay
 static OH_NativeXComponent_Callback g_xcb = {on_created, on_changed, on_destroyed, on_touch};
 
+static void cleanup_input(void *arg) { (void)arg; dm_ohos_frame_rate_running(0); dm_ohos_gamepad_stop(); dm_ohos_haptics_focus(0); }
 static napi_value init(napi_env env, napi_value exports) {
+    napi_add_env_cleanup_hook(env, cleanup_input, NULL);
     napi_property_descriptor d[] = {
+        {"profileDescriptors", NULL, js_profile_descriptors, NULL, NULL, NULL, napi_default, NULL},
+        {"experimentFlags", NULL, js_experiment_flags, NULL, NULL, NULL, napi_default, NULL},
+        {"setExperimentFlags", NULL, js_set_experiment_flags, NULL, NULL, NULL, napi_default, NULL},
+        {"appIdentity", NULL, js_app_identity, NULL, NULL, NULL, napi_default, NULL},
         {"start", NULL, js_start, NULL, NULL, NULL, napi_default, NULL},
         {"focus", NULL, js_focus, NULL, NULL, NULL, napi_default, NULL},
         {"refresh", NULL, js_refresh, NULL, NULL, NULL, napi_default, NULL},
+        {"touchCancel", NULL, js_touch_cancel, NULL, NULL, NULL, napi_default, NULL},
         {"touchEvent", NULL, js_touch_event, NULL, NULL, NULL, napi_default, NULL},
         {"touchScreen", NULL, js_touch_screen, NULL, NULL, NULL, napi_default, NULL},
         {"touchTick", NULL, js_touch_tick, NULL, NULL, NULL, napi_default, NULL},

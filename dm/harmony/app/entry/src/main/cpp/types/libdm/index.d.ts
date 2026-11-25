@@ -11,3 +11,11 @@ export const setCallbacks: (showInput: (id: number, title: string, sub: string, 
   bootFailed: (code: number) => void) => void;
 export const textResult: (id: number, accepted: boolean, text: string) => void;
 export const presentCount: () => number;
+
+export const touchCancel: () => void;
+export const appIdentity: (bundle: string, version: string) => void;
+
+export const experimentFlags: () => number;
+export const setExperimentFlags: (flags: number) => number;
+
+export const profileDescriptors: () => number;

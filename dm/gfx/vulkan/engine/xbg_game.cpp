@@ -16,12 +16,21 @@ extern "C" int xbg_completion_wait_selftest(char *report,size_t bytes);
 #include "xbg_sampler.h"
 #include "xbg_framebuffer.h"
 #include "xbg_clear.h"
+#include "xbg_load_clear.h"
+#include "xbg_whole_set.h"
 #include "xbg_blit.h"
 #include "xbg_adreno_policy.h"
 #ifdef XBG_HAVE_SPIRV_OPT
 #include "spirv-tools/optimizer.hpp"
 #endif
 #include "xbg_bc_policy.h"
+#include "xbg_bc_reupload.h"
+#if defined(DM_H12_MEASURE) && defined(__OHOS__)
+extern "C" {
+#include "../../../host/dm_hud.h"
+int dm_loadscreen_up(void);
+}
+#endif
 #include "xbg_writeback_policy.h"
 #include "xbg_clear_spv.h"
 #include "xbg_bright_spv.h"
@@ -94,6 +103,17 @@ __attribute__((weak)) void dm_cam_publish(const float vpo[16],const float ivpo[1
 #include <deque>
 #include <condition_variable>
 #include <set>
+
+// H-08 exclusive timing hooks; absent on other platforms and standalone tests.
+#ifdef __OHOS__
+extern "C" int dm_h8_enter(int);
+extern "C" void dm_h8_leave(int);
+struct H8Scope {int active;explicit H8Scope(int k):active(dm_h8_enter(k)){}~H8Scope(){dm_h8_leave(active);}};
+#else
+struct H8Scope {explicit H8Scope(int){}};
+#endif
+template<class F> static auto h8_call(int k,F f)->decltype(f()){H8Scope scope(k);return f();}
+
 
 // Flags of the NVN memory pool that holds a guest range (dm/gfx/nvn/hle_nvn.c), or -1. Weak: hosts without it keep every
 // storage writeback.
@@ -266,27 +286,130 @@ bool perf_timing=true; // always-on wall-time breakdown for NVN PERF (exclusive 
 // every 32 frames. The Android app turns it off (DM_GFX_PERF_SAMPLE=0); measurement runs set the marker.
 unsigned perf_sample=32;bool perf_frame_timed=true;uint64_t perf_timed_frames=0;
 XbgCpuTiming::Counter perf_timing_before[XbgCpuTiming::Count];
+struct H11DescriptorTiming {
+    enum Kind { Setup, BufferBind, ImageLookup, ImageTransition, ImageView, SamplerBind, ElementRest, MemoKeyAndCheck, MemoLookup, MemoRefresh, VectorPrepare, SetKeyLookup, SetAllocate, SetUpdate, SetInsert, Audit, Count };
+    struct Counter { uint64_t calls=0, ns=0; } counters[Count];
+    struct Scope;
+    Scope *top=nullptr;
+    uint64_t reads=0; bool invalid=false;
+    uint64_t position(XbgCpuTiming::Scope *root) {
+        uint64_t now=root->recorder->clock();
+        if(reads==UINT64_MAX)invalid=true;else ++reads;
+        if(root->recorder->top!=root || now<root->start || root->children>now-root->start){invalid=true;return 0;}
+        return now-root->start-root->children;
+    }
+    struct Scope {
+        H11DescriptorTiming *owner; XbgCpuTiming::Scope *root;
+        Scope *parent=nullptr; Kind kind; uint64_t begin=0, children=0;
+        Scope(H11DescriptorTiming *o,XbgCpuTiming::Scope *r,Kind k):owner(o),root(r),kind(k){
+            if(owner && root && root->recorder){begin=owner->position(root);parent=owner->top;owner->top=this;}else owner=nullptr;
+        }
+        ~Scope(){if(!owner)return;uint64_t end=owner->position(root),elapsed=end>=begin?end-begin:0;
+            if(end<begin || children>elapsed)owner->invalid=true;
+            auto &c=owner->counters[kind];uint64_t exclusive=children<=elapsed?elapsed-children:0;
+            if(c.calls==UINT64_MAX || c.ns>UINT64_MAX-exclusive)owner->invalid=true;
+            else{++c.calls;c.ns+=exclusive;}
+            if(parent){if(parent->children>UINT64_MAX-elapsed)owner->invalid=true;else parent->children+=elapsed;}owner->top=parent;
+        }
+        Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+    };
+    uint64_t sum() {uint64_t n=0;for(const auto &c:counters){if(n>UINT64_MAX-c.ns){invalid=true;return 0;}n+=c.ns;}return n;}
+};
+
 bool descriptor_detail=false;
-XbgDescriptorTiming descriptor_timing;
+bool whole_set_enabled=false;
+uint64_t whole_set_arena=1,whole_set_writes=1;
+#ifdef DM_H12_MEASURE
+uint64_t whole_set_attempts=0,whole_set_hits=0;
+#endif
+H11DescriptorTiming descriptor_timing;
 thread_local XbgCpuTiming::Scope *descriptor_root=nullptr;
 struct DescriptorRoot {
     bool on=descriptor_detail || !tls_gate;XbgCpuTiming::Scope *previous=nullptr;
     DescriptorRoot(XbgCpuTiming::Scope *scope){if(on){previous=descriptor_root;descriptor_root=descriptor_detail?scope:nullptr;}}
     ~DescriptorRoot(){if(on)descriptor_root=previous;}
 };
-#define DESC_SCOPE(kind) XbgDescriptorTiming::Scope descriptor_scope(descriptor_detail?&descriptor_timing:nullptr,(descriptor_detail || !tls_gate)?descriptor_root:nullptr,XbgDescriptorTiming::kind)
+#define DESC_SCOPE(kind) H11DescriptorTiming::Scope descriptor_scope(descriptor_detail?&descriptor_timing:nullptr,(descriptor_detail || !tls_gate)?descriptor_root:nullptr,H11DescriptorTiming::kind)
 #define DESC_CALL(kind, expr) [&](){DESC_SCOPE(kind);return (expr);}()
 
+struct H11DrawTiming {
+    enum Kind { Writeback, VertexPrepare, StateBuild, Record, Count };
+    enum Flag { BadClock=1, Overflow=2, Stack=4, Coverage=8 };
+    struct Counter { uint64_t calls=0, ns=0; } counters[Count];
+    struct Scope;
+    Scope *top=nullptr;
+    uint64_t reads=0,storage_ranges=0,images_visited=0,writeback_bytes=0,index_expand_calls=0,index_expand_bytes=0;
+    uint32_t flags=0;
+    void add(uint64_t &value,uint64_t amount){if(amount>UINT64_MAX-value)flags|=Overflow;else value+=amount;}
+    uint64_t position(XbgCpuTiming::Scope *root){
+        const uint64_t now=root->recorder->clock();add(reads,1);
+        if(root->kind!=XbgCpuTiming::Draw || root->recorder->top!=root){flags|=Stack;return 0;}
+        if(now<root->start || root->children>now-root->start){flags|=BadClock;return 0;}
+        return now-root->start-root->children;
+    }
+    struct Scope {
+        H11DrawTiming *owner;XbgCpuTiming::Scope *root;Scope *parent=nullptr;
+        Kind kind;uint64_t begin=0,children=0;
+        Scope(H11DrawTiming *o,XbgCpuTiming::Scope *r,Kind k):owner(o),root(r),kind(k){
+            if(owner && root && root->recorder){parent=owner->top;begin=owner->position(root);owner->top=this;}else owner=nullptr;
+        }
+        ~Scope(){finish();}
+        void finish(){
+            if(!owner)return;
+            if(owner->top!=this)owner->flags|=Stack;
+            uint64_t end=owner->position(root),elapsed=0,exclusive=0;
+            if(end<begin)owner->flags|=BadClock;else elapsed=end-begin;
+            if(children>elapsed)owner->flags|=BadClock;else exclusive=elapsed-children;
+            auto &c=owner->counters[kind];owner->add(c.calls,1);owner->add(c.ns,exclusive);
+            if(parent)owner->add(parent->children,elapsed);
+            owner->top=parent;owner=nullptr;
+        }
+        Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+    };
+    bool in(Kind kind)const{return top && top->kind==kind;}
+    void storage(uint64_t bytes){if(in(Writeback)){add(storage_ranges,1);add(writeback_bytes,bytes);}}
+    void image(){if(in(Writeback))add(images_visited,1);}
+    void index(uint64_t count){if(in(VertexPrepare)){add(index_expand_calls,1);if(count>UINT64_MAX/2)flags|=Overflow;else add(index_expand_bytes,count*2);}}
+    uint64_t sum(){uint64_t value=0;for(const auto &c:counters)add(value,c.ns);return value;}
+    uint64_t finish(uint64_t total){
+        const uint64_t tagged=sum();if(top)flags|=Stack;
+        uint64_t calls=0;for(const auto &c:counters)add(calls,c.calls);
+        if(calls>UINT64_MAX/2)flags|=Overflow;else if(reads!=calls*2)flags|=Coverage;
+        if(tagged>total)flags|=Coverage;
+        return tagged;
+    }
+};
+
 bool draw_detail=false;
-XbgDrawTiming draw_timing;
+H11DrawTiming draw_timing;
 thread_local XbgCpuTiming::Scope *draw_root=nullptr;
 struct DrawRoot {
     bool on=draw_detail || !tls_gate;XbgCpuTiming::Scope *previous=nullptr;
     DrawRoot(XbgCpuTiming::Scope *scope){if(on){previous=draw_root;draw_root=draw_detail?scope:nullptr;}}
     ~DrawRoot(){if(on)draw_root=previous;}
 };
-#define DRAW_SCOPE(kind) XbgDrawTiming::Scope draw_scope(draw_detail?&draw_timing:nullptr,(draw_detail || !tls_gate)?draw_root:nullptr,XbgDrawTiming::kind)
+#define DRAW_SCOPE(kind) H11DrawTiming::Scope draw_scope(draw_detail?&draw_timing:nullptr,(draw_detail || !tls_gate)?draw_root:nullptr,H11DrawTiming::kind)
 bool live_profile_used=false;
+uint64_t live_not_before_ns=0;uint32_t live_detail_mask=0;
+// Fixed-size diagnostic table: no resource pointers are retained/dereferenced.
+// Collision replaces the prior entry and is reported, never counted as an equal binding.
+struct H11Repeat {
+    struct Entry {std::array<uint64_t,4> key{};std::array<uint64_t,8> value{};uint64_t draw=0;bool valid=false;};
+    std::array<Entry,8192> entries{};
+    uint64_t total=0,same=0,offset_only=0,unique_draw=0,collisions=0;
+    void reset(){for(auto &e:entries)e.valid=false;total=same=offset_only=unique_draw=collisions=0;}
+    void observe(std::array<uint64_t,4> key,std::array<uint64_t,8> value,uint64_t draw){
+        uint64_t hash=1469598103934665603ull;for(auto v:key){hash^=v;hash*=1099511628211ull;}
+        auto &e=entries[hash%entries.size()];++total;bool match=e.valid && e.key==key;
+        if(e.valid && !match)++collisions;
+        if(!match || e.draw!=draw)++unique_draw;
+        if(match){if(e.value==value)++same;else if(e.value[0]==value[0] && e.value[2]==value[2] && e.value[3]==value[3] && e.value[4]==value[4] && e.value[5]==value[5] && e.value[6]==value[6] && e.value[7]==value[7] && e.value[1]!=value[1])++offset_only;}
+        e={key,value,draw,true};
+    }
+};
+H11Repeat buffer_repeat,image_input_repeat,image_output_repeat;uint64_t descriptor_ordinal=0;
+void repeat_report(const char *name,const H11Repeat &r){xbg_logf("NVN DESC_TIMING audit=%s total=%llu same=%llu offset_only=%llu unique_draw=%llu collisions=%llu",name,(unsigned long long)r.total,(unsigned long long)r.same,(unsigned long long)r.offset_only,(unsigned long long)r.unique_draw,(unsigned long long)r.collisions);}
+
 struct PipelineCounts {uint64_t hits=0,misses=0,evictions=0,bypass=0;} pipeline_counts,pipeline_before;
 void report_pipeline_cache();
 struct TimingRoot {
@@ -299,10 +422,15 @@ inline XbgCpuTiming *timing_now(){return (!tls_gate || timing_any.load(std::memo
 // Hot-path sub-timers: free on untimed frames.
 inline uint64_t perf_clock(){return timing_now()?timing_clock():0;}
 void timing_start(){
+    // Start with this window only: periodic PERF samples during the 3-second delay are not capture frames.
+    timing=XbgCpuTiming(timing_clock);
     timing_active=true;timing_start_ns=timing_clock();pipeline_before=pipeline_counts;
+    if(live_detail_mask){descriptor_detail=(live_detail_mask&1)!=0;draw_detail=(live_detail_mask&2)!=0;}
+    xbg_logf("NVN CPU_TIMING started monotonic_ns=%llu detail_mask=%u",(unsigned long long)timing_start_ns,live_detail_mask);
     timing_before={stats.submissions.load(),stats.draws.load(),stats.dispatches.load(),stats.presents.load(),stats.shader_loads.load()};
 }
 void descriptor_report();
+extern uint64_t load_clear_passes;
 void draw_report();
 void timing_report(const char *reason){
     if(!timing_active)return;
@@ -317,15 +445,20 @@ void timing_report(const char *reason){
     static const char *names[]={"other","draw","dispatch","descriptor","pass","buffer","pipeline","submit","fence","present","cleanup","hash","image","log","program","cpuwrite","snapshot"};
     for(unsigned i=0;i<XbgCpuTiming::Count;i++){const auto &c=timing.counters[i];xbg_logf("NVN CPU_TIMING part=%s calls=%llu exclusive_ns=%llu inclusive_ns=%llu max_ns=%llu",names[i],(unsigned long long)c.calls,(unsigned long long)c.exclusive_ns,(unsigned long long)c.inclusive_ns,(unsigned long long)c.max_ns);}
     descriptor_report();
-    draw_report();
+    draw_report();descriptor_detail=false;draw_detail=false;live_detail_mask=0;
 }
 void descriptor_report(){
     if(!descriptor_detail)return;
     const uint64_t total=timing.counters[XbgCpuTiming::Descriptor].exclusive_ns;
     const uint64_t tagged=descriptor_timing.sum();
     xbg_logf("NVN DESC_TIMING v=2 first=%llu last=%llu descriptor_ns=%llu tagged_ns=%llu remaining_ns=%llu coverage=%s clock_reads=%llu",(unsigned long long)(timing_before.presents+1),(unsigned long long)stats.presents.load(),(unsigned long long)total,(unsigned long long)tagged,(unsigned long long)(tagged<=total?total-tagged:0),tagged<=total && !descriptor_timing.invalid && !descriptor_timing.top?"OK":"INVALID",(unsigned long long)descriptor_timing.reads);
-    const char *names[]={"setup","buffer_bind","image_lookup","image_transition","image_view","sampler_bind","element_rest"};
-    for(unsigned i=0;i<XbgDescriptorTiming::Count;++i)xbg_logf("NVN DESC_TIMING part=%s calls=%llu exclusive_ns=%llu",names[i],(unsigned long long)descriptor_timing.counters[i].calls,(unsigned long long)descriptor_timing.counters[i].ns);
+#ifdef DM_H12_MEASURE
+    if(whole_set_enabled)xbg_logf("NVN WHOLE_SET draws=%llu hits=%llu", (unsigned long long)whole_set_attempts,(unsigned long long)whole_set_hits);
+    whole_set_attempts=whole_set_hits=0;
+#endif
+    repeat_report("buffer",buffer_repeat);repeat_report("image_input",image_input_repeat);repeat_report("image_output",image_output_repeat);
+    const char *names[]={"setup","buffer_bind","image_lookup","image_transition","image_view","sampler_bind","element_rest","memo_key_check","memo_lookup","memo_refresh","vector_prepare","set_key_lookup","set_allocate","set_update","set_insert","audit_overhead"};
+    for(unsigned i=0;i<H11DescriptorTiming::Count;++i)xbg_logf("NVN DESC_TIMING part=%s calls=%llu exclusive_ns=%llu",names[i],(unsigned long long)descriptor_timing.counters[i].calls,(unsigned long long)descriptor_timing.counters[i].ns);
     xbg_logf("NVN DESC_TIMING part=remaining calls=0 exclusive_ns=%llu",(unsigned long long)(tagged<=total?total-tagged:0));
 }
 void draw_report(){
@@ -334,19 +467,32 @@ void draw_report(){
     const uint64_t tagged=draw_timing.finish(total);
     const uint64_t remaining=tagged<=total?total-tagged:0;
     xbg_logf("NVN DRAW_TIMING v=1 first=%llu last=%llu draw_ns=%llu tagged_ns=%llu remaining_ns=%llu coverage=%s clock_reads=%llu flags=%u",(unsigned long long)(timing_before.presents+1),(unsigned long long)stats.presents.load(),(unsigned long long)total,(unsigned long long)tagged,(unsigned long long)remaining,draw_timing.flags?"INVALID":"OK",(unsigned long long)draw_timing.reads,draw_timing.flags);
-    const char *names[]={"writeback","vertex_prepare"};
-    for(unsigned i=0;i<XbgDrawTiming::Count;++i)xbg_logf("NVN DRAW_TIMING part=%s calls=%llu exclusive_ns=%llu",names[i],(unsigned long long)draw_timing.counters[i].calls,(unsigned long long)draw_timing.counters[i].ns);
+    const char *names[]={"writeback","vertex_prepare","state_build","record_commands"};
+    for(unsigned i=0;i<H11DrawTiming::Count;++i)xbg_logf("NVN DRAW_TIMING part=%s calls=%llu exclusive_ns=%llu",names[i],(unsigned long long)draw_timing.counters[i].calls,(unsigned long long)draw_timing.counters[i].ns);
     xbg_logf("NVN DRAW_TIMING part=remaining calls=0 exclusive_ns=%llu",(unsigned long long)remaining);
     xbg_logf("NVN DRAW_TIMING counters storage_ranges=%llu images_visited=%llu writeback_bytes=%llu index_expand_calls=%llu index_expand_bytes=%llu",(unsigned long long)draw_timing.storage_ranges,(unsigned long long)draw_timing.images_visited,(unsigned long long)draw_timing.writeback_bytes,(unsigned long long)draw_timing.index_expand_calls,(unsigned long long)draw_timing.index_expand_bytes);
 }
 void timing_boundary(){
     if(timing_active){if(stats.presents>=timing_last)timing_report("frames");else if(timing_clock()-timing_start_ns>=60000000000ull)timing_report("60s-next-present");}
-    else if(timing_first && stats.presents+1==timing_first)timing_start();
+    else if(timing_first && stats.presents+1==timing_first){
+        if(live_not_before_ns && timing_clock()<live_not_before_ns){++timing_first;++timing_last;}
+        else{live_not_before_ns=0;timing_start();}
+    }
 }
 // 最近一个统计窗的每帧 GPU / 翻译 CPU 毫秒（宿主 hle_oe.c 的 GPU 时间 3D 比例控制器、hle_nvn.c 的自适应出图档读）| per-frame GPU / translation CPU ms of the last
 std::atomic<double> perf_gpu_ms{-1},perf_cpu_ms{-1};
 extern "C" double xbg_recent_gpu_ms(void){return perf_gpu_ms.load();}
 extern "C" double xbg_recent_cpu_ms(void){return perf_cpu_ms.load();}
+// Coherent, low-frequency sample for the optional dynamic-resolution controller.
+std::mutex perf_sample_mutex;
+uint64_t perf_sample_serial=0,perf_sample_time=0;
+double perf_sample_gpu=-1,perf_sample_cpu=-1;
+extern "C" uint64_t xbg_recent_perf_sample(double *gpu,double *cpu,double *age_ms){
+    std::lock_guard<std::mutex> lock(perf_sample_mutex);
+    *gpu=perf_sample_gpu;*cpu=perf_sample_cpu;
+    *age_ms=perf_sample_time?double(timing_clock()-perf_sample_time)/1e6:-1;
+    return perf_sample_serial;
+}
 bool sync_mode=false; // diagnostic: marker files/gfx-sync-mode resolves all GPU results at each submit end
 std::atomic<uint64_t> completed{0};uint64_t submitted=0; // guest fence values: submitted xbg_submit calls / GPU-complete ones (see Slot::covers)
 // 完成通知（鸿蒙缺省开，DM_GFX_COMPLETION_WAIT=0/1 改）：游戏线程等 fence 时，目标批次一完成就从发布点被唤醒返回，不必排在后续提交后面等引擎锁。
@@ -440,6 +586,13 @@ struct Buffer {
     void flush(){if(coherent)return;VkMappedMemoryRange r{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};r.memory=memory;r.size=VK_WHOLE_SIZE;VK(vkFlushMappedMemoryRanges(cfg.device,1,&r));}
     void invalidate(){if(coherent)return;VkMappedMemoryRange r{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};r.memory=memory;r.size=VK_WHOLE_SIZE;VK(vkInvalidateMappedMemoryRanges(cfg.device,1,&r));}
 };
+bool bc_reupload=false;
+uint64_t last_soft_bc_upload=0;
+h12bc::Histories bc_histories;
+h12bc::Scratch bc_linear,bc_blocks;
+void release_bc_history(){
+    bc_histories={};bc_linear={};bc_blocks={};last_soft_bc_upload=0;
+}
 struct Arena {
     std::vector<ArenaChunk> chunks;size_t current=0,peak_chunks=3;bool cached=false;VkDeviceSize used_total=0,peak=0;
     ArenaChunk make(VkDeviceSize bytes){
@@ -642,7 +795,7 @@ uint64_t queued=0,waits=0,wait_ns=0;   // render thread only
 void run(){
     for(;;){Job j;{std::unique_lock<std::mutex> l(mu);cv.wait(l,[]{return stop || !jobs.empty();});if(jobs.empty())return;j=jobs.front();jobs.erase(jobs.begin());}
         const uint64_t timeout=std::max<uint64_t>(cfg.fence_timeout_ns,10000000000ull);
-        VkResult r=vkWaitForFences(cfg.device,1,&j.fence,VK_TRUE,timeout);
+        VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&j.fence,VK_TRUE,timeout);});
         // 栅栏一直不亮而驱动又不报 DEVICE_LOST 时，这里只剩 VK_TIMEOUT；把它说清楚，别让崩在后面的检查里只留下一个 2。
         // When the fence never signals and the driver does not report DEVICE_LOST, all that is left here is VK_TIMEOUT; say so,
         // so the fatal check later does not leave just a 2 in the crash report.
@@ -808,7 +961,7 @@ void retire_slot(Slot &s){
     if(!s.pending)return;
     poolreset::finish(s);
     {CPU_SCOPE(Fence);bool busy=vkGetFenceStatus(cfg.device,s.fence)==VK_NOT_READY;uint64_t b0=busy?timing_clock():0;
-     VK(vkWaitForFences(cfg.device,1,&s.fence,VK_TRUE,std::max<uint64_t>(cfg.fence_timeout_ns,10000000000ull)));
+     VK(h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&s.fence,VK_TRUE,std::max<uint64_t>(cfg.fence_timeout_ns,10000000000ull));}));
      if(busy){block_ns[sync_site]+=timing_clock()-b0;++block_calls[sync_site];}}
     ++perf.waits;
     if(s.prof){
@@ -849,6 +1002,7 @@ void retire_slot(Slot &s){
     for(auto &v:s.texel_views)vkDestroyBufferView(cfg.device,v.second,nullptr);s.texel_views.clear();
     uint64_t c3=timing_clock();s.retire.run();release_descriptors(s);uint64_t c4=timing_clock();
     perf.arena_peak=std::max<uint64_t>(perf.arena_peak,s.stream.peak+s.readback.peak);s.stream.peak=s.readback.peak=0;
+    if(whole_set_enabled)++whole_set_arena;
     s.stream.reset();s.readback.reset();
     // Every set is fully rewritten before use, so sets are recycled instead of resetting pools (vkAllocateDescriptorSets cost ~15 us/set on Maleoon).
     for(auto &u:s.used_sets){auto &sp=s.spare_sets[u.first];sp.insert(sp.end(),u.second.begin(),u.second.end());u.second.clear();}s.set_cache.clear();
@@ -941,7 +1095,7 @@ void submit_slots(bool wait){
             vkCmdPipelineBarrier(s.pro,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,1,&after,0,nullptr,0,nullptr);
             VK(vkEndCommandBuffer(s.pro));cbs[0]=s.pro;cbs[1]=s.cmd;ncb=2;s.pro_ops.clear();}
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=ncb;si.pCommandBuffers=cbs;
-        {CPU_SCOPE(Submit);VK(vkQueueSubmit(cfg.queue,1,&si,s.fence));}++submit_by[sync_site];poolreset::queue(s);
+        {CPU_SCOPE(Submit);VK(h8_call(7,[&]{return vkQueueSubmit(cfg.queue,1,&si,s.fence);}));}++submit_by[sync_site];poolreset::queue(s);
         s.recording=false;s.pending=true;s.covers=submitted;s.hud_frame=hud::frame.load(std::memory_order_relaxed);slot_index^=1;++perf.submits;snapshot_reset();++slot_serial;
         pending_events.insert(pending_events.end(),recording_events.begin(),recording_events.end());recording_events.clear();
     }
@@ -983,7 +1137,58 @@ extern bool tex_dirty;extern uint64_t tex_dirty_tracked,tex_dirty_checks,tex_dir
 // 3D 画面加亮的读数（定义在 dispatch 前的 namespace bright）
 // Readings of the 3D picture brightening (defined in namespace bright before dispatch)
 namespace bright{extern bool enabled;extern uint64_t applied;extern float last_k;}
+#ifdef DM_H12_MEASURE
+struct BcFrameMeasure {
+    bool enabled=false;
+    FILE *capture=nullptr;
+    unsigned rows=0;
+    void close(){if(capture){fclose(capture);capture=nullptr;}}
+    void open(){
+#if defined(__OHOS__)
+        const char *e=getenv("DM_H12_BC_CAPTURE");
+        if(enabled && e && !strcmp(e,"1") && cfg.shader_directory){
+            std::string path=std::string(cfg.shader_directory)+"/../h12-bc-"+std::to_string(getpid())+".tsv";
+            capture=fopen(path.c_str(),"wx");
+            if(!capture){xbg_logf("NVN H12 BC capture open failed errno=%d",errno);return;}
+            fputs("sample\tframe\tmono_ns\twall_ns\tloading\tarea\tx\ty\tshader\tpipeline\tfirst\treupload\tbytes\tupload_ns\tchecked\tequal\n",capture);
+        }
+#endif
+    }
+    uint64_t previous_ns=0,checked=0,equal=0,total_checked=0,total_equal=0;
+    uint64_t shaders=0,pipelines=0,uploads=0,reuploads=0,bytes=0,upload_ns=0;
+    void finish(){
+        if(!enabled)return;
+        const uint64_t now=timing_clock(), frame=hud::frame.load();
+        const uint64_t dt=previous_ns?now-previous_ns:0;
+        const uint64_t sh=hud::shaders.load(),pl=hud::pipelines.load(),up=hud::uploads.load(),re=hud::reuploads.load();
+        const uint64_t b=hud::upload_bytes.load(),ns=hud::upload_ns.load();
+        total_checked+=checked;total_equal+=equal;
+#if defined(__OHOS__)
+        if(capture){
+            dm_hud_info hud_info{};dm_hud_get(&hud_info);
+            int loading=dm_loadscreen_up();
+            fprintf(capture,"%u\t%llu\t%llu\t%llu\t%d\t%d\t%d\t%d\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
+                ++rows,(unsigned long long)frame,(unsigned long long)now,(unsigned long long)dt,
+                loading,hud_info.valid?hud_info.area:0,hud_info.x,hud_info.y,(unsigned long long)(sh-shaders),
+                (unsigned long long)(pl-pipelines),(unsigned long long)(up-uploads),(unsigned long long)(re-reuploads),
+                (unsigned long long)(b-bytes),(unsigned long long)(ns-upload_ns),(unsigned long long)checked,(unsigned long long)equal);
+            if(!(rows%60))fflush(capture);
+            if(rows>=240000 || ferror(capture))close();
+        }
+#endif
+        if(dt>=50000000 || (frame%120)==0)
+            xbg_logf("NVN H12 BC frame=%llu wall_ms=%.3f shader=%llu pipeline=%llu first=%llu reupload=%llu bytes=%llu upload_ms=%.3f checked=%llu equal=%llu total_checked=%llu total_equal=%llu",
+                (unsigned long long)frame,double(dt)/1e6,(unsigned long long)(sh-shaders),(unsigned long long)(pl-pipelines),
+                (unsigned long long)(up-uploads),(unsigned long long)(re-reuploads),(unsigned long long)(b-bytes),double(ns-upload_ns)/1e6,
+                (unsigned long long)checked,(unsigned long long)equal,(unsigned long long)total_checked,(unsigned long long)total_equal);
+        previous_ns=now;shaders=sh;pipelines=pl;uploads=up;reuploads=re;bytes=b;upload_ns=ns;checked=equal=0;
+    }
+} bc_measure;
+#endif
 void perf_frame(){
+#ifdef DM_H12_MEASURE
+    bc_measure.finish();
+#endif
     {texel_distinct+=texel_frame_keys.size();for(auto k:texel_frame_keys)if(texel_prev_keys.count(k))++texel_reused;texel_prev_keys.swap(texel_frame_keys);texel_frame_keys.clear();}
     if(completion_wait_enabled)fold_completion_wait_stats();
     if(perf_frame_timed)++perf_timed_frames;perf_frame_timed=perf_sample && stats.presents.load()%perf_sample==0;   // the next frame
@@ -1043,7 +1248,9 @@ void perf_frame(){
     if(shaders_reused || shader_reuse_mismatches){xbg_logf("NVN PERF shader_reuse window reused=%llu mismatches=%llu",(unsigned long long)shaders_reused,(unsigned long long)shader_reuse_mismatches);shaders_reused=shader_reuse_mismatches=0;}
     if(wb_skip){xbg_logf("NVN PERF wbskip ab=%d skipped=%.1f (%.2fMB)",int(ab_frame_on),wb_skipped/f,wb_skipped_bytes/1048576.0/f);wb_skipped=wb_skipped_bytes=0;}
     if(pipe_memo){xbg_logf("NVN PERF pipememo ab=%d hits=%.1f misses=%.1f",int(ab_frame_on),pipe_memo_hits/f,pipe_memo_misses/f);pipe_memo_hits=pipe_memo_misses=0;}
-    {double gm=perf.gpu_samples?double(perf.gpu_ns)/1e6/f:-1.0,cm=double(perf.submit_cpu_ns)/1e6/f;perf_gpu_ms.store(gm);perf_cpu_ms.store(cm);}
+    {double gm=perf.gpu_samples?double(perf.gpu_ns)/1e6/f:-1.0,cm=double(perf.submit_cpu_ns)/1e6/f;perf_gpu_ms.store(gm);perf_cpu_ms.store(cm);
+     {std::lock_guard<std::mutex> lock(perf_sample_mutex);perf_sample_gpu=gm;perf_sample_cpu=cm;perf_sample_time=now;++perf_sample_serial;}}
+    xbg_logf("NVN PERF explicit_load_clear_per_frame=%.2f",double(load_clear_passes)/f);load_clear_passes=0;
     perf=Perf{};perf.window_start=now;perf_timed_frames=0;
 }
 void occlusion_query(VkQueryPool &pool,uint32_t &index){
@@ -1114,6 +1321,7 @@ uint64_t snap_front_hits=0,snap_map_hits=0,snap_invalidations=0,snap_invalidated
 inline SnapFront &snap_front_for(int which,uint64_t a,uint64_t n){uint64_t x=a*0x9E3779B97F4A7C15ull^n*0xC2B2AE3D27D4EB4Full;return snap_front[which][(x^(x>>31))&2047];}
 void snapshot_reset(){snapshot_maps_reset();snapshot_maxlen=0;desc_memo_reset();++texel_write_epoch;++snapshot_epoch;last_pass_reset();}   // the guest may write memory between submissions: texel copies are re-verified
 void snapshot_invalidate(uint64_t address,uint64_t bytes){
+    if(whole_set_enabled)++whole_set_writes;
     ++snap_invalidations;if(ab_off("snapinval"))++snapshot_epoch;
     if(address<texel_hi && address+bytes>texel_lo)texel_touch(address,bytes);
     uint64_t lo=address>snapshot_maxlen?address-snapshot_maxlen:0;int which=0;
@@ -1390,6 +1598,7 @@ void capability_report(){
 struct Image {
     tex_t source{}; uint64_t provenance_epoch=0,provenance_writer=0;unsigned provenance_write_site=0; VkImage image{};VkDeviceMemory memory{};VkFormat fmt{};VkImageLayout layout=VK_IMAGE_LAYOUT_UNDEFINED;
     VkImageAspectFlags aspects{};VkImageUsageFlags usage{};uint32_t width{},height{},depth=1,levels{},layers{},bpp{};VkSampleCountFlagBits samples=VK_SAMPLE_COUNT_1_BIT;bool uploaded=false,gpu_written=false,decoded=false,mutable_format=false;VkImageCreateInfo create{}; // create: as created (no pNext), for upgrade_mutable
+    bool uploaded_hash_valid=false; // GPU-written bytes may not match the previous CPU upload.
     uint64_t cpu_hash=0,checked_submission=UINT64_MAX,last_write=0;uint32_t stable_checks=0;int64_t mem_bytes=0,bc_bytes=0,bc_data=0;
     // 最近一次经 get_image 取用时的 slot_serial：等于当前值，说明这次提交里已有命令用过它（gfx-upload-prologue 据此判断能否提前上传）。
     // slot_serial at the last get_image of this image: equal to the current value means a command of this submission already used it
@@ -1829,6 +2038,27 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
         im.dirty_stamp=0;   // a new upload starts on the hash checks again
         need(im.samples==VK_SAMPLE_COUNT_1_BIT,"Cannot upload uninitialized multisample image from CPU storage");
         need(t->mem && t->pool && t->off>=0 && uint64_t(t->off)<=t->pool->size && t->L.size<=t->pool->size-uint64_t(t->off),"Texture storage outside memory pool");
+        // Both the baseline and the experiment validate pool bounds before hashing guest memory.
+        bool inspect_layout=bc_reupload;
+#ifdef DM_H12_MEASURE
+        inspect_layout=inspect_layout || bc_measure.enabled;
+#endif
+        const bool same_layout=inspect_layout && t->mem==im.source.mem && t->L.size==im.source.L.size &&
+                               !memcmp(&t->d,&im.source.d,sizeof(t->d));
+        const bool check_hash=bc_reupload && im.uploaded_hash_valid && same_layout && reupload;
+        const uint64_t previous_hash=im.cpu_hash;
+        const uint64_t incoming_hash=check_hash?hash_memory(t->mem,t->L.size):0;
+        if(bc_reupload && last_soft_bc_upload && !h12bc::burst_active(up_t0,last_soft_bc_upload))
+            release_bc_history();
+        if(bc_reupload && im.decoded && reupload)last_soft_bc_upload=up_t0;
+        if(h12bc::can_skip(check_hash,im.uploaded_hash_valid,same_layout,previous_hash,incoming_hash)){
+            im.uploaded=true;im.checked_submission=stats.submissions;
+#ifdef DM_H12_MEASURE
+            if(bc_measure.enabled){++bc_measure.checked;++bc_measure.equal;}
+#endif
+            provenance_image("GET_UPLOAD",t,im);im.slot_use=slot_serial;return im;
+        }
+        im.dirty_stamp=0;   // a new upload starts on the hash checks again
         if(im.aspects!=VK_IMAGE_ASPECT_COLOR_BIT)xbg_logf("NVN depth initial upload serial=%llu format=%#x vkFormat=%u target=%d extent=%ux%ux%u levels=%u layers=%u source=%p bytes=%llu",(unsigned long long)t->serial,t->d.format,unsigned(im.fmt),t->d.target,im.width,im.height,im.depth,im.levels,im.layers,t->mem,(unsigned long long)t->L.size);
         UpScratch &linear=up_linear;linear.reset();std::vector<VkBufferImageCopy> copies;
         // Choose the differential state for this image and pre-compute its sub-resource layout. | 为这张图挑出差分状态并预先算好子资源布局。
@@ -2858,6 +3088,21 @@ struct ImgKey{uint64_t h,sh,tp,to,sp,so,kind;bool operator==(const ImgKey &o)con
 struct ImgKeyHash{size_t operator()(const ImgKey &k)const{uint64_t x=k.h*0x9E3779B97F4A7C15ull^k.sh*0xC2B2AE3D27D4EB4Full^k.tp^(k.to<<17)^(k.sp<<7)^k.so^(k.kind<<40);x^=x>>29;return size_t(x*0xBF58476D1CE4E5B9ull);}};
 struct ImgEntry{const tex_t *tex;Image *im;VkImageView view;VkSampler sampler;const RegisteredTexture *record;uint64_t revision;};
 std::unordered_map<ImgKey,ImgEntry,ImgKeyHash> img_cache;bool img_cache_enabled=true;uint64_t img_cache_hits=0,img_cache_misses=0;
+// H-11b: a lookup accelerator only. The owning map and all resource validation
+// remain authoritative. unordered_map rehash preserves element addresses.
+template<class Key,class Value,size_t N> struct H11LookupFront {
+    struct Cell {Key key{};Value *value=nullptr;uint64_t epoch=0;};
+    Cell cells[N]{};uint64_t epoch=1;
+    Value *find(size_t slot,const Key &key) const {
+        const Cell &c=cells[slot];return c.epoch==epoch && c.value && c.key==key?c.value:nullptr;
+    }
+    void put(size_t slot,const Key &key,Value *value){cells[slot]={key,value,epoch};}
+    void invalidate(){if(++epoch==0){for(auto &c:cells)c.epoch=0;epoch=1;}}
+};
+H11LookupFront<ImgKey,ImgEntry,6*128> descriptor_image_front;
+bool descriptor_image_front_enabled=false;
+void img_cache_clear(){descriptor_image_front.invalidate();img_cache.clear();}
+
 // Recreate an image created without MUTABLE_FORMAT with it, copy every level and layer, and retire the old image and its
 // views (queue order keeps earlier recorded uses on the old one). Cached descriptor sets and the image cache hold the old
 // views: memo_epoch and img_cache drop them. Field counts on Metal: 0 of 17473 textures needed this (nvn_mtl.m).
@@ -2879,7 +3124,7 @@ void upgrade_mutable(Image &im){
     std::vector<VkFramebuffer> old_fbs;forget_framebuffers(im,&old_fbs);
     retire_handle([old_image,old_memory,old_views,old_fbs]{for(auto f:old_fbs)vkDestroyFramebuffer(cfg.device,f,nullptr);for(auto v:old_views)vkDestroyImageView(cfg.device,v,nullptr);vkDestroyImage(cfg.device,old_image,nullptr);vkFreeMemory(cfg.device,old_memory,nullptr);});
     im.image=image;im.memory=memory;im.create=ci;im.mutable_format=true;im.layout=VK_IMAGE_LAYOUT_GENERAL;
-    ++memo_epoch;img_cache.clear();++mutable_upgrades;last_pass_reset();
+    ++memo_epoch;img_cache_clear();++mutable_upgrades;last_pass_reset();
     xbg_logf("NVN mutable upgrade serial=%llu fmt=%d %ux%ux%u levels=%u layers=%u copied=%d total=%llu",(unsigned long long)im.source.serial,int(im.fmt),im.width,im.height,im.depth,im.levels,im.layers,int(copied),(unsigned long long)mutable_upgrades);
 }
 struct DescMemo{const LayoutEntry *entry;VkDescriptorSet set;VkPipelineLayout pipeline_layout;std::vector<uint32_t> dynamic_offsets;std::vector<MemoImage> images;struct Dyn{uint64_t order;VkBuffer buffer;uint32_t offset;bool uniform;uint8_t src=0,ns=0,bank=0;};std::vector<Dyn> dyn;bool persistent=false;std::vector<std::pair<uint64_t,const void*>> tex_ids;struct Stor{uint64_t base,bytes;VkBuffer buffer;VkDeviceSize offset;};std::vector<Stor> stor;
@@ -2916,7 +3161,7 @@ unsigned dyn_mode_for(bool compute,bool *no_ubo=nullptr){unsigned all=0,vary=0;
 void memo_unpin_all(unsigned si){Slot &s=slots[si];for(auto &pn:memo_pinned[si])s.used_sets[pn.second.layout].push_back(pn.first);memo_pinned[si].clear();desc_memo_slot[si].clear();desc_memo_local[si]=0;++memo_mod_gen;}
 void memo_check_epoch(){unsigned si=slot_index;if(memo_slot_epoch[si]!=memo_epoch || memo_pinned[si].size()>8192){if(!desc_memo_slot[si].empty())++xmemo_drops;memo_unpin_all(si);memo_slot_epoch[si]=memo_epoch;}}
 // End of a submit for the recording slot: frame-local entries go (their snapshots are per submit); persistent ones stay.
-void desc_memo_reset(){img_cache.clear();
+void desc_memo_reset(){img_cache_clear();
     if(!xmemo_enabled){memo_unpin_all(slot_index);return;}
     // Sweep only when the slot holds frame-local entries: walking its ~600-800 persistent entries every submission to find
     // none was ~1% of the D2R camp's render thread on the Redmi K50 Ultra.
@@ -2971,15 +3216,105 @@ void texel_evict(unsigned si,bool all){
     for(auto it=map.begin();it!=map.end();){if(all || it->second.used+128<slot_serial){vkDestroyBufferView(cfg.device,it->second.view,nullptr);texel_hole_bytes[si]+=it->first.bytes;texel_live_bytes[si]-=it->first.bytes;it=map.erase(it);++texel_evictions;}else ++it;}
     if(all || texel_hole_bytes[si]>8ull*1024*1024){for(auto &e:map)vkDestroyBufferView(cfg.device,e.second.view,nullptr);map.clear();texel_arena[si].release();texel_hole_bytes[si]=texel_live_bytes[si]=0;}
 }
+// Only immutable/read-only descriptors with a complete dependency list qualify. The
+// command slot owns all buffers/sets until its fence. A registry change, retirement,
+// submission or in-stream write invalidates the entry before any saved pointer is read.
+struct WholeSet {
+    const Descriptors *source=nullptr;
+    XbgWholeSetStamp stamp;
+    std::vector<XbgWholeSetRevision> refs;
+    std::vector<MemoImage> images;
+} whole_set;
+
+XbgWholeSetStamp whole_set_stamp(){
+    XbgWholeSetStamp s;
+    std::copy_n(buf_gen,6,s.buffers.begin());
+    std::copy_n(tex_gen,6,s.textures.begin());
+    std::copy_n(state.shader,5,s.shaders.begin());
+    const auto &t=state.texture_pool,&a=state.sampler_pool;
+    s.pools={t.pool?uint64_t(uintptr_t(t.pool->mem)):0,uint64_t(t.off),uint64_t(t.n),
+             a.pool?uint64_t(uintptr_t(a.pool->mem)):0,uint64_t(a.off),uint64_t(a.n)};
+    s.frame=stats.presents.load();s.submit=snapshot_epoch;s.arena=whole_set_arena;
+    s.writes=whole_set_writes;s.samplers=memo_epoch.load();s.registrations=memo_check_gen;
+    s.images=images_epoch;s.width=state.viewport.width;s.height=state.viewport.height;s.alpha=state.color.alpha_func;
+    return s;
+}
+
+bool whole_set_restore(Descriptors &out,Commands &commands){
+    if(!whole_set.source || !pending_writebacks.empty() || !pending_reports.empty() ||
+       !xbg_whole_set_valid(whole_set.stamp,whole_set_stamp(),whole_set.refs))return false;
+    // Mirror get_image's already-checked-in-this-submission case only. No pending
+    // CPU writebacks/reports can overlap the read. Any upload, hash check or
+    // ambiguous state must take the original path before issuing a barrier.
+    for(const auto &i:whole_set.images){
+        if(i.second->checked_submission!=stats.submissions ||
+           !(i.second->uploaded || i.second->gpu_written))return false;
+    }
+    for(const auto &i:whole_set.images){
+        i.second->slot_use=slot_serial;
+        prepare_read(*i.second,commands.command);
+    }
+    const Descriptors &prior=*whole_set.source;
+    out.entry=prior.entry;out.pipeline_layout=prior.pipeline_layout;out.set=prior.set;
+    out.dynamic_offsets=prior.dynamic_offsets;
+    out.buffers.reserve(40); // draw() appends at most 16 vertex and one index view
+    return true;
+}
+
+void whole_set_remember(const Descriptors &out,const std::vector<MemoImage> &images){
+    if(!out.set || !out.written.empty() || !out.storage.empty() || !out.buffer_views.empty() ||
+       !pending_writebacks.empty() || !pending_reports.empty())return;
+    auto &cache=whole_set;
+    cache.refs.clear();
+    size_t sampled=0;
+    for(unsigned st=0;st<5;++st){
+        const Shader *shader=state.shader[st];
+        if(!shader)continue;
+        for(const auto &b:shader->bindings){
+            if(b.type==VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE || b.type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER){
+                sampled+=b.count;
+                continue;
+            }
+            if(b.type!=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)return;
+            if(b.source==XBG_SOURCE_SUPPORT || b.source==XBG_SOURCE_DRIVER0 ||
+               b.source==XBG_SOURCE_DRIVER2 || b.source==XBG_SOURCE_C1)continue;
+            // Guest UBOs can change in place without a Bind or an in-stream write.
+            // A snapshot front tag identifies an allocation, not a guest content
+            // revision. Preserve the normal UBO snapshot path for every such draw.
+            return;
+        }
+    }
+    if(sampled!=images.size())return; // unknown or untracked descriptor source
+    for(const auto &i:images){
+        cache.refs.push_back({&i.record->revision,i.revision});
+        cache.refs.push_back({&i.second->last_write,i.second->last_write});
+        cache.refs.push_back({&i.second->cpu_hash,i.second->cpu_hash});
+    }
+    cache.images=images;cache.stamp=whole_set_stamp();cache.source=&out;
+}
+
 void descriptors(Descriptors &out,Commands &commands,bool compute){
     need(!read_preflight || (pending_writebacks.empty() && pending_reports.empty()),"Unresolved CPU reads at descriptor entry");
+    const bool whole=whole_set_enabled && !compute && !capture.active && !provenance_file && g_ui_moff==0;
+    if(whole_set_enabled){
+#ifdef DM_H12_MEASURE
+        if(!compute && descriptor_detail && timing_active)++whole_set_attempts;
+#endif
+        if(whole && whole_set_restore(out,commands)){
+#ifdef DM_H12_MEASURE
+            if(descriptor_detail && timing_active)++whole_set_hits;
+#endif
+            return;
+        }
+        whole_set.source=nullptr;
+    }
     uint64_t tm0=perf_clock();struct MemoClock{uint64_t t0;~MemoClock(){}} mc{tm0};
     static std::vector<uint64_t> key;key.clear();static std::vector<uint8_t> ktag;ktag.clear();
     // ktag (which part of the key each word is) only feeds the keydiff census, so it is filled on timed frames only (one in
     // perf_sample); a miss without tags skips the census. A/B target ktag tags every frame again.
     const bool tags=timing_now()!=nullptr || ab_off("ktag");
     bool ok=desc_memo_enabled && !compute && !capture.active && !provenance_file && g_ui_moff==0;
-    if(ok){CPU_SCOPE(Descriptor);
+    if(ok){CPU_SCOPE(Descriptor);DescriptorRoot descriptor_measurement(&cpu_scope);DESC_SCOPE(MemoKeyAndCheck);
         static std::vector<DynUbo> dyn_ubos;dyn_ubos.clear();
         bool no_ubo=false;const unsigned dmode=dyn_mode_for(false,&no_ubo);memo_dyn_ok=dmode!=0 || no_ubo;
         for(unsigned st=0;st<5;st++){key.push_back(uint64_t(uintptr_t(state.shader[st])));if(tags)ktag.push_back(0);}
@@ -3008,13 +3343,15 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
                 if(!ok)break;
             }}
         if(ok){memo_check_epoch();auto hit=desc_memo.end();
+            {DESC_SCOPE(MemoLookup);
             if(memo_front_gen==memo_mod_gen && memo_front_slot==slot_index && !ab_off("memofront") && memo_front_key==key){hit=memo_front_it;++memo_front_hits;}
             else{hit=desc_memo.find(key);if(hit!=desc_memo.end()){memo_front_key=key;memo_front_it=hit;memo_front_gen=memo_mod_gen;memo_front_slot=slot_index;}}
+            }
             if(hit==desc_memo.end() && ktag.size()==key.size()){   // diagnostic: which key part differs from the last key of the same shaders
                 static std::unordered_map<std::vector<uint64_t>,std::vector<uint64_t>,SetKeyHash> last;std::vector<uint64_t> pre(key.begin(),key.begin()+5);
                 auto &prev=last[pre];if(prev.size()==key.size()){bool any=false;for(size_t i=0;i<key.size();i++)if(prev[i]!=key[i]){++key_diff[ktag[i]<12?ktag[i]:11];any=true;}if(!any)++key_diff[11];}else ++key_diff[prev.empty()?12:13];
                 prev=key;}
-            if(hit!=desc_memo.end()){DescMemo &m=hit->second;
+            if(hit!=desc_memo.end()){DESC_SCOPE(MemoRefresh);DescMemo &m=hit->second;
                 static std::vector<std::pair<uint64_t,Buffer>> fresh;fresh.clear();
                 for(auto &u:dyn_ubos)fresh.push_back({u.order,uniform_snapshot(u.address,u.copy)});
                 std::sort(fresh.begin(),fresh.end(),[](const std::pair<uint64_t,Buffer> &a,const std::pair<uint64_t,Buffer> &b){return a.first<b.first;});
@@ -3053,7 +3390,7 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
                 // 命中也走既有按 submit 节流的 CPU 内容复核，不强制重传。
                 // Hits retain get_image's bounded per-submit CPU checks, without forcing uploads.
                 for(auto &ti:m.images){Image &im=get_image(ti.first,true);prepare_read(im,commands.command);}
-                out.entry=m.entry;out.set=m.set;out.pipeline_layout=m.pipeline_layout;out.dynamic_offsets=offsets;++desc_memo_hits;if(m.persistent)++xmemo_hits;desc_ns[5]+=perf_clock()-tm0;return;}
+                out.entry=m.entry;out.set=m.set;out.pipeline_layout=m.pipeline_layout;out.dynamic_offsets=offsets;if(whole)whole_set_remember(out,m.images);++desc_memo_hits;if(m.persistent)++xmemo_hits;desc_ns[5]+=perf_clock()-tm0;return;}
                 ++desc_memo_why[3];
                 if(m.persistent){auto pin=memo_pinned[slot_index].find(m.set);if(pin!=memo_pinned[slot_index].end() && --pin->second.refs==0){slots[slot_index].used_sets[pin->second.layout].push_back(m.set);memo_pinned[slot_index].erase(pin);}}
                 if(!m.persistent && desc_memo_local[slot_index])--desc_memo_local[slot_index];desc_memo.erase(hit);++memo_mod_gen;}}
@@ -3065,6 +3402,7 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
     if(ok && desc_memo_texel_fail){ok=false;++desc_memo_why[0];}
     if(ok && !(out.written.empty() && out.buffer_views.empty() && out.set && out.dynamic_offsets.size()==desc_memo_dyn.size()))++desc_memo_why[4];
     if(ok && out.written.empty() && out.buffer_views.empty() && out.set && out.dynamic_offsets.size()==desc_memo_dyn.size()){++desc_memo_misses;
+        if(whole)whole_set_remember(out,desc_memo_images);
         std::sort(desc_memo_dyn.begin(),desc_memo_dyn.end(),[](const DescMemo::Dyn &a,const DescMemo::Dyn &b){return a.order<b.order;});
         DescMemo dm{out.entry,out.set,out.pipeline_layout,out.dynamic_offsets,desc_memo_images,desc_memo_dyn};dm.texel=desc_memo_texel;
         {size_t elements=0;for(unsigned st=0;st<5;st++)if(state.shader[st])for(auto &b:state.shader[st]->bindings)elements+=b.count;dm.reserve=elements*2+40;}
@@ -3078,6 +3416,7 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
         bool local=!dm.persistent;if(desc_memo.emplace(key,std::move(dm)).second && local)++desc_memo_local[slot_index];++memo_mod_gen;}
 }
 void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCOPE(Descriptor);DescriptorRoot descriptor_measurement(&cpu_scope);
+
     // Uniform buffers use dynamic offsets (when the set fits the device limit) so per-draw constants do not change set contents.
     const unsigned dmode=dyn_mode_for(compute);
     // Aliased NVN storage ranges must refer to the same VkBuffer allocation.
@@ -3116,7 +3455,7 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
     out.entry=entry;out.pipeline_layout=entry->pipeline_layout;
     }
     static std::vector<VkDescriptorBufferInfo> buffer_infos;static std::vector<VkDescriptorImageInfo> image_infos;static std::vector<VkBufferView> texel_views;static std::vector<VkWriteDescriptorSet> writes;static std::vector<std::pair<uint64_t,uint32_t>> dynamic_list;static std::vector<uint64_t> set_key;
-    {size_t elements=0;for(unsigned st=0;st<6;st++)if(state.shader[st] && (st==5)==compute)for(auto &b:state.shader[st]->bindings)elements+=b.count;
+    {DESC_SCOPE(VectorPrepare);size_t elements=0;for(unsigned st=0;st<6;st++)if(state.shader[st] && (st==5)==compute)for(auto &b:state.shader[st]->bindings)elements+=b.count;
      buffer_infos.clear();image_infos.clear();texel_views.clear();writes.clear();dynamic_list.clear();buffer_infos.reserve(elements);image_infos.reserve(elements);texel_views.reserve(elements);writes.reserve(elements);}
     for(unsigned st=0;st<6;st++)if(state.shader[st] && (st==5)==compute){Shader &shader=*state.shader[st];unsigned ns=nvn_stage[st];
         for(auto &b:shader.bindings)for(unsigned element=0;element<b.count;element++){DESC_SCOPE(ElementRest);
@@ -3143,9 +3482,12 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
                 need(n && n<=size_t(is_storage?properties.limits.maxStorageBufferRange:properties.limits.maxUniformBufferRange),"Descriptor range exceeds device limit");
                 if(write.descriptorType==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC){buffer_infos.push_back({buffer->buffer,0,n});if(desc_memo_recording)desc_memo_dyn.push_back({(uint64_t(b.binding)<<32)|element,buffer->buffer,uint32_t(buffer->offset+buffer_offset),b.source==XBG_SOURCE_UNIFORM,uint8_t(b.source),uint8_t(ns),uint8_t(b.source==XBG_SOURCE_DRIVER0?0:1)});dynamic_list.push_back({(uint64_t(b.binding)<<32)|element,uint32_t(buffer->offset+buffer_offset)});}
                 else buffer_infos.push_back({buffer->buffer,buffer->offset+buffer_offset,n});write.pBufferInfo=&buffer_infos.back();
+                if(descriptor_detail){DESC_SCOPE(Audit);buffer_repeat.observe({uint64_t(out.entry->layout),uint64_t(st),uint64_t(b.binding),uint64_t(element)},{uint64_t(buffer->buffer),uint64_t(buffer->offset+buffer_offset),uint64_t(n),uint64_t(write.descriptorType)},descriptor_ordinal);}
                 if(capture.active){char label[100];snprintf(label,sizeof(label),"st%u-bind%u-el%u-buffer",st,b.binding,element);capture_log("BUFFER label=%s shader=%s nvnStage=%u sourceKind=%u slot=%u guest=%p copied=%zu descriptorBytes=%zu bufferOffset=%zu",label,shader.key.c_str(),ns,b.source,slot,data,copy,n,buffer_offset);capture_data(label,static_cast<const uint8_t*>(buffer->mapped)+buffer_offset,n);}
             }else{
                 DESC_SCOPE(ImageLookup);
+                if(descriptor_detail){DESC_SCOPE(Audit);unsigned ai=b.slot+element;
+                    if(ai<(b.source==XBG_SOURCE_IMAGE?16u:128u)){uint64_t ah=b.source==XBG_SOURCE_IMAGE?state.img[ns][ai]:state.tex[ns][ai];image_input_repeat.observe({uint64_t(out.entry->layout),uint64_t(st),uint64_t(b.binding),uint64_t(element)},{ah,b.sampler_slot<128?state.samp[ns][b.sampler_slot]:ah,state.texture_pool.pool?uint64_t(uintptr_t(state.texture_pool.pool->mem)):0,uint64_t(state.texture_pool.off),state.sampler_pool.pool?uint64_t(uintptr_t(state.sampler_pool.pool->mem)):0,uint64_t(state.sampler_pool.off),uint64_t(state.texture_pool.n),uint64_t(b.type)|(uint64_t(b.flags)<<32)},descriptor_ordinal);}}
                 bool img_fast=false,img_cacheable=false;ImgKey ikey{};
                 if(img_cache_enabled && !capture.active && !provenance_file && b.source==XBG_SOURCE_TEXTURE && (b.type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER || b.type==VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) && b.slot+element<128 && state.texture_pool.pool
                    && (b.sampler_slot==UINT32_MAX || b.sampler_slot<128)){
@@ -3153,14 +3495,17 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
                     if(id!=0 && !(state.texture_pool.n>0 && id>=state.texture_pool.n)){
                         uint64_t sh=b.type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER?(b.sampler_slot!=UINT32_MAX?state.samp[ns][b.sampler_slot]:handle):0;
                         ikey={handle,sh,uint64_t(uintptr_t(state.texture_pool.pool->mem)),uint64_t(state.texture_pool.off),state.sampler_pool.pool?uint64_t(uintptr_t(state.sampler_pool.pool->mem)):0,uint64_t(state.sampler_pool.off),uint64_t(b.type)|(uint64_t((b.flags>>16)&3)<<8)};img_cacheable=true;
-                        auto it=img_cache.find(ikey);
-                        auto live=it==img_cache.end()?images.end():images.find(it->second.tex->serial);
-                        if(it!=img_cache.end() && it->second.record->revision==it->second.revision &&
-                            live!=images.end() && live->second.get()==it->second.im){Image *im=&get_image(it->second.tex,true);
-                            prepare_read(*im,commands.command);if(desc_memo_recording)desc_memo_images.push_back({it->second.tex,im,it->second.record,it->second.revision});
-                            VkDescriptorImageInfo ii{};ii.imageView=it->second.view;ii.sampler=b.type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER?it->second.sampler:VK_NULL_HANDLE;ii.imageLayout=VK_IMAGE_LAYOUT_GENERAL;
+                        const size_t front_slot=st*128+b.slot+element;
+                        ImgEntry *cached=descriptor_image_front_enabled?descriptor_image_front.find(front_slot,ikey):nullptr;
+                        if(!cached){auto it=img_cache.find(ikey);if(it!=img_cache.end()){
+                            cached=&it->second;if(descriptor_image_front_enabled)descriptor_image_front.put(front_slot,ikey,cached);}}
+                        auto live=cached?images.find(cached->tex->serial):images.end();
+                        if(cached && cached->record->revision==cached->revision &&
+                            live!=images.end() && live->second.get()==cached->im){Image *im=&get_image(cached->tex,true);
+                            prepare_read(*im,commands.command);if(desc_memo_recording)desc_memo_images.push_back({cached->tex,im,cached->record,cached->revision});
+                            VkDescriptorImageInfo ii{};ii.imageView=cached->view;ii.sampler=b.type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER?cached->sampler:VK_NULL_HANDLE;ii.imageLayout=VK_IMAGE_LAYOUT_GENERAL;
                             image_infos.push_back(ii);write.pImageInfo=&image_infos.back();img_fast=true;++img_cache_hits;}
-                        else if(it!=img_cache.end())img_cache.erase(it);
+                        else if(cached){descriptor_image_front.invalidate();img_cache.erase(ikey);}
                     }
                 }
                 if(!img_fast){
@@ -3197,12 +3542,16 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
                 }
                 }
             }
+            if(descriptor_detail && (write.pImageInfo || write.pTexelBufferView)){DESC_SCOPE(Audit);
+                std::array<uint64_t,8> v{};if(write.pImageInfo)v={uint64_t(write.pImageInfo->imageView),uint64_t(write.pImageInfo->sampler),uint64_t(write.pImageInfo->imageLayout),uint64_t(write.descriptorType)};else v={uint64_t(*write.pTexelBufferView),0,0,uint64_t(write.descriptorType)};
+                image_output_repeat.observe({uint64_t(out.entry->layout),uint64_t(st),uint64_t(b.binding),uint64_t(element)},v,descriptor_ordinal);}
             writes.push_back(write);
         }
     }
+    DESC_SCOPE(SetKeyLookup);
     // Dynamic offsets are consumed in binding/array-element order.
     std::sort(dynamic_list.begin(),dynamic_list.end());out.dynamic_offsets.clear();for(auto &d:dynamic_list)out.dynamic_offsets.push_back(d.second);
-    if(!set_cache_enabled){out.set=allocate_set(out.entry->layout);if(writes.empty())return;
+    if(!set_cache_enabled){out.set=DESC_CALL(SetAllocate,allocate_set(out.entry->layout));if(writes.empty())return;
         // Update templates: one driver call with packed payloads instead of parsing VkWriteDescriptorSet per element.
         LayoutEntry &e=*const_cast<LayoutEntry*>(out.entry);static std::vector<uint64_t> sig;sig.clear();
         for(auto &w:writes)sig.push_back((uint64_t(w.dstBinding)<<40)|(uint64_t(w.dstArrayElement)<<8)|uint64_t(w.descriptorType));
@@ -3211,8 +3560,8 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
             if(vkCreateDescriptorUpdateTemplate(cfg.device,&ti,nullptr,&e.tmpl)==VK_SUCCESS)e.tmpl_sig=sig;else e.tmpl=VK_NULL_HANDLE;}
         if(template_enabled && e.tmpl && sig==e.tmpl_sig){static std::vector<DescEntry> data;data.resize(writes.size());
             for(size_t i=0;i<writes.size();i++){auto &w=writes[i];if(w.pBufferInfo)data[i].buffer=*w.pBufferInfo;else if(w.pImageInfo)data[i].image=*w.pImageInfo;else data[i].view=*w.pTexelBufferView;}
-            vkUpdateDescriptorSetWithTemplate(cfg.device,out.set,e.tmpl,data.data());++template_updates;return;}
-        for(auto &w:writes)w.dstSet=out.set;vkUpdateDescriptorSets(cfg.device,uint32_t(writes.size()),writes.data(),0,nullptr);++plain_updates;return;}
+            DESC_CALL(SetUpdate,vkUpdateDescriptorSetWithTemplate(cfg.device,out.set,e.tmpl,data.data()));++template_updates;return;}
+        for(auto &w:writes)w.dstSet=out.set;DESC_CALL(SetUpdate,vkUpdateDescriptorSets(cfg.device,uint32_t(writes.size()),writes.data(),0,nullptr));++plain_updates;return;}
     uint64_t tk0=perf_clock();
     set_key.clear();set_key.push_back(uint64_t(out.entry->layout));
     for(auto &w:writes){set_key.push_back((uint64_t(w.dstBinding)<<32)|w.dstArrayElement);set_key.push_back(w.descriptorType);
@@ -3221,7 +3570,7 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
         else if(w.pTexelBufferView)set_key.push_back(uint64_t(*w.pTexelBufferView));}
     Slot &slot=recording_slot();bool use_cache=true;auto hit=use_cache?slot.set_cache.find(set_key):slot.set_cache.end();desc_ns[3]+=perf_clock()-tk0;
     if(hit!=slot.set_cache.end()){out.set=hit->second;++set_cache_hits;return;}
-    {uint64_t t0=perf_clock();out.set=allocate_set(out.entry->layout);desc_ns[2]+=perf_clock()-t0;}++set_cache_misses;
+    {uint64_t t0=perf_clock();out.set=DESC_CALL(SetAllocate,allocate_set(out.entry->layout));desc_ns[2]+=perf_clock()-t0;}++set_cache_misses;
     if(!writes.empty()){LayoutEntry &e=*const_cast<LayoutEntry*>(out.entry);static std::vector<uint64_t> sig2;sig2.clear();
         for(auto &w:writes)sig2.push_back((uint64_t(w.dstBinding)<<40)|(uint64_t(w.dstArrayElement)<<8)|uint64_t(w.descriptorType));
         if(!e.tmpl){std::vector<VkDescriptorUpdateTemplateEntry> entries;for(size_t i=0;i<writes.size();i++)entries.push_back({writes[i].dstBinding,writes[i].dstArrayElement,1,writes[i].descriptorType,i*sizeof(DescEntry),sizeof(DescEntry)});
@@ -3229,9 +3578,9 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
             if(vkCreateDescriptorUpdateTemplate(cfg.device,&ti,nullptr,&e.tmpl)==VK_SUCCESS)e.tmpl_sig=sig2;else e.tmpl=VK_NULL_HANDLE;}
         if(e.tmpl && sig2==e.tmpl_sig){static std::vector<DescEntry> data;data.resize(writes.size());
             for(size_t i=0;i<writes.size();i++){auto &w=writes[i];if(w.pBufferInfo)data[i].buffer=*w.pBufferInfo;else if(w.pImageInfo)data[i].image=*w.pImageInfo;else data[i].view=*w.pTexelBufferView;}
-            {uint64_t t0=perf_clock();vkUpdateDescriptorSetWithTemplate(cfg.device,out.set,e.tmpl,data.data());desc_ns[1]+=perf_clock()-t0;}++template_updates;}
-        else{for(auto &w:writes)w.dstSet=out.set;vkUpdateDescriptorSets(cfg.device,uint32_t(writes.size()),writes.data(),0,nullptr);++plain_updates;}}
-    if(use_cache)slot.set_cache.emplace(set_key,out.set);
+            {uint64_t t0=perf_clock();DESC_CALL(SetUpdate,vkUpdateDescriptorSetWithTemplate(cfg.device,out.set,e.tmpl,data.data()));desc_ns[1]+=perf_clock()-t0;}++template_updates;}
+        else{for(auto &w:writes)w.dstSet=out.set;DESC_CALL(SetUpdate,vkUpdateDescriptorSets(cfg.device,uint32_t(writes.size()),writes.data(),0,nullptr));++plain_updates;}}
+    if(use_cache){DESC_SCOPE(SetInsert);slot.set_cache.emplace(set_key,out.set);}
 }
 // Render passes are cached by their full definition; framebuffers are cached
 // per frame slot (they reference image views of possibly released images).
@@ -3250,10 +3599,14 @@ uint64_t noload_passes=0;bool noload_enabled=false;
 // noload: the same pass with every color loadOp DONT_CARE (noload_enabled; first_draw_covers). Only load ops differ, so it is
 // compatible with pass and its pipelines and framebuffers.
 struct RenderPassEntry {VkRenderPass pass{},noload{};PipelineDefinition definition;};
+// Explicit full clears only. Keep the ordinary pass as the pipeline/framebuffer
+// identity: load/store operations do not affect Vulkan render-pass compatibility.
+struct LoadClearPass {VkClearAttachment clear{};VkRenderPass pass{};VkClearValue values[9]{};uint32_t count=0;};
+bool load_clear_enabled=true;uint64_t load_clear_passes=0;
 std::map<std::vector<uint32_t>,RenderPassEntry> render_pass_cache;
 void clear_render_pass_cache(){for(auto &r:render_pass_cache){vkDestroyRenderPass(cfg.device,r.second.pass,nullptr);if(r.second.noload)vkDestroyRenderPass(cfg.device,r.second.noload,nullptr);}render_pass_cache.clear();pipeline_fast.clear();pipe_memo_valid=false;}
-bool create_pass(Pass &p,Commands &c,int clear_color=-1,bool clear_depth=false,bool soft=false){CPU_SCOPE(Pass);
-    const bool plain_draw=c.draw && clear_color<0 && !clear_depth && !soft && !provenance_file && !capture.active && !ab_off("passfast");
+bool create_pass(Pass &p,Commands &c,int clear_color=-1,bool clear_depth=false,bool soft=false,LoadClearPass *load_clear=nullptr){CPU_SCOPE(Pass);
+    const bool plain_draw=c.draw && !load_clear && clear_color<0 && !clear_depth && !soft && !provenance_file && !capture.active && !ab_off("passfast");
     if(plain_draw && last_pass.valid && open_pass.cmd==c.command && open_pass.pass==last_pass.pass.pass && open_pass.framebuffer==last_pass.pass.framebuffer && !memcmp(&state.rt,&last_pass.rt,sizeof state.rt)){
         p=last_pass.pass;for(auto *im:p.images){im->last_write=++write_seq;im->gpu_written=true;}++pass_fast_hits;return true;}
     // 仅显式设置DM_VK_TRACE_ATTACHMENTS=1时输出成功诊断；首次调用读取，错误始终记录。
@@ -3316,6 +3669,38 @@ bool create_pass(Pass &p,Commands &c,int clear_color=-1,bool clear_depth=false,b
     if(cached!=cache.end()){p.framebuffer=cached->second;++fb_hits;}
     else{VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fb.renderPass=p.pass;fb.attachmentCount=views.size();fb.pAttachments=views.data();fb.width=p.width;fb.height=p.height;fb.layers=1;VK(vkCreateFramebuffer(cfg.device,&fb,nullptr,&p.framebuffer));cache.emplace(fb_key,p.framebuffer);++fb_creates;
         if(persistent)for(auto *im:p.images)im->fb_keys.push_back(fb_key);}
+    if(load_clear && load_clear_enabled && !ab_off("loadclear")){
+        const auto &a=load_clear->clear;
+        const bool is_color=(a.aspectMask&VK_IMAGE_ASPECT_COLOR_BIT)!=0;
+        const unsigned target=is_color?a.colorAttachment:8;
+        const uint32_t index=is_color?(target<colors.size()?colors[target].attachment:VK_ATTACHMENT_UNUSED):depth.attachment;
+        VkRect2D rect{};
+        const bool new_pass=open_pass.cmd!=c.command || open_pass.pass!=p.pass || open_pass.framebuffer!=p.framebuffer;
+        bool unique_target=true;if(index<p.images.size())for(uint32_t j=0;j<p.images.size();++j)if(j!=index && p.images[j]==p.images[index])unique_target=false;
+        if(unique_target && target<9 && targets[target] && index<descriptions.size() &&
+           xbg_clear_rectangle(p.width,p.height,state.scissor.offset.x,state.scissor.offset.y,state.scissor.extent.width,state.scissor.extent.height,&rect)==0){
+            const auto &extent=extents[target];
+            const unsigned aw=extent.base_level<32?std::max(1u,extent.width>>extent.base_level):0;
+            const unsigned ah=extent.base_level<32?std::max(1u,extent.height>>extent.base_level):0;
+            const unsigned aspects=xbg_load_clear_aspects(new_pass,false,p.images[index]->aspects,a.aspectMask,p.width,p.height,aw,ah,rect.offset.x,rect.offset.y,rect.extent.width,rect.extent.height);
+            if(aspects){
+                // Change only the explicitly cleared aspect. In particular a
+                // depth-only clear keeps stencil LOAD, and vice versa. Every
+                // store op, dependency, format, sample count and view is intact.
+                auto clear_descriptions=descriptions;
+                if(aspects&(VK_IMAGE_ASPECT_COLOR_BIT|VK_IMAGE_ASPECT_DEPTH_BIT))clear_descriptions[index].loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;
+                if(aspects&VK_IMAGE_ASPECT_STENCIL_BIT)clear_descriptions[index].stencilLoadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;
+                VkRenderPassCreateInfo clear_rp=rp;clear_rp.pAttachments=clear_descriptions.data();
+                XbgPipelineKey clear_key;
+                if(xbg_renderpass_key(clear_key,clear_rp) && clear_key.valid){
+                    std::vector<uint32_t> words(clear_key.words,clear_key.words+clear_key.count);
+                    auto it=render_pass_cache.find(words);
+                    if(it==render_pass_cache.end()){RenderPassEntry e;VK(vkCreateRenderPass(cfg.device,&clear_rp,nullptr,&e.pass));e.definition.assign(clear_key,true);it=render_pass_cache.emplace(std::move(words),std::move(e)).first;}
+                    load_clear->pass=it->second.pass;load_clear->values[index]=a.clearValue;load_clear->count=index+1;
+                }
+            }
+        }
+    }
     if(plain_draw && persistent){last_pass.rt=state.rt;last_pass.pass=p;last_pass.valid=true;}else last_pass.valid=false;
     return true;
 }
@@ -3343,7 +3728,9 @@ void pass_prof_draw(VkCommandBuffer cmd){Slot &s=slots[slot_index];if(!s.prof ||
 int pass_prof_compute_begin(VkCommandBuffer cmd,const p_dispatch &p){int index=pass_prof_reserve(cmd);if(index<0)return index;
     auto &r=slots[slot_index].prof_recs[index];r.compute=true;r.first=state.shader[5]->key;r.last=r.first;r.x=uint32_t(p.x);r.y=uint32_t(p.y);r.z=uint32_t(p.z);return index;
 }
-void begin_pass(Pass &p,Commands &c){pass_prof_begin(p,c.command);VkRenderPassBeginInfo b{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};b.renderPass=p.pass;b.framebuffer=p.framebuffer;b.renderArea.extent={p.width,p.height};vkCmdBeginRenderPass(c.command,&b,VK_SUBPASS_CONTENTS_INLINE);}
+void begin_pass(Pass &p,Commands &c,const LoadClearPass *clear=nullptr){pass_prof_begin(p,c.command);VkRenderPassBeginInfo b{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};b.renderPass=p.pass;b.framebuffer=p.framebuffer;b.renderArea.extent={p.width,p.height};
+    if(clear && clear->pass){b.renderPass=clear->pass;b.clearValueCount=clear->count;b.pClearValues=clear->values;++load_clear_passes;}
+    vkCmdBeginRenderPass(c.command,&b,VK_SUBPASS_CONTENTS_INLINE);}
 void capture_pass(Pass &pass){
     if(!capture.active)return;
     capture_log("PASS width=%u height=%u samples=%u viewport=%g,%g,%g,%g scissor=%d,%d,%u,%u mask=%#x blendEnable=%#x cull=%u front=%u depthTest=%u depthWrite=%u depthFunc=%u stencil=%u",pass.width,pass.height,unsigned(pass.samples),state.viewport.x,state.viewport.y,state.viewport.width,state.viewport.height,state.scissor.offset.x,state.scissor.offset.y,state.scissor.extent.width,state.scissor.extent.height,state.mask.mask,state.color.blend_en,state.poly.cull,state.poly.front,unsigned(state.ds.dt),unsigned(state.ds.dw),unsigned(state.ds.df),unsigned(state.ds.st));
@@ -3445,7 +3832,7 @@ bool ui_cover_all(double hf){
         x0=std::min(x0,nx);x1=std::max(x1,nx);y0=std::min(y0,ny);y1=std::max(y1,ny);}
     return x0<0.002f && x1>0.998f && y0<0.002f && std::fabs(y1-float(hf))<0.002f;
 }
-void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instances=1,uint32_t first_instance=0){preflight_cpu_reads();CPU_SCOPE(Draw);DrawRoot draw_timing_root(&cpu_scope);provenance_draw();
+void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instances=1,uint32_t first_instance=0){preflight_cpu_reads();CPU_SCOPE(Draw);DrawRoot draw_timing_root(&cpu_scope);DRAW_SCOPE(StateBuild);if(descriptor_detail)++descriptor_ordinal;provenance_draw();
     need(state.rt.n>=0 && state.rt.n<=8,"Invalid draw color target count");
     VkShaderModule modules[5]{};for(unsigned i=0;i<5;i++)if(state.shader[i])modules[i]=state.shader[i]->module;
     uint32_t active_colors=0;for(int i=0;i<state.rt.n;i++)if(state.rt.color[i])active_colors|=1u<<i;
@@ -3537,9 +3924,11 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     // Buffer copies precede the draw; original guest layout remains unchanged.
     static std::vector<std::pair<uint32_t,Buffer*>> vertex_buffers;vertex_buffers.clear();
     Buffer *ib=nullptr;VkIndexType index_type=VK_INDEX_TYPE_UINT16;
+    draw_scope.finish();
     {DRAW_SCOPE(VertexPrepare);for(auto &b:bindings){if(int(b.binding)==zero_binding){const uint32_t zero[4]={0};vertex_buffers.push_back({b.binding,d.keep(stream_buffer(sizeof(zero),zero,sizeof(zero)))});continue;}auto r=state.vb[b.binding];need(r.address && r.size,"Unbound vertex buffer");snap_site=1;vertex_buffers.push_back({b.binding,d.keep(snapshot(r.address,r.size))});snap_site=0;}
     if(indexed){need(indexed->itype>=0 && indexed->itype<=2 && indexed->instances>0 && indexed->base_instance>=0,"Invalid indexed draw");size_t bytes=size_t(count)*(1u<<indexed->itype);need(indexed->ibuf,"Unbound index buffer");if(indexed->itype==0){if(draw_detail)draw_timing.index(uint64_t(count));std::vector<uint16_t> expanded(count);const uint8_t *src=reinterpret_cast<const uint8_t*>(indexed->ibuf);for(int i=0;i<count;i++)expanded[i]=src[i];ib=d.keep(stream_buffer(expanded.size()*2,expanded.data(),expanded.size()*2));}else{index_type=indexed->itype==1?VK_INDEX_TYPE_UINT16:VK_INDEX_TYPE_UINT32;snap_site=2;ib=indexed==&quad_indexed?d.keep(stream_buffer(bytes,reinterpret_cast<void*>(indexed->ibuf),bytes)):d.keep(snapshot(uint64_t(indexed->ibuf),bytes));snap_site=0;}}
     } // VertexPrepare excludes capture, recording and storage writeback.
+    H11DrawTiming::Scope record_scope(draw_detail?&draw_timing:nullptr,(draw_detail || !tls_gate)?draw_root:nullptr,H11DrawTiming::Record);
     if(capture.active){for(auto &v:vertex_buffers){char label[40];snprintf(label,sizeof(label),"vertex-stream%u",v.first);capture_log("VERTEX label=%s guest=%#llx bytes=%zu",label,(unsigned long long)state.vb[v.first].address,v.second->size);capture_data(label,v.second->mapped,v.second->size);}if(ib){capture_log("INDEX guest=%#llx vkType=%u bytes=%zu",(unsigned long long)indexed->ibuf,unsigned(index_type),ib->size);capture_data("index",ib->mapped,ib->size);}for(auto &input:d.capture_inputs)for(auto *output:p.images)if(input.image==output)capture_log("FEEDBACK input=%s serial=%llu",input.label.c_str(),(unsigned long long)output->source.serial);}
     VkQueryPool occlusion{};uint32_t occlusion_index=0;const bool counting=state.count_samples && !no_occlusion_queries && !ab_off("occ");
     const bool new_run=counting && (!occlusion_batch_enabled || ab_off("query") || !open_occlusion.cmd || open_pass.cmd!=c.command || open_pass.pass!=p.pass || open_pass.framebuffer!=p.framebuffer);
@@ -3583,6 +3972,7 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     if(indexed){if(bc.ib!=ib->buffer || bc.ibo!=ib->offset || bc.it!=index_type){vkCmdBindIndexBuffer(c.command,ib->buffer,ib->offset,index_type);bc.ib=ib->buffer;bc.ibo=ib->offset;bc.it=index_type;}else ++binds_skipped;vkCmdDrawIndexed(c.command,count,indexed->instances,0,indexed->base_vertex,indexed->base_instance);}else vkCmdDraw(c.command,count,instances,first,first_instance);
     if(!occlusion_batch_enabled)end_occlusion_query();c.finish();++perf.draws;++pass_prof_draws;pass_prof_verts+=uint64_t(uint32_t(count))*instances;
     if(d.needs_writeback() || capture.active){unsigned saved=cur_op;cur_op=62;end_open_pass();full_barrier(c.command);cur_op=saved;VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;barrier.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(c.command,VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&barrier,0,nullptr,0,nullptr);}
+    record_scope.finish();
     {DRAW_SCOPE(Writeback);if(capture.active){if(d.needs_writeback())gpu_sync(perf.sync_writeback);d.writeback();}else d.defer_writeback();}stats.draws.fetch_add(1,std::memory_order_relaxed);   // diagnostics only: a seq_cst add (LDADDAL) waits for every earlier store, ~2.7% of the render thread
     if(capture.active){capture_pass(p);d.capture_read_images();capture.active=false;}
 }
@@ -3679,7 +4069,7 @@ void after_dispatch(Commands &c){
     ++applied;
 }
 }
-void dispatch(const p_dispatch &p){preflight_cpu_reads();CPU_SCOPE(Dispatch);provenance_log("DISPATCH shader=%s",state.shader[5]?state.shader[5]->key.c_str():"null");need(state.shader[5],"Dispatch has no genuine compute shader");need(p.x>=0 && p.y>=0 && p.z>=0,"Negative compute dispatch");if(!p.x||!p.y||!p.z)return;if(pipeguard::skipped(pipeguard::compute_key(state.shader[5]->key)))return;need(uint32_t(p.x)<=properties.limits.maxComputeWorkGroupCount[0] && uint32_t(p.y)<=properties.limits.maxComputeWorkGroupCount[1] && uint32_t(p.z)<=properties.limits.maxComputeWorkGroupCount[2],"Compute dispatch exceeds device limit");Commands c;Descriptors &d=acquire_descriptors();descriptors(d,c,true);VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=state.shader[5]->module;ci.stage.pName="main";ci.layout=d.pipeline_layout;PipelineLease pipeline;{CPU_SCOPE(Pipeline);XbgPipelineKey key;bool cacheable=xbg_compute_pipeline_key(key,ci,d.entry->definition.view());pipeline_lookup(pipeline,key,cacheable,nullptr,&ci);}if(!pipeline.pipeline){c.finish();return;}vkCmdBindPipeline(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline.pipeline);vkCmdBindDescriptorSets(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,d.pipeline_layout,0,1,&d.set,uint32_t(d.dynamic_offsets.size()),d.dynamic_offsets.data());int prof_dispatch=pass_prof_compute_begin(c.command,p);vkCmdDispatch(c.command,p.x,p.y,p.z);pass_prof_complete(c.command,prof_dispatch);bright::after_dispatch(c);VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};b.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(c.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&b,0,nullptr,0,nullptr);c.finish();++perf.dispatches;d.defer_writeback();++stats.dispatches;}
+void dispatch(const p_dispatch &p){preflight_cpu_reads();CPU_SCOPE(Dispatch);if(descriptor_detail)++descriptor_ordinal;provenance_log("DISPATCH shader=%s",state.shader[5]?state.shader[5]->key.c_str():"null");need(state.shader[5],"Dispatch has no genuine compute shader");need(p.x>=0 && p.y>=0 && p.z>=0,"Negative compute dispatch");if(!p.x||!p.y||!p.z)return;if(pipeguard::skipped(pipeguard::compute_key(state.shader[5]->key)))return;need(uint32_t(p.x)<=properties.limits.maxComputeWorkGroupCount[0] && uint32_t(p.y)<=properties.limits.maxComputeWorkGroupCount[1] && uint32_t(p.z)<=properties.limits.maxComputeWorkGroupCount[2],"Compute dispatch exceeds device limit");Commands c;Descriptors &d=acquire_descriptors();descriptors(d,c,true);VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=state.shader[5]->module;ci.stage.pName="main";ci.layout=d.pipeline_layout;PipelineLease pipeline;{CPU_SCOPE(Pipeline);XbgPipelineKey key;bool cacheable=xbg_compute_pipeline_key(key,ci,d.entry->definition.view());pipeline_lookup(pipeline,key,cacheable,nullptr,&ci);}if(!pipeline.pipeline){c.finish();return;}vkCmdBindPipeline(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline.pipeline);vkCmdBindDescriptorSets(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,d.pipeline_layout,0,1,&d.set,uint32_t(d.dynamic_offsets.size()),d.dynamic_offsets.data());int prof_dispatch=pass_prof_compute_begin(c.command,p);vkCmdDispatch(c.command,p.x,p.y,p.z);pass_prof_complete(c.command,prof_dispatch);bright::after_dispatch(c);VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};b.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(c.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&b,0,nullptr,0,nullptr);c.finish();++perf.dispatches;d.defer_writeback();++stats.dispatches;}
 
 struct MaskedClear {
     VkShaderModule vs{},fs{};VkPipelineLayout layout{};VkPipeline pipeline{};
@@ -3730,11 +4120,11 @@ void clear_attachment(const p_clear_color *color,const p_clear_ds *depth,int sca
         uint32_t lvl=tv && tv->set_levels?tv->base_level:0;uint32_t cw=std::max(1u,ti.width>>lvl),ch=std::max(1u,ti.height>>lvl);VkRect2D keep{};
         bool needs_preserve=lvl<ti.levels && xbg_clear_rectangle(cw,ch,state.scissor.offset.x,state.scissor.offset.y,state.scissor.extent.width,state.scissor.extent.height,&keep)==0 && xbg_clear_requires_preserve(ti.levels,ti.layers,cw,ch,&keep,false,ti.aspects,a.aspectMask)!=0;
         if(!needs_preserve || ti.gpu_written || ti.uploaded){
-            Commands c(true);Pass p;
-            if(create_pass(p,c,-1,false,true)){
-                if(open_pass.cmd!=c.command || open_pass.pass!=p.pass || open_pass.framebuffer!=p.framebuffer){end_open_pass();begin_pass(p,c);open_pass.cmd=c.command;open_pass.pass=p.pass;open_pass.framebuffer=p.framebuffer;open_pass.images=p.images;open_pass.depth_attached=state.rt.depth!=nullptr;++perf.passes;}
+            Commands c(true);Pass p;LoadClearPass load_clear;load_clear.clear=a;
+            if(create_pass(p,c,-1,false,true,&load_clear)){
+                if(open_pass.cmd!=c.command || open_pass.pass!=p.pass || open_pass.framebuffer!=p.framebuffer){end_open_pass();begin_pass(p,c,&load_clear);open_pass.cmd=c.command;open_pass.pass=p.pass;open_pass.framebuffer=p.framebuffer;open_pass.images=p.images;open_pass.depth_attached=state.rt.depth!=nullptr;++perf.passes;}
                 if(depth)open_pass.depth_used=true;
-                VkClearRect r{scissor(p),0,1};if(r.rect.extent.width && r.rect.extent.height)vkCmdClearAttachments(c.command,1,&a,1,&r);
+                VkClearRect r{scissor(p),0,1};if(!load_clear.pass && r.rect.extent.width && r.rect.extent.height)vkCmdClearAttachments(c.command,1,&a,1,&r);
                 ++perf.folded_clears;return;
             }
         }
@@ -4226,7 +4616,7 @@ void zero_copy_probe(){
 }
 extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t bytes){
     if(!c || c->size!=sizeof(*c) || !c->physical || !c->device || !c->queue || !c->shader_directory || !c->fence_timeout_ns){if(error&&bytes)snprintf(error,bytes,"Invalid xbg_game_config");return -1;}
-    std::lock_guard<std::recursive_mutex> lock(mutex);if(initialized){if(error&&bytes)snprintf(error,bytes,"Game graphics already initialized");return -1;}
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(initialized){if(error&&bytes)snprintf(error,bytes,"Game graphics already initialized");return -1;}
 #ifdef DM_COMPLETION_WAIT_SELFTEST
     if(const char *test=getenv("DM_GFX_COMPLETION_WAIT_TEST"))if(!strcmp(test,"1")){
         // 隔离测试在资源/线程初始化前只跑一次；失败不准进入游戏，不污染真实 completed。
@@ -4253,6 +4643,19 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
      {FILE *v=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-tex-dirty").c_str(),"rb");tex_dirty=false;if(v){tex_dirty=fgetc(v)!='0';fclose(v);}else if(const char *e=getenv("DM_GFX_TEX_DIRTY"))tex_dirty=atoi(e)!=0;
       xbg_logf("NVN texture checks through the dirty tracker=%d (marker gfx-tex-dirty)",int(tex_dirty));}{FILE *b=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-native-bc").c_str(),"rb");native_bc=false;if(b){native_bc=fgetc(b)!='0';fclose(b);}else if(const char *e=getenv("DM_GFX_NATIVE_BC"))native_bc=atoi(e)!=0;xbg_logf("NVN native BC textures=%d (marker gfx-native-bc)",int(native_bc));}
      {FILE *b=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-noload").c_str(),"rb");noload_enabled=false;if(b){noload_enabled=fgetc(b)!='0';fclose(b);}else if(const char *e=getenv("DM_GFX_NOLOAD"))noload_enabled=atoi(e)!=0;xbg_logf("NVN proven full-overwrite first draws skip the color load=%d (marker gfx-noload; A/B target noload)",int(noload_enabled));}{FILE *q=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-bright").c_str(),"rb");bright::enabled=true;if(q){bright::enabled=fgetc(q)!='0';fclose(q);}else if(const char *e=getenv("DM_GFX_BRIGHT"))bright::enabled=atoi(e)!=0;xbg_logf("NVN 3D brightening=%d (marker gfx-bright; A/B target bright)",int(bright::enabled));}{FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-perf-sample").c_str(),"rb");perf_sample=32;if(m){if(fscanf(m,"%u",&perf_sample)!=1)perf_sample=32;fclose(m);}else if(const char *e=getenv("DM_GFX_PERF_SAMPLE"))perf_sample=unsigned(atoi(e));perf_frame_timed=perf_sample!=0;perf_timed_frames=0;xbg_logf("NVN perf timing every %u frames (marker gfx-perf-sample; 0 = off)",perf_sample);}}
+    const char *whole_env=getenv("DM_GFX_WHOLE_SET");
+    whole_set_enabled=whole_env && strcmp(whole_env,"1")==0;whole_set.source=nullptr;
+    xbg_logf("NVN H12 whole descriptor set=%d",int(whole_set_enabled));
+    {const char *e=getenv("DM_GFX_BC_REUPLOAD_SKIP");bc_reupload=e && !strcmp(e,"1");}
+#ifdef DM_H12_MEASURE
+    bc_measure={};
+    {const char *e=getenv("DM_FRAME_SPLIT");bc_measure.enabled=e && !strcmp(e,"1");}
+    bc_measure.open();
+#endif
+    xbg_logf("NVN H12 BC reupload=%d",int(bc_reupload));
+    descriptor_image_front_enabled=false;if(const char *e=getenv("DM_GFX_IMAGE_FRONT"))descriptor_image_front_enabled=strcmp(e,"1")==0;descriptor_image_front.invalidate();xbg_logf("NVN H11 image lookup front=%d",int(descriptor_image_front_enabled));
+    load_clear_enabled=true;if(const char *e=getenv("DM_GFX_LOAD_CLEAR"))load_clear_enabled=strcmp(e,"0")!=0;load_clear_passes=0;
+    xbg_logf("NVN explicit full load-clear=%d (DM_GFX_LOAD_CLEAR=0 restores attachment clears; A/B target loadclear)",int(load_clear_enabled));
     for(auto &sl:slots)sl=Slot{};slot_index=0;pass_prof_enabled=false;pass_prof_next=300;pass_prof_period=600;pass_prof_until=UINT64_MAX;pass_prof_frame=UINT64_MAX;pass_prof_draws=0;pass_prof_queries=pass_prof_slots=pass_prof_skipped_slots=0;perf=Perf{};for(auto &c:perf_timing_before)c=XbgCpuTiming::Counter{};static_arena.cached=false;support_static.clear();format_property_cache.clear();for(auto &k:format_flat_known)k=false;
     VkPhysicalDeviceShaderDrawParametersFeatures draw_parameters{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES};VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};features.pNext=&draw_parameters;vkGetPhysicalDeviceFeatures2(cfg.physical,&features);if(cfg.enabled_shader_draw_parameters && !draw_parameters.shaderDrawParameters){if(error&&bytes)snprintf(error,bytes,"shaderDrawParameters unsupported");return -1;}
     VkCommandPoolCreateInfo cp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};cp.queueFamilyIndex=cfg.queue_family;cp.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;VkResult r=vkCreateCommandPool(cfg.device,&cp,nullptr,&command_pool);if(r!=VK_SUCCESS){if(error&&bytes)snprintf(error,bytes,"vkCreateCommandPool=%d",r);return r;}
@@ -4290,7 +4693,7 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
       warm::keep_rewritten=shader_reuse!=0;xbg_logf("NVN shader loads take the warm-up's rewritten SPIR-V=%d (marker gfx-shader-reuse; 2 also rewrites and compares)",shader_reuse);}}
     {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');choose_depth_storage(cut==std::string::npos?dir:dir.substr(0,cut));}
     pipeguard::load();xbg_module_id_hook=warm::module_id;{std::string lp=warm::list_path();FILE *nw=fopen((lp.substr(0,lp.find_last_of('/'))+"/gfx-no-warm").c_str(),"rb");warm::enabled=!nw;if(nw)fclose(nw);}warm::start();
-    wtrack::enabled=false;state=State{};state.color.logic_op=3;state.color.alpha_func=8;for(unsigned i=0;i<8;i++)state.blend[i]={i,2,1,2,1,1,1};stats.reset();timing=XbgCpuTiming(timing_clock);pipeline_counts={};pipeline_before={};pipeline_tick=0;timing_active=false;timing_first=timing_last=0;live_profile_used=false;descriptor_detail=false;descriptor_timing=XbgDescriptorTiming{};descriptor_root=nullptr;draw_detail=false;draw_timing=XbgDrawTiming{};draw_root=nullptr;completed=0;last_attachment_trace=UINT64_MAX;sampler_mirror_clamp_enabled=VK_FALSE;failed=false;error_text[0]=0;initialized=true;
+    wtrack::enabled=false;state=State{};state.color.logic_op=3;state.color.alpha_func=8;for(unsigned i=0;i<8;i++)state.blend[i]={i,2,1,2,1,1,1};stats.reset();timing=XbgCpuTiming(timing_clock);pipeline_counts={};pipeline_before={};pipeline_tick=0;timing_active=false;timing_first=timing_last=0;live_profile_used=false;live_not_before_ns=0;live_detail_mask=0;descriptor_detail=false;descriptor_timing=H11DescriptorTiming{};descriptor_root=nullptr;draw_detail=false;draw_timing=H11DrawTiming{};draw_root=nullptr;completed=0;last_attachment_trace=UINT64_MAX;sampler_mirror_clamp_enabled=VK_FALSE;failed=false;error_text[0]=0;initialized=true;
     {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-sync-submit").c_str(),"rb");bool sync_submit=false;if(m){sync_submit=fgetc(m)=='1';fclose(m);}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-async-pool-reset").c_str(),"rb");poolreset::enabled=false;if(w){poolreset::enabled=fgetc(w)!='0';fclose(w);}else if(const char *e=getenv("DM_GFX_ASYNC_POOL_RESET"))poolreset::enabled=atoi(e)!=0;poolreset::start();xbg_logf("NVN async command pool reset=%d (marker gfx-async-pool-reset)",int(poolreset::enabled));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-bindcache").c_str(),"rb");if(w){bind_cache_enabled=false;fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-imgcache").c_str(),"rb");if(w){img_cache_enabled=false;fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-pass-profile").c_str(),"rb");if(w){pass_prof_enabled=true;unsigned long long from=0,period=0,count=0;if(fscanf(w,"%llu %llu %llu",&from,&period,&count)>=2){pass_prof_next=from;pass_prof_period=period?period:1;if(count)pass_prof_until=from+count;}fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-descmemo").c_str(),"rb");if(w){desc_memo_enabled=false;fclose(w);}xbg_logf("NVN descmemo enabled=%d",int(desc_memo_enabled));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-dynpartial").c_str(),"rb");if(w){dyn_partial_enabled=false;fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-xmemo").c_str(),"rb");if(w){xmemo_enabled=false;fclose(w);}xbg_logf("NVN cross-frame memo enabled=%d",int(xmemo_enabled));}{auto marker=[&](const char *name){FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+name).c_str(),"rb");int c=-1;if(w){c=fgetc(w);fclose(w);}return c;};persistent_fb_enabled=marker("/gfx-no-persistent-fb")<0;slot_pools_enabled=marker("/gfx-no-slot-pools")<0;readback_cached=marker("/gfx-readback-cached")=='1' || (marker("/gfx-readback-cached")<0 && getenv("DM_GFX_READBACK_CACHED") && *getenv("DM_GFX_READBACK_CACHED")=='1');texel_memo_enabled=marker("/gfx-no-texel-memo")<0;no_occlusion_queries=marker("/gfx-no-occlusion")=='1';samples_report_seen=false;open_occlusion=OpenOcclusion{};occlusion_queries_started=0;occlusion_batch_enabled=marker("/gfx-query-per-draw")!='1' && marker("/gfx-no-query-batch")<0;heavy_timestamps=marker("/gfx-heavy-timestamps")=='1';xbg_logf("NVN persistent framebuffers=%d slot command pools=%d cached readback=%d texel memo=%d (markers gfx-no-persistent-fb, gfx-no-slot-pools, gfx-readback-cached, gfx-no-texel-memo)",int(persistent_fb_enabled),int(slot_pools_enabled),int(readback_cached),int(texel_memo_enabled));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-wtrack").c_str(),"rb");wtrack::marker=-1;if(w){wtrack::marker=fgetc(w)=='1'?1:0;fclose(w);}wtrack::enabled=wtrack::marker==1;}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-wtrack").c_str(),"rb");if(w){wtrack::enabled=false;wtrack::marker=0;fclose(w);}xbg_logf("NVN wtrack enabled=%d (markers gfx-no-wtrack, gfx-wtrack=0)",int(wtrack::enabled));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-mutable-images").c_str(),"rb");no_mutable_images=true;if(w){no_mutable_images=fgetc(w)!='1';fclose(w);}xbg_logf("NVN mutable-format images=%d (marker gfx-mutable-images)",int(!no_mutable_images));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-mutable-test").c_str(),"rb");mutable_test=0;if(w){if(fscanf(w,"%u",&mutable_test)!=1)mutable_test=0;fclose(w);}if(mutable_test)xbg_logf("NVN mutable upgrade test every %u images (marker gfx-mutable-test)",mutable_test);}
      /* Android: no guest memory remapping probe. */
      {FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-pipe-stats").c_str(),"rb");if(m){fclose(m);pstat_props=reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(vkGetDeviceProcAddr(cfg.device,"vkGetPipelineExecutablePropertiesKHR"));
@@ -4324,12 +4727,12 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
 extern "C" int xbg_evguard_fault(void *addr,int is_write,void *uc){return evguard::enabled?evguard::fault(addr,is_write,uc):0;}
 extern "C" void xbg_game_event_read(const void *addr){
     gfx_drain();
-    std::lock_guard<std::recursive_mutex> lock(mutex);if(!initialized || failed)return;
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(!initialized || failed)return;
     for(auto *list:{&pending_events,&recording_events})for(auto &e:*list)if(e.addr==uint64_t(reinterpret_cast<uintptr_t>(addr))){++event_reads;complete_all();return;}
 }
 extern "C" int xbg_game_set_sampler_mirror_clamp_to_edge(VkBool32 enabled){
     if(enabled!=VK_FALSE && enabled!=VK_TRUE)return -1;
-    std::lock_guard<std::recursive_mutex> lock(mutex);if(!initialized || failed || stats.submissions || stats.draws || stats.dispatches)return -1;
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(!initialized || failed || stats.submissions || stats.draws || stats.dispatches)return -1;
     if(enabled){
         uint32_t count=0;VkResult result=vkEnumerateDeviceExtensionProperties(cfg.physical,nullptr,&count,nullptr);if(result!=VK_SUCCESS)return result;
         std::vector<VkExtensionProperties> extensions(count);result=vkEnumerateDeviceExtensionProperties(cfg.physical,nullptr,&count,extensions.data());if(result!=VK_SUCCESS)return result;
@@ -4341,7 +4744,7 @@ extern "C" int xbg_game_set_sampler_mirror_clamp_to_edge(VkBool32 enabled){
 }
 
 extern "C" int xbg_game_provenance(const char *path){
-    std::lock_guard<std::recursive_mutex> lock(mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}
     if(!path){provenance_close("CLOSE");return 0;}
     if(!initialized || provenance_file || capture.trace || timing_active || timing_first || failed || stats.presents.load()>UINT64_MAX-2)return -1;
     FILE *f=fopen(path,"wx");if(!f)return -2;
@@ -4353,7 +4756,7 @@ extern "C" int xbg_game_provenance(const char *path){
 
 extern "C" int xbg_game_capture_frame(const char *directory,uint64_t frame){
     if(!directory || !directory[0] || !frame || strlen(directory)>800)return -1;
-    std::lock_guard<std::recursive_mutex> lock(mutex);if(!initialized || failed || stats.submissions || stats.draws || stats.dispatches || capture.trace || timing_first)return -1;
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(!initialized || failed || stats.submissions || stats.draws || stats.dispatches || capture.trace || timing_first)return -1;
     std::string path=std::string(directory)+"/capture.txt";FILE *trace=fopen(path.c_str(),"wb");if(!trace)return -2;
     capture.directory=directory;capture.trace=trace;capture.frame=frame;capture.bytes=0;capture.events=0;capture.active=false;
     capture_log("CAPTURE version=1 frame=%llu maxEvents=16 maxBytes=%llu semantics=post-fence-raw-no-state-replacement",(unsigned long long)frame,(unsigned long long)capture_limit);
@@ -4361,7 +4764,7 @@ extern "C" int xbg_game_capture_frame(const char *directory,uint64_t frame){
 }
 extern "C" int xbg_game_profile_cpu_live(uint32_t frame_count){gfx_drain();
     if(!frame_count || frame_count>60)return -1;
-    std::lock_guard<std::recursive_mutex> lock(mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}
     const uint64_t current=stats.presents.load();
     if(!initialized || failed || live_profile_used || timing_active || timing_first || capture.trace || provenance_file || current>UINT64_MAX-uint64_t(frame_count)-1)return -1;
     // Requested from inside the present callback (a timing scope is open): arm at the next submit instead.
@@ -4370,50 +4773,64 @@ extern "C" int xbg_game_profile_cpu_live(uint32_t frame_count){gfx_drain();
     xbg_logf("NVN CPU_TIMING armed-live first=%llu count=%u maxSeconds=60 clock=steady elapsed-not-thread-cpu once=1",(unsigned long long)timing_first,frame_count);
     return 0;
 }
+extern "C" int xbg_game_profile_details_live(uint32_t frame_count,uint32_t mask){gfx_drain();
+    if(!mask || (mask&~3u))return -1;
+    std::unique_lock<std::recursive_mutex> lock(mutex);
+    int result=xbg_game_profile_cpu_live(frame_count);if(result)return result;
+    descriptor_timing=H11DescriptorTiming{};draw_timing=H11DrawTiming{};
+    buffer_repeat.reset();image_input_repeat.reset();image_output_repeat.reset();descriptor_ordinal=0;
+    live_detail_mask=mask;live_not_before_ns=timing_clock()+3000000000ull;
+    xbg_logf("NVN CPU_TIMING delayed-live count=%u detail_mask=%u delay_ms=3000 not_before_ns=%llu",frame_count,mask,(unsigned long long)live_not_before_ns);
+    return 0;
+}
 extern "C" int xbg_game_profile_descriptor_live(uint32_t frame_count){gfx_drain();
-    std::lock_guard<std::recursive_mutex> lock(mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}
     // Reuse exact once/pending/active/nonempty-scope/provenance/capture checks.
     int result=xbg_game_profile_cpu_live(frame_count);if(result)return result;
-    descriptor_timing=XbgDescriptorTiming{};descriptor_detail=true;
+    descriptor_timing=H11DescriptorTiming{};descriptor_detail=true;
     xbg_logf("NVN DESC_TIMING armed v=2 first=%llu count=%u once=1 maxSeconds=60",(unsigned long long)timing_first,frame_count);
     return 0;
 }
 extern "C" int xbg_game_profile_draw_live(uint32_t frame_count){gfx_drain();
-    std::lock_guard<std::recursive_mutex> lock(mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}
     // Reuse the original live once/pending/active/provenance/capture gates.
     int result=xbg_game_profile_cpu_live(frame_count);if(result)return result;
-    draw_timing=XbgDrawTiming{};draw_detail=true;
+    draw_timing=H11DrawTiming{};draw_detail=true;
     xbg_logf("NVN DRAW_TIMING armed v=1 first=%llu count=%u once=1 maxSeconds=60",(unsigned long long)timing_first,frame_count);
     return 0;
 }
 extern "C" int xbg_game_profile_cpu(uint64_t first_frame,uint32_t frame_count){
     if(!first_frame || !frame_count || frame_count>120 || first_frame>UINT64_MAX-frame_count)return -1;
-    std::lock_guard<std::recursive_mutex> lock(mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}
     if(!initialized || failed || stats.submissions || stats.draws || stats.dispatches || stats.presents || timing_first || capture.trace)return -1;
     timing=XbgCpuTiming(timing_clock);timing_first=first_frame;timing_last=first_frame+frame_count-1;
     xbg_logf("NVN CPU_TIMING armed first=%llu count=%u maxSeconds=60 clock=steady elapsed-not-thread-cpu",(unsigned long long)first_frame,frame_count);
     if(first_frame==1)timing_start();return 0;
 }
-extern "C" int xbg_game_shutdown(){gfx_drain();gfx_async_stop();std::lock_guard<std::recursive_mutex> lock(mutex);if(!initialized)return 0;timing_report("shutdown-partial");provenance_close("SHUTDOWN");resolve_pending();submit_slots(true);save_pipeline_cache();pending_writebacks.clear();pending_reports.clear();pending_events.clear();recording_events.clear();epochs.clear();VkResult r=vkQueueWaitIdle(cfg.queue);if(r!=VK_SUCCESS)return r;wtrack::release();destroy_slots();clear_pipeline_objects();cache_save_join();warm::shutdown();bright::shutdown();clear_descriptor_caches();clear_render_pass_cache();images.clear();++images_epoch;for(auto &f:persistent_framebuffers)vkDestroyFramebuffer(cfg.device,f.second,nullptr);persistent_framebuffers.clear();image_index.clear();image_index_dirty=true;program_cache.clear();shaders.clear();textures.clear();texture_pool_cache=nullptr;samplers.clear();null_textures.clear();texture_pool_cache=nullptr;pools.clear();host_segments.clear();host_ranges.clear();host_bytes=0;cmd_range_lo=0;cmd_range_bytes=0;vkDestroyPipelineCache(cfg.device,pipeline_cache,nullptr);pipeline_cache=VK_NULL_HANDLE;vkDestroyCommandPool(cfg.device,command_pool,nullptr);command_pool=VK_NULL_HANDLE;initialized=false;return 0;}
+extern "C" int xbg_game_shutdown(){gfx_drain();gfx_async_stop();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(!initialized)return 0;timing_report("shutdown-partial");provenance_close("SHUTDOWN");resolve_pending();submit_slots(true);save_pipeline_cache();pending_writebacks.clear();pending_reports.clear();pending_events.clear();recording_events.clear();epochs.clear();VkResult r=vkQueueWaitIdle(cfg.queue);if(r!=VK_SUCCESS)return r;wtrack::release();release_bc_history();
+#ifdef DM_H12_MEASURE
+    bc_measure.close();
+#endif
+    destroy_slots();clear_pipeline_objects();cache_save_join();warm::shutdown();bright::shutdown();clear_descriptor_caches();clear_render_pass_cache();images.clear();++images_epoch;for(auto &f:persistent_framebuffers)vkDestroyFramebuffer(cfg.device,f.second,nullptr);persistent_framebuffers.clear();image_index.clear();image_index_dirty=true;program_cache.clear();shaders.clear();textures.clear();texture_pool_cache=nullptr;samplers.clear();null_textures.clear();texture_pool_cache=nullptr;pools.clear();host_segments.clear();host_ranges.clear();host_bytes=0;cmd_range_lo=0;cmd_range_bytes=0;vkDestroyPipelineCache(cfg.device,pipeline_cache,nullptr);pipeline_cache=VK_NULL_HANDLE;vkDestroyCommandPool(cfg.device,command_pool,nullptr);command_pool=VK_NULL_HANDLE;initialized=false;return 0;}
 extern "C" void xbg_game_get_stats(xbg_game_stats *out){if(out)*out={stats.submissions.load(),stats.draws.load(),stats.dispatches.load(),stats.presents.load(),stats.shader_loads.load()};}
 extern "C" void xbg_game_frame_counters(xbg_frame_counters *out){if(out)*out={hud::pipelines.load(),hud::pipeline_ns.load(),hud::shaders.load(),hud::shader_ns.load(),hud::uploads.load(),hud::reuploads.load(),hud::upload_bytes.load(),hud::upload_ns.load()};}
 extern "C" void xbg_game_set_frame(uint64_t frame){hud::frame.store(frame,std::memory_order_relaxed);}
 extern "C" double xbg_game_gpu_ms(uint64_t frame){const hud::Gpu &g=hud::gpu[frame%64];if(g.frame.load(std::memory_order_acquire)!=frame)return -1;return double(g.ns.load(std::memory_order_acquire))/1e6;}
-static void xbg_legacy_pool_add_now(void *p,size_t n){std::lock_guard<std::recursive_mutex> lock(mutex);need(p&&n,"Invalid NVN pool");pools[uintptr_t(p)]=n;cmd_range_lo=0;cmd_range_bytes=0;auto epoch=provenance.pool(uint64_t(p),true);provenance_log("POOL_ADD mem=%p bytes=%zu epoch=%llu",p,n,epoch);}
-static void xbg_legacy_pool_del_now(void *p){std::lock_guard<std::recursive_mutex> lock(mutex);provenance_log("POOL_DEL mem=%p epoch=%llu",p,provenance.epoch(uint64_t(p)));provenance.pool(uint64_t(p),false);{auto pit=pools.find(uintptr_t(p));if(pit!=pools.end())vcache::drop_pool(uintptr_t(p),pit->second);}pools.erase(uintptr_t(p));cmd_range_lo=0;cmd_range_bytes=0;}
-static void xbg_register_texture_now(const dpool_t *p,int id,const tex_t *t,const view_t *v){std::lock_guard<std::recursive_mutex> lock(mutex);need(p&&id>=0&&id<p->n&&t,"Invalid texture registration");auto &slot=textures[pool_key(p)][id];if(register_texture_record(slot,*t,v))++memo_bump[0];}
-static void xbg_register_sampler_now(const dpool_t *p,int id,const samp_par *s){std::lock_guard<std::recursive_mutex> lock(mutex);need(p&&id>=0&&id<p->n&&s,"Invalid sampler registration");auto &slot=samplers[pool_key(p)][id];if(memcmp(&slot,s,sizeof(*s))){++memo_epoch;++memo_bump[1];}slot=*s;}
-static void xbg_legacy_tex_release_now(tex_t *t){std::lock_guard<std::recursive_mutex> lock(mutex);if(t){auto i=images.find(t->serial);if(i!=images.end()){provenance_image("RELEASE",t,*i->second);retire_object(i->second);++memo_bump[2];}images.erase(t->serial);image_index_dirty=true;++images_epoch;++memo_check_gen;}}
-static void xbg_legacy_prog_release_now(prog_t *p){/* Immutable shader modules are keyed by original control digest, shared safely. */std::lock_guard<std::recursive_mutex> lock(mutex);if(p && p->serial)program_cache.erase(p->serial);}
-static void xbg_texture_invalidate_now(const tex_t *t){std::lock_guard<std::recursive_mutex> lock(mutex);if(t){auto i=images.find(t->serial);if(i!=images.end()){need(!i->second->gpu_written,"CPU invalidation of GPU-written texture needs explicit range merge");i->second->uploaded=false;}}}
-extern "C" void *xbg_host_command_memory(cmd_t *owner,size_t n){gfx_drain();std::lock_guard<std::recursive_mutex> lock(mutex);need(n<=64*1024*1024 && host_bytes+n<=256ull*1024*1024,"Host command memory cap reached; finalize handles before reusing");auto p=std::make_unique<uint8_t[]>(n);void *out=p.get();host_ranges[uintptr_t(out)]=n;host_segments.push_back({owner,std::move(p),n});host_bytes+=n;return out;}
+static void xbg_legacy_pool_add_now(void *p,size_t n){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}need(p&&n,"Invalid NVN pool");pools[uintptr_t(p)]=n;cmd_range_lo=0;cmd_range_bytes=0;auto epoch=provenance.pool(uint64_t(p),true);provenance_log("POOL_ADD mem=%p bytes=%zu epoch=%llu",p,n,epoch);}
+static void xbg_legacy_pool_del_now(void *p){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}provenance_log("POOL_DEL mem=%p epoch=%llu",p,provenance.epoch(uint64_t(p)));provenance.pool(uint64_t(p),false);{auto pit=pools.find(uintptr_t(p));if(pit!=pools.end())vcache::drop_pool(uintptr_t(p),pit->second);}pools.erase(uintptr_t(p));cmd_range_lo=0;cmd_range_bytes=0;}
+static void xbg_register_texture_now(const dpool_t *p,int id,const tex_t *t,const view_t *v){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}need(p&&id>=0&&id<p->n&&t,"Invalid texture registration");auto &slot=textures[pool_key(p)][id];if(register_texture_record(slot,*t,v))++memo_bump[0];}
+static void xbg_register_sampler_now(const dpool_t *p,int id,const samp_par *s){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}need(p&&id>=0&&id<p->n&&s,"Invalid sampler registration");auto &slot=samplers[pool_key(p)][id];if(memcmp(&slot,s,sizeof(*s))){++memo_epoch;++memo_bump[1];}slot=*s;}
+static void xbg_legacy_tex_release_now(tex_t *t){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(t){auto i=images.find(t->serial);if(i!=images.end()){provenance_image("RELEASE",t,*i->second);retire_object(i->second);++memo_bump[2];}images.erase(t->serial);image_index_dirty=true;++images_epoch;++memo_check_gen;}}
+static void xbg_legacy_prog_release_now(prog_t *p){/* Immutable shader modules are keyed by original control digest, shared safely. */std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(p && p->serial)program_cache.erase(p->serial);}
+static void xbg_texture_invalidate_now(const tex_t *t){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}if(t){auto i=images.find(t->serial);if(i!=images.end()){need(!i->second->gpu_written,"CPU invalidation of GPU-written texture needs explicit range merge");i->second->uploaded=false;}}}
+extern "C" void *xbg_host_command_memory(cmd_t *owner,size_t n){gfx_drain();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}need(n<=64*1024*1024 && host_bytes+n<=256ull*1024*1024,"Host command memory cap reached; finalize handles before reusing");auto p=std::make_unique<uint8_t[]>(n);void *out=p.get();host_ranges[uintptr_t(out)]=n;host_segments.push_back({owner,std::move(p),n});host_bytes+=n;return out;}
 extern "C" void xbg_release_command_handle(uint64_t handle){
     // A handle can CALL another handle and game-supplied segments can point to
     // host segments. Retain until shutdown until reference ownership is proven.
     (void)handle;
 }
 extern "C" void xbg_copy_commands(cmd_t *command,int count,const uint64_t *handles){gfx_drain();
-    std::lock_guard<std::recursive_mutex> lock(mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}
     auto available=[](void *,const void *p)->size_t{return command_available(static_cast<const uint8_t*>(p));};
     size_t bytes=0;int result=xbg_command_clone(count,handles,nullptr,256ull*1024*1024,available,nullptr,&bytes);
     if(result)xbg_fatalf("CopyCommands invalid source chain: %d",result);
@@ -4423,10 +4840,10 @@ extern "C" void xbg_copy_commands(cmd_t *command,int count,const uint64_t *handl
     for(size_t offset=0;offset<bytes;){op_hdr h;memcpy(&h,snapshot.data()+offset,8);xbg_record_command(command,snapshot.data()+offset,h.size);offset+=h.size;}
 }
 extern "C" void xbg_invoke_command_callback(cmd_t *c,size_t n){uint64_t args[]={uint64_t(c),NVN_COMMAND_BUFFER_MEMORY_EVENT_OUT_OF_COMMAND_MEMORY,n,uint64_t(c->cb_data)};if(cfg.invoke_guest)cfg.invoke_guest(cfg.userdata,reinterpret_cast<void*>(c->cb),args,4);else c->cb(reinterpret_cast<NVNcommandBuffer*>(c),NVN_COMMAND_BUFFER_MEMORY_EVENT_OUT_OF_COMMAND_MEMORY,n,c->cb_data);}
-static void xbg_submit_now(int n,const uint64_t *handles){std::lock_guard<std::recursive_mutex> lock(mutex);
+static void xbg_submit_now(int n,const uint64_t *handles){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}
     if(deferred_live_profile && !timing.top){uint64_t current=stats.presents.load();timing=XbgCpuTiming(timing_clock);timing_first=current+2;timing_last=timing_first+deferred_live_profile-1;deferred_live_profile=0;}
    TimingRoot timing_root;CPU_SCOPE(Other);need(initialized && !failed,"Game Vulkan backend not initialized/healthy");uint64_t begin=timing_clock();snapshot_reset();uint64_t budget=0;for(int i=0;i<n;i++)execute(reinterpret_cast<const uint8_t*>(handles[i]),0,budget);++stats.submissions;++submitted;if(sync_mode)complete_all();perf.submit_cpu_ns+=timing_clock()-begin;}
-extern "C" uint64_t xbg_legacy_last_fence(){return gfx_async?gfx_enqueued.load():[]{std::lock_guard<std::recursive_mutex> lock(mutex);return submitted;}();}
+extern "C" uint64_t xbg_legacy_last_fence(){return gfx_async?gfx_enqueued.load():[]{std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}return submitted;}();}
 extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
     // 不取锁的提前返回只用于新写法；旧写法（非鸿蒙缺省）先判 failed，与原来逐条相同
     // the lock-free early return is new-path only; the old path (default off HarmonyOS) checks failed first, exactly as before
@@ -4447,7 +4864,7 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
     if(timeout || legacy_waitall){XTRACE_COUNT("dm-legacy-target", fence);XTRACE_COUNT("dm-legacy-completed-before-lock", completed.load());}
     if(!timeout && !legacy_waitall){if(!lock.try_lock())return 0;}else{
         XTRACE_BEGIN("dm-legacy-lock");
-        const auto acquired=completion_path?completion_wait.acquire(lock,fence,deadline):(lock.lock(),xbg_completion::Acquire::EngineLocked);
+        const auto acquired=completion_path?h8_call(4,[&]{return completion_wait.acquire(lock,fence,deadline);}):(lock.lock(),xbg_completion::Acquire::EngineLocked);
         XTRACE_END();XTRACE_COUNT("dm-legacy-lock-result", int(acquired));
         if(acquired==xbg_completion::Acquire::Completed){XTRACE_COUNT("dm-legacy-completed", completed.load());return 1;}
         if(acquired==xbg_completion::Acquire::TimedOut)return 0;
@@ -4473,7 +4890,7 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
             XTRACE_COUNT("dm-legacy-slot", t-slots);XTRACE_COUNT("dm-legacy-covers", t->covers);
             XTRACE_COUNT("dm-legacy-completed", completed.load());
             VkFence f=t->fence;t->waiters.n.fetch_add(1);lock.unlock();
-            XTRACE_BEGIN("dm-legacy-wait");uint64_t b0=timing_clock();VkResult r=vkWaitForFences(cfg.device,1,&f,VK_TRUE,remaining);uint64_t b1=timing_clock();XTRACE_END();
+            XTRACE_BEGIN("dm-legacy-wait");uint64_t b0=timing_clock();VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&f,VK_TRUE,remaining);});uint64_t b1=timing_clock();XTRACE_END();
             // 先释放 waiter 再等待完成/重锁；此后槽可被另一线程复用，不再读取 t。
             // Release the waiter before completion/relock waits; another thread may now reuse the slot, so never read t again.
             t->waiters.n.fetch_sub(1);
@@ -4483,7 +4900,7 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
                 // 设备错误不能被 completed 快路吞掉；原 fatal 状态仍在 engine 下处理。
                 // Completion must not hide device errors; handle the original fatal state while holding engine.
                 if(r!=VK_SUCCESS){lock.lock();fold_completion_wait_stats();VK(r);}
-                XTRACE_BEGIN("dm-legacy-relock");const auto acquired=completion_wait.acquire(lock,fence,deadline);XTRACE_END();
+                XTRACE_BEGIN("dm-legacy-relock");const auto acquired=h8_call(4,[&]{return completion_wait.acquire(lock,fence,deadline);});XTRACE_END();
                 XTRACE_COUNT("dm-legacy-relock-result", int(acquired));XTRACE_COUNT("dm-legacy-completed", completed.load());
                 if(acquired==xbg_completion::Acquire::Completed)return 1;
                 if(acquired==xbg_completion::Acquire::TimedOut)return 0;
@@ -4502,15 +4919,15 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
         if(completion_path && !remaining)return fence<=completed;
         if(!completion_path && timeout!=UINT64_MAX){auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-begin).count();remaining=uint64_t(elapsed)>=timeout?0:timeout-uint64_t(elapsed);}
         bool busy=vkGetFenceStatus(cfg.device,slot.fence)==VK_NOT_READY;uint64_t b0=busy?timing_clock():0;
-        VkResult r=vkWaitForFences(cfg.device,1,&slot.fence,VK_TRUE,remaining);if(busy){block_ns[SITE_LEGACY_WAIT]+=timing_clock()-b0;++block_calls[SITE_LEGACY_WAIT];}
+        VkResult r=h8_call(2,[&]{return vkWaitForFences(cfg.device,1,&slot.fence,VK_TRUE,remaining);});if(busy){block_ns[SITE_LEGACY_WAIT]+=timing_clock()-b0;++block_calls[SITE_LEGACY_WAIT];}
         if(r==VK_TIMEOUT)return 0;VK(r);retire_slot(slot);
     }
     resolve_known_reports();if(pending_writebacks.empty()&&pending_reports.empty()){publish_completed(submitted);}
     return fence<=completed;
 }
-extern "C" void xbg_legacy_finish(){gfx_drain();std::lock_guard<std::recursive_mutex> lock(mutex);need(initialized,"Queue finish before Vulkan initialization");++perf.why_finish;complete_all();VK(vkQueueWaitIdle(cfg.queue));}
-static void xbg_present_texture_now(const win_t *window,const tex_t *texture){std::lock_guard<std::recursive_mutex> lock(mutex);preflight_cpu_reads();{SiteScope site(SITE_PRESENT);cur_op=61;TimingRoot timing_root;CPU_SCOPE(Other);need(initialized&&cfg.present,"Game presentation callback not installed");uint64_t present_begin=timing_clock();Image &im=get_image(texture,false);need(im.gpu_written,"Game tried to present a texture never rendered");Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);c.finish();submit_slots(false);int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r)xbg_fatalf("Game presentation failed: %d",r);++stats.presents;if(pass_prof_enabled && stats.presents.load()==pass_prof_frame)xbg_logf("NVN GPASS boundary frame=%llu slots=%u skipped_slots=%u reserved_queries=%u max_queries=%u max_slots=%u",(unsigned long long)pass_prof_frame,pass_prof_slots,pass_prof_skipped_slots,pass_prof_queries,pass_prof_query_limit,pass_prof_slot_limit);perf.present_cpu_ns+=timing_clock()-present_begin;perf_frame();if(provenance_file && stats.presents.load()>=provenance.target)provenance_close("END");if(capture.trace && stats.presents==capture.frame){capture_log("END frame=%llu events=%u bytes=%llu presentedSerial=%llu image=%p",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes,(unsigned long long)texture->serial,(void*)im.image);fclose(capture.trace);capture.trace=nullptr;capture.active=false;xbg_logf("NVN one-frame capture complete frame=%llu events=%u bytes=%llu",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes);}}timing_boundary();}
-extern "C" void xbg_legacy_read_texels(const tex_t *t,unsigned level,unsigned layer,const NVNcopyRegion *r,uint8_t *dst,size_t row,size_t image){gfx_drain();std::lock_guard<std::recursive_mutex> lock(mutex);preflight_cpu_reads();need(t&&r&&dst,"Invalid ReadTexels arguments");auto found=images.find(t->serial);if(found==images.end() || !found->second->gpu_written){int bw,bh,bpp=nvn_fmt_bpb(t->d.format,&bw,&bh);need(bpp && r->xoffset==0 && r->yoffset==0 && r->zoffset==0 && r->depth==1 && uint32_t(r->width)==std::max(1u,t->d.width>>level) && uint32_t(r->height)==std::max(1u,t->d.height>>level),"CPU ReadTexels partial region unsupported");need(!(t->d.flags&0x10),"Linear CPU ReadTexels not implemented");need(nvn_deswizzle(&t->d,level,layer,t->mem,dst,row)==0,"ReadTexels deswizzle failed");}
+extern "C" void xbg_legacy_finish(){gfx_drain();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}need(initialized,"Queue finish before Vulkan initialization");++perf.why_finish;complete_all();VK(vkQueueWaitIdle(cfg.queue));}
+static void xbg_present_texture_now(const win_t *window,const tex_t *texture){std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}preflight_cpu_reads();{SiteScope site(SITE_PRESENT);cur_op=61;TimingRoot timing_root;CPU_SCOPE(Other);need(initialized&&cfg.present,"Game presentation callback not installed");uint64_t present_begin=timing_clock();Image &im=get_image(texture,false);need(im.gpu_written,"Game tried to present a texture never rendered");Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);c.finish();submit_slots(false);int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r)xbg_fatalf("Game presentation failed: %d",r);++stats.presents;if(pass_prof_enabled && stats.presents.load()==pass_prof_frame)xbg_logf("NVN GPASS boundary frame=%llu slots=%u skipped_slots=%u reserved_queries=%u max_queries=%u max_slots=%u",(unsigned long long)pass_prof_frame,pass_prof_slots,pass_prof_skipped_slots,pass_prof_queries,pass_prof_query_limit,pass_prof_slot_limit);perf.present_cpu_ns+=timing_clock()-present_begin;perf_frame();if(provenance_file && stats.presents.load()>=provenance.target)provenance_close("END");if(capture.trace && stats.presents==capture.frame){capture_log("END frame=%llu events=%u bytes=%llu presentedSerial=%llu image=%p",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes,(unsigned long long)texture->serial,(void*)im.image);fclose(capture.trace);capture.trace=nullptr;capture.active=false;xbg_logf("NVN one-frame capture complete frame=%llu events=%u bytes=%llu",(unsigned long long)capture.frame,capture.events,(unsigned long long)capture.bytes);}}timing_boundary();}
+extern "C" void xbg_legacy_read_texels(const tex_t *t,unsigned level,unsigned layer,const NVNcopyRegion *r,uint8_t *dst,size_t row,size_t image){gfx_drain();std::unique_lock<std::recursive_mutex> lock(mutex,std::defer_lock);{H8Scope h8s(4);lock.lock();}preflight_cpu_reads();need(t&&r&&dst,"Invalid ReadTexels arguments");auto found=images.find(t->serial);if(found==images.end() || !found->second->gpu_written){int bw,bh,bpp=nvn_fmt_bpb(t->d.format,&bw,&bh);need(bpp && r->xoffset==0 && r->yoffset==0 && r->zoffset==0 && r->depth==1 && uint32_t(r->width)==std::max(1u,t->d.width>>level) && uint32_t(r->height)==std::max(1u,t->d.height>>level),"CPU ReadTexels partial region unsupported");need(!(t->d.flags&0x10),"Linear CPU ReadTexels not implemented");need(nvn_deswizzle(&t->d,level,layer,t->mem,dst,row)==0,"ReadTexels deswizzle failed");}
     else{p_copy_b2t p{};p.src=uint64_t(dst);p.tex=t;p.has_view=1;p.view.set_levels=p.view.set_layers=1;p.view.base_level=level;p.view.nlevels=1;p.view.min_layer=layer;p.view.nlayers=1;p.r=*r;int64_t old=state.copy_stride,old_image=state.copy_image_stride;state.copy_stride=row;state.copy_image_stride=image;copy_texture_buffer(p,true);state.copy_stride=old;state.copy_image_stride=old_image;}}
 
 // ---- public entry points (queued in order on the graphics thread) ----

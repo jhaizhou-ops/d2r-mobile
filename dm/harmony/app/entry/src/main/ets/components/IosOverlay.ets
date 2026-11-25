@@ -70,11 +70,19 @@ export struct IosOverlay {
       if (dm.touchTick(this.s) === 1) { this.draw(); }
     }, 16);
   }
-  aboutToDisappear(): void { clearInterval(this.timer); }
+  aboutToDisappear(): void {
+    clearInterval(this.timer); dm.touchCancel();
+    this.images.forEach((p: image.PixelMap | null) => { p?.release(); });
+    this.frames.forEach((p: image.PixelMap | null) => { p?.release(); });
+    this.socket?.release(); this.socket = null;
+    this.images.clear(); this.frames.clear(); this.sizes.clear();
+  }
   onEnabled(): void {
-    this.images.clear(); this.sizes.clear(); this.frames.clear(); this.text.clear();
-    try { this.hudUi = JSON.parse(fileIo.readTextSync(this.overlayRoot + '/hud_v4_ui/ui.json')) as HudUi; } catch (e) { this.hudUi = null; }
-    if (!this.inputEnabled) { this.ctx.clearRect(0, 0, this.cw, this.chh); }
+    this.text.clear(); // Keep decoded art across input dialogs; release when the page is destroyed.
+    if (!this.hudUi) {
+      try { this.hudUi = JSON.parse(fileIo.readTextSync(this.overlayRoot + '/hud_v4_ui/ui.json')) as HudUi; } catch (e) { this.hudUi = null; }
+    }
+    if (!this.inputEnabled) { dm.touchCancel(); this.ctx.clearRect(0, 0, this.cw, this.chh); }
     this.screen();
   }
   private screen(): void { if (this.cw > 0 && this.chh > 0) { dm.touchScreen(this.cw, this.chh, this.safeLeft, this.safeRight, this.safeBottom); } }

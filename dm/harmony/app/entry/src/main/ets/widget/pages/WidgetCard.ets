@@ -1,7 +1,7 @@
 const storage = new LocalStorage();
 
 class HeroRow {
-  name: string = ''; cls: string = ''; initial: string = ''; level: number = 0; gold: string = ''; time: string = '';
+  name: string = ''; cls: string = ''; initial: string = ''; img: string = ''; classIndex: number = -1; level: number = 0; gold: string = ''; time: string = '';
 }
 
 // 暗金风格卡片（数据由 EntryFormAbility.buildCard 给）。2×2：最近一位英雄；2×4：最多三位；4×4：最多六位加「继续游戏」。
@@ -20,18 +20,20 @@ struct WidgetCard {
   @LocalStorageProp('countText') countText: string = '';
   @LocalStorageProp('resume') resume: string = '';
 
-  // 职业徽章：职业首字，暗底金边 | Class badge: the class's first character, dark face with a gold rim
+  // Real class artwork when available; missing portraits retain a readable class badge.
   @Builder
-  badge(initial: string, size: number) {
-    Text(initial).width(size).height(size).textAlign(TextAlign.Center).fontSize(size * 0.46).fontWeight(FontWeight.Bold).fontColor('#F2D38A')
-      .backgroundColor('#1B140D').borderRadius(size / 2).border({ width: 1.5, color: '#9C7A40', radius: size / 2 })
-      .shadow({ radius: 6, color: '#66C9A85A' })
+  badge(hero: HeroRow, size: number) {
+    Stack() {
+      if (hero.img) { Image(hero.img).width(size).height(size).objectFit(ImageFit.Contain) }
+      else { Text(hero.initial).fontSize(size * 0.46).fontWeight(FontWeight.Bold).fontColor('#F2D38A') }
+    }.width(size).height(size).backgroundColor('#1B140D').borderRadius(size / 2)
+      .border({ width: 1.5, color: '#9C7A40', radius: size / 2 }).clip(true)
   }
 
   @Builder
   heroLine(h: HeroRow, big: boolean) {
     Row({ space: 8 }) {
-      this.badge(h.initial, big ? 40 : 32)
+      this.badge(h, big ? 40 : 32)
       Column({ space: 2 }) {
         Text(h.name).fontSize(big ? 15 : 13).fontWeight(FontWeight.Bold).fontColor('#E8C67A').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         Text(`${this.levelWord === 'Lv' ? 'Lv ' + h.level : h.level + ' ' + this.levelWord} · ${h.cls}`).fontSize(11).fontColor('#D9C9A6').maxLines(1)
@@ -56,9 +58,10 @@ struct WidgetCard {
         Column({ space: 6 }) {
           Text(this.title).fontSize(10).fontColor('#8C7345')
           Blank()
-          this.badge(this.heroes[0].initial, 44)
+          this.badge(this.heroes[0], 44)
           Text(this.heroes[0].name).fontSize(15).fontWeight(FontWeight.Bold).fontColor('#E8C67A').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           Text(`${this.levelWord === 'Lv' ? 'Lv ' + this.heroes[0].level : this.heroes[0].level + ' ' + this.levelWord} · ${this.heroes[0].cls}`).fontSize(11).fontColor('#D9C9A6')
+          Text(`${this.goldWord} ${this.heroes[0].gold}`).fontSize(10).fontColor('#C9A85A').maxLines(1)
           Text(this.count > 1 ? this.countText : this.heroes[0].time).fontSize(9).fontColor('#7D7466').maxLines(1)
         }.width('100%').height('100%').alignItems(HorizontalAlign.Start)
       } else {

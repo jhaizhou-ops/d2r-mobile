@@ -25,6 +25,7 @@ enum {
     DM_OS_HUD = DM_OS_GLYPHS + 6 * DM_OS_GSTRIDE,                    // [valid, hp, hp_max, mp, mp_max, level, exp‰, points, quest_unread, belt×4, players, dead]
     DM_OS_FLOATS = DM_OS_HUD + 16
 };
+void dm_ohos_touch_cancel(void);
 #ifdef __cplusplus
 }
 #endif

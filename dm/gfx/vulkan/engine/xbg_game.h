@@ -109,3 +109,9 @@ int xbg_game_profile_descriptor_live(uint32_t frame_count);
 extern "C"
 #endif
 int xbg_game_profile_draw_live(uint32_t frame_count);
+
+// H-11: mask 1=DESC, 2=DRAW; shared once gate, starts after 3 seconds.
+#ifdef __cplusplus
+extern "C"
+#endif
+int xbg_game_profile_details_live(uint32_t frame_count,uint32_t mask);

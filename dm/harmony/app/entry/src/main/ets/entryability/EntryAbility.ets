@@ -1,37 +1,74 @@
-// 应用入口：横屏全屏、游戏前台常亮；窗口状态转成原生生命周期事件（0 失焦 1 后台 2 前台 3 激活，同安卓）。
-// App entry: landscape full screen, screen kept on while the game is in front; window states become native lifecycle events
-// (0 unfocused, 1 background, 2 foreground, 3 active, as on Android).
-import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
+// Full-screen landscape window, live safe areas and foreground-only screen wake lock.
+import { AbilityConstant, UIAbility, Want, bundleManager } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import dm from 'libdm.so';
 import { refreshForms } from '../entryformability/EntryFormAbility';
 
 export default class EntryAbility extends UIAbility {
-  // 退到后台时刷新桌面卡片（存档此时已写完）| Refresh the home-screen cards when going to the background (the saves are written by then)
-  onBackground(): void { refreshForms(this.context.filesDir); }
+  private mainWindow: window.Window | undefined = undefined;
+  private stage: window.WindowStage | undefined = undefined;
+  private foreground: boolean = false;
+  private awakeQueue: Promise<void> = Promise.resolve();
+  private avoidChanged = (options: window.AvoidAreaOptions): void => { this.refreshSafeArea(); };
+  private sizeChanged = (size: window.Size): void => { this.refreshSafeArea(); };
+  private stageChanged = (ev: window.WindowStageEventType): void => {
+    const map = new Map<window.WindowStageEventType, number>([
+      [window.WindowStageEventType.SHOWN, 2], [window.WindowStageEventType.ACTIVE, 3],
+      [window.WindowStageEventType.INACTIVE, 0], [window.WindowStageEventType.HIDDEN, 1]]);
+    const v = map.get(ev);
+    if (v !== undefined) {
+      this.foreground = v === 2 || v === 3; this.syncAwake(); dm.focus(v);
+      if (this.foreground) { this.refreshSafeArea(); }
+    }
+  };
+  private syncAwake(): void {
+    const win = this.mainWindow;
+    if (!win) { return; }
+    this.awakeQueue = this.awakeQueue.then(() => win.setWindowKeepScreenOn(this.mainWindow === win && this.foreground))
+      .catch((e: Error) => { hilog.warn(0, 'dm', 'screen wake: %{public}s', e.message); });
+  }
+  private refreshSafeArea(): void {
+    const win = this.mainWindow;
+    if (!win) { return; }
+    try {
+      const cutout = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT);
+      const navigation = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+      AppStorage.setOrCreate('safeLeftPx', Math.max(cutout.leftRect.width, navigation.leftRect.width));
+      AppStorage.setOrCreate('safeRightPx', Math.max(cutout.rightRect.width, navigation.rightRect.width));
+      AppStorage.setOrCreate('safeBottomPx', Math.max(cutout.bottomRect.height, navigation.bottomRect.height));
+    } catch (e) { hilog.warn(0, 'dm', 'safe area update failed'); }
+  }
+  onForeground(): void { this.foreground = true; this.syncAwake(); this.refreshSafeArea(); }
+  onBackground(): void { this.foreground = false; this.syncAwake(); refreshForms(this.context.filesDir); }
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    const bundle = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+    dm.appIdentity(bundle.name, bundle.versionName);
     AppStorage.setOrCreate('filesDir', this.context.filesDir);
     AppStorage.setOrCreate('lang', this.context.config.language ?? 'zh');
   }
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    windowStage.getMainWindow().then((win: window.Window) => {
-      win.setWindowLayoutFullScreen(true);
-      win.setWindowSystemBarEnable([]);
-      win.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE);
-      win.setWindowKeepScreenOn(true);
-      const avoid = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT);
-      AppStorage.setOrCreate('safeLeftPx', avoid.leftRect.width);
-      AppStorage.setOrCreate('safeRightPx', avoid.rightRect.width);
-      AppStorage.setOrCreate('safeBottomPx', avoid.bottomRect.height);
+    this.stage = windowStage;
+    windowStage.getMainWindow().then(async (win: window.Window) => {
+      if (this.stage !== windowStage) { return; }
+      this.mainWindow = win;
+      win.on('avoidAreaChange', this.avoidChanged);
+      win.on('windowSizeChange', this.sizeChanged);
+      await win.setWindowLayoutFullScreen(true);
+      await win.setWindowSystemBarEnable([]);
+      await win.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE);
+      this.syncAwake(); this.refreshSafeArea();
     }).catch((e: Error) => hilog.warn(0, 'dm', 'window setup: %{public}s', e.message));
-    windowStage.on('windowStageEvent', (ev: window.WindowStageEventType) => {
-      const map = new Map<window.WindowStageEventType, number>([
-        [window.WindowStageEventType.SHOWN, 2], [window.WindowStageEventType.ACTIVE, 3],
-        [window.WindowStageEventType.INACTIVE, 0], [window.WindowStageEventType.HIDDEN, 1]]);
-      const v = map.get(ev);
-      if (v !== undefined) { dm.focus(v); }
-    });
+    windowStage.on('windowStageEvent', this.stageChanged);
     windowStage.loadContent('pages/Index');
+  }
+  onWindowStageDestroy(): void {
+    this.foreground = false; this.syncAwake();
+    if (this.mainWindow) {
+      this.mainWindow.off('avoidAreaChange', this.avoidChanged);
+      this.mainWindow.off('windowSizeChange', this.sizeChanged);
+    }
+    this.stage?.off('windowStageEvent', this.stageChanged);
+    this.mainWindow = undefined; this.stage = undefined;
   }
 }

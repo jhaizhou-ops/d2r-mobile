@@ -10,6 +10,7 @@
     "deviceTypes": ["phone"],
     "deliveryWithInstall": true,
     "installationFree": false,
+    "requestPermissions": [{ "name": "ohos.permission.VIBRATE" }],
     "pages": "$profile:main_pages",
     "abilities": [{
       "name": "EntryAbility",

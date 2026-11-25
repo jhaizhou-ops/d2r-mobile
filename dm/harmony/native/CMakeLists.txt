@@ -58,26 +58,63 @@ if(NOT EXISTS ${DM_GEN_DIR}/dm_touch_native_art.c)
 endif()
 list(APPEND COMPAT_SRCS ${DM}/ios/Sources/dm_touch_game_state.c ${DM}/ios/Sources/dm_touch_game_identity.c ${DM}/ios/Sources/dm_touch_game_bridge.c ${DM_GEN_DIR}/dm_touch_native_art.c)
 add_library(dmcore STATIC ${HOST_SRCS} ${HLE_SRCS} ${GFX_SRCS} ${LIBDEFLATE_SRCS} ${ASM_SRCS} ${COMPAT_SRCS})
+# The private AppGallery package carries pre-generated modules as signed ELF libraries.
+# Empty public shells keep their existing import/debug-signing workflow.
+option(DM_OHOS_SIGNED_GUEST "Load module code from HAP-signed native libraries" OFF)
+if(DM_OHOS_SIGNED_GUEST)
+  target_sources(dmcore PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/signed_guest_image.c)
+  target_compile_definitions(dmcore PUBLIC DM_OHOS_SIGNED_GUEST=1)
+endif()
 target_include_directories(dmcore PUBLIC ${HOST} ${DM}/gfx/nvn/include ${AND}/compat/include ${DM_GEN_DIR} ${DM}/ios/Sources)
 # 宿主 / 平台层用 -O2（原 -O1：游戏线程每次 NVN 调用的命令录制都跑在这里；-fno-strict-aliasing 保留）| host / platform at -O2 (was -O1: every NVN call of the game thread records here; -fno-strict-aliasing kept)
-set(DM_CFLAGS -O2 -g -D_GNU_SOURCE -Wall -Wno-unused-function -fno-strict-aliasing -include ${AND}/compat/include/dm_android_compat.h)
+set(DM_OPT_LEVEL -O2)
+set(DM_H12_BUILD "$ENV{DM_H12_BUILD}")
+if(DM_H12_BUILD AND NOT DM_H12_BUILD STREQUAL "baseline")
+  if(NOT DM_H12_BUILD MATCHES "^(thin|generate|use)$")
+    message(FATAL_ERROR "Unknown DM_H12_BUILD: ${DM_H12_BUILD}")
+  endif()
+  set(DM_OPT_LEVEL -O3)
+endif()
+set(DM_CFLAGS ${DM_OPT_LEVEL} -g -D_GNU_SOURCE -Wall -Wno-unused-function -fno-strict-aliasing -include ${AND}/compat/include/dm_android_compat.h)
 target_compile_options(dmcore PUBLIC $<$<COMPILE_LANGUAGE:C>:${DM_CFLAGS} -std=gnu17>)
 
 # ---- 平台层：dm/android 里平台无关的文件原样复用，安卓头文件由 android_shim 替身接到鸿蒙 ----
 # ---- Platform layer: platform-neutral files in dm/android are reused unchanged; android_shim maps their Android headers to HarmonyOS ----
 set(OHOS_REUSED ${AND}/vulkan_present.cpp ${AND}/overlay_validate.c ${CMAKE_CURRENT_SOURCE_DIR}/front_ohos.c ${CMAKE_CURRENT_SOURCE_DIR}/touch_ohos.c ${CMAKE_CURRENT_SOURCE_DIR}/gameperf_ohos.c)
-add_library(dmplatform STATIC ${OHOS_REUSED})
+add_library(dmplatform STATIC ${OHOS_REUSED} ${CMAKE_CURRENT_SOURCE_DIR}/gamepad_ohos.c ${CMAKE_CURRENT_SOURCE_DIR}/haptics_ohos.c ${CMAKE_CURRENT_SOURCE_DIR}/frame_rate_ohos.cpp)
 target_include_directories(dmplatform BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/android_shim)
 target_include_directories(dmplatform PRIVATE ${AND})
 target_link_libraries(dmplatform PUBLIC dmcore dm_vulkan_engine)
-target_compile_options(dmplatform PRIVATE $<$<COMPILE_LANGUAGE:C>:${DM_CFLAGS} -std=gnu17> $<$<COMPILE_LANGUAGE:CXX>:-O2 -g -D_GNU_SOURCE>)
+target_compile_options(dmplatform PRIVATE $<$<COMPILE_LANGUAGE:C>:${DM_CFLAGS} -std=gnu17> $<$<COMPILE_LANGUAGE:CXX>:${DM_OPT_LEVEL} -g -D_GNU_SOURCE>)
 
 # ---- overlay 合约头（与安卓同一工具生成） | Overlay contract header (same tool as Android) ----
 set(DM_OVERLAY_TOOL ${DM}/ios/tools/overlay_contract.py)
 get_filename_component(DM_REPO_ROOT ${DM}/.. ABSOLUTE)
 set(DM_OVERLAY_HEADER ${CMAKE_CURRENT_BINARY_DIR}/dm_overlay_contract.h)
+# Recompute at configure time as well: switching branches can leave an output
+# newer than every dependency even though its content belongs to another tree.
+execute_process(COMMAND ${Python3_EXECUTABLE} ${DM_OVERLAY_TOOL} --inputs
+  OUTPUT_VARIABLE DM_OVERLAY_INPUT_LIST RESULT_VARIABLE DM_OVERLAY_INPUT_RESULT
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT DM_OVERLAY_INPUT_RESULT EQUAL 0)
+  message(FATAL_ERROR "Cannot enumerate overlay contract inputs")
+endif()
+string(REPLACE "\r" "" DM_OVERLAY_INPUT_LIST "${DM_OVERLAY_INPUT_LIST}")
+string(REPLACE "\n" ";" DM_OVERLAY_INPUT_LIST "${DM_OVERLAY_INPUT_LIST}")
+set(DM_OVERLAY_DEPENDS)
+foreach(input IN LISTS DM_OVERLAY_INPUT_LIST)
+  list(APPEND DM_OVERLAY_DEPENDS "${DM_REPO_ROOT}/${input}")
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${DM_OVERLAY_DEPENDS})
+execute_process(COMMAND ${Python3_EXECUTABLE} ${DM_OVERLAY_TOOL}
+  --repo-root ${DM_REPO_ROOT} --header ${DM_OVERLAY_HEADER}
+  RESULT_VARIABLE DM_OVERLAY_HEADER_RESULT)
+if(NOT DM_OVERLAY_HEADER_RESULT EQUAL 0)
+  message(FATAL_ERROR "Cannot generate overlay contract header")
+endif()
 add_custom_command(OUTPUT ${DM_OVERLAY_HEADER}
-  COMMAND ${Python3_EXECUTABLE} ${DM_OVERLAY_TOOL} --repo-root ${DM_REPO_ROOT} --header ${DM_OVERLAY_HEADER} VERBATIM)
+  COMMAND ${Python3_EXECUTABLE} ${DM_OVERLAY_TOOL} --repo-root ${DM_REPO_ROOT} --header ${DM_OVERLAY_HEADER}
+  DEPENDS ${DM_OVERLAY_DEPENDS} VERBATIM)
 
 # ---- App 共享库 libdm.so：main.c 以 -Dmain=dm_main 编（同 iOS / 安卓），NAPI 入口 napi_ohos.c ----
 # ---- App shared library libdm.so: main.c built with -Dmain=dm_main (as iOS / Android), NAPI entry napi_ohos.c ----
@@ -93,5 +130,42 @@ target_compile_options(dm PRIVATE $<$<COMPILE_LANGUAGE:C>:${DM_CFLAGS} -std=gnu1
 file(STRINGS ${DM}/PRODUCT DM_PRODUCT_LINE LIMIT_COUNT 1)
 target_compile_definitions(dm PRIVATE DM_PRODUCT="${DM_PRODUCT_LINE}")
 target_link_libraries(dm PRIVATE -Wl,--whole-archive dmplatform dmcore -Wl,--no-whole-archive dm_vulkan_engine
-  ace_napi.z ace_ndk.z hilog_ndk.z hitrace_ndk.z native_window native_display_manager ohaudio qos vulkan m dl)
+  ace_napi.z ace_ndk.z hilog_ndk.z hitrace_ndk.z native_window native_display_manager ohaudio qos ohgame_controller.z ohvibrator.z vulkan m dl)
 target_link_options(dm PRIVATE -Wl,--no-undefined -Wl,-z,nostart-stop-gc -Wl,-Bsymbolic)
+
+# Diagnostic packages only. Keep the distribution configuration and its hot
+# paths unchanged when the build environment contains no H-12 options.
+if("$ENV{DM_H12_MEASURE}" STREQUAL "1")
+  target_sources(dmcore PRIVATE h12_measure.c)
+  # The fixed reference must keep the same loop under every compiler A/B.
+  # Per-source options are emitted after the experimental target options.
+  set_source_files_properties(h12_measure.c PROPERTIES COMPILE_OPTIONS
+    "-O2;-mcpu=generic;-fno-lto;-fno-profile-generate;-fno-profile-use")
+  target_compile_definitions(dmcore PRIVATE DM_H12_MEASURE=1)
+  target_compile_definitions(dm_vulkan_engine PRIVATE DM_H12_MEASURE=1)
+endif()
+if(DM_OPT_LEVEL STREQUAL "-O3")
+  set(h12_compile -O3 -flto=thin)
+  set(h12_link -flto=thin)
+  if(NOT "$ENV{DM_H12_CPU}" STREQUAL "")
+    list(APPEND h12_compile "-mcpu=$ENV{DM_H12_CPU}")
+  endif()
+  if(DM_H12_BUILD STREQUAL "generate")
+    list(APPEND h12_compile -fprofile-generate -fprofile-update=atomic)
+    list(APPEND h12_link -fprofile-generate)
+    target_sources(dm PRIVATE h12_pgo.c)
+    set_source_files_properties(h12_pgo.c PROPERTIES COMPILE_OPTIONS "-fno-profile-generate")
+  elseif(DM_H12_BUILD STREQUAL "use")
+    if(NOT EXISTS "$ENV{DM_H12_PROFDATA}")
+      message(FATAL_ERROR "DM_H12_PROFDATA must point to the merged training profile")
+    endif()
+    list(APPEND h12_compile "-fprofile-use=$ENV{DM_H12_PROFDATA}" -Werror=profile-instr-out-of-date)
+    list(APPEND h12_link "-fprofile-use=$ENV{DM_H12_PROFDATA}")
+  endif()
+  foreach(target dm_vulkan_engine dmcore dmplatform dm_app_main dm)
+    foreach(flag IN LISTS h12_compile)
+      target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:${flag}>")
+    endforeach()
+  endforeach()
+  target_link_options(dm PRIVATE ${h12_link})
+endif()

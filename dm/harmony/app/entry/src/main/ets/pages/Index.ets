@@ -22,8 +22,19 @@ struct Index {
   @State request: InputRequest | null = null;
   @State text: string = '';
   @State fps: string = '';
+  @State showFps: boolean = false;
+  @State toolsOpen: boolean = false;
+  @State logTail: string = '';
+  @State showLog: boolean = false;
+  @State developerExperimentsOpen: boolean = false;
+  @State experimentsOpen: boolean = false;
+  @State experimentBits: number = 0;
+  @State experimentsReady: boolean = false;
+  @State experimentError: string = '';
+  @State experimentSaved: boolean = false;
   @State canImport: boolean = false;
   @State importing: string = '';
+  private bundledRuntime: boolean = false;
   private fpsTimer: number = -1;
   private lastPresents: number = 0;
   private lastFpsAt: number = 0;
@@ -42,9 +53,16 @@ struct Index {
   private boot(): void {
     dm.setCallbacks(
       (id: number, title: string, sub: string, guide: string, initial: string, maxChars: number, nameRule: number, numericMax: number) => {
+        this.toolsOpen = false; this.showLog = false;
         this.text = initial; this.request = { id, title, sub, guide, initial, maxChars, nameRule, numericMax };
       },
-      (code: number) => { this.started = false; this.error = `${this.t('dmAndroidStartFailed') || '启动失败'} (${code})`; });
+      (code: number) => {
+        if ([-9, -10, -13].indexOf(code) >= 0) { this.startupFailure(code); return; }
+        this.started = false; this.canImport = false;
+        if (this.fpsTimer >= 0) { clearInterval(this.fpsTimer); this.fpsTimer = -1; }
+        const message = this.t('dmAndroidStartFailed') || '启动失败';
+        this.error = message.indexOf('%d') >= 0 ? message.replace('%d', String(code)) : `${message} (${code})`;
+      });
     try { display.getDefaultDisplaySync() && dm.refresh(display.getDefaultDisplaySync().refreshRate); } catch (e) { }
     const rc = dm.start(this.files, this.files, this.dataDir(), this.lang.startsWith('zh') ? 'zh-Hans' : 'en-US');
     if (rc > 0) {
@@ -57,24 +75,39 @@ struct Index {
         this.lastPresents = n; this.lastFpsAt = t;
       }, 1000);
     } else {
-      // -2 没有游戏数据，-3 没有执行映像，-4 没有着色器，-5 缺 build.config，-9/-10 overlay 缺或不符，-11 导入包与应用不配套，-12 衍生表没读全：都可以用「导入游戏资源」补齐
-      // -2 no game data, -3 no execution images, -4 no shaders, -5 missing build.config, -9/-10 overlay missing or mismatched, -11 import pack does not match the app, -12 derived tables incomplete: all fixed by importing resources
-      this.canImport = [-2, -3, -4, -5, -9, -10, -11, -12].indexOf(rc) >= 0;
-      this.error = `${(this.t('dmAndroidStartFailed') || '启动失败（%d）').replace('%d', String(rc))}${!this.canImport ? '' : (rc === -10 || rc === -11) ? (this.lang.startsWith('zh') ? '\n导入包与这版应用不配套：请用与这版应用同一版本的工具重新生成 dm 文件夹，再点下面的按钮导入' : '\nThe import pack does not match this version of the app: regenerate the dm folder with the tools of the same version, then import it with the button below') : rc === -12 ? (this.lang.startsWith('zh') ? '\n导入包缺少 derived.tsv 或内容不全：请用这版工具重新生成 dm 文件夹，再点下面的按钮导入' : '\nThe import pack lacks a complete derived.tsv: regenerate the dm folder with this version of the tools, then import it with the button below') : [-2, -5].indexOf(rc) >= 0 ? '\n缺少游戏数据：请把游戏的 data 文件夹放进手机上一个文件夹（例如「D2R Mobile」）里，再点下面的按钮选中那个文件夹' : '\n缺少运行组件：这个版本没有内置组件，请把 dm 文件夹（out、shaders、overlay、ui-art）和 data 放进同一个文件夹，再点下面的按钮选中它'}
-可执行内存自检 / exec self-test: ${dm.execProbe()}`;
+      this.startupFailure(rc);
     }
   }
-  // 调试版内置运行包（out / shaders / overlay / ui-art 压成 dm-pack.zip，见 entry/build-profile.json5 的 default 目标和 scripts/stage_debug_pack.sh）：
-  // 首次启动或包版本变了，解压到 files/dm（游戏照常从那里读），玩家只需导入游戏的 data。发布版没有内置包，直接跳过
-  // Debug builds bundle the runtime pack (out / shaders / overlay / ui-art zipped as dm-pack.zip, see the default target in entry/build-profile.json5 and
-  // scripts/stage_debug_pack.sh): on first launch or when the pack version changed it is unpacked into files/dm (where the game reads it), so players only import the
-  // game's data. Release builds have no bundled pack and skip this
-  private async preparePack(): Promise<void> {
+  private startupFailure(rc: number): void {
+    this.started = false;
+    if (this.fpsTimer >= 0) { clearInterval(this.fpsTimer); this.fpsTimer = -1; }
+      const dataMissing = rc === -2 || rc === -5;
+      this.canImport = dataMissing || (!this.bundledRuntime && [-3, -4, -9, -10, -11, -12].indexOf(rc) >= 0);
+      const zh = this.lang.startsWith('zh');
+      let detail = '';
+      if (dataMissing) {
+        detail = zh ? '请选择游戏原始 Data 文件夹，完整保留里面的文件和目录。' : 'Select the original game Data folder with all its contents.';
+      } else if (this.bundledRuntime || rc === -13) {
+        detail = zh ? '应用内置运行组件检查失败。请保留已导入的游戏数据和存档，向开发者反馈此错误码；无需导入 dm 或重新复制 Data。' : 'Bundled runtime validation failed. Keep your game data and saves and report this error code. Do not import dm or recopy Data.';
+      } else if (this.canImport) {
+        detail = zh ? '此空壳需要与应用版本配套的运行包。' : 'This shell requires a matching runtime pack.';
+      }
+      this.error = `${zh ? '游戏启动准备失败' : 'Game startup failed'} (${rc})\n${detail}`;
+      hilog.error(0xD2E0, 'XblBoot', 'startup failed code=%{public}d bundled=%{public}s', rc, String(this.bundledRuntime));
+  }
+  // selfuse 邀请版（包括 Release）内置运行组件；公共空壳才需要外部运行包。
+  private async preparePack(): Promise<boolean> {
     const src = getContext(this).resourceDir + '/dm';
     let want = '', have = '';
-    try { want = fileIo.readTextSync(src + '/pack-version.txt').trim(); } catch (e) { return; }
+    try { want = fileIo.readTextSync(src + '/pack-version.txt').trim(); } catch (e) {
+      try { this.bundledRuntime = fileIo.accessSync(src + '/dm-pack.zip'); } catch (ignored) { }
+      if (!this.bundledRuntime) { return true; }
+      this.error = '内置组件版本信息缺失 (PACK-MARKER)，请反馈开发者；请保留 Data 和存档。'; return false;
+    }
+    this.bundledRuntime = true;
+    if (!want) { this.error = '内置组件版本信息为空 (PACK-MARKER)，请反馈开发者。'; return false; }
     try { have = fileIo.readTextSync(this.files + '/dm/pack-version.txt').trim(); } catch (e) { }
-    if (want === have) { return; }
+    if (want === have) { return true; }
     try {
       if (!fileIo.accessSync(this.files + '/dm')) { fileIo.mkdirSync(this.files + '/dm', true); }   // 已存在时 mkdirSync 抛 13900015（以前包一更新就在这里失败）| mkdirSync throws 13900015 when it exists (pack updates used to fail right here)
       try { fileIo.unlinkSync(this.files + '/dm/pack-version.txt'); } catch (e) { }   // 解压到一半被杀：下次重来 | killed halfway: unpack again next time
@@ -96,8 +129,12 @@ struct Index {
       try { fileIo.rmdirSync(tmp); } catch (e) { }
       fileIo.copyFileSync(src + '/pack-version.txt', this.files + '/dm/pack-version.txt');
       hilog.info(0xD2E0, 'XblPack', 'runtime pack %{public}s unpacked', want);
-    } catch (e) { hilog.error(0xD2E0, 'XblPack', 'pack unpack failed: %{public}s', JSON.stringify(e)); }
-    this.importing = '';
+    } catch (e) {
+      hilog.error(0xD2E0, 'XblPack', 'pack unpack failed: %{public}s', JSON.stringify(e));
+      this.error = `内置组件解压失败 (PACK-UNPACK/${(e as BusinessError).code})，请检查存储空间后重启应用；请保留 Data 和存档。`;
+      this.importing = ''; this.canImport = false; return false;
+    }
+    this.importing = ''; return true;
   }
   // 导入游戏资源：选手机上的「D2R Mobile」文件夹（里面 data/ = 游戏数据，dm/ = 电脑上生成的运行包：out、shaders、overlay、ui-art），
   // 拷进本应用：data → files/romfs/data，dm/* → files/dm/*。拷完重新启动。不删源文件夹。
@@ -109,27 +146,38 @@ struct Index {
       const uris = await new picker.DocumentViewPicker(getContext(this) as common.UIAbilityContext).select(opts);
       if (!uris || uris.length === 0) { return; }
       const root = uris[0];
+      // Accept the data directory itself as well as its parent; bundled components are already prepared.
+      // 内置组件已就绪时，可直接选 data 本身，也兼容原来的父目录选择方式。
+      const directData = decodeURIComponent(root).replace(/\/+$/, '').split('/').pop()?.toLowerCase() === 'data';
       this.importing = '正在检查文件夹…';
-      const parts: string[][] = [['data', this.files + '/romfs'], ['dm/out', this.files + '/dm'], ['dm/shaders', this.files + '/dm'], ['dm/overlay', this.files + '/dm'], ['dm/ui-art', this.files + '/dm'], ['dm/derived.tsv', this.files + '/dm'], ['dm/pack_info.txt', this.files + '/dm']];
+      const parts: string[][] = (directData || this.bundledRuntime) ? [['data', this.files + '/romfs']] : [['data', this.files + '/romfs'], ['dm/out', this.files + '/dm'], ['dm/shaders', this.files + '/dm'], ['dm/overlay', this.files + '/dm'], ['dm/ui-art', this.files + '/dm'], ['dm/derived.tsv', this.files + '/dm'], ['dm/pack_info.txt', this.files + '/dm']];
       let copied = 0;
       const failed: string[] = [];
       for (const part of parts) {
-        const src = root + '/' + part[0];
+        const src = directData ? root : root + '/' + part[0];
         // 目录已存在时 mkdirSync 抛 13900015（同 preparePack）| mkdirSync throws 13900015 when the directory exists (as in preparePack)
         if (!fileIo.accessSync(part[1])) { fileIo.mkdirSync(part[1], true); }
         const name = part[0].split('/').pop() as string, target = part[1] + '/' + name;
-        // 单个文件（derived.tsv、pack_info.txt）先删旧的再拷 | single files (derived.tsv, pack_info.txt): remove the old one before copying
-        if (name.indexOf('.') >= 0) { try { fileIo.unlinkSync(target); } catch (e) { } }
+        // 只导入 data 时，源目录可能没有组件信息文件；先拷到临时文件，成功后才替换，保留内置包的信息。
+        // A data-only folder has no runtime metadata. Stage file copies before replacing the bundled metadata.
+        const isFile = name.indexOf('.') >= 0;
+        const copyTarget = isFile ? target + '.importing' : target;
+        if (isFile) { try { fileIo.unlinkSync(copyTarget); } catch (e) { } }
         try {
           // copy 的目录目标必须先存在；全新壳没有 out/shaders/overlay/ui-art，不能把目标缺失误判成源缺失。
           // Directory copy needs an existing destination; a fresh shell has none of these runtime directories yet.
           if (name.indexOf('.') < 0 && !fileIo.accessSync(target)) { fileIo.mkdirSync(target, true); }
-          await fileIo.copy(src, fileUri.getUriFromPath(target), {
+          await fileIo.copy(src, fileUri.getUriFromPath(copyTarget), {
             progressListener: (p: fileIo.Progress) => {
               this.importing = `正在导入 ${part[0]}：${Math.floor(p.processedSize / 1048576)} / ${Math.floor(p.totalSize / 1048576)} MB`;
             }
           });
+          if (isFile) {
+            fileIo.copyFileSync(copyTarget, target);
+            try { fileIo.unlinkSync(copyTarget); } catch (e) { }
+          }
         } catch (e) {
+          if (isFile) { try { fileIo.unlinkSync(copyTarget); } catch (cleanupError) { } }
           // 13900002 = 选中的文件夹里没有这一项（只导入 data 或只导入 dm 都可以）；其余错误算导入失败，不启动，免得新旧组件混用
           // 13900002 = the picked folder has no such entry (importing only data or only dm is fine); any other error fails the import without starting, so old and new parts never mix
           const code = (e as BusinessError).code;
@@ -142,10 +190,50 @@ struct Index {
         copied++;
       }
       if (failed.length) { this.importing = `导入没有完成（${failed.join('、')}），请检查手机存储空间后重新导入`; return; }
-      if (!copied) { this.importing = '这个文件夹里没有 data 或 dm，请选中「装着它们的那个文件夹」（例如「D2R Mobile」）'; return; }
+      if (!copied) { this.importing = this.bundledRuntime ? '没有找到游戏数据，请直接选择 Data 文件夹。' : '没有找到 data 或运行包，请检查选择的文件夹。'; return; }
       this.importing = '导入完成，正在启动…'; this.error = ''; this.canImport = false;
       this.boot(); this.importing = '';
     } catch (e) { this.importing = `导入失败：${JSON.stringify(e)}`; }
+  }
+  aboutToDisappear(): void {
+    if (this.fpsTimer >= 0) { clearInterval(this.fpsTimer); this.fpsTimer = -1; }
+  }
+  private readLog(): void {
+    try {
+      const path = this.files + '/dm/boot.log';
+      const size = fileIo.statSync(path).size;
+      this.logTail = fileIo.readTextSync(path, { offset: Math.max(0, size - 16384), length: Math.min(size, 16384) });
+    } catch (e) { this.logTail = this.lang.startsWith('zh') ? '当前没有可读取的游戏日志。' : 'No game log is available yet.'; }
+    this.showLog = true;
+  }
+  private readExperiments(): void {
+    this.experimentsReady = false; this.experimentError = ''; this.experimentSaved = false;
+    try {
+      const flags = dm.experimentFlags();
+      if (flags < 0) {
+        this.experimentError = `${this.lang.startsWith('zh') ? '读取实验设置失败' : 'Could not read experiment settings'} (${flags})`;
+        return;
+      }
+      this.experimentBits = flags; this.experimentsReady = true;
+    } catch (e) { this.experimentError = this.lang.startsWith('zh') ? '读取实验设置失败，请重新打开工具面板。' : 'Could not read experiment settings. Reopen the tools panel.'; }
+  }
+  private saveExperiment(mask: number, enabled: boolean): void {
+    if (!this.experimentsReady) { return; }
+    let flags = enabled ? this.experimentBits | mask : this.experimentBits & ~mask;
+    if (enabled && (mask === 32 || mask === 64)) { flags = (flags & ~96) | mask; }
+    this.writeExperimentFlags(flags);
+  }
+  private writeExperimentFlags(flags: number): void {
+    if (!this.experimentsReady) { return; }
+    this.experimentError = ''; this.experimentSaved = false;
+    try {
+      const result = dm.setExperimentFlags(flags);
+      if (result < 0) {
+        this.experimentError = `${this.lang.startsWith('zh') ? '保存失败，设置未更改' : 'Save failed; settings unchanged'} (${result})`;
+        return;
+      }
+      this.experimentBits = flags; this.experimentSaved = true;
+    } catch (e) { this.experimentError = this.lang.startsWith('zh') ? '保存失败，设置未更改。' : 'Save failed; settings unchanged.'; }
   }
   private finishInput(accepted: boolean): void {
     if (!this.request) { return; }
@@ -156,31 +244,172 @@ struct Index {
     Stack() {
       XComponent({ id: 'dm', type: XComponentType.SURFACE, libraryname: 'dm' })
         .width('100%').height('100%')
-        .onLoad(() => { this.preparePack().then(() => this.boot()); })
+        .onLoad(() => { this.preparePack().then((ready: boolean) => { if (ready) { this.boot(); } }); })
       IosOverlay({
-        inputEnabled: this.started && this.request === null,
+        inputEnabled: this.started && this.request === null && !this.toolsOpen,
         overlayRoot: this.files + '/dm/overlay',
         artRoot: this.files + '/dm/ui-art',
         safeLeft: px2vp(this.safeLeftPx), safeRight: px2vp(this.safeRightPx), safeBottom: px2vp(this.safeBottomPx)
       }).width('100%').height('100%')
-      if (this.fps) {
+      if (this.showFps && this.fps && !this.toolsOpen && !this.request) {
         Text(this.fps).fontColor('#ff66dd66').fontSize(14).backgroundColor('#66000000').padding({ left: 8, right: 8, top: 2, bottom: 2 })
           .borderRadius(6).position({ x: '50%', y: 6 }).translate({ x: '-50%' }).hitTestBehavior(HitTestMode.Transparent)
       }
-      if (this.error || this.importing) {
+      if (!this.request) {
+        Button('···', { type: ButtonType.Circle }).width(36).height(36)
+          .fontSize(22).fontColor('#F1F3F5').backgroundColor('#8021262D')
+          .accessibilityText(this.lang.startsWith('zh') ? '游戏工具与诊断' : 'Game tools and diagnostics')
+          .position({ x: px2vp(this.safeLeftPx) + 8, y: 8 })
+          .onClick(() => { this.toolsOpen = !this.toolsOpen; this.showLog = false; this.experimentsOpen = false; if (this.toolsOpen) { this.readExperiments(); } })
+      }
+      if (this.toolsOpen && !this.request) {
+        Column({ space: 14 }) {
+          Row() {
+            Text(this.lang.startsWith('zh') ? '游戏工具' : 'Game tools').fontSize(22).fontWeight(FontWeight.Bold).fontColor('#F1F3F5')
+            Blank()
+            Button(this.lang.startsWith('zh') ? '关闭' : 'Close').onClick(() => { this.toolsOpen = false; })
+          }.width('100%')
+          Scroll() {
+            Column({ space: 14 }) {
+          Row() {
+            Text(this.lang.startsWith('zh') ? '显示帧率' : 'Show FPS').fontSize(16).fontColor('#F1F3F5')
+            Blank()
+            Toggle({ type: ToggleType.Switch, isOn: this.showFps }).onChange((value: boolean) => { this.showFps = value; })
+          }.width('100%')
+          Text(this.lang.startsWith('zh') ? '帧率为应用呈现计数；上屏稳定性以性能采样为准。' : 'FPS uses application present counts; display pacing requires a performance capture.')
+            .fontSize(12).fontColor('#B7C2CF').width('100%')
+          Button(this.lang.startsWith('zh') ? '查看最近日志' : 'Recent logs').width('100%').onClick(() => { this.readLog(); })
+          if (this.showLog) {
+            Scroll() { Text(this.logTail).fontSize(11).fontColor('#DCE4EE').copyOption(CopyOptions.LocalDevice).width('100%') }.height(150).width('100%')
+          }
+          Button(this.lang.startsWith('zh') ? (this.experimentsOpen ? '收起实验性能选项 ▴' : '实验性能选项 ▾') : (this.experimentsOpen ? 'Hide performance experiments ▴' : 'Performance experiments ▾'))
+            .width('100%').onClick(() => { this.experimentsOpen = !this.experimentsOpen; })
+          if (this.experimentsOpen) {
+            Column({ space: 12 }) {
+              Button(this.lang.startsWith('zh') ? '恢复推荐设置' : 'Restore recommended settings')
+                .enabled(this.experimentsReady).onClick(() => { this.writeExperimentFlags(0); })
+              Row({ space: 12 }) {
+                Text(this.lang.startsWith('zh') ? '性能优先画面（界面文字略糊）' : 'Performance display (softer text)').layoutWeight(1).fontColor('#FFFFFF')
+                Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 32768) !== 0 }).enabled(this.experimentsReady)
+                  .onChange((value: boolean) => { this.saveExperiment(32768, value); })
+              }.width('100%')
+              Button(this.lang.startsWith('zh') ? '开发者对照（不建议改动）' : 'Developer comparisons')
+                .onClick(() => { this.developerExperimentsOpen = !this.developerExperimentsOpen; })
+              if (this.developerExperimentsOpen) {
+                Text(this.lang.startsWith('zh') ? '仅用于性能对照；开启不代表帧率或画质一定提升。' : 'For performance comparisons only; enabling an experiment does not guarantee an improvement.')
+                  .fontSize(12).fontColor('#B7C2CF').width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '关闭 60 帧 GPU 预算（对照）' : 'Disable 60 FPS GPU budget (control)').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 1) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(1, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '关闭新增清屏优化' : 'Disable the new clear optimization').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 2) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(2, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '减少短抖动引起的降帧' : 'Confirm brief stalls before lowering frame rate').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 4) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(4, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '开启 OpenGTX 关键线程登记' : 'Enable OpenGTX key thread registration').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 8) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(8, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? 'PerfHint 不上报线程号' : 'PerfHint without thread IDs').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 16) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(16, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '帧率区间 B：30–120，期望60' : 'Rate range B: 30–120, expected 60').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 32) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(32, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '帧率区间 C：0–120，期望60' : 'Rate range C: 0–120, expected 60').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 64) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(64, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '关闭 90 Hz 节拍修正（负对照）' : 'Disable 90 Hz pacing correction (control)').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 128) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(128, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '原生尺寸上屏（实验）' : 'Native-size presentation (experimental)').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 256) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(256, value); })
+                }.width('100%')
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '出帧分段测量（实验）' : 'Frame stage measurements (experimental)').fontSize(15).fontColor('#F1F3F5').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 512) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(512, value); })
+                }.width('100%')
+                Row() {
+                  Text(this.lang.startsWith('zh') ? '高频核请求（实验）' : 'High-frequency core requests (experimental)').fontSize(14).fontColor('#FFFFFF').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 1024) === 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(1024, !value); })
+                }.width('100%')
+                Row() {
+                  Text(this.lang.startsWith('zh') ? '停顿后清除旧掉帧计数' : 'Clear stale late-frame counts after stalls').fontSize(14).fontColor('#FFFFFF').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 2048) === 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(2048, !value); })
+                }.width('100%')
+                Row() {
+                  Text(this.lang.startsWith('zh') ? '图像缓存快速查找（实验）' : 'Image cache fast lookup (experimental)').fontSize(14).fontColor('#FFFFFF').layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 4096) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(4096, value); })
+                }.width('100%')
+                Text(this.lang.startsWith('zh') ? '保存并退出游戏后，关闭并重新打开应用生效。不会自动退出游戏。' : 'Save and exit the game, then close and reopen the app to apply. The game will not be closed automatically.')
+                  .fontSize(13).fontColor('#E8C67A').width('100%')
+                Button(this.lang.startsWith('zh') ? '采集一次绘制性能' : 'Capture drawing performance once')
+                  .onClick(() => {
+                    const result = dm.profileDescriptors();
+                    this.experimentError = result === 0 ? (this.lang.startsWith('zh') ? '3秒后同时采集DESC与DRAW，共60帧；请关闭面板。' : 'DESC + DRAW: 60 frames in 3 seconds; close this panel.') : `Capture unavailable (${result})`;
+                  })
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '描述符整套复用' : 'Descriptor set reuse').layoutWeight(1).fontColor('#FFFFFF')
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 16384) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(16384, value); })
+                }
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '跳过相同 BC 贴图重传' : 'Skip identical BC uploads').layoutWeight(1).fontColor('#FFFFFF')
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 65536) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(65536, value); })
+                }
+              }
+              if (this.experimentSaved) {
+                Text(this.lang.startsWith('zh') ? '已保存，重新打开应用后生效。' : 'Saved. Applies after reopening the app.').fontSize(12).fontColor('#91D7A3').width('100%')
+              }
+              if (this.experimentError) { Text(this.experimentError).fontSize(12).fontColor('#FFB4AB').width('100%') }
+            }.width('100%').padding(12).backgroundColor('#303741').borderRadius(12)
+          }
+          Text(this.lang.startsWith('zh') ? '离开游戏请使用游戏菜单中的“保存并退出”，确保角色进度写入。' : 'Use Save and Exit in the game menu to preserve character progress.')
+            .fontSize(13).fontColor('#B7C2CF').width('100%')
+            }.width('100%')
+          }.width('100%').layoutWeight(1)
+        }.width('70%').height('86%').constraintSize({ maxWidth: 520 }).padding(20).backgroundColor('#F2222730').borderRadius(24)
+      }
+      // Modal priority: name input > tools > startup/import status; never draw two panels together.
+      if (!this.request && !this.toolsOpen && (this.error || this.importing)) {
         Column({ space: 16 }) {
           if (this.error) { Text(this.error).fontColor('#ffcdb98c').fontSize(16) }
           if (this.canImport && !this.importing) {
-            Button('导入（选择装着 data 的文件夹）').onClick(() => { this.importResources(); })
+            Button('导入 data（可直接选 data 文件夹）').onClick(() => { this.importResources(); })
           }
           if (this.importing) { Text(this.importing).fontColor('#ffd8d0bc').fontSize(15) }
         }.padding(24).backgroundColor('#cc000000').borderRadius(8)
       }
       if (this.request) {
         Column({ space: 12 }) {
-          Text(this.request.title || this.t('dmInputTitle')).fontColor('#ffcdb98c').fontSize(18)
-          if (this.request.sub) { Text(this.request.sub).fontColor('#ffd8d0bc').fontSize(14) }
+          Text(this.request.title || this.t('dmInputTitle')).fontColor('#F1F3F5').fontSize(22).fontWeight(FontWeight.Bold)
+          if (this.request.sub) { Text(this.request.sub).fontColor('#B7C2CF').fontSize(14) }
           TextInput({ text: this.text, placeholder: this.request.nameRule ? this.t('dmNameBlankRandom') : this.request.guide })
+            .height(52).fontSize(20).fontColor('#F1F3F5').placeholderColor('#9AA7B5')
+            .backgroundColor('#383F49').borderRadius(14).padding({ left: 16, right: 16 })
             .maxLength(this.request.maxChars > 0 ? this.request.maxChars : 64)
             .type(this.request.numericMax >= 0 ? InputType.Number : InputType.Normal)
             .onChange((v: string) => { this.text = v; })
@@ -189,7 +418,7 @@ struct Index {
             Button(this.t('dmCancel')).onClick(() => this.finishInput(false))
             Button(this.t('dmConfirm')).onClick(() => this.finishInput(true))
           }
-        }.padding(24).backgroundColor('#ee141210').borderRadius(12).width('60%')
+        }.padding(24).backgroundColor('#F2222730').borderRadius(24).width('80%').constraintSize({ maxWidth: 520 })
       }
     }.width('100%').height('100%').backgroundColor('#000000')
   }

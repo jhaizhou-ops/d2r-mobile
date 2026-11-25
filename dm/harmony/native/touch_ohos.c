@@ -1,3 +1,5 @@
+#include "gamepad_ohos.h"
+#include "haptics_ohos.h"
 // 鸿蒙触控：iOS front_ios.m 的 DmMetalView（触点 → 手势层 dm_touch_controls.c → 宿主）与 touch_ui_message 逐段搬运，不另起一套。
 // 差别只在平台外壳：UITouch 换成触点 id（ArkTS 传来）、CADisplayLink 换成 ArkTS 每帧调 dm_ohos_touch_tick、dispatch_async 换成原子量（下一拍在 UI 线程生效）。
 // 绘图（DmTouchOverlay drawRect）在 ArkTS IosOverlay.ets，这里只给它一份状态快照（touch_ohos.h DM_OS_*）。
@@ -67,6 +69,7 @@ static int ov_hidden = 1, ov_nav, ov_dialogOnly, ov_hudBlocked, g_dirty = 1;
 static dm_hud_info ov_hud; static dm_tg_snapshot ov_native;
 // 游戏线程 → UI 线程（iOS 的 dispatch_async）| Game thread → UI thread (iOS's dispatch_async)
 static _Atomic int g_touch_frontend = 1, g_touch_navigation, g_hud_blocked, g_nav_pub, g_cover;
+int dm_front_navigation(void) { return atomic_load(&g_nav_pub); }
 static _Atomic int g_focused = 1;
 static int _labelsArmed, _labelsDone; static double _labelsAt;
 
@@ -379,9 +382,12 @@ void dm_ohos_touch_event(int phase, int id, float x, float y) {
     finish_touch(id, phase == 2 ? "ended" : "cancelled");
     if (_pendEnd != id) t->live = 0;
 }
+void dm_ohos_touch_cancel(void) {
+    if (g_ready) { for (int i = 0; i < 32; i++) g_t[i].live = 0; _nswallow = 0; _uiFinger = NOT; _uiFeDrag = 0; cancel_controls(); }
+}
 void dm_ohos_touch_focus(int active) {
     atomic_store(&g_focused, !!active);
-    if (!active && g_ready) { for (int i = 0; i < 32; i++) g_t[i].live = 0; _nswallow = 0; _uiFinger = NOT; _uiFeDrag = 0; cancel_controls(); }
+    if (!active) dm_ohos_touch_cancel();
 }
 
 // ---- 每帧（tickTouchControls + refreshPortalBinding）| Every frame (tickTouchControls + refreshPortalBinding) ----
@@ -447,6 +453,8 @@ static void glyph_out(float *o, dm_ta_glyph g, int held, int ss, int charges) {
 }
 
 int dm_ohos_touch_tick(float *o, int cap) {
+    _padMode = dm_ohos_gamepad_mode();
+    dm_ohos_haptics_tick();
     if (!o || cap < DM_OS_FLOATS) return -1;
     ensure_init();
     { float vr[4]; front_ohos_view_rect(g_win_w, g_win_h, vr); if (memcmp(vr, g_vr, sizeof vr)) layout_view(); }

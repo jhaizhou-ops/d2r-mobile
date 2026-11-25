@@ -2057,6 +2057,12 @@ static void ui_bind_pump(uint64_t root, uint64_t fr) {
 // The controller has no key for switching this mode (the map key − only opens / closes).
 static _Atomic int g_map_req = -1, g_map_full_now, g_map_hold;
 static int g_map_want = -1, g_map_cfg_seen = -1;   // 主线程（ui_map_pump）独用 | main thread (ui_map_pump) only
+static _Atomic int g_map_new_run;
+// A new character run is explicit; area loading is deliberately not a reset.
+static void ui_map_lifecycle(const char *cat, const char *act) {
+    if (!strcmp(cat, "CharacterSelect") && !strcmp(act, "LoadCharacter")) atomic_store(&g_map_new_run, 1);
+}
+
 void dm_ui_map_full(int on) { atomic_store(&g_map_req, on != 0); }
 void dm_ui_map_hold(int on) { atomic_store(&g_map_hold, on != 0); }
 int dm_ui_map_is_full(void) { return atomic_load(&g_map_full_now); }
@@ -2088,6 +2094,10 @@ static void ui_map_center(module_t *m, uint64_t root, int mini) {
 // the original map-opening path, which brings the area name back too (sending only PanelManager:OpenPanel AutoMap brought the lines back but not the area name at the top right, measured on the host).
 static _Atomic int g_map_movie;
 static void ui_map_pump(module_t *m, uint64_t root) {
+    if (atomic_exchange(&g_map_new_run, 0)) {
+        g_map_want = g_map_cfg_seen = -1;
+        atomic_store(&g_map_req, -1);
+    }
     // 局外（前端各页、读取画面，按本帧界面判：有 HUD 且没有读取画面才算局内）一律不调原版地图切换 0x40f780：它经 0x411540 按当前关卡重建地图线条，
     // 出局那几帧旧局的关卡数据已释放，读到的是垃圾指针。线上：一键重开回到前端、发出载入后的下一帧在 main+0x4117cc 崩（iOS 18.6，三次同址）。
     // 不能拿 HUD 读数的 valid 当局内：它由服务端拍发布，出局后不再有拍，停在最后一次的 1。局外的切换请求也丢掉，不带进下一局。
@@ -3114,6 +3124,7 @@ static void sel_keep(const char *cat, const char *act) {
     LOG("选角：确认的是「%s」，原版重排后当前成了「%s」（被选者没排到第一行）→ 已按名字设回第 %lld 行", want, nm ? nm : "", (long long)at);
 }
 void dm_ui_on_uimsg(const char *cat, const char *act, const char *arg) {
+    ui_map_lifecycle(cat, act);
     sel_keep(cat, act);
     // 位置守卫自检的四条路：关面板 / 切页签 / 退出到前端（切后台由前端 dm_ui_lifecycle 报）
     // The four paths of the position guard self-check: closing a panel / switching tabs / exiting to the front end (going to the background is reported by the front end's dm_ui_lifecycle)
