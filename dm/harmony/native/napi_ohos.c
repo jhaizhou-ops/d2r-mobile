@@ -347,6 +347,11 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
       LOG("boot: rate_range=%d pace_ref60=%d", (flags & 64) ? 2 : (flags & 32) ? 1 : 0, !(flags & 128));
       setenv("DM_PERFHINT_NO_TIDS", (flags & 16) ? "1" : "0", 1);
       setenv("DM_PACE_HYSTERESIS", (flags & 4) ? "1" : "0", 1);
+      // H-13 B/C 缺省开：试升前要 CPU 余量、退避上限 120 s；60 档以下不压 3D 比例。位 131072 两项一起退回原策略（对照）
+      // H-13 B/C on by default: probe-up needs CPU headroom, backoff cap 120 s; no 3D-scale cuts below the 60 tier. Bit 131072 restores both old policies (control)
+      setenv("DM_PACE_PROBE_GATE", (flags & 131072) ? "0" : "1", 1);
+      setenv("DM_3D_SCALE_BUDGET_RELAX", (flags & 131072) ? "0" : "1", 1);
+      LOG("boot: pace_probe_gate=%d budget_relax=%d", !(flags & 131072), !(flags & 131072));
       setenv("DM_PACE_HYSTERESIS_TRACE", (flags & 4) ? "1" : "0", 1);
       LOG("boot: experience flags=%d budget=%d loadclear=%d hysteresis=%d gtx_keys=%d perfhint_no_tids=%d", flags, !(flags & 1), !(flags & 2), !!(flags & 4), !!(flags & 8), !!(flags & 16)); }
     // 鸿蒙缺省值（都只在环境里没有时设；dm/env 与标记文件仍可逐项改）。Pura X / Mate90 实测依据见 dm/harmony/README.md 的性能一节

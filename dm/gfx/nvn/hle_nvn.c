@@ -1505,6 +1505,12 @@ static void present_cfg(const win_t *o) {
 // whole pipeline's bottleneck: max(mean game-thread CPU per frame, actual translation-thread CPU per frame, GPU time per frame).
 // Step down at once when the bottleneck exceeds this tier's period by 3%; step up only after 90 consecutive frames below 88% of the faster tier's period, to avoid flapping.
 __attribute__((weak)) uint64_t dm_present_late_count(void) { return 0; } __attribute__((weak)) double xbg_recent_gpu_ms(void) { return -1; }   // 空的弱定义（不是弱声明）：苹果链接器要求弱引用链接时有定义；Vulkan 后端 / 鸿蒙平台层给强定义 | empty weak definitions (not declarations): Apple's linker needs a weak reference to resolve; the Vulkan backend / HarmonyOS platform give the strong ones
+extern int (*g_nvn_loadscreen_up)(void);
+#if defined(__OHOS__)
+#define PACE_BACKOFF_CAP (gate ? NVN_PACE_PROBE_CAP_NS : 60000000000ull)
+#else
+#define PACE_BACKOFF_CAP 60000000000ull
+#endif
 static void pace_adapt_tick(double screen_hz) {
     if (!pace_adapt_enabled() || screen_hz <= 0) return;
     // 游戏侧取本线程 CPU 时间（不含任何等待）：墙钟减节拍等待会把下游等待（合成器按时放帧 → 翻译线程等交换链 → 游戏等翻译）算进去，形成越降越慢的正反馈
@@ -1514,6 +1520,8 @@ static void pace_adapt_tick(double screen_hz) {
 #ifdef __OHOS__
     static int hyst = -1, trace, gap_reset; static unsigned trace_windows;
     static nvn_pace_hysteresis hs;
+    static int gate = -1; static uint64_t gate_log;
+    if (gate < 0) { const char *e = getenv("DM_PACE_PROBE_GATE"); gate = !(e && !strcmp(e, "0")); LOG("[nvn] pace_probe_gate=%d（试升前要 CPU 余量、退避上限 120 s、换区域重置 | probe needs CPU headroom, backoff cap 120 s, reset on area change）", gate); }
     if (hyst < 0) { const char *e = getenv("DM_PACE_HYSTERESIS"), *t = getenv("DM_PACE_HYSTERESIS_TRACE"), *g = getenv("DM_PACE_GAP_RESET"); hyst = e && !strcmp(e,"1"); trace = t && !strcmp(t,"1"); gap_reset = !(g && !strcmp(g,"0")); LOG("[nvn] pace_gap_reset=%d", gap_reset); if (hyst) LOG("[nvn] pace hysteresis enabled: tier evidence is CPU submit-late proxy, not actual display timestamps; trace limit=30 windows"); }
 #endif
     uint64_t now = now_ns(), cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID); static uint64_t pcpu; g_pa_wait = 0;
@@ -1535,6 +1543,10 @@ static void pace_adapt_tick(double screen_hz) {
         // Start a fresh observation after discontinuity; preserve probe/backoff policy.
         if (probing) skip = 20;
     }
+#endif
+#ifdef __OHOS__
+    // 换区域（读取画面开着）：场景变了，上一处的试升失败不再说明问题，退避回到 3 s | Area change (loading screen up): the scene changed, earlier probe failures no longer apply, backoff back to 3 s
+    if (gate && backoff != 3000000000ull && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { backoff = 3000000000ull; LOG("[nvn] 出图档 换区域，试升退避重置为 3 s"); }
 #endif
     if (iv > 250) return;   // 读取画面 / 卡住的帧不计 | loading-screen / stuck frames are not counted
     g_pa_ema += (busy - g_pa_ema) / 16;
@@ -1574,14 +1586,23 @@ static void pace_adapt_tick(double screen_hz) {
     }
     int prior_k = g_pa_k;
 #endif
+#ifdef __OHOS__
+    int probe_ok = 1;
+    if (gate && !probing && g_pa_k > kmin && now - stable_since > backoff
+        && !nvn_pace_probe_allowed((g_pa_k - 1) * 1000.0 / screen_hz, g_pa_ema, cm, now - stable_since, NVN_PACE_PROBE_CAP_NS)) {
+        probe_ok = 0;
+        if (now - gate_log > 30000000000ull) { gate_log = now; LOG("[nvn] 出图档 暂不试升 %.1f FPS：CPU 余量不够（游戏 %.1f / 翻译 %.1f ms，限 %.1f ms）", screen_hz / (g_pa_k - 1), g_pa_ema, cm, (g_pa_k - 1) * 870.0 / screen_hz); }
+    }
+#endif
     if (probing) {
         probing = 0; stable_since = now;
-        if (misses >= 4 && g_pa_k < kmax) { g_pa_k++; backoff = backoff * 2 > 60000000000ull ? 60000000000ull : backoff * 2; LOG("[nvn] 出图档 试升失败，退回 %.1f FPS（60 帧错过 %u 帧；下次 %.0f s 后再试）", screen_hz / g_pa_k, misses, backoff / 1e9); }
+        if (misses >= 4 && g_pa_k < kmax) { g_pa_k++; backoff = nvn_pace_backoff_next(backoff, PACE_BACKOFF_CAP); LOG("[nvn] 出图档 试升失败，退回 %.1f FPS（60 帧错过 %u 帧；下次 %.0f s 后再试）", screen_hz / g_pa_k, misses, backoff / 1e9); }
         else { backoff = 3000000000ull; LOG("[nvn] 出图档 ↑ %.1f FPS 站稳（60 帧错过 %u 帧；游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", screen_hz / g_pa_k, misses, g_pa_ema, cm, gm); }
     } else if (down && g_pa_k < kmax) { g_pa_k++; stable_since = now; LOG("[nvn] 出图档 ↓ %.1f FPS（60 帧错过 %u 帧；游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", screen_hz / g_pa_k, misses, g_pa_ema, cm, gm); }
     else if (g_pa_k > kmin && now - stable_since > backoff
 #ifdef __OHOS__
              && (!hyst || hs.bad_windows == 0)
+             && probe_ok
 #endif
     ) { g_pa_k--; probing = 1; skip = 20; LOG("[nvn] 出图档 试升 %.1f FPS", screen_hz / g_pa_k); }
 #ifdef __OHOS__

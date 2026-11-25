@@ -341,6 +341,16 @@ static void s3g_feed(double iv_ms) {
         double budget = 1000.0 / last_target;
         int decision = dm_scale_budget_step(&budget_ctl, sample, age, g, cpu, budget,
             now < hold, lv, maxlv, higher / current);
+        // 跑在 60 档以下（实际帧间隔 > 20 ms）时不再压 3D 比例，并每 5 个窗口回升一档到配置值：长测里降到下限 0.41 后 GPU 时间没降（GPU 跟着降频），只是画面一直最糊（H-13 C）。
+        // DM_3D_SCALE_BUDGET_RELAX=0（实验位 131072）退回原策略。
+        // Below the 60 tier (actual frame interval > 20 ms) stop lowering the 3D scale and walk it back one level every 5 windows to the configured value:
+        // in long runs the floor 0.41 did not lower GPU time (the GPU clock followed), it only kept the picture at its blurriest (H-13 C).
+        // DM_3D_SCALE_BUDGET_RELAX=0 (experiment bit 131072) restores the old policy.
+        { static int relax_on = -1, relax; if (relax_on < 0) { const char *e = getenv("DM_3D_SCALE_BUDGET_RELAX"); relax_on = !(e && *e == '0'); LOG("3D GPU budget: below-60 relax=%d", relax_on); }
+          if (relax_on && fr > 20.0 && decision != DM_S3B_INVALID && decision != DM_S3B_DUPLICATE && decision != DM_S3B_HOLD) {
+              if (decision == DM_S3B_DOWN || decision == DM_S3B_FLOOR || decision == DM_S3B_CPU || decision == DM_S3B_WAIT_UP) decision = DM_S3B_STABLE;
+              if (lv > 0 && decision == DM_S3B_STABLE && ++relax >= 5) { relax = 0; decision = DM_S3B_UP; }
+          } else if (decision != DM_S3B_DUPLICATE) relax = 0; }
         static const char *reason[] = {"unknown", "same-sample", "hold", "cpu-bound", "floor", "down", "wait-up", "up", "stable"};
         LOG("3D GPU budget: target=%d frame=%.1f gpu=%.1f cpu=%.1f age=%.0f level=%d reason=%s",
             last_target, fr, g, cpu, age, lv, reason[decision]);

@@ -380,6 +380,11 @@ struct Index {
                   Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 65536) !== 0 }).enabled(this.experimentsReady)
                     .onChange((value: boolean) => { this.saveExperiment(65536, value); })
                 }
+                Row({ space: 12 }) {
+                  Text(this.lang.startsWith('zh') ? '关闭试升余量与 3D 回升（对照）' : 'Disable probe headroom and 3D relax (control)').layoutWeight(1).fontColor('#FFFFFF')
+                  Toggle({ type: ToggleType.Switch, isOn: (this.experimentBits & 131072) !== 0 }).enabled(this.experimentsReady)
+                    .onChange((value: boolean) => { this.saveExperiment(131072, value); })
+                }
               }
               if (this.experimentSaved) {
                 Text(this.lang.startsWith('zh') ? '已保存，重新打开应用后生效。' : 'Saved. Applies after reopening the app.').fontSize(12).fontColor('#91D7A3').width('100%')

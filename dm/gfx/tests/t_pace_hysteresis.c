@@ -21,7 +21,25 @@ int pace_hysteresis_test(void) {
  CHECK((6>=6) && !nvn_pace_hysteresis_down(&s,6));
  return 0;
 }
-int main(void) { return pace_hysteresis_test(); }
+// H-13 B: probe-up needs CPU headroom (87% of the faster period), except once the stable period reaches the cap; backoff doubles to the cap.
+int pace_probe_gate_test(void) {
+ const unsigned long long cap=NVN_PACE_PROBE_CAP_NS, s3=3000000000ull;
+ CHECK(nvn_pace_probe_allowed(16.667,12.0,14.0,s3,cap));     // both under 14.5 ms
+ CHECK(!nvn_pace_probe_allowed(16.667,12.0,19.7,s3,cap));    // H-11 camp translation 19.7 ms blocks the 60 probe
+ CHECK(!nvn_pace_probe_allowed(16.667,15.0,10.0,s3,cap));    // game thread over the limit
+ CHECK(nvn_pace_probe_allowed(16.667,12.0,-1,s3,cap));       // no async translation reading: game side only
+ CHECK(!nvn_pace_probe_allowed(16.667,-1,-1,s3,cap));        // no reading at all: wait
+ CHECK(nvn_pace_probe_allowed(16.667,30.0,30.0,cap,cap));    // cap reached: probe anyway (no lock-in)
+ CHECK(!nvn_pace_probe_allowed(0,1,1,s3,cap));
+ CHECK(nvn_pace_probe_allowed(25.0,21.0,21.5,s3,cap));       // 40 fps probe from 30: limit 21.75 ms
+ CHECK(nvn_pace_backoff_next(s3,cap)==6000000000ull);
+ unsigned long long b=s3; for(int i=0;i<10;i++) b=nvn_pace_backoff_next(b,cap);
+ CHECK(b==cap);
+ CHECK(nvn_pace_backoff_next(cap,cap)==cap);
+ CHECK(nvn_pace_backoff_next(48000000000ull,60000000000ull)==60000000000ull);   // old cap still honoured when the gate is off
+ return 0;
+}
+int main(void) { int r=pace_hysteresis_test(); return r?r:pace_probe_gate_test(); }
 
 #ifdef NVN_PACE_INTEGRATION
 #ifdef _WIN32
@@ -50,6 +68,7 @@ static uint64_t g_pa_wait,g_pa_last;
 static double g_pa_ema,g_pa_screen_hz;
 static int g_pa_k=2,g_x_sync;
 static _Atomic double g_pa_xcpu_ms=14;
+int (*g_nvn_loadscreen_up)(void);
 #include "pace_adapt_tick_under_test.inc"
 static void advance(unsigned frames,unsigned late) {
  for (unsigned i=0;i<frames;++i) { test_now+=100000000; test_cpu+=1000000; if(i<late)++test_late; pace_adapt_tick(60); }
@@ -64,6 +83,18 @@ int pace_actual_branch_test(void) {
  test_cpu=1; test_now+=100000000; pace_adapt_tick(60); // backwards clock resets pending/window
  advance(60,6); CHECK(g_pa_k==2); // fresh first mild window
  advance(60,6); CHECK(g_pa_k==3); // second mild window down
+ return 0;
+}
+// H-13 B on the real controller: with translation at 19.7 ms the 60 probe waits (no hiccup every few seconds), then fires once the
+// stable period reaches the 120 s cap; with headroom it probes after the normal 3 s backoff. Frames here are 100 ms apart.
+int pace_gate_branch_test(void) {
+ g_pa_k=2; g_pa_xcpu_ms=19.7; advance(60,0); advance(60,0);            // settle at 30 (k=2 at 60 Hz) after the previous test
+ unsigned waited=0; while (g_pa_k==2 && waited<1500) { advance(60,0); waited+=60; }
+ CHECK(g_pa_k==1); CHECK(waited>=960 && waited<=1320);                   // probed only near the 120 s cap (1200 frames), not after the 3 s backoff
+ advance(80,0); CHECK(g_pa_k==1);                                        // probe held without misses
+ g_pa_k=2; g_pa_xcpu_ms=12.0; advance(60,0);
+ waited=0; while (g_pa_k==2 && waited<1200) { advance(60,0); waited+=60; }
+ CHECK(g_pa_k==1); CHECK(waited<=180);                                   // headroom: probe after the short backoff
  return 0;
 }
 #endif
