@@ -19,6 +19,11 @@ static int request_target(int target) {
     if (target == 60 && profile && (*profile == '1' || *profile == '2')) {
         range.min = *profile == '1' ? 30 : 0; range.max = 120;
     }
+    // DM_REFRESH_120=1：请屏幕跑 120 Hz，出图档就有 60 / 40 / 30（60 Hz 屏只有 60 / 30 / 20）——营地撑不住 60 时停在均匀的 40 而不是 30。
+    // DM_REFRESH_120=1: ask for a 120 Hz screen so the present tiers become 60 / 40 / 30 (a 60 Hz screen only has 60 / 30 / 20) -- when camp cannot hold 60 it
+    // settles at an even 40 instead of 30.
+    const char *r120 = getenv("DM_REFRESH_120");
+    if (target == 60 && r120 && *r120 == '1') { range.min = 60; range.max = 120; range.expected = 120; }
     g_target = target; // A failed request is not retried every frame; retry on a new target or foreground session.
     int rc = OH_NativeXComponent_SetExpectedFrameRateRange(g_component, &range);
     RATE_LOG("XComponent rate request min=%{public}d max=%{public}d expected=%{public}d rc=%{public}d (request only, not actual FPS)",
