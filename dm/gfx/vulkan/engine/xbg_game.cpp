@@ -754,6 +754,8 @@ struct Slot {
     // The HLE frame at submission: on retire this submission's GPU time is added to it (hud::gpu_add).
     uint64_t hud_frame=0;
     struct WaitCount{std::atomic<int> n{0};WaitCount()=default;WaitCount(const WaitCount&){}WaitCount &operator=(const WaitCount&){n.store(0);return *this;}} waiters;   // 不持引擎锁等本槽栅栏的线程数（xbg_legacy_wait）；复位栅栏前须等它们离开 | threads waiting on this slot's fence without the engine lock (xbg_legacy_wait); the fence is reset only after they leave
+    // gfx-split-submit: cmd is the buffer being recorded; cmd0 the slot's first one; extra the continuation buffers (from pool, reset with it).
+    VkCommandBuffer cmd0{};std::vector<VkCommandBuffer> extra;size_t extra_used=0;uint32_t split_draws=0,split_passes=0;
     VkCommandBuffer cmd{};VkCommandPool pool{};VkFence fence{};VkQueryPool timestamps{};bool recording=false,pending=false;uint64_t ops=0,covers=0; // covers: guest fence value complete once this slot retires
     std::vector<VkQueryPool> occlusion_pools,timestamp_pools;uint32_t occlusion_used=0,timestamp_used=0;
     Retire retire;Arena stream,readback;std::vector<VkDescriptorPool> pools;size_t pool_next=0;
@@ -1054,8 +1056,9 @@ Slot &recording_slot(){
         else s.stream.keep_chunks=3;
         s.stream.trim();s.readback.keep_chunks=s.guard.empty()?1:s.readback.chunks.size();s.readback.trim();
         if(texel_memo_enabled && (slot_serial&15)<2)texel_evict(slot_index,false);   // this slot's copies: its previous submission retired
+        if(s.cmd0){s.cmd=s.cmd0;s.extra_used=0;}s.split_draws=s.split_passes=0;
         if(!s.cmd){if(slot_pools_enabled){VkCommandPoolCreateInfo cp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};cp.queueFamilyIndex=cfg.queue_family;VK(vkCreateCommandPool(cfg.device,&cp,nullptr,&s.pool));}
-            VkCommandBufferAllocateInfo a{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};a.commandPool=s.pool?s.pool:command_pool;a.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;a.commandBufferCount=1;VK(vkAllocateCommandBuffers(cfg.device,&a,&s.cmd));}
+            VkCommandBufferAllocateInfo a{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};a.commandPool=s.pool?s.pool:command_pool;a.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;a.commandBufferCount=1;VK(vkAllocateCommandBuffers(cfg.device,&a,&s.cmd));s.cmd0=s.cmd;}
         s.readback.cached=readback_cached;
         if(!s.fence){VkFenceCreateInfo f{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};VK(vkCreateFence(cfg.device,&f,nullptr,&s.fence));}
         if(!s.timestamps && timestamp_bits){VkQueryPoolCreateInfo q{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};q.queryType=VK_QUERY_TYPE_TIMESTAMP;q.queryCount=2;VK(vkCreateQueryPool(cfg.device,&q,nullptr,&s.timestamps));}
@@ -1122,6 +1125,25 @@ void submit_slots(bool wait){
     }
     if(wait){retire_slot(slots[slot_index]);retire_slot(slots[slot_index^1]);}
 }
+// gfx-split-submit (DM_GFX_SPLIT_SUBMIT=<render passes>, 0 = off): between render passes, once that many passes and at least
+// split_min_draws draws were recorded, the recording so far is submitted (no fence; the slot's fence on the last part covers
+// all of them in queue order) and recording continues in a new buffer of the same pool. The GPU starts on the frame earlier
+// and the driver's per-submit work is spread over the frame instead of one ~2 ms vkQueueSubmit at its end (ANGLE
+// preferSubmitAtFBOBoundary, Ryujinx AutoFlushCounter). Same thread as every other queue use; not while a prologue,
+// pass profiling or the present thread's deferred submit is involved.
+unsigned split_every=0,split_min_draws=40;uint64_t split_count=0;
+void split_submit_maybe(){
+    Slot &s=slots[slot_index];if(!split_every || !s.recording || open_pass.cmd || !s.pool || s.prof || submit_defer)return;
+    if(++s.split_passes<split_every || s.split_draws<split_min_draws || !s.pro_ops.empty() || !s.pro_images.empty())return;
+    VK(vkEndCommandBuffer(s.cmd));VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&s.cmd;
+    if(xbg_queue_barrier)xbg_queue_barrier();
+    {CPU_SCOPE(Submit);VK(vkQueueSubmit(cfg.queue,1,&si,VK_NULL_HANDLE));}
+    if(s.extra_used==s.extra.size()){VkCommandBufferAllocateInfo a{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};a.commandPool=s.pool;a.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;a.commandBufferCount=1;
+        VkCommandBuffer nb{};VK(vkAllocateCommandBuffers(cfg.device,&a,&nb));s.extra.push_back(nb);}
+    s.cmd=s.extra[s.extra_used++];VkCommandBufferBeginInfo b{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};b.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;VK(vkBeginCommandBuffer(s.cmd,&b));
+    {VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};mb.srcAccessMask=VK_ACCESS_MEMORY_WRITE_BIT;mb.dstAccessMask=VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT;
+     vkCmdPipelineBarrier(s.cmd,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,1,&mb,0,nullptr,0,nullptr);barrier_seq=write_seq;}
+    bind_cache_reset();s.split_passes=0;s.split_draws=0;++split_count;}
 // Pipelines persist across launches (the driver validates the header and
 // ignores incompatible data), so later launches skip shader compilation.
 size_t pipelines_unsaved=0;uint64_t pipeline_save_frame=0;constexpr uint64_t compile_ns=2000000;
@@ -1241,6 +1263,7 @@ void perf_frame(){
     if(vcache::enabled){xbg_logf("NVN PERF vcache hits=%.1f (%.2fMB) fills=%.1f (%.2fMB) refills=%.2f volatile=%llu untracked=%llu flushes=%llu entries=%zu arena=%.1fMB pools=%d",vcache::hits/f,vcache::hit_bytes/1048576.0/f,vcache::fills/f,vcache::fill_bytes/1048576.0/f,vcache::refills/f,(unsigned long long)vcache::volatiles,(unsigned long long)vcache::untracked,(unsigned long long)vcache::flushes,vcache::live(),vcache::arena_bytes()/1048576.0,[]{int live=0,used=0;uint64_t adds=0;if(nvn_dirty_slot_stats)nvn_dirty_slot_stats(&live,&used,&adds);return used;}());vcache::hits=vcache::hit_bytes=vcache::fills=vcache::fill_bytes=vcache::refills=0;}
     {static uint64_t pm=0,pe=0;xbg_logf("NVN PERF pipelines_new=%llu evicted=%llu warm_hits=%llu created=%llu create_ms=%.1f create_max_ms=%.1f warm_built=%llu warm_failed=%llu warm_ms=%.0f async_skips=%llu async_built=%llu",(unsigned long long)(pipeline_counts.misses-pm),(unsigned long long)(pipeline_counts.evictions-pe),(unsigned long long)warm::hits,(unsigned long long)warm::creates,warm::create_ns/1e6,warm::create_max_ns/1e6,(unsigned long long)warm::built.load(),(unsigned long long)warm::failed.load(),warm::build_ns.load()/1e6,(unsigned long long)warm::async_skips.exchange(0),(unsigned long long)warm::async_built.load());warm::hits=warm::creates=warm::create_ns=warm::create_max_ns=0;pm=pipeline_counts.misses;pe=pipeline_counts.evictions;}
     xbg_logf("NVN PERF uimemo skips=%.1f",ui_memo_skips/f);ui_memo_skips=0;
+    xbg_logf("NVN PERF split submits=%.2f",split_count/f);split_count=0;
     xbg_logf("NVN PERF upick on=%d mode4=%.1f decided=%llu hits=%.1f fills=%.1f fallbacks=%.1f flushes=%llu entries=%zu bytes=%.1fMB",int(upick_enabled),upick_mode4/f,(unsigned long long)upick_decided,upick_hits/f,upick_fills/f,upick_fallbacks/f,(unsigned long long)upick_flushes,ucas::count,ucas::arena.used_total/1048576.0);upick_mode4=upick_hits=upick_fills=upick_fallbacks=0;
     xbg_logf("NVN PERF drvstatic on=%d mode3=%.1f mode0=%.1f hits=%.1f fills=%.1f flushes=%llu",int(drvs_enabled),drvs_mode3/f,drvs_mode0/f,drvs_hits/f,drvs_fills/f,(unsigned long long)drvs_flushes);drvs_mode3=drvs_mode0=drvs_hits=drvs_fills=0;
     xbg_logf("NVN PERF setcache ab=%d hits=%.1f misses=%.1f template=%.1f plain=%.1f memo_hits=%.1f memo_misses=%.1f memo_front=%.1f why=texel%.1f/simg%.1f/dm%.1f/dynbuf%.1f/store%.1f",int(ab_frame_on),set_cache_hits/f,set_cache_misses/f,template_updates/f,plain_updates/f,desc_memo_hits/f,desc_memo_misses/f,memo_front_hits/f,desc_memo_why[0]/f,desc_memo_why[1]/f,desc_memo_why[2]/f,desc_memo_why[3]/f,desc_memo_why[4]/f);desc_memo_hits=desc_memo_misses=memo_front_hits=0;for(auto &w:desc_memo_why)w=0;xbg_logf("NVN PERF keydiff shader%.0f pool%.0f ubo%.0f uaddr%.0f size%.0f vp%.0f alpha%.0f drv%.0f tex%.0f samp%.0f saddr%.0f same%.0f new%.0f len%.0f",key_diff[0]/tf,key_diff[1]/tf,key_diff[2]/tf,key_diff[3]/tf,key_diff[4]/tf,key_diff[5]/tf,key_diff[6]/tf,key_diff[7]/tf,key_diff[8]/tf,key_diff[9]/tf,key_diff[10]/tf,key_diff[11]/tf,key_diff[12]/tf,key_diff[13]/tf);for(auto &k:key_diff)k=0;{char ub[1024];int o=snprintf(ub,sizeof ub,"NVN PERF ucensus n=%llu st=%llu/%llu/%llu/%llu/%llu uni:",(unsigned long long)ucen_n,(unsigned long long)ucen_st[0],(unsigned long long)ucen_st[1],(unsigned long long)ucen_st[2],(unsigned long long)ucen_st[3],(unsigned long long)ucen_st[4]);for(int u=0;u<18 && o<900;u++)if(ucen_uni[u])o+=snprintf(ub+o,sizeof ub-o," %d=%llu",u,(unsigned long long)ucen_uni[u]);o+=snprintf(ub+o,sizeof ub-o," moved:");for(int a=0;a<5;a++)for(int c=0;c<16 && o<1000;c++)if(ucen_diff[a][c])o+=snprintf(ub+o,sizeof ub-o," s%dc%d=%llu",a,c,(unsigned long long)ucen_diff[a][c]);xbg_logf("%s",ub);memset(ucen_diff,0,sizeof ucen_diff);memset(ucen_uni,0,sizeof ucen_uni);memset(ucen_st,0,sizeof ucen_st);ucen_n=0;}   // per timed frame
@@ -1543,10 +1566,10 @@ Buffer snapshot_slow(uint64_t address,size_t bytes,VkDeviceSize align){
     Buffer b=stream_buffer(bytes,reinterpret_cast<const void*>(address),bytes,false);snapshots.emplace(key,b);snapshot_maxlen=std::max<uint64_t>(snapshot_maxlen,bytes);return b;
 }
 struct Commands {
-    VkCommandBuffer command{};bool draw=false;
+    VkCommandBuffer &command;bool draw=false;   // the slot's current buffer: a split submission (gfx-split-submit) moves it on
     // Non-draw operations keep the former submit-per-operation semantics: they
     // end any open pass and are fenced by full barriers before and after.
-    explicit Commands(bool is_draw=false):draw(is_draw){Slot &s=recording_slot();command=s.cmd;++perf.ops;++s.ops;
+    explicit Commands(bool is_draw=false):command(recording_slot().cmd),draw(is_draw){Slot &s=recording_slot();++perf.ops;++s.ops;if(draw)++s.split_draws;
         if(!draw){end_open_pass();full_barrier(command);}}
     void finish(){if(!draw){end_open_pass();full_barrier(command);}}
 };
@@ -4075,7 +4098,7 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     VkQueryPool occlusion{};uint32_t occlusion_index=0;const bool counting=state.count_samples && !no_occlusion_queries && !ab_off("occ");
     const bool new_run=counting && (!occlusion_batch_enabled || ab_off("query") || !open_occlusion.cmd || open_pass.cmd!=c.command || open_pass.pass!=p.pass || open_pass.framebuffer!=p.framebuffer);
     if(new_run){need(cfg.enabled_core.occlusionQueryPrecise,"Precise samples-passed query disabled");occlusion_query(occlusion,occlusion_index);}   // a new pool ends the pass first
-    if(open_pass.cmd!=c.command || open_pass.pass!=p.pass || open_pass.framebuffer!=p.framebuffer){end_open_pass();
+    if(open_pass.cmd!=c.command || open_pass.pass!=p.pass || open_pass.framebuffer!=p.framebuffer){end_open_pass();split_submit_maybe();
         // Proven full overwrite: begin with the color-DONT_CARE twin; open_pass keeps p.pass, so later draws continue this pass.
         if(p.pass_noload && quad_indices.empty() && !ab_off("noload") && ui_uy==0 && ui_vs==1 && first_draw_covers(p,prim,first,count,indexed,vertex_buffers,ib,index_type)){VkRenderPass keep=p.pass;p.pass=p.pass_noload;begin_pass(p,c);p.pass=keep;++noload_passes;}
         else begin_pass(p,c);
@@ -4793,7 +4816,7 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
 #else
     upick_enabled=u&&*u&&atoi(u)!=0;
 #endif
-    xbg_logf("NVN picked static uniform buffers (mode 4)=%d (DM_GFX_UNI_PICK)",int(upick_enabled));}}
+    xbg_logf("NVN picked static uniform buffers (mode 4)=%d (DM_GFX_UNI_PICK)",int(upick_enabled));}{const char *v=getenv("DM_GFX_SPLIT_SUBMIT");split_every=v&&*v?unsigned(atoi(v)):0;const char *m=getenv("DM_GFX_SPLIT_MIN_DRAWS");if(m&&*m)split_min_draws=unsigned(atoi(m));xbg_logf("NVN split submit every %u passes, min %u draws (DM_GFX_SPLIT_SUBMIT)",split_every,split_min_draws);}}
      {FILE *v=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-tex-dirty").c_str(),"rb");tex_dirty=false;if(v){tex_dirty=fgetc(v)!='0';fclose(v);}else if(const char *e=getenv("DM_GFX_TEX_DIRTY"))tex_dirty=atoi(e)!=0;
       xbg_logf("NVN texture checks through the dirty tracker=%d (marker gfx-tex-dirty)",int(tex_dirty));}{FILE *b=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-native-bc").c_str(),"rb");native_bc=false;if(b){native_bc=fgetc(b)!='0';fclose(b);}else if(const char *e=getenv("DM_GFX_NATIVE_BC"))native_bc=atoi(e)!=0;xbg_logf("NVN native BC textures=%d (marker gfx-native-bc)",int(native_bc));}
      {FILE *b=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-noload").c_str(),"rb");noload_enabled=false;if(b){noload_enabled=fgetc(b)!='0';fclose(b);}else if(const char *e=getenv("DM_GFX_NOLOAD"))noload_enabled=atoi(e)!=0;xbg_logf("NVN proven full-overwrite first draws skip the color load=%d (marker gfx-noload; A/B target noload)",int(noload_enabled));}{FILE *q=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-bright").c_str(),"rb");bright::enabled=true;if(q){bright::enabled=fgetc(q)!='0';fclose(q);}else if(const char *e=getenv("DM_GFX_BRIGHT"))bright::enabled=atoi(e)!=0;xbg_logf("NVN 3D brightening=%d (marker gfx-bright; A/B target bright)",int(bright::enabled));}{FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-perf-sample").c_str(),"rb");perf_sample=32;if(m){if(fscanf(m,"%u",&perf_sample)!=1)perf_sample=32;fclose(m);}else if(const char *e=getenv("DM_GFX_PERF_SAMPLE"))perf_sample=unsigned(atoi(e));perf_frame_timed=perf_sample!=0;perf_timed_frames=0;xbg_logf("NVN perf timing every %u frames (marker gfx-perf-sample; 0 = off)",perf_sample);}}
