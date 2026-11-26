@@ -68,7 +68,7 @@ struct Index {
         this.error = message.indexOf('%d') >= 0 ? message.replace('%d', String(code)) : `${message} (${code})`;
       });
     try { display.getDefaultDisplaySync() && dm.refresh(display.getDefaultDisplaySync().refreshRate); } catch (e) { }
-    const rc = dm.start(this.files, this.files, this.dataDir(), this.lang.startsWith('zh') ? 'zh-Hans' : 'en-US');
+    const rc = dm.start(this.files, this.files, this.dataDir(), this.lang || 'zh-Hans');   // full system tag (es / ru / ko / pt too): dm_lang_from_tag picks the first-install language, as iOS / Android
     if (rc > 0) {
       this.started = true;
       // 调试帧率（顶部居中，同老版）：每秒取出图帧数差 | Debug FPS (top center, as the old build): presented-frame difference per second
