@@ -518,6 +518,17 @@ static void on_changed(OH_NativeXComponent *c, void *window) { surface_set(c, wi
 static void on_destroyed(OH_NativeXComponent *c, void *window) { (void)window; surface_set(c, NULL); }
 static void on_touch(OH_NativeXComponent *c, void *window) { (void)c; (void)window; }   // 触控走 ArkTS 覆盖层 | touch goes through the ArkTS overlay
 static OH_NativeXComponent_Callback g_xcb = {on_created, on_changed, on_destroyed, on_touch};
+// 实体键盘（蓝牙 / USB）：游戏用的键吃掉（不让系统拿 Tab、方向键去走焦），其余照常传下去 | Physical keyboard: game keys are consumed (so Tab / arrows do not move
+// ArkUI focus), others propagate as usual
+static bool on_key(OH_NativeXComponent *c, void *w) {
+    (void)w; OH_NativeXComponent_KeyEvent *e = NULL; OH_NativeXComponent_KeyAction a; OH_NativeXComponent_KeyCode k;
+    if (OH_NativeXComponent_GetKeyEvent(c, &e) || !e || OH_NativeXComponent_GetKeyEventAction(e, &a) || OH_NativeXComponent_GetKeyEventCode(e, &k)) return false;
+    if (a != OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN && a != OH_NATIVEXCOMPONENT_KEY_ACTION_UP) return false;
+    int used = dm_ohos_keyboard_key((int)k, a == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN);
+    { static int logged; if (logged < 3 && a == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN) { ++logged; fprintf(stderr, "键盘：按键 code=%d 游戏键=%d
+", (int)k, used); } }
+    return used != 0;
+}
 
 static void cleanup_input(void *arg) { (void)arg; dm_ohos_frame_rate_running(0); dm_ohos_gamepad_stop(); dm_ohos_haptics_focus(0); }
 static napi_value init(napi_env env, napi_value exports) {
@@ -544,7 +555,7 @@ static napi_value init(napi_env env, napi_value exports) {
     // XComponent 以本库为 libraryname 加载时，exports 上挂着原生组件句柄 | When an XComponent loads this library, exports carries the native component
     napi_value xobj; OH_NativeXComponent *xc = NULL;
     if (napi_get_named_property(env, exports, OH_NATIVE_XCOMPONENT_OBJ, &xobj) == napi_ok && napi_unwrap(env, xobj, (void **)&xc) == napi_ok && xc)
-        OH_NativeXComponent_RegisterCallback(xc, &g_xcb);
+        { OH_NativeXComponent_RegisterCallback(xc, &g_xcb); int rc = OH_NativeXComponent_RegisterKeyEventCallbackWithResult(xc, on_key); if (rc) HLOG(LOG_WARN, "dm-key", "key callback rc=%d", rc); }
     return exports;
 }
 static napi_module g_module = {1, 0, NULL, init, "dm", NULL, {0}};

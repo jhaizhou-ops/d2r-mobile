@@ -21,6 +21,9 @@ static struct pad { char *id; uint64_t buttons, hat; int32_t ax[4]; int xbox, ps
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static int running, focused = 1, pad_mode, need_center, stick_on[2], glyph, zr_mine;
 static uint64_t previous_buttons, previous_zr;
+/* Keyboard (Bluetooth / USB, XComponent key events): one more pad, same bits as the Mac app (front_mac.m key_bit):
+   J/Space A, K/Esc B, U X, I Y, F/G stick clicks, Q/E L/R, Z/C ZL/ZR, Enter/=/keypad+ Plus, Tab Minus, arrows d-pad, WASD left stick. */
+static uint64_t kb_buttons; static int kb_w, kb_a, kb_s, kb_d;
 static int button_regs, axis_regs, device_reg;
 
 static int slot(const char *id, int create) {
@@ -54,6 +57,9 @@ static void apply(void) {
             if (m > best[k]) { best[k] = m; a[2*k] = pads[i].ax[2*k]; a[2*k+1] = pads[i].ax[2*k+1]; }
         }
     }
+    b |= kb_buttons;
+    { int32_t kx = (kb_d - kb_a) * DM_STICK_MAX, ky = (kb_w - kb_s) * DM_STICK_MAX; double m = hypot(kx, ky);
+      if (m > best[0]) { best[0] = m > DM_STICK_MAX ? DM_STICK_MAX : m; a[0] = kx; a[1] = ky; } }
     if (!focused || !running) { dm_pad_set(0, 0, 0, 0, 0); return; }
     for (int k = 0; k < 2; ++k) stick_on[k] = best[k] / DM_STICK_MAX >= (stick_on[k] ? .15 : .25);
     if (!stick_on[0] && !stick_on[1]) need_center = 0;
@@ -174,6 +180,27 @@ void dm_ohos_gamepad_touched(void) {
     pthread_mutex_lock(&lock);
     if (pad_mode) { need_center = 1; mode(0); apply(); }
     pthread_mutex_unlock(&lock);
+}
+int dm_ohos_keyboard_key(int code, int down) {
+    uint64_t bit = 0; int *stick = NULL;
+    switch (code) {
+    case 2026: case 2050: bit = DM_BTN_A; break;            /* J, Space */
+    case 2027: case 2070: bit = DM_BTN_B; break;            /* K, Esc */
+    case 2037: bit = DM_BTN_X; break; case 2025: bit = DM_BTN_Y; break;   /* U, I */
+    case 2022: bit = DM_BTN_LS; break; case 2023: bit = DM_BTN_RS; break; /* F, G */
+    case 2033: bit = DM_BTN_L; break; case 2021: bit = DM_BTN_R; break;   /* Q, E */
+    case 2042: bit = DM_BTN_ZL; break; case 2019: bit = DM_BTN_ZR; break; /* Z, C */
+    case 2054: case 2058: case 2116: bit = DM_BTN_PLUS; break;  /* Enter, =, keypad + */
+    case 2049: bit = DM_BTN_MINUS; break;                   /* Tab */
+    case 2014: bit = DM_BTN_LEFT; break; case 2012: bit = DM_BTN_UP; break; case 2015: bit = DM_BTN_RIGHT; break; case 2013: bit = DM_BTN_DOWN; break;
+    case 2039: stick = &kb_w; break; case 2017: stick = &kb_a; break; case 2035: stick = &kb_s; break; case 2020: stick = &kb_d; break;  /* W A S D */
+    default: return 0;
+    }
+    pthread_mutex_lock(&lock);
+    if (down) glyph = DM_GLYPH_KBD;
+    if (stick) *stick = !!down; else kb_buttons = down ? (kb_buttons | bit) : (kb_buttons & ~bit);
+    apply(); pthread_mutex_unlock(&lock);
+    return 1;
 }
 int dm_ohos_gamepad_mode(void) { pthread_mutex_lock(&lock); int m = pad_mode; pthread_mutex_unlock(&lock); return m; }
 int dm_ohos_gamepad_count(void) { pthread_mutex_lock(&lock); int n = 0; for (int i = 0; i < SLOTS; ++i) n += pads[i].id != NULL; pthread_mutex_unlock(&lock); return n; }

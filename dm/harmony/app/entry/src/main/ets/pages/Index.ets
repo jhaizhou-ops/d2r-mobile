@@ -303,6 +303,7 @@ struct Index {
     Stack() {
       XComponent({ id: 'dm', type: XComponentType.SURFACE, libraryname: 'dm' })
         .width('100%').height('100%')
+        .focusable(true).defaultFocus(true).focusOnTouch(true)   // physical keyboard: key events reach the native callback (on_key)
         .onLoad(() => { this.preparePack().then((ready: boolean) => { if (ready) { this.boot(); } }); })
       IosOverlay({
         inputEnabled: this.started && this.request === null && !this.toolsOpen,
