@@ -3221,17 +3221,23 @@ Buffer &driver_block(unsigned ns,unsigned bank){uint64_t gen=bank?tex_gen[ns]:bu
 // trust). Past the budget the arena goes to the retiring slot and memo_epoch drops every memoized set that may hold an old block.
 namespace drvstatic{
 constexpr size_t bytes=0x1000,budget=4096;Arena arena;uint64_t epoch=1;size_t count=0;
-struct Entry{Buffer buffer;std::unique_ptr<uint8_t[]> shadow;};std::unordered_map<uint64_t,std::vector<Entry>> map;
+// Keyed by exactly what fill_driver copies (no 4 KB clear / fill / hash per binding change): storage bank = stage (its table base
+// differs) + 16 storage (address, 32-bit size) + for compute 16 uniform ones; texture bank = 128 texture + 128 sampler + 9 image handles.
+struct Entry{Buffer buffer;std::vector<uint64_t> key;};std::unordered_map<uint64_t,std::vector<Entry>> map;
 struct Cur{uint64_t gen=0,epoch=0;Buffer buffer;};Cur cur[6][2];
-uint64_t hash(const uint8_t *p){uint64_t h=0x9E3779B97F4A7C15ull;for(size_t i=0;i<bytes;i+=8){uint64_t w;memcpy(&w,p+i,8);h=(h^w)*0x100000001B3ull;h^=h>>29;}return h;}
+size_t make_key(uint64_t *k,unsigned ns,unsigned bank){size_t n=0;k[n++]=(uint64_t(bank)<<8)|(bank?0:ns);
+    if(!bank){for(unsigned r=0;r<16;r++){k[n++]=state.sb[ns][r].address;k[n++]=uint32_t(state.sb[ns][r].size);}if(ns==5)for(unsigned r=0;r<16;r++){k[n++]=state.ub[ns][r].address;k[n++]=uint32_t(state.ub[ns][r].size);}}
+    else{memcpy(k+n,state.tex[ns],128*8);n+=128;memcpy(k+n,state.samp[ns],128*8);n+=128;memcpy(k+n,state.img[ns],9*8);n+=9;}
+    return n;}
+uint64_t hash(const uint64_t *k,size_t n){uint64_t h=0x9E3779B97F4A7C15ull;for(size_t i=0;i<n;i++){h=(h^k[i])*0x100000001B3ull;h^=h>>29;}return h;}
 void flush(){if(arena.chunks.empty() && map.empty())return;std::vector<ArenaChunk> old;old.swap(arena.chunks);arena.current=0;arena.used_total=0;arena.peak=0;map.clear();count=0;++epoch;++drvs_flushes;++memo_epoch;
     retire_handle([old]()mutable{for(auto &c:old)Arena::destroy(c);});}
 const Buffer &block(unsigned ns,unsigned bank){uint64_t gen=bank?tex_gen[ns]:buf_gen[ns];Cur &c=cur[ns][bank];
     if(c.epoch==epoch && c.gen==gen && c.buffer.buffer){++drvs_hits;return c.buffer;}
-    alignas(16) static uint8_t scratch[bytes];memset(scratch,0,bytes);fill_driver(scratch,ns,bank?2:0);uint64_t h=hash(scratch);
-    {auto f=map.find(h);if(f!=map.end())for(auto &e:f->second)if(!memcmp(e.shadow.get(),scratch,bytes)){c.gen=gen;c.epoch=epoch;c.buffer=e.buffer;++drvs_hits;return c.buffer;}}
+    static uint64_t k[1+64+265];size_t kn=make_key(k,ns,bank);uint64_t h=hash(k,kn);
+    {auto f=map.find(h);if(f!=map.end())for(auto &e:f->second)if(e.key.size()==kn && !memcmp(e.key.data(),k,kn*8)){c.gen=gen;c.epoch=epoch;c.buffer=e.buffer;++drvs_hits;return c.buffer;}}
     if(count>=budget)flush();
-    Entry e;e.buffer=arena.alloc(bytes);memcpy(e.buffer.mapped,scratch,bytes);e.buffer.flush();e.shadow.reset(new uint8_t[bytes]);memcpy(e.shadow.get(),scratch,bytes);
+    Entry e;e.buffer=arena.alloc(bytes);memset(e.buffer.mapped,0,bytes);fill_driver(static_cast<uint8_t*>(e.buffer.mapped),ns,bank?2:0);e.buffer.flush();e.key.assign(k,k+kn);
     c.gen=gen;c.epoch=epoch;c.buffer=e.buffer;map[h].push_back(std::move(e));++count;++drvs_fills;return c.buffer;}
 void release(){if(!arena.chunks.empty()){for(auto &ch:arena.chunks)Arena::destroy(ch);arena.chunks.clear();}arena.current=0;arena.used_total=0;arena.peak=0;map.clear();count=0;++epoch;for(auto &a:cur)for(auto &b:a)b=Cur{};}
 }
