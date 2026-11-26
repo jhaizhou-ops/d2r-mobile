@@ -525,8 +525,7 @@ static bool on_key(OH_NativeXComponent *c, void *w) {
     if (OH_NativeXComponent_GetKeyEvent(c, &e) || !e || OH_NativeXComponent_GetKeyEventAction(e, &a) || OH_NativeXComponent_GetKeyEventCode(e, &k)) return false;
     if (a != OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN && a != OH_NATIVEXCOMPONENT_KEY_ACTION_UP) return false;
     int used = dm_ohos_keyboard_key((int)k, a == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN);
-    { static int logged; if (logged < 3 && a == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN) { ++logged; fprintf(stderr, "键盘：按键 code=%d 游戏键=%d
-", (int)k, used); } }
+    { static int logged; if (logged < 3 && a == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN) { ++logged; fprintf(stderr, "键盘：按键 code=%d 游戏键=%d\n", (int)k, used); } }
     return used != 0;
 }
 
