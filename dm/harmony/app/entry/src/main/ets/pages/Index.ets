@@ -9,6 +9,8 @@ import { zlib, BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display, window } from '@kit.ArkUI';
+import { systemShare } from '@kit.ShareKit';
+import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { IosOverlay } from '../components/IosOverlay';
 import { importGamePack, PackError, PackProgress, PackResult, PACK_CANCELLED } from '../data/GamePackImport';
 import { UI_TEXT_EN, UI_TEXT_ZH } from '../generated/UiText';
@@ -54,6 +56,24 @@ struct Index {
     try { if (fileIo.accessSync(base + '/data/.build.config') || fileIo.accessSync(base + '/data/build.config')) { return base + '/data'; } } catch (e) { }
     return base;
   }
+  // 暂停菜单「分享诊断日志」：截 boot.log 最后 2 MB 到缓存目录，弹系统分享面板（同 iOS / 安卓：玩家自己选发到哪，不上传）。
+  // Pause menu "Share diagnostic log": the last 2 MB of boot.log into the cache dir, then the system share sheet (as iOS / Android: the
+  // player chooses where it goes; nothing is uploaded).
+  private shareLog(): void {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const src = this.files + '/dm/boot.log', dst = ctx.cacheDir + '/D2R-Mobile-log.txt';
+      const size = fileIo.statSync(src).size, keep = Math.min(size, 2 * 1024 * 1024);
+      const buf = new ArrayBuffer(keep), from = fileIo.openSync(src, fileIo.OpenMode.READ_ONLY);
+      fileIo.readSync(from.fd, buf, { offset: size - keep, length: keep }); fileIo.closeSync(from);
+      const to = fileIo.openSync(dst, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(to.fd, buf); fileIo.closeSync(to);
+      const data = new systemShare.SharedData({ utd: utd.UniformDataType.PLAIN_TEXT, uri: fileUri.getUriFromPath(dst), title: 'D2R Mobile log' });
+      new systemShare.ShareController(data).show(ctx, { selectionMode: systemShare.SelectionMode.SINGLE, previewMode: systemShare.SharePreviewMode.DEFAULT })
+        .catch((e: BusinessError) => { hilog.warn(0xD2E0, 'dm', 'share log failed %{public}s', JSON.stringify(e)); });
+      hilog.info(0xD2E0, 'dm', 'share log %{public}d bytes', keep);
+    } catch (e) { hilog.warn(0xD2E0, 'dm', 'share log failed %{public}s', JSON.stringify(e)); }
+  }
   private boot(): void {
     dm.setCallbacks(
       (id: number, title: string, sub: string, guide: string, initial: string, maxChars: number, nameRule: number, numericMax: number) => {
@@ -66,7 +86,8 @@ struct Index {
         if (this.fpsTimer >= 0) { clearInterval(this.fpsTimer); this.fpsTimer = -1; }
         const message = this.t('dmAndroidStartFailed') || '启动失败';
         this.error = message.indexOf('%d') >= 0 ? message.replace('%d', String(code)) : `${message} (${code})`;
-      });
+      },
+      () => { this.shareLog(); });
     try { display.getDefaultDisplaySync() && dm.refresh(display.getDefaultDisplaySync().refreshRate); } catch (e) { }
     const rc = dm.start(this.files, this.files, this.dataDir(), this.lang || 'zh-Hans');   // full system tag (es / ru / ko / pt too): dm_lang_from_tag picks the first-install language, as iOS / Android
     if (rc > 0) {

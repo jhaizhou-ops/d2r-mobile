@@ -8,7 +8,7 @@ export const touchTick: (out: Float32Array) => number;
 export const uiText: (key: string) => string;
 export const execProbe: () => string;
 export const setCallbacks: (showInput: (id: number, title: string, sub: string, guide: string, initial: string, maxChars: number, nameRule: number, numericMax: number) => void,
-  bootFailed: (code: number) => void) => void;
+  bootFailed: (code: number) => void, shareLog?: () => void) => void;
 export const textResult: (id: number, accepted: boolean, text: string) => void;
 export const presentCount: () => number;
 

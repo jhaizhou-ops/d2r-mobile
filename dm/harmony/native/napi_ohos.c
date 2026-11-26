@@ -125,7 +125,7 @@ static int link_romfs(const char *romfs) {
 }
 
 // ---- ArkTS 回调（线程安全函数）：起名输入框、启动失败 | ArkTS callbacks (thread-safe functions): naming dialog, boot failure ----
-static napi_threadsafe_function g_show_input, g_boot_failed;
+static napi_threadsafe_function g_show_input, g_boot_failed, g_share_log;
 typedef struct { int64_t id; char *s[4]; int max_chars, name_rule, numeric_max; } input_req;
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t input_done = PTHREAD_COND_INITIALIZER;
@@ -151,6 +151,12 @@ static void call_boot_failed(napi_env env, napi_value js, void *ctx, void *data)
     napi_value code, undef; napi_create_int32(env, failure, &code); napi_get_undefined(env, &undef);
     napi_call_function(env, undef, js, 1, &code, NULL);
 }
+// 暂停菜单「分享诊断日志」（diag.c 在游戏主线程调）：交给 ArkTS 截最近一段日志、弹系统分享面板，不等 | Pause menu "Share diagnostic log" (diag.c, game
+// main thread): ArkTS copies the recent log and opens the system share sheet; no waiting here
+static void call_share_log(napi_env env, napi_value js, void *ctx, void *data) {
+    (void)ctx; (void)data; if (!env) return; napi_value undef; napi_get_undefined(env, &undef); napi_call_function(env, undef, js, 0, NULL, NULL);
+}
+static void share_log(void) { if (g_share_log) napi_call_threadsafe_function(g_share_log, NULL, napi_tsfn_nonblocking); }
 void front_android_boot_failed(int code) {
     if (g_boot_failed) napi_call_threadsafe_function(g_boot_failed, (void *)(intptr_t)code, napi_tsfn_nonblocking);
 }
@@ -184,12 +190,16 @@ static napi_value undefined(napi_env env) { napi_value r; napi_get_undefined(env
 #define ARGS(n) size_t argc = n; napi_value argv[n]; napi_get_cb_info(env, info, &argc, argv, NULL, NULL)
 
 static napi_value js_set_callbacks(napi_env env, napi_callback_info info) {
-    ARGS(2); napi_value name;
+    ARGS(3); napi_value name;
     napi_create_string_utf8(env, "dmShowInput", NAPI_AUTO_LENGTH, &name);
     napi_create_threadsafe_function(env, argv[0], NULL, name, 0, 1, NULL, NULL, NULL, call_show_input, &g_show_input);
     napi_create_string_utf8(env, "dmBootFailed", NAPI_AUTO_LENGTH, &name);
     napi_create_threadsafe_function(env, argv[1], NULL, name, 0, 1, NULL, NULL, NULL, call_boot_failed, &g_boot_failed);
     napi_unref_threadsafe_function(env, g_show_input); napi_unref_threadsafe_function(env, g_boot_failed);
+    napi_valuetype t = napi_undefined; if (argc >= 3 && napi_typeof(env, argv[2], &t) == napi_ok && t == napi_function) {
+        napi_create_string_utf8(env, "dmShareLog", NAPI_AUTO_LENGTH, &name);
+        if (napi_create_threadsafe_function(env, argv[2], NULL, name, 0, 1, NULL, NULL, NULL, call_share_log, &g_share_log) == napi_ok) {
+            napi_unref_threadsafe_function(env, g_share_log); void dm_sharelog_init(void (*cb)(void)); dm_sharelog_init(share_log); } }
     return undefined(env);
 }
 static napi_value js_text_result(napi_env env, napi_callback_info info) {
