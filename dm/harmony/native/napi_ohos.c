@@ -29,6 +29,7 @@
 #include <napi/native_api.h>
 #include <dirent.h>
 #include <errno.h>
+#include <time.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -49,7 +50,30 @@ static int g_started; // ArkUI thread only; reset only for pre-Vulkan payload fa
 static dm_lifecycle_dispatch g_lifecycle;
 static pthread_once_t g_lifecycle_once = PTHREAD_ONCE_INIT;
 static int g_lifecycle_error;
-static void lifecycle_graphics(int on) { dm_gfx_suspend(on); HLOG(LOG_INFO, "dm-lifecycle", "graphics suspend=%d", on); }
+// 进后台：挂起图形前，局内先请游戏存一次盘并等存档提交（同 iOS background_wait_save / Mac 退出：等到提交后 0.2 秒无新提交，最多 2.5 秒；
+// 暂停菜单开着时 dm_save_wait 冻住世界、临时放开暂停存这一次）。在生命周期线程上等，不挡 UI 线程。之前鸿蒙只发后台焦点，被系统冻结或划掉就丢掉
+// 距上次定时存盘（5 分钟）以来的进度。
+// Entering background: before suspending graphics, in a run ask the game to save once and wait for the commit (as iOS background_wait_save /
+// Mac quit: until 0.2 s without a new commit, at most 2.5 s; with the pause menu open dm_save_wait freezes the world and releases the pause for
+// this save). Waits on the lifecycle thread, not the UI thread. Before, HarmonyOS only posted the background focus, so a freeze or a swipe-away lost
+// the progress since the last timed save (every 5 minutes).
+static void background_wait_save(void) {
+    int dm_ingame_now(void); int dm_save_wait(double max_s, uint64_t *commits, int *froze, double *ms);
+    if (!g_started || !dm_ingame_now()) return;
+    uint64_t n = 0; int froze = 0; double ms = 0; int asked = dm_save_wait(2.5, &n, &froze, &ms);
+    fprintf(stderr, "前端：进后台等游戏存盘 %.0f ms，期间存档提交 %llu 次%s%s\n", ms, (unsigned long long)n, froze ? "（原先暂停着：冻结世界存盘、已恢复暂停）" : "",
+            n ? "" : (asked ? "【红】（2.5 秒内没等到）" : "【红】（没能请游戏存盘）"));
+}
+// 失焦（下拉通知栏、进多任务界面）：只请游戏下一拍存一次，不等；30 秒内只请一次（同 iOS resign_save）。在多任务界面直接划掉进程走不到进后台。
+// Unfocused (notification shade, app switcher): only ask the game to save on its next tick, without waiting; at most once per 30 s (as iOS resign_save).
+// Swiping the process away in the app switcher never reaches the background save.
+static void unfocus_save(void) {
+    int dm_ingame_now(void); int dm_request_save(void);
+    static uint64_t last; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    if (!g_started || !dm_ingame_now() || (last && now - last < 30000000000ull)) return;
+    if (dm_request_save()) { last = now; fprintf(stderr, "前端：失焦，请游戏下一拍存一次盘（不等）\n"); }
+}
+static void lifecycle_graphics(int on) { if (on) background_wait_save(); dm_gfx_suspend(on); HLOG(LOG_INFO, "dm-lifecycle", "graphics suspend=%d", on); }
 static void lifecycle_init(void) {
     dm_lifecycle_ops ops = {dm_focus_set, dm_audio_suspend, lifecycle_graphics};
     g_lifecycle_error = dm_lifecycle_start(&g_lifecycle, ops);
@@ -413,6 +437,7 @@ static napi_value js_focus(napi_env env, napi_callback_info info) {
     dm_ohos_frame_rate_focus(ev == 2 || ev == 3);
     dm_ohos_haptics_focus(ev == 2 || ev == 3);
     dm_ohos_touch_focus(ev == 2 || ev == 3);
+    if (ev == 0) unfocus_save();
     if (lifecycle_ready()) dm_lifecycle_post(&g_lifecycle, ev);
     return undefined(env);
 }
