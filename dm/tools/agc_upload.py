@@ -76,8 +76,12 @@ class Agc:
 
     def app_id(self, package):
         d = self.call('GET', '/api/publish/v2/appid-list', {'packageName': package, 'packageTypes': 7})
-        for x in d.get('appids') or []:
+        ids = d.get('appids') or []
+        for x in ids:
             if x.get('key') == package: return x.get('value')
+        # 实测（2026-11-27）：按包名查时 key 是应用名（如 "D2R Mobile"），只回一条就是它 | measured: queried by package, the key is the
+        # app name (e.g. "D2R Mobile"); a single result is the app
+        if len(ids) == 1 and ids[0].get('value'): log('[ok] app "%s"' % ids[0].get('key')); return ids[0]['value']
         sys.exit('[x] %s has no app id in this team: %s' % (package, d))
 
 
@@ -119,7 +123,9 @@ def test_groups(a, appid):
     for gtype in (0, 1):
         page = 1
         while True:
-            d = a.call('GET', '/api/app-test/v1/test-group/list', {'groupType': gtype, 'current': page, 'pageSize': 50}, headers={'appId': str(appid)})
+            try: d = a.call('GET', '/api/app-test/v1/test-group/list', {'groupType': gtype, 'current': page, 'pageSize': 50}, headers={'appId': str(appid)})
+            except SystemExit as e:   # 实测：API 客户端角色不够时 rtnCode 2「permission denied by api permission control」| measured: rtnCode 2 when the role lacks it
+                log('[!] 查不到群组列表（%s），只用上一个测试版本挂的群组 | group list unavailable, using the previous test version groups' % e); return out
             out += [g for g in d.get('groups') or [] if g.get('groupId')]
             if page >= int((d.get('pageInfo') or {}).get('totalPage') or 1): break
             page += 1
