@@ -1,3 +1,5 @@
+#include "gamepad_ohos.h"
+#include "haptics_ohos.h"
 // 鸿蒙触控：iOS front_ios.m 的 DmMetalView（触点 → 手势层 dm_touch_controls.c → 宿主）与 touch_ui_message 逐段搬运，不另起一套。
 // 差别只在平台外壳：UITouch 换成触点 id（ArkTS 传来）、CADisplayLink 换成 ArkTS 每帧调 dm_ohos_touch_tick、dispatch_async 换成原子量（下一拍在 UI 线程生效）。
 // 绘图（DmTouchOverlay drawRect）在 ArkTS IosOverlay.ets，这里只给它一份状态快照（touch_ohos.h DM_OS_*）。
@@ -15,6 +17,7 @@
 #include "../../host/dm_hud.h"
 #include "../../host/dm_world.h"
 #include "../../host/dm_uiscreen.h"
+#include "../../host/touch_mac.h"
 #include "../../ios/Sources/dm_touch_controls.h"
 #include "../../ios/Sources/dm_touch_game_state.h"
 #include "../../ios/Sources/dm_touch_native_art.h"
@@ -67,6 +70,7 @@ static int ov_hidden = 1, ov_nav, ov_dialogOnly, ov_hudBlocked, g_dirty = 1;
 static dm_hud_info ov_hud; static dm_tg_snapshot ov_native;
 // 游戏线程 → UI 线程（iOS 的 dispatch_async）| Game thread → UI thread (iOS's dispatch_async)
 static _Atomic int g_touch_frontend = 1, g_touch_navigation, g_hud_blocked, g_nav_pub, g_cover;
+int dm_front_navigation(void) { return atomic_load(&g_nav_pub); }
 static _Atomic int g_focused = 1;
 static int _labelsArmed, _labelsDone; static double _labelsAt;
 
@@ -111,7 +115,7 @@ static void restart_cover_hook(int mode) { atomic_store(&g_cover, mode); }
 static void ensure_init(void) {
     if (g_ready) return;
     for (int i = 0; i < 16; i++) _slot[i] = NOT;
-    dm_tc_set_tall_scale(0);
+    { int dm_ohos_device_class(void); dm_tc_set_tall_scale(dm_ohos_device_class() > 0); }   // 平板 / 电脑：同 iPad 的平板档（控件最多放大 15%，矮窗口另排）；手机照旧 | tablet / PC: the iPad tablet profile (controls up to 15% larger, short windows rearranged); phones unchanged
     dm_tc_init(&_controls, BW > 0 ? BW : 800, BH > 0 ? BH : 450); _controls.mouse_click_mode = 1;
     g_dm_restart_cover_hook = restart_cover_hook;
     g_ready = 1;
@@ -379,9 +383,29 @@ void dm_ohos_touch_event(int phase, int id, float x, float y) {
     finish_touch(id, phase == 2 ? "ended" : "cancelled");
     if (_pendEnd != id) t->live = 0;
 }
+// 指针模式（平板 / 电脑接鼠标，同 Mac App front_mac.m）：手柄版界面在屏时，鼠标左键 / 拖动 / 悬停交宿主 dm_touch_host_live（界面归一化坐标，
+// 局内界面矩形外带符号 = 3D 世界）。返回 0 = 没接（触屏版、没开指针模式），ArkTS 照旧当触点。op 0 按下 1 拖动 2 抬起 3 悬停；窗口坐标（vp）
+// Pointer mode (tablet / PC with a mouse, as the Mac App front_mac.m): while the controller layout is up, left button / drag / hover go to the host
+// dm_touch_host_live (UI-normalised; outside the UI rectangle in game, signed = 3D world). Returns 0 when not taken (touch layout, pointer mode off):
+// ArkTS then treats it as a touch. op 0 down 1 drag 2 up 3 hover; window coordinates (vp)
+int dm_ohos_pointer(int op, float x, float y) {
+    static int nlog; int lg = op == 0 && nlog < 6;
+    if (op < 0 || op > 3 || !dm_touch_host_is_live() || !dm_ohos_gamepad_mode() || dm_padmode_busy()) {
+        if (lg) { nlog++; LOG("鼠标：按下不走指针模式（指针 %d、手柄版 %d、切换中 %d）→ 当手指", dm_touch_host_is_live(), dm_ohos_gamepad_mode(), dm_padmode_busy()); } return 0; }
+    if (atomic_load(&g_cover) || !atomic_load(&g_focused)) { if (lg) { nlog++; LOG("鼠标：按下被吞（遮罩 %d、焦点 %d）", atomic_load(&g_cover), atomic_load(&g_focused)); } return 1; }
+    ensure_init(); float vr[4]; front_ohos_view_rect(g_win_w, g_win_h, vr); if (!(vr[2] > 0 && vr[3] > 0)) return 0;
+    float nx = (x - vr[0]) / vr[2], ny = (y - vr[1]) / vr[3];
+    if (lg) { nlog++; LOG("鼠标：按下 窗口 (%.0f,%.0f) → 界面 (%.3f,%.3f)%s", x, y, nx, ny, !dm_uiscreen_ingame() && (nx < 0 || nx > 1 || ny < 0 || ny > 1) ? "，在黑边上不算点" : ""); }
+    if (op == 0 && !dm_uiscreen_ingame() && (nx < 0 || nx > 1 || ny < 0 || ny > 1)) return 1;   // 按在黑边上：不算点 | pressed on the black bars: not a click
+    dm_touch_host_live(op, nx, ny);
+    return 1;
+}
+void dm_ohos_touch_cancel(void) {
+    if (g_ready) { for (int i = 0; i < 32; i++) g_t[i].live = 0; _nswallow = 0; _uiFinger = NOT; _uiFeDrag = 0; cancel_controls(); }
+}
 void dm_ohos_touch_focus(int active) {
     atomic_store(&g_focused, !!active);
-    if (!active && g_ready) { for (int i = 0; i < 32; i++) g_t[i].live = 0; _nswallow = 0; _uiFinger = NOT; _uiFeDrag = 0; cancel_controls(); }
+    if (!active) dm_ohos_touch_cancel();
 }
 
 // ---- 每帧（tickTouchControls + refreshPortalBinding）| Every frame (tickTouchControls + refreshPortalBinding) ----
@@ -447,8 +471,13 @@ static void glyph_out(float *o, dm_ta_glyph g, int held, int ss, int charges) {
 }
 
 int dm_ohos_touch_tick(float *o, int cap) {
+    _padMode = dm_ohos_gamepad_mode();
+    dm_ohos_haptics_tick();
     if (!o || cap < DM_OS_FLOATS) return -1;
     ensure_init();
+    {   // dm/env 的 DM_DEVICE_CLASS 在 start 时才读到（触控可能更早初始化）：类别变了就按新档重排 | DM_DEVICE_CLASS from dm/env is read only at start (touch may initialise earlier): re-lay out when the class changes
+        static int tall = -1; int dm_ohos_device_class(void), t = dm_ohos_device_class() > 0;
+        if (t != tall) { if (tall >= 0) LOG("前端：触控布局改%s档", t ? "平板" : "手机"); tall = t; dm_tc_set_tall_scale(t); if (BW > 0 && BH > 0) { cancel_controls(); dm_tc_resize(&_controls, BW, BH); g_dirty = 1; } } }
     { float vr[4]; front_ohos_view_rect(g_win_w, g_win_h, vr); if (memcmp(vr, g_vr, sizeof vr)) layout_view(); }
     apply_async();
     double now = media_time();

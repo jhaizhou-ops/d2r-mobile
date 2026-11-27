@@ -133,6 +133,8 @@ int dm_update_click_at(float nx, float ny) {
     float x = nx * xr, y = ny * 2160; if (x < xr - 1400 - bx || x > xr - bx + 20 || y < 100 || y > 230) return 0;
     LOG("更新：鼠标点了主菜单的新版本提示"); if (g_on_click) g_on_click(); return 1;
 }
+#else
+int dm_update_click_at(float nx, float ny) { (void)nx; (void)ny; return 0; }   // 只有 Mac App 有更新提示 | only the Mac App has the update hint
 #endif
 // 文字框（TextBoxWidget，虚表 main+0x20ba4c8）设文本 = 游戏自己到处内联的两步（如 0x38f5bc–0x38f5cc、0x3d8480–0x3d849c）：
 // 字符串赋值 0x136e5c(控件+0x88, 字节, 字节数)，再 0xadc434(控件) 刷新省略号截断串。绘制每帧现取 +0x88 现量现画，不用另调重排。不是文字框就不动

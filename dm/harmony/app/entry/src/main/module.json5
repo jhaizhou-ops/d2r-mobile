@@ -7,9 +7,10 @@
     "type": "entry",
     "description": "$string:module_desc",
     "mainElement": "EntryAbility",
-    "deviceTypes": ["phone"],
+    "deviceTypes": ["phone", "tablet", "2in1"],
     "deliveryWithInstall": true,
     "installationFree": false,
+    "requestPermissions": [{ "name": "ohos.permission.VIBRATE" }],
     "pages": "$profile:main_pages",
     "abilities": [{
       "name": "EntryAbility",

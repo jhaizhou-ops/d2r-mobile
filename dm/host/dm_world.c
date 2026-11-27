@@ -79,7 +79,7 @@ static int w_interact(uint64_t u) {   // 就近交互：游戏的点击入口（
                    // A waypoint (large footprint) appears at offset (3,4); an NPC at 4 cells comes and goes (he is walking, and it is gone again after the player stops). Stopped at 4 cells, tapping the target can interact (we call the click entry with the target), but after closing the dialog pressing the primary button does nothing
                    // (Akara 4 cells 0/5, 2 cells 5/5). So always walk to within 2 cells before interacting; when 2 cells cannot be reached (the target itself occupies the cell, or it is blocked) and the player is already within W_FAR cells, interact in place
 #define W_FAR 4
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
 #define W_GROUND 99   // g_go.type 的特殊值：目标不是单位，是地面上的一格（Mac 鼠标点空地走过去；只有 macOS 宿主有） | special value of g_go.type: the target is not a unit but a tile on the ground (Mac mouse click-to-walk; macOS host only)
 #define W_NEAREST_OK(t) ((t) == 2 || (t) == W_GROUND)
 static int g_hit_mon;   // 这一次命中把敌对怪也算进来（Mac 鼠标点怪 = 攻击；触屏不算，攻击归技能键） | this hit test also counts hostile monsters (Mac mouse click on a monster = attack; touch does not, attacking belongs to the skill buttons)
@@ -248,7 +248,7 @@ static int w_arrive(uint64_t pl, uint64_t u, int px, int py, int ox, int oy, con
         if (act != u) LOG("世界目标：出口砖 id %u 旁有把守它的物件 cls %u id %u（%d,%d，游戏自己选中的）→ 交互它", g_go.id, *(uint32_t *)(act + 4), *(uint32_t *)(act + 8), nx, ny); }
     g_go.on = 0; int r = w_interact(act); LOG("世界目标：类型 %u id %u %s（玩家 %d,%d 目标 %d,%d%s）→ 交互 %d", g_go.type, g_go.id, how, px, py, ox, oy, ok ? "" : "，四侧都进不了同一房间", r); return 1;
 }
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
 // ---- Mac 鼠标：点空地走过去 ----
 // 触屏上「除摇杆外触点不触发点地移动」（见文件头）不变；这一段只给 Mac App 的鼠标用：键鼠玩家没有摇杆，点空地 = 走到那一点，按住 = 一直朝光标走（touch_mac.c 每隔几拍重发一次）。
 // 屏幕点 → 地面格：以玩家脚底的屏幕位置（游戏自己的投影）为原点，按等距投影反算——每「经典像素」合屏幕 k = 画面高 × 0.00206 像素（同上面物件占地菱形用的那个数），
@@ -290,7 +290,7 @@ static void w_ground_step(uint8_t *b, uint64_t pl) {
 #endif
 static void w_go_step(void) {
     if (!g_go.on) return; uint64_t dm_stick_last_ns(void); uint8_t *b = wb(); uint64_t pl = w_player(), u = pl ? w_find(g_go.type, g_go.id) : 0; int px, py, x, y;
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
     if (g_go.type == W_GROUND) { w_ground_step(b, pl); return; }
 #endif
     const char *why = !u ? "目标没了" : w_now_ns() > g_go.until_ns ? "15 秒没到" : dm_stick_last_ns() != g_go.stick ? "摇杆动了" : !w_unit_xy(pl, &px, &py) || !w_unit_xy(u, &x, &y) ? "读不到坐标" : (g_go.type == 4 && *(uint32_t *)(u + 0xc) != 3) ? "物品已不在地上" : NULL;
@@ -442,7 +442,7 @@ unsigned dm_world_tap(float nx, float ny) { if (nx < 0) nx = 0; if (nx > 1) nx =
     unsigned seq = atomic_fetch_add(&g_tap_seq, 1) + 1; atomic_store(&g_tap, (uint64_t)seq << 32 | (uint64_t)(uint32_t)(nx * 65535) << 16 | (uint32_t)(ny * 65535)); return seq; }
 int dm_world_tap_result(unsigned seq) { return atomic_load(&g_tap_done) == seq ? atomic_load(&g_tap_res) : -1; }   // -1 还没执行；0 没有目标（什么都没发）；1 物品 2 NPC 3 物件 4 出口 | -1 not executed yet; 0 no target (nothing sent); 1 item 2 NPC 3 object 4 exit
 int dm_world_has_target(void) { return atomic_load(&g_has_target); }   // 按主键会去交互的目标存在（游戏手柄版自己的选择，main+0x2f7a0c）；任意线程读 | a target that the primary button would interact with exists (the game's own controller-version selection, main+0x2f7a0c); read from any thread
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
 static int w_hostile(uint8_t *b, uint64_t u) { if (*(uint32_t *)u != 1) return 0; uint64_t pl = w_player(); int c = pl ? ((int (*)(int, uint64_t, uint64_t))(b + 0x2f7b7c))(0x165, pl, u) : 0; return c == 1 || c == 0xa; }
 static uint64_t g_mouse_attack_at;
 static void w_attack(uint64_t u, const char *how) { g_mouse_attack_at = w_now_ns(); if (g_go.on) g_go.on = 0; int r = w_interact(u); static int lg; if (lg++ < 300) LOG("鼠标攻击：%s 类型 1 cls %u id %u → 点击入口 %d", how, *(uint32_t *)(u + 4), *(uint32_t *)(u + 8), r); }
@@ -465,7 +465,7 @@ static void w_walk_step(uint8_t *b) {
     g_go.n = g_go.i = g_go.replans = g_go.empty = g_go.direct = g_go.alt = g_go.alt_on = 0; g_go.stop_at = 0; g_gnd_x = x; g_gnd_y = y; g_go.on = 1;
 }
 #endif
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
 // ---- Mac 鼠标：点怪 = 攻击 ----
 // 发令走游戏自己的点击入口（同 w_interact：手柄主键与键鼠左键共用的 main+0x4ace20，带上这只怪当指定目标）：近战它自己走过去打，主键上绑的是技能就对它放那个技能，不另写攻击逻辑。
 // 按住不放时 touch_mac.c 每 30 Hz 拍更新「朝光标走」（dm_world_walk）：敌对怪改成攻击（追着打），重复攻击仍至少间隔 0.2 秒，不是怪才走路。
@@ -486,11 +486,11 @@ static void w_tap_step(uint8_t *b) {
     uint64_t t = atomic_exchange(&g_tap, 0); if (!t) return; unsigned seq = (unsigned)(t >> 32); int res = 0;
     int W = 0, H = 0; dm_screen_real(&W, &H);   // 命中框按真实画面算，不能用游戏的「屏幕宽高」全局量（界面改成 16:9 后它的高是界面高，dm_uiscreen.c） | hit boxes are computed against the real picture, not the game's "screen width/height" globals (after the UI was changed to 16:9 its height is the UI height, dm_uiscreen.c)
     float sx = ((t >> 16) & 0xffff) / 65535.0f * W, sy = (t & 0xffff) / 65535.0f * H, d = 0; int lab = 0;
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
     g_hit_mon = atomic_exchange(&g_tap_mouse, 0);
 #endif
     uint64_t u = W > 0 && H > 0 ? w_hit(b, sx, sy, H * 0.10f, &d, &lab) : 0;
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
     g_hit_mon = 0;
     if (u && w_hostile(b, u)) { w_attack(u, "点"); u = 0; res = 6; }   // 鼠标点到敌对怪：攻击（见 w_attack），不走「走过去交互」 | the mouse clicked a hostile monster: attack (see w_attack), not "walk over and interact"
 #endif
@@ -509,7 +509,7 @@ static void w_watch_step(uint8_t *b) {
     uint32_t w = atomic_load(&g_watch); if (!w) return; int t = (w >> 24) & 0x7f; uint32_t cls = w & 0xffffff; uint64_t scene = *(uint64_t *)(b + 0x2e2a698), v = 0;
     int W = 0, H = 0; dm_screen_real(&W, &H);
     for (int k = 0; scene && W > 0 && H > 0 && t <= 5 && k < 128 && !v; k++) for (uint64_t u = *(uint64_t *)(b + 0x2d603a0 + t * 0x400 + k * 8); u; u = *(uint64_t *)(u + 0x158)) {
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
         if (cls == 0xfffffe) { if (!(((int (*)(uint64_t, int, int, int, int))(b + 0x464a70))(u, 0, 0, -1, -1) & 1) || !w_hostile(b, u)) continue; } else   // 类号 0xfffffe（Mac 合成鼠标脚本的 unit 1,hostile）= 敌对且可选中的怪 | class 0xfffffe (unit 1,hostile in the Mac synthetic mouse script) = hostile and selectable monster
 #endif
         if (cls != 0xffffff ? *(uint32_t *)(u + 4) != cls : (t == 4 && *(uint32_t *)(u + 0xc) != 3)) continue;   // 类号 0xffffff（开关里写 any）= 这一类里任意一个；物品只认在地上的 | class number 0xffffff (written as any in the switch) = any one of this type; items only count when on the ground
@@ -787,7 +787,7 @@ static void w_cam_zoom(uint8_t *b) {
     else if (*z < 1.0f) { LOG("镜头缩放：cameraZoomSetting %.2f 低于原版下限，写回 1.20", *z); *z = 1.2f; }
 }
 void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at the controller poll
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
     w_mouse_cancel_pending();
 #endif
     { void dm_rift_client_pump(uint8_t *); DM_PROF(0, "w.rift_client", dm_rift_client_pump(wb())); }   // 秘境爬塔：认击杀（dm_rift.c） | rift tower climb: recognize kills (dm_rift.c)
@@ -843,7 +843,7 @@ void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at th
               for (int k = 0; k < 128; k++) for (uint64_t c = *(uint64_t *)(b + 0x2d603a0 + gt * 0x400 + k * 8); c; c = *(uint64_t *)(c + 0x158)) if (*(uint32_t *)(c + 4) == (uint32_t)gi && w_unit_xy(c, &x, &y)) { long dd = (long)(x - px) * (x - px) + (long)(y - py) * (y - py); if (bd < 0 || dd < bd) { bd = dd; u = c; } } }
           if (u) { w_go(u); if (nearonly) g_go.stop_at = nearonly; } LOG("世界目标：DM_TEST_WORLD_GO %s → %s", e, u ? "已发" : "没找到"); if (u) LOG("世界目标：DM_TEST_WORLD_GO 目标 类型 %u 类号 %u id %u", *(uint32_t *)u, *(uint32_t *)(u + 4), *(uint32_t *)(u + 8)); } }
     w_tap_step(b);
-#if TARGET_OS_OSX
+#if DM_MOUSE_LIVE
     { uint64_t dm_stick_last_ns(void); uint64_t v = dm_stick_last_ns(); if (v != g_gnd_stick_seen) { g_gnd_stick_seen = v; g_gnd_stick_at = w_now_ns(); } }
     w_walk_step(b);
 #endif

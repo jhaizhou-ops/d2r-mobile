@@ -3,6 +3,7 @@
 #include "../nvn/nvn_obj.h"
 #include "../nvn/nvn_mtl.h"
 #include "../nvn/nvn_pace.h"
+#include "../nvn/nvn_adaptive_pace.h"
 #include "../../host/front.h"
 #include "nvn_vk.h"
 #include "engine/xbg_game_internal.h"
@@ -86,7 +87,15 @@ double mtl_presented_time(uint64_t n){return n && n<=g_present_n && g_present_n-
 uint64_t mtl_present_count(void){return g_present_n;}
 int mtl_has_window(void){return g_config.has_window?g_config.has_window(g_config.game.userdata):0;}
 double front_display_refresh(char *name, size_t n);
-double mtl_display_refresh(void) { double hz = front_display_refresh(NULL, 0); return hz > 0 ? hz : g_config.display_hz; }
+double mtl_display_refresh(void) {
+    double hz = front_display_refresh(NULL, 0); hz = hz > 0 ? hz : g_config.display_hz;
+#ifdef __OHOS__
+    // 只供出图节拍与动态 3D 比例使用；DM_PACE_REF60=0 恢复按原始刷新率分档 | Used only by present pacing and dynamic 3D scale; DM_PACE_REF60=0 restores raw-refresh tiers
+    static int ref60 = -1; if (ref60 < 0) { const char *e = getenv("DM_PACE_REF60"); ref60 = !(e && *e == '0'); }
+    if (ref60) hz = nvn_pace_reference_hz(hz);
+#endif
+    return hz;
+}
 int mtl_display_hz(void) { return (int)(mtl_display_refresh() + 0.5); }
 double dm_pace_hz(double screen_hz, double floor_hz) { return nvn_pace_hz(screen_hz, floor_hz); }
 __attribute__((weak)) int dm_fps_setting(void){return 60;}

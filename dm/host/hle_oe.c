@@ -7,6 +7,7 @@
 #include "dm_cursor.h"
 #include "hle.h"
 #include "dm_uiscreen.h"
+#include "dm_scale_budget.h"
 
 // 运行模式是运行时状态（前端可改：iOS 过热降级切掌机）：唯一来源在此，启动时从 DM_OPMODE 取一次，之后不再读环境变量
 // The operation mode is runtime state (the front end can change it: iOS overheat downgrade switches to handheld): the single source is here, taken once from DM_OPMODE at startup, the environment variable is not read again afterwards
@@ -185,7 +186,7 @@ static _Atomic float g_s3_set;
 static float s3_phone_default(void) {
     static float d = -1;
     if (d < 0) { const char *e = getenv("DM_3D_SCALE_DEFAULT"); float v = 0.75f;
-        if (e) { char *end; float x = strtof(e, &end); if (end != e && !*end && x >= 0.5f && x <= 1.0f) v = x; else LOG("【红】DM_3D_SCALE_DEFAULT 非法：%s（要求 0.5–1.0），按 0.75", e); }
+        if (e) { char *end; float x = strtof(e, &end); if (end != e && !*end && x >= 0.4f && x <= 1.0f) v = x; else LOG("【红】DM_3D_SCALE_DEFAULT 非法：%s（要求 0.4–1.0），按 0.75", e); }
         d = v; }
     return d;
 }
@@ -195,7 +196,7 @@ static float s3_phone_default(void) {
 static float s3_cfg(void) {
     static float env = -1;
     if (env < 0) { const char *e = getenv("DM_3D_SCALE"); float v = 0;
-        if (e) { char *end; v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); }
+        if (e) { char *end; v = strtof(e, &end); if (end == e || *end || !(v >= 0.4f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.4–1.0；0.4–0.5 配 EASU 放大用）", e); }
         env = v; }
     if (env > 0) return env;
     float s = atomic_load(&g_s3_set);
@@ -289,6 +290,14 @@ static const float g_s3g_mult[] = {0.92f, 0.85f, 0.78f, 0.72f, 0.66f, 0.60f};
 // g_s3g_scale（定义在上面 dm_3d_scale_level_set 前）> 0：覆盖动态档（scale3d_tick）
 // g_s3g_scale (defined above, before dm_3d_scale_level_set) > 0: overrides the dynamic level (scale3d_tick)
 __attribute__((weak)) double xbg_recent_gpu_ms(void) { return -1; }   // 空的弱定义（不是弱声明）：苹果链接器要求弱引用链接时有定义；Vulkan 后端 / 鸿蒙平台层给强定义 | empty weak definitions (not declarations): Apple's linker needs a weak reference to resolve; the Vulkan backend / HarmonyOS platform give the strong ones
+// Optional coherent Vulkan sample; unsupported backends leave the experiment idle.
+__attribute__((weak)) uint64_t xbg_recent_perf_sample(double *gpu, double *cpu, double *age_ms) {
+    (void)gpu; (void)cpu; (void)age_ms; return 0;
+}
+static int s3g_budget_on(void) { static int on = -1; if (on < 0) {
+    const char *e = getenv("DM_3D_SCALE_GPU_BUDGET"); on = e && *e == '1';
+    if (on) LOG("3D GPU budget: experimental requested-FPS policy enabled (1.05/1.10/0.90)");
+} return on; }
 static int s3g_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_3D_SCALE_GPU"); on = e && *e == '1'; } return on; }
 // GPU 控制器的配置值：手机同 s3_cfg（DM_3D_SCALE / 自定义页的档 / 0.75）；Mac 宿主照旧 DM_3D_SCALE 或 0.75
 // The GPU controller's configured value: on phones the same as s3_cfg (DM_3D_SCALE / the Custom page level / 0.75); the Mac host as before, DM_3D_SCALE or 0.75
@@ -299,6 +308,7 @@ static float s3g_cfg(void) {
 }
 static void s3g_feed(double iv_ms) {
     static double acc; static unsigned n; static uint64_t hold; static int lv, good, maxlv, was_in; static float cfg = -1, fl = -1;
+    static dm_scale_budget budget_ctl; static uint64_t last_feed; static int last_target;
     if (fl < 0) { const char *f = getenv("DM_3D_SCALE_GPU_FLOOR"); fl = f ? strtof(f, NULL) : 0.40f; }
     // 配置值变了（第一次，或自定义页换档）：重算最多降几档，档回到 0
     // The configured value changed (first time, or a Custom page level change): recompute how many levels it may go down, back to level 0
@@ -309,9 +319,48 @@ static void s3g_feed(double iv_ms) {
     uint64_t now = now_ns();
     if (!dm_ingame_now()) { was_in = 0; acc = 0; n = 0; return; }
     if (!was_in) { was_in = 1; hold = now + 20 * S3_SEC; }   // 刚进局的 20 秒是装载 | the first 20 s of a run are loading
+    int experiment = s3g_budget_on();
+    if (experiment) {
+        int mtl_fps_target(void); int target = mtl_fps_target() == 30 ? 30 : 60;
+        int resumed = atomic_exchange(&g_scale3d_resumed, 0);
+        if (resumed || (last_feed && now - last_feed > 3 * S3_SEC) || (last_target && last_target != target)) {
+            uint64_t until = now + 3 * S3_SEC; if (hold < until) hold = until;
+            double g = -1, c = -1, a = -1;
+            budget_ctl.sample = xbg_recent_perf_sample(&g, &c, &a); budget_ctl.good = 0;
+            acc = 0; n = 0;
+        }
+        last_feed = now; last_target = target;
+    }
     if (iv_ms > 0) { acc += iv_ms; n++; }
     if (acc < 2000 || !n) return;
     double fr = acc / n, g = xbg_recent_gpu_ms ? xbg_recent_gpu_ms() : -1; acc = 0; n = 0;
+    if (experiment) {
+        double cpu = -1, age = -1; uint64_t sample = xbg_recent_perf_sample(&g, &cpu, &age);
+        double current = lv ? g_s3g_mult[lv - 1] : 1.0;
+        double higher = lv > 1 ? g_s3g_mult[lv - 2] : 1.0;
+        double budget = 1000.0 / last_target;
+        int decision = dm_scale_budget_step(&budget_ctl, sample, age, g, cpu, budget,
+            now < hold, lv, maxlv, higher / current);
+        // 跑在 60 档以下（实际帧间隔 > 20 ms）时不再压 3D 比例，并每 5 个窗口回升一档到配置值：长测里降到下限 0.41 后 GPU 时间没降（GPU 跟着降频），只是画面一直最糊（H-13 C）。
+        // DM_3D_SCALE_BUDGET_RELAX=0（实验位 131072）退回原策略。
+        // Below the 60 tier (actual frame interval > 20 ms) stop lowering the 3D scale and walk it back one level every 5 windows to the configured value:
+        // in long runs the floor 0.41 did not lower GPU time (the GPU clock followed), it only kept the picture at its blurriest (H-13 C).
+        // DM_3D_SCALE_BUDGET_RELAX=0 (experiment bit 131072) restores the old policy.
+        { static int relax_on = -1, relax; if (relax_on < 0) { const char *e = getenv("DM_3D_SCALE_BUDGET_RELAX"); relax_on = !(e && *e == '0'); LOG("3D GPU budget: below-60 relax=%d", relax_on); }
+          if (relax_on && fr > 20.0 && decision != DM_S3B_INVALID && decision != DM_S3B_DUPLICATE && decision != DM_S3B_HOLD) {
+              if (decision == DM_S3B_DOWN || decision == DM_S3B_FLOOR || decision == DM_S3B_CPU || decision == DM_S3B_WAIT_UP) decision = DM_S3B_STABLE;
+              if (lv > 0 && decision == DM_S3B_STABLE && ++relax >= 5) { relax = 0; decision = DM_S3B_UP; }
+          } else if (decision != DM_S3B_DUPLICATE) relax = 0; }
+        static const char *reason[] = {"unknown", "same-sample", "hold", "cpu-bound", "floor", "down", "wait-up", "up", "stable"};
+        LOG("3D GPU budget: target=%d frame=%.1f gpu=%.1f cpu=%.1f age=%.0f level=%d reason=%s",
+            last_target, fr, g, cpu, age, lv, reason[decision]);
+        if (decision == DM_S3B_DOWN || decision == DM_S3B_UP) {
+            lv += decision == DM_S3B_DOWN ? 1 : -1;
+            hold = now + 4 * S3_SEC;
+            atomic_store(&g_s3g_scale, lv ? cfg * g_s3g_mult[lv - 1] : 0.0f);
+        }
+        return;
+    }
     if (now < hold || g <= 0) return;
     int old = lv;
     if (fr > 35.0 && g >= 0.85 * fr && lv < maxlv) { lv++; good = 0; }
@@ -361,7 +410,8 @@ static void scale3d_tick(void) {
     // 动态档：0 = 配置值，k = 表里第 k 个低于配置值的比例
     // Dynamic level: 0 = configured value, k = the k-th table scale below the configured value
     int lv = atomic_load(&g_scale3d_level); float dyn = s3_level_scale(want_cfg, lv);
-    if (s3g_on()) { float g = atomic_load(&g_s3g_scale); dyn = g > 0 && g < want_cfg ? g : want_cfg; }   // GPU 时间控制器（DM_3D_SCALE_GPU=1，鸿蒙缺省开）覆盖帧间隔档 | GPU-time controller (DM_3D_SCALE_GPU=1, on by default on HarmonyOS) overrides the frame-interval level
+    if (dm_3d_quality_mode_get() == 1) dyn = want_cfg; // Quality mode ignores both dynamic controllers; keep their history for return to smooth mode.
+    else if (s3g_on()) { float g = atomic_load(&g_s3g_scale); dyn = g > 0 && g < want_cfg ? g : want_cfg; }   // GPU 时间控制器（DM_3D_SCALE_GPU=1，鸿蒙缺省开）覆盖帧间隔档 | GPU-time controller (DM_3D_SCALE_GPU=1, on by default on HarmonyOS) overrides the frame-interval level
     float want = dm_nvn_ruler_truth() ? 1.0f : dyn;
     if (want == cur || !main || dm_nvn_frame_count() < 30) return;
     uintptr_t renderer = *(uintptr_t *)(main->base + 0x31e0848); if (!renderer) return;

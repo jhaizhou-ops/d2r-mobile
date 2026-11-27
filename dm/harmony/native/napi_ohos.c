@@ -1,3 +1,7 @@
+#include "frame_rate_ohos.h"
+#if defined(DM_OHOS_SIGNED_GUEST)
+#include "signed_guest_image.h"
+#endif
 // 鸿蒙 App 入口（NAPI，ArkTS 侧见 dm/harmony/app/entry/src/main/ets）：对应安卓 jni_android.c + text_input_jni.c + touch_android_jni.c。
 // 启动、目录、日志、生命周期、触控、起名输入框的逻辑与安卓一一对应；平台无关的部分（呈现、触控状态机、前端接口、overlay 校验）直接复用 dm/android。
 //   start(files, ext, src, lang)：备好目录与环境变量，校验改写产物 / 着色器 / overlay，起宿主线程跑 dm_main
@@ -13,6 +17,8 @@
 #include "../../host/dm_actions.h"
 #include "../../android/vulkan_present.h"
 #include "touch_ohos.h"
+#include "gamepad_ohos.h"
+#include "haptics_ohos.h"
 #include "../../host/dm_i18n.h"
 #include "../../host/dm_custom.h"
 #include "../../android/lifecycle_dispatch.h"
@@ -22,10 +28,13 @@
 #include <hilog/log.h>
 #include <napi/native_api.h>
 #include <dirent.h>
+#include <deviceinfo.h>
 #include <errno.h>
+#include <time.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <signal.h>
 
 void front_android_set_window(void *win, int w, int h);
 void front_android_set_refresh(float hz);
@@ -37,12 +46,36 @@ extern _Atomic int g_fe_name_no_accept;
 
 static char g_files[1024], g_ext[1024], g_src[1024], g_runtime[1100];
 static FILE *g_logf;
+static int g_started; // ArkUI thread only; reset only for pre-Vulkan payload failure.
 
 // ---- 生命周期：同安卓，UI 只入队，挂起在原生线程上做 | Lifecycle: as Android, the UI only enqueues ----
 static dm_lifecycle_dispatch g_lifecycle;
 static pthread_once_t g_lifecycle_once = PTHREAD_ONCE_INIT;
 static int g_lifecycle_error;
-static void lifecycle_graphics(int on) { dm_gfx_suspend(on); HLOG(LOG_INFO, "dm-lifecycle", "graphics suspend=%d", on); }
+// 进后台：挂起图形前，局内先请游戏存一次盘并等存档提交（同 iOS background_wait_save / Mac 退出：等到提交后 0.2 秒无新提交，最多 2.5 秒；
+// 暂停菜单开着时 dm_save_wait 冻住世界、临时放开暂停存这一次）。在生命周期线程上等，不挡 UI 线程。之前鸿蒙只发后台焦点，被系统冻结或划掉就丢掉
+// 距上次定时存盘（5 分钟）以来的进度。
+// Entering background: before suspending graphics, in a run ask the game to save once and wait for the commit (as iOS background_wait_save /
+// Mac quit: until 0.2 s without a new commit, at most 2.5 s; with the pause menu open dm_save_wait freezes the world and releases the pause for
+// this save). Waits on the lifecycle thread, not the UI thread. Before, HarmonyOS only posted the background focus, so a freeze or a swipe-away lost
+// the progress since the last timed save (every 5 minutes).
+static void background_wait_save(void) {
+    int dm_ingame_now(void); int dm_save_wait(double max_s, uint64_t *commits, int *froze, double *ms);
+    if (!g_started || !dm_ingame_now()) return;
+    uint64_t n = 0; int froze = 0; double ms = 0; int asked = dm_save_wait(2.5, &n, &froze, &ms);
+    fprintf(stderr, "前端：进后台等游戏存盘 %.0f ms，期间存档提交 %llu 次%s%s\n", ms, (unsigned long long)n, froze ? "（原先暂停着：冻结世界存盘、已恢复暂停）" : "",
+            n ? "" : (asked ? "【红】（2.5 秒内没等到）" : "【红】（没能请游戏存盘）"));
+}
+// 失焦（下拉通知栏、进多任务界面）：只请游戏下一拍存一次，不等；30 秒内只请一次（同 iOS resign_save）。在多任务界面直接划掉进程走不到进后台。
+// Unfocused (notification shade, app switcher): only ask the game to save on its next tick, without waiting; at most once per 30 s (as iOS resign_save).
+// Swiping the process away in the app switcher never reaches the background save.
+static void unfocus_save(void) {
+    int dm_ingame_now(void); int dm_request_save(void);
+    static uint64_t last; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    if (!g_started || !dm_ingame_now() || (last && now - last < 30000000000ull)) return;
+    if (dm_request_save()) { last = now; fprintf(stderr, "前端：失焦，请游戏下一拍存一次盘（不等）\n"); }
+}
+static void lifecycle_graphics(int on) { if (on) background_wait_save(); dm_gfx_suspend(on); HLOG(LOG_INFO, "dm-lifecycle", "graphics suspend=%d", on); }
 static void lifecycle_init(void) {
     dm_lifecycle_ops ops = {dm_focus_set, dm_audio_suspend, lifecycle_graphics};
     g_lifecycle_error = dm_lifecycle_start(&g_lifecycle, ops);
@@ -94,7 +127,7 @@ static int link_romfs(const char *romfs) {
 }
 
 // ---- ArkTS 回调（线程安全函数）：起名输入框、启动失败 | ArkTS callbacks (thread-safe functions): naming dialog, boot failure ----
-static napi_threadsafe_function g_show_input, g_boot_failed;
+static napi_threadsafe_function g_show_input, g_boot_failed, g_share_log;
 typedef struct { int64_t id; char *s[4]; int max_chars, name_rule, numeric_max; } input_req;
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t input_done = PTHREAD_COND_INITIALIZER;
@@ -113,10 +146,19 @@ out:
     free(r);
 }
 static void call_boot_failed(napi_env env, napi_value js, void *ctx, void *data) {
+    dm_ohos_frame_rate_running(0);
     (void)ctx; if (!env) return;
-    napi_value code, undef; napi_create_int32(env, (int)(intptr_t)data, &code); napi_get_undefined(env, &undef);
+    int failure = (int)(intptr_t)data;
+    if (failure == -9 || failure == -10 || failure == -13) g_started = 0;
+    napi_value code, undef; napi_create_int32(env, failure, &code); napi_get_undefined(env, &undef);
     napi_call_function(env, undef, js, 1, &code, NULL);
 }
+// 暂停菜单「分享诊断日志」（diag.c 在游戏主线程调）：交给 ArkTS 截最近一段日志、弹系统分享面板，不等 | Pause menu "Share diagnostic log" (diag.c, game
+// main thread): ArkTS copies the recent log and opens the system share sheet; no waiting here
+static void call_share_log(napi_env env, napi_value js, void *ctx, void *data) {
+    (void)ctx; (void)data; if (!env) return; napi_value undef; napi_get_undefined(env, &undef); napi_call_function(env, undef, js, 0, NULL, NULL);
+}
+static void share_log(void) { if (g_share_log) napi_call_threadsafe_function(g_share_log, NULL, napi_tsfn_nonblocking); }
 void front_android_boot_failed(int code) {
     if (g_boot_failed) napi_call_threadsafe_function(g_boot_failed, (void *)(intptr_t)code, napi_tsfn_nonblocking);
 }
@@ -150,12 +192,16 @@ static napi_value undefined(napi_env env) { napi_value r; napi_get_undefined(env
 #define ARGS(n) size_t argc = n; napi_value argv[n]; napi_get_cb_info(env, info, &argc, argv, NULL, NULL)
 
 static napi_value js_set_callbacks(napi_env env, napi_callback_info info) {
-    ARGS(2); napi_value name;
+    ARGS(3); napi_value name;
     napi_create_string_utf8(env, "dmShowInput", NAPI_AUTO_LENGTH, &name);
     napi_create_threadsafe_function(env, argv[0], NULL, name, 0, 1, NULL, NULL, NULL, call_show_input, &g_show_input);
     napi_create_string_utf8(env, "dmBootFailed", NAPI_AUTO_LENGTH, &name);
     napi_create_threadsafe_function(env, argv[1], NULL, name, 0, 1, NULL, NULL, NULL, call_boot_failed, &g_boot_failed);
     napi_unref_threadsafe_function(env, g_show_input); napi_unref_threadsafe_function(env, g_boot_failed);
+    napi_valuetype t = napi_undefined; if (argc >= 3 && napi_typeof(env, argv[2], &t) == napi_ok && t == napi_function) {
+        napi_create_string_utf8(env, "dmShareLog", NAPI_AUTO_LENGTH, &name);
+        if (napi_create_threadsafe_function(env, argv[2], NULL, name, 0, 1, NULL, NULL, NULL, call_share_log, &g_share_log) == napi_ok) {
+            napi_unref_threadsafe_function(env, g_share_log); void dm_sharelog_init(void (*cb)(void)); dm_sharelog_init(share_log); } }
     return undefined(env);
 }
 static napi_value js_text_result(napi_env env, napi_callback_info info) {
@@ -170,8 +216,34 @@ static napi_value js_text_result(napi_env env, napi_callback_info info) {
     return undefined(env);
 }
 
+// Full resource hashes can take seconds on large texture packs. Run them on the
+// host worker before Vulkan or guest execution; retain the exact failure codes.
+static int validate_runtime_payload(void) {
+    char required[1300];
+    LOG("boot: worker payload validation begin");
+    snprintf(required, sizeof required, "%s/overlay", g_runtime);
+    char reason[256];
+    dm_overlay_result ov = dm_overlay_validate(required, DM_OVERLAY_SOURCE_SHA256, reason, sizeof reason);
+    if (ov == DM_OVERLAY_OK) ov = dm_overlay_require_touch_art(required, reason, sizeof reason);
+    if (ov != DM_OVERLAY_OK) { LOG("boot: overlay rejected (%d): %s", ov, reason); return ov == DM_OVERLAY_MISSING ? -9 : -10; }
+    setenv("DM_ROMFS_OVERLAY", required, 1);
+#if defined(DM_OHOS_SIGNED_GUEST)
+    char signed_dir[1200], signed_error[512];
+    snprintf(signed_dir, sizeof signed_dir, "%s/out", g_runtime);
+    if (!dm_signed_guest_prepare(signed_dir, signed_error, sizeof signed_error)) {
+        LOG("boot: signed native image check failed: %s", signed_error);
+        return -13;
+    }
+    LOG("boot: signed native images verified; anonymous executable memory is not required");
+#endif
+    LOG("boot: worker payload validation complete");
+    return 0;
+}
+
 static void *host_thread(void *arg) {
     (void)arg;
+    int payload_rc = validate_runtime_payload();
+    if (payload_rc) { front_android_boot_failed(payload_rc); return NULL; }
     char out[1200]; snprintf(out, sizeof out, "%s/out", g_runtime);
     char shaders[1200], error[512] = {0}; snprintf(shaders, sizeof shaders, "%s/shaders", g_runtime);
     int graphics_rc = dm_android_vk_initialize(shaders, error, sizeof error);
@@ -208,14 +280,50 @@ __attribute__((weak)) int dm_derived_reload(void);
 
 // start(files, ext, src, lang) → 链接的资源文件数（>0）或负数错误码（同安卓 nativeStart）
 // start(files, ext, src, lang) → number of linked resource files (>0) or a negative error code (as Android nativeStart)
+// Bounded local diagnostics; only known flags, never arbitrary environment writes.
+static int experiment_flags(void) {
+    if (!*g_files) return 0;
+    char path[1200]; snprintf(path, sizeof path, "%s/experience-flags", g_files);
+    FILE *f = fopen(path, "r"); int flags = 0;
+    if (f) { if (fscanf(f, "%d", &flags) != 1 || flags < 0 || flags > 262143) flags = 0; fclose(f); }
+    return flags;
+}
+extern int xbg_game_profile_details_live(uint32_t frame_count,uint32_t mask);
+static napi_value js_profile_descriptors(napi_env env, napi_callback_info info) {
+    (void)info; return ret_int(env, xbg_game_profile_details_live(60,3));
+}
+static napi_value js_experiment_flags(napi_env env, napi_callback_info info) {
+    (void)info; return ret_int(env, experiment_flags());
+}
+static napi_value js_set_experiment_flags(napi_env env, napi_callback_info info) {
+    ARGS(1); int32_t flags = -1;
+    if (argc != 1 || napi_get_value_int32(env, argv[0], &flags) != napi_ok || flags < 0 || flags > 262143 || !*g_files) return ret_int(env, -1);
+    char path[1200], tmp[1210]; snprintf(path, sizeof path, "%s/experience-flags", g_files); snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w"); if (!f) return ret_int(env, -2);
+    int ok = fprintf(f, "%d\n", flags) > 0;
+    if (fflush(f) || fsync(fileno(f))) ok = 0;
+    if (fclose(f)) ok = 0;
+    if (!ok || rename(tmp, path)) { unlink(tmp); return ret_int(env, -3); }
+    return ret_int(env, 0);
+}
+
+// 设备类别：0 手机、1 平板、2 电脑（2in1）。dm/env 的 DM_DEVICE_CLASS=phone|tablet|2in1 可改（在手机上验平板 / 电脑布局）
+// Device class: 0 phone, 1 tablet, 2 PC (2in1). DM_DEVICE_CLASS=phone|tablet|2in1 in dm/env overrides it (to check the tablet / PC layouts on a phone)
+int dm_ohos_device_class(void) {
+    const char *e = getenv("DM_DEVICE_CLASS"), *t = e && *e ? e : OH_GetDeviceType();
+    return t && !strcmp(t, "2in1") ? 2 : t && !strcmp(t, "tablet") ? 1 : 0;
+}
+static void *test_crash_main(void *p) { sleep((unsigned)*(int *)p); raise(SIGSEGV); return NULL; }
 static napi_value js_start(napi_env env, napi_callback_info info) {
-    ARGS(4); static int started; if (started) return ret_int(env, 0);
+    ARGS(4); if (g_started) return ret_int(env, 0);
     char lg[64] = {0};
-    get_str(env, argv[0], g_files, sizeof g_files); get_str(env, argv[1], g_ext, sizeof g_ext); get_str(env, argv[2], g_src, sizeof g_src); get_str(env, argv[3], lg, sizeof lg);
+    get_str(env, argv[0], g_files, sizeof g_files); get_str(env, argv[1], g_ext, sizeof g_ext); get_str(env, argv[2], g_src, sizeof g_src); get_str(env, argv[3], lg, sizeof lg); dm_ohos_haptics_dir(g_files);
     // 挂存档与选择覆盖层之前提供设置目录，使语言选择在本次启动生效。
     // Make saved preferences available before save mount and overlay selection.
+    { void front_ohos_early_scale_default(int performance_res); front_ohos_early_scale_default((experiment_flags() & 32768) != 0); }
     dm_custom_init(g_files);
     snprintf(g_runtime, sizeof g_runtime, "%s/dm", g_files); mkdirs(g_runtime);
+    { extern char g_crash_marker[1100]; snprintf(g_crash_marker, sizeof g_crash_marker, "%s/last-crash.txt", g_runtime); }   // 崩溃记号（host/crash.c），前端下次启动提示分享日志 | crash marker (host/crash.c): the front end offers the log on the next launch
     log_init();
     LOG("boot: 鸿蒙 内部目录 %s，资源 %s，系统语言 %s", g_files, g_src, lg);
     {   // 诊断：各核最高主频（找大核，供翻译线程绑核用）| Diagnostics: max frequency of each core (to find the big cores for pinning the translation thread)
@@ -259,6 +367,38 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     { char ef[1200], ln[512]; snprintf(ef, sizeof ef, "%s/env", g_runtime); FILE *f = fopen(ef, "rb");
       while (f && fgets(ln, sizeof ln, f)) { ln[strcspn(ln, "\r\n")] = 0; char *eq = strchr(ln, '='); if (ln[0] == '#' || !eq || eq == ln) continue; *eq = 0; setenv(ln, eq + 1, 1); LOG("boot: env %s=%s", ln, eq + 1); }
       if (f) fclose(f); }
+    { int flags = experiment_flags();
+      // 60 帧 GPU 预算缺省开（D-01 Pura 温控 5 同档：开 30 帧均匀、关 20–30 帧跳动）；位 1 改为关闭对照 | GPU budget on by default (D-01, Pura thermal 5: on = even 30, off = 20-30 jumping); bit 1 now turns it off
+      setenv("DM_3D_SCALE_GPU_BUDGET", (flags & 1) ? "0" : "1", 1);
+      setenv("DM_GFX_LOAD_CLEAR", (flags & 2) ? "0" : "1", 1);
+      setenv("DM_GTX_KEYS", (flags & 8) ? "1" : "0", 1);
+      setenv("DM_PRESENT_NATIVE", (flags & 256) ? "1" : "0", 1);
+      setenv("DM_GFX_IMAGE_FRONT", (flags & 4096) ? "1" : "0", 1);
+      setenv("DM_GFX_WHOLE_SET", (flags & 16384) ? "1" : "0", 1);
+      setenv("DM_H12_PERFORMANCE_RES", (flags & 32768) ? "1" : "0", 1);
+      setenv("DM_GFX_BC_REUPLOAD_SKIP", (flags & 65536) ? "1" : "0", 1);
+      LOG("boot: image_lookup_front=%d", !!(flags & 4096));
+      setenv("DM_FRAME_SPLIT", (flags & 512) ? "1" : "0", 1);
+      LOG("boot: frame_split=%d", !!(flags & 512));
+      // H-09 C passed same-binary thermal-3/4 gates; bit1024 now disables the default request policy.
+      setenv("DM_PIN_FAST", (flags & 1024) ? "0" : "max", 1);
+      LOG("boot: pin_fast_experiment=%d policy=highest-nominal-frequency", !(flags & 1024));
+      // H-10: stale late-present counts are cleared after stalls by default; bit2048 disables it.
+      setenv("DM_PACE_GAP_RESET", (flags & 2048) ? "0" : "1", 1);
+      LOG("boot: pace_gap_reset=%d", !(flags & 2048));
+      LOG("boot: present_native=%d", !!(flags & 256));
+      setenv("DM_RATE_RANGE", (flags & 64) ? "2" : (flags & 32) ? "1" : "0", 1);
+      setenv("DM_PACE_REF60", (flags & 128) ? "0" : "1", 1);
+      LOG("boot: rate_range=%d pace_ref60=%d", (flags & 64) ? 2 : (flags & 32) ? 1 : 0, !(flags & 128));
+      setenv("DM_PERFHINT_NO_TIDS", (flags & 16) ? "1" : "0", 1);
+      setenv("DM_PACE_HYSTERESIS", (flags & 4) ? "1" : "0", 1);
+      // H-13 B/C 缺省开：试升前要 CPU 余量、退避上限 120 s；60 档以下不压 3D 比例。位 131072 两项一起退回原策略（对照）
+      // H-13 B/C on by default: probe-up needs CPU headroom, backoff cap 120 s; no 3D-scale cuts below the 60 tier. Bit 131072 restores both old policies (control)
+      setenv("DM_PACE_PROBE_GATE", (flags & 131072) ? "0" : "1", 1);
+      setenv("DM_3D_SCALE_BUDGET_RELAX", (flags & 131072) ? "0" : "1", 1);
+      LOG("boot: pace_probe_gate=%d budget_relax=%d", !(flags & 131072), !(flags & 131072));
+      setenv("DM_PACE_HYSTERESIS_TRACE", (flags & 4) ? "1" : "0", 1);
+      LOG("boot: experience flags=%d budget=%d loadclear=%d hysteresis=%d gtx_keys=%d perfhint_no_tids=%d", flags, !(flags & 1), !(flags & 2), !!(flags & 4), !!(flags & 8), !!(flags & 16)); }
     // 鸿蒙缺省值（都只在环境里没有时设；dm/env 与标记文件仍可逐项改）。Pura X / Mate90 实测依据见 dm/harmony/README.md 的性能一节
     // HarmonyOS defaults (each set only when absent; dm/env and the marker files still override). Measurements on the Pura X / Mate90: see the performance section of dm/harmony/README.md
     setenv("DM_3D_SCALE_GPU", "1", 0);   // 动态 3D 比例按 GPU 耗时调（发热后 GPU 成瓶颈时降，最低 0.40）| dynamic 3D scale driven by GPU time (lowered when the hot GPU becomes the bottleneck, floor 0.40)
@@ -269,7 +409,14 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     setenv("DM_GFX_READBACK_CACHED", "1", 0);    // 读回缓冲用带缓存内存（马良最佳实践）| readback buffers in host-cached memory (Maleoon best practice)
     setenv("DM_GFX_PIPE_MEMO", "1", 0); setenv("DM_GFX_QUAD_DERIVATIVES", "1", 0); setenv("DM_GFX_WARP32", "1", 0); setenv("DM_GFX_NAN_MINMAX", "1", 0);
     setenv("DM_GFX_NATIVE_BC", "0", 0);          // 马良不支持 BC 贴图（textureCompressionBC = 0），软解 | Maleoon has no BC textures (textureCompressionBC = 0): software decode
-    setenv("DM_GFX_ASYNC_POOL_RESET", "0", 0); setenv("DM_GFX_WB_SKIP", "0", 0);
+    // 与安卓一致的引擎开关（0.20.4 起；Pura X 营地翻译线程每帧 18.0 → 16.7 ms，画面逐张对照无差别）：关 1/32 帧的分段计时（每次约 4 ms、32 帧一顿），
+    // 顶点 / 索引快照跨帧常驻，贴图按写入才重哈希，命令池异步重置，跳过已被覆盖的写回，两项 SPIR-V 精简，着色器复用预热结果，整张上传放到提交前。
+    // Engine switches as on Android (from 0.20.4; Pura X camp translation thread 18.0 -> 16.7 ms per frame, screenshots identical): no 1-in-32-frame scope timing
+    // (about 4 ms each, a hitch every 32 frames), vertex / index snapshots kept across frames, textures rehashed only after writes, async command pool reset,
+    // skip write-backs already overwritten, two SPIR-V clean-ups, shaders reuse the warm-up results, whole uploads ahead of the submission.
+    setenv("DM_GFX_PERF_SAMPLE", "0", 0); setenv("DM_GFX_VCACHE", "1", 0); setenv("DM_GFX_TEX_DIRTY", "1", 0);
+    setenv("DM_GFX_ASYNC_POOL_RESET", "1", 0); setenv("DM_GFX_WB_SKIP", "1", 0);
+    setenv("DM_GFX_LDC_FOLD", "1", 0); setenv("DM_GFX_FORWARD_TEMPS", "1", 0); setenv("DM_GFX_SHADER_REUSE", "1", 0); setenv("DM_GFX_UPLOAD_PROLOGUE", "1", 0);
     setenv("DM_GFX_NOLOAD", "1", 0);             // 首绘可证全覆盖的通道不读入颜色附件 | colour attachments are not loaded in passes whose first draw provably covers them
     setenv("DM_PACE_ADAPT", "1", 0);             // 自适应出图档：游戏帧按撑得住的最高整除档均匀放行（hle_nvn.c）| adaptive present tier: game frames released evenly at the highest sustainable divisor tier (hle_nvn.c)
     // 完成通知（xbg_game.cpp completion_wait）与不持引擎锁等栅栏（gfx-legacy-waitall=0）在鸿蒙上是引擎缺省 | completion notification (xbg_game.cpp completion_wait)
@@ -296,24 +443,44 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     snprintf(required, sizeof required, "%s/derived.tsv", g_runtime);
     setenv("DM_DERIVED", required, 1);
     if (dm_derived_reload && dm_derived_reload()) { LOG("boot: derived tables incomplete (%s)", required); return ret_int(env, -12); }
-    snprintf(required, sizeof required, "%s/overlay", g_runtime);
-    char reason[256];
-    dm_overlay_result ov = dm_overlay_validate(required, DM_OVERLAY_SOURCE_SHA256, reason, sizeof reason);
-    if (ov == DM_OVERLAY_OK) ov = dm_overlay_require_touch_art(required, reason, sizeof reason);
-    if (ov != DM_OVERLAY_OK) { LOG("boot: overlay rejected (%d): %s", ov, reason); return ret_int(env, ov == DM_OVERLAY_MISSING ? -9 : -10); }
-    setenv("DM_ROMFS_OVERLAY", required, 1);
     if (!lifecycle_ready()) return ret_int(env, -8);
+    {   // 测试：DM_TEST_CRASH=<秒>，到点在一条线程里触发 SIGSEGV（验闪退记号与「分享日志」入口；产品没有环境变量，不触发）
+        // Test: DM_TEST_CRASH=<seconds> raises SIGSEGV on a thread when due (checks the crash marker and the "Share log" entry; the product has no env, never fires)
+        const char *tc = getenv("DM_TEST_CRASH"); static int secs; secs = tc ? atoi(tc) : 0;
+        if (secs > 0) { pthread_t ct; if (!pthread_create(&ct, NULL, test_crash_main, &secs)) pthread_detach(ct); LOG("boot: DM_TEST_CRASH：%d 秒后触发 SIGSEGV", secs); }
+    }
+    {   // 布局缺省：手机 = 触屏版（原样）；平板 = 触屏版 + 平板档（touch_ohos.c）；电脑 = 手柄版 + 键盘键帽（同 Mac App），碰屏 / 点鼠标切触屏版。DM_PAD_BOOT=0/1 可改
+        // Layout defaults: phone = touch layout (unchanged); tablet = touch layout + tablet profile (touch_ohos.c); PC = controller layout + keyboard key caps
+        // (as the Mac App), touching / clicking switches to the touch layout. DM_PAD_BOOT=0/1 overrides
+        int cls = dm_ohos_device_class(); const char *pb = getenv("DM_PAD_BOOT"); const char *sys = OH_GetDeviceType();
+        if (pb ? *pb == '1' : cls == 2) { setenv("DM_PAD_BOOT", "1", 1); dm_ohos_gamepad_boot_pad(); }
+        // 指针模式（同 Mac App）：平板 / 电脑缺省开，DM_POINTER=0/1 可改；手柄版界面在屏时鼠标直接点选，触屏版时鼠标照旧当手指
+        // Pointer mode (as the Mac App): on by default for tablets / PCs, DM_POINTER=0/1 overrides; the mouse picks directly in the controller layout and stays a finger in the touch layout
+        { const char *pm = getenv("DM_POINTER"); if (pm ? *pm == '1' : cls > 0) { setenv("DM_POINTER_LIVE", "1", 1); dm_ohos_gamepad_live_keys(1); LOG("boot: 鼠标指针模式开（装载后在 front_run 接上）"); } }
+        LOG("boot: 设备类别 %s（系统报 %s），开机布局 %s", cls == 2 ? "电脑" : cls == 1 ? "平板" : "手机", sys ? sys : "?", getenv("DM_PAD_BOOT") && *getenv("DM_PAD_BOOT") == '1' ? "手柄版 + 键盘键帽" : cls == 1 ? "触屏版（平板档）" : "触屏版");
+    }
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8u << 20);
     pthread_t th; int rc = pthread_create(&th, &a, host_thread, NULL); pthread_attr_destroy(&a);
-    if (!rc) { started = 1; pthread_detach(th); }
+    if (!rc) { g_started = 1; pthread_detach(th); dm_ohos_gamepad_start(); dm_ohos_frame_rate_running(1); }
     return ret_int(env, rc ? -1 : n);
 }
 
 // 0 失焦，1 后台，2 前台，3 激活（同安卓） | 0 unfocused, 1 background, 2 foreground, 3 active (as Android)
 static napi_value js_focus(napi_env env, napi_callback_info info) {
     ARGS(1); int32_t ev = 0; napi_get_value_int32(env, argv[0], &ev);
+    dm_ohos_gamepad_focus(ev == 2 || ev == 3);
+    dm_ohos_frame_rate_focus(ev == 2 || ev == 3);
+    dm_ohos_haptics_focus(ev == 2 || ev == 3);
     dm_ohos_touch_focus(ev == 2 || ev == 3);
+    if (ev == 0) unfocus_save();
     if (lifecycle_ready()) dm_lifecycle_post(&g_lifecycle, ev);
+    return undefined(env);
+}
+static napi_value js_touch_cancel(napi_env env, napi_callback_info info) { (void)info; dm_ohos_touch_cancel(); return undefined(env); }
+static napi_value js_app_identity(napi_env env, napi_callback_info info) {
+    ARGS(2); char bundle[256] = {0}, version[96] = {0};
+    get_str(env, argv[0], bundle, sizeof bundle); get_str(env, argv[1], version, sizeof version);
+    if (*bundle && *version) { setenv("DM_BUNDLE_NAME", bundle, 1); setenv("DM_APP_VERSION", version, 1); }
     return undefined(env);
 }
 static napi_value js_refresh(napi_env env, napi_callback_info info) { ARGS(1); double hz = 0; napi_get_value_double(env, argv[0], &hz); front_android_set_refresh((float)hz); return undefined(env); }
@@ -321,7 +488,18 @@ static napi_value js_refresh(napi_env env, napi_callback_info info) { ARGS(1); d
 static napi_value js_touch_event(napi_env env, napi_callback_info info) {
     ARGS(4); int32_t phase = 0, id = 0; double x = 0, y = 0;
     napi_get_value_int32(env, argv[0], &phase); napi_get_value_int32(env, argv[1], &id); napi_get_value_double(env, argv[2], &x); napi_get_value_double(env, argv[3], &y);
+    if (phase == 0) dm_ohos_gamepad_touched();
     dm_ohos_touch_event(phase, id, (float)x, (float)y); return undefined(env);
+}
+// pointer(op, x, y)：指针模式，0 按下 1 拖动 2 抬起 3 悬停，窗口坐标（vp）；返回 1 = 已接（ArkTS 不再当触点）| pointer mode, window vp; 1 = taken
+static napi_value js_pointer(napi_env env, napi_callback_info info) {
+    ARGS(3); int32_t op = 0; double x = 0, y = 0; napi_get_value_int32(env, argv[0], &op); napi_get_value_double(env, argv[1], &x); napi_get_value_double(env, argv[2], &y);
+    return ret_int(env, dm_ohos_pointer(op, (float)x, (float)y));
+}
+// mouse(kind, value)：0 右键（1 按下 / 0 抬起）、1 滚轮（+1 上 / -1 下）| 0 right button (1 down / 0 up), 1 wheel (+1 up / -1 down)
+static napi_value js_mouse(napi_env env, napi_callback_info info) {
+    ARGS(2); int32_t kind = 0, value = 0; napi_get_value_int32(env, argv[0], &kind); napi_get_value_int32(env, argv[1], &value);
+    dm_ohos_mouse(kind, value); return undefined(env);
 }
 // touchScreen(w, h, safeLeft, safeRight, safeBottom)：整个窗口（vp）| whole window (vp)
 static napi_value js_touch_screen(napi_env env, napi_callback_info info) {
@@ -346,6 +524,12 @@ static napi_value js_ui_text(napi_env env, napi_callback_info info) {
 // Whether the system allows executable memory under release signing (AGC distribution) is confirmed on device with this; the result is shown on the start / error page.
 #include <sys/mman.h>
 static napi_value js_exec_probe(napi_env env, napi_callback_info info) {
+#if defined(DM_OHOS_SIGNED_GUEST)
+    (void)info;
+    napi_value out;
+    napi_create_string_utf8(env, "uses signed native libraries; anonymous execution is not required", NAPI_AUTO_LENGTH, &out);
+    return out;
+#else
     (void)info; char r[96];
     uint32_t *pg = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (pg == MAP_FAILED) snprintf(r, sizeof r, "mmap errno %d", errno);
@@ -358,6 +542,7 @@ static napi_value js_exec_probe(napi_env env, napi_callback_info info) {
     }
     LOG("boot: 可执行内存自检 %s", r);
     napi_value out; napi_create_string_utf8(env, r, NAPI_AUTO_LENGTH, &out); return out;
+#endif
 }
 // 调试帧率：已出图帧数（nvn_vk.c mtl_present_count），ArkTS 每秒取差值显示 | Debug FPS: presented frame count; ArkTS shows the per-second difference
 uint64_t mtl_present_count(void);
@@ -366,6 +551,7 @@ static napi_value js_present_count(napi_env env, napi_callback_info info) {
 }
 // ---- XComponent 窗口回调 → 呈现层（同安卓 nativeSurface） | XComponent window callbacks → presenter (as Android nativeSurface) ----
 static void surface_set(OH_NativeXComponent *c, void *window) {
+    dm_ohos_frame_rate_surface(c, window != NULL);
     uint64_t w = 0, h = 0;
     if (window) OH_NativeXComponent_GetXComponentSize(c, window, &w, &h);
     dm_android_vk_set_window((ANativeWindow *)window);
@@ -377,13 +563,32 @@ static void on_changed(OH_NativeXComponent *c, void *window) { surface_set(c, wi
 static void on_destroyed(OH_NativeXComponent *c, void *window) { (void)window; surface_set(c, NULL); }
 static void on_touch(OH_NativeXComponent *c, void *window) { (void)c; (void)window; }   // 触控走 ArkTS 覆盖层 | touch goes through the ArkTS overlay
 static OH_NativeXComponent_Callback g_xcb = {on_created, on_changed, on_destroyed, on_touch};
+// 实体键盘（蓝牙 / USB）：游戏用的键吃掉（不让系统拿 Tab、方向键去走焦），其余照常传下去 | Physical keyboard: game keys are consumed (so Tab / arrows do not move
+// ArkUI focus), others propagate as usual
+static bool on_key(OH_NativeXComponent *c, void *w) {
+    (void)w; OH_NativeXComponent_KeyEvent *e = NULL; OH_NativeXComponent_KeyAction a; OH_NativeXComponent_KeyCode k;
+    if (OH_NativeXComponent_GetKeyEvent(c, &e) || !e || OH_NativeXComponent_GetKeyEventAction(e, &a) || OH_NativeXComponent_GetKeyEventCode(e, &k)) return false;
+    if (a != OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN && a != OH_NATIVEXCOMPONENT_KEY_ACTION_UP) return false;
+    int used = dm_ohos_keyboard_key((int)k, a == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN);
+    { static int logged; if (logged < 3 && a == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN) { ++logged; fprintf(stderr, "键盘：按键 code=%d 游戏键=%d\n", (int)k, used); } }
+    return used != 0;
+}
 
+static void cleanup_input(void *arg) { (void)arg; dm_ohos_frame_rate_running(0); dm_ohos_gamepad_stop(); dm_ohos_haptics_focus(0); }
 static napi_value init(napi_env env, napi_value exports) {
+    napi_add_env_cleanup_hook(env, cleanup_input, NULL);
     napi_property_descriptor d[] = {
+        {"profileDescriptors", NULL, js_profile_descriptors, NULL, NULL, NULL, napi_default, NULL},
+        {"experimentFlags", NULL, js_experiment_flags, NULL, NULL, NULL, napi_default, NULL},
+        {"setExperimentFlags", NULL, js_set_experiment_flags, NULL, NULL, NULL, napi_default, NULL},
+        {"appIdentity", NULL, js_app_identity, NULL, NULL, NULL, napi_default, NULL},
         {"start", NULL, js_start, NULL, NULL, NULL, napi_default, NULL},
         {"focus", NULL, js_focus, NULL, NULL, NULL, napi_default, NULL},
         {"refresh", NULL, js_refresh, NULL, NULL, NULL, napi_default, NULL},
+        {"touchCancel", NULL, js_touch_cancel, NULL, NULL, NULL, napi_default, NULL},
         {"touchEvent", NULL, js_touch_event, NULL, NULL, NULL, napi_default, NULL},
+        {"mouse", NULL, js_mouse, NULL, NULL, NULL, napi_default, NULL},
+        {"pointer", NULL, js_pointer, NULL, NULL, NULL, napi_default, NULL},
         {"touchScreen", NULL, js_touch_screen, NULL, NULL, NULL, napi_default, NULL},
         {"touchTick", NULL, js_touch_tick, NULL, NULL, NULL, napi_default, NULL},
         {"uiText", NULL, js_ui_text, NULL, NULL, NULL, napi_default, NULL},
@@ -396,7 +601,7 @@ static napi_value init(napi_env env, napi_value exports) {
     // XComponent 以本库为 libraryname 加载时，exports 上挂着原生组件句柄 | When an XComponent loads this library, exports carries the native component
     napi_value xobj; OH_NativeXComponent *xc = NULL;
     if (napi_get_named_property(env, exports, OH_NATIVE_XCOMPONENT_OBJ, &xobj) == napi_ok && napi_unwrap(env, xobj, (void **)&xc) == napi_ok && xc)
-        OH_NativeXComponent_RegisterCallback(xc, &g_xcb);
+        { OH_NativeXComponent_RegisterCallback(xc, &g_xcb); int rc = OH_NativeXComponent_RegisterKeyEventCallbackWithResult(xc, on_key); if (rc) HLOG(LOG_WARN, "dm-key", "key callback rc=%d", rc); }
     return exports;
 }
 static napi_module g_module = {1, 0, NULL, init, "dm", NULL, {0}};

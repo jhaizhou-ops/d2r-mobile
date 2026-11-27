@@ -13,10 +13,11 @@ const CLASSES_ZH: string[] = ['亚马逊', '法师', '死灵法师', '圣骑士'
 const CLASSES_EN: string[] = ['Amazon', 'Sorceress', 'Necromancer', 'Paladin', 'Barbarian', 'Druid', 'Assassin', 'Warlock'];
 
 class HeroRow {
-  name: string = ''; cls: string = ''; initial: string = ''; level: number = 0; gold: string = ''; time: string = '';
+  name: string = ''; cls: string = ''; initial: string = ''; img: string = ''; classIndex: number = -1; level: number = 0; gold: string = ''; time: string = '';
 }
 class CardData {
   dim: number = 2; has: boolean = false; count: number = 0; heroes: HeroRow[] = [];
+  formImages: Record<string, number> = {};
   title: string = ''; empty: string = ''; levelWord: string = ''; goldWord: string = ''; countText: string = ''; resume: string = '';
 }
 
@@ -39,11 +40,51 @@ export function buildCard(filesDir: string, size: number): CardData {
   data.resume = cn ? '继续游戏' : 'Continue';
   data.heroes = all.slice(0, max).map((h: SaveSummary) => {
     const r = new HeroRow(), names = cn ? CLASSES_ZH : CLASSES_EN;
-    r.name = h.name; r.cls = h.classIndex >= 0 ? names[h.classIndex] : (cn ? '冒险者' : 'Hero');
+    r.name = h.name; r.classIndex = h.classIndex; r.cls = h.classIndex >= 0 && h.classIndex < names.length ? names[h.classIndex] : (cn ? '冒险者' : 'Hero');
     r.initial = r.cls.substring(0, 1); r.level = h.level; r.gold = h.gold.toLocaleString(); r.time = timeText(h.lastPlayed, cn);
     return r;
   });
   return data;
+}
+
+// The portraits are generated from the player's own HIREABLES class icons, never shipped as source assets.
+class PreparedCard {
+  data: CardData = new CardData();
+  opened: fileIo.File[] = [];
+}
+const initialImages: Map<string, fileIo.File[]> = new Map();
+function closeImages(opened: fileIo.File[]): void {
+  for (const file of opened) { try { fileIo.closeSync(file); } catch (e) { } }
+}
+function releaseInitialImages(id: string): void {
+  const old = initialImages.get(id);
+  if (old) { closeImages(old); initialImages.delete(id); }
+}
+function prepareCard(filesDir: string, size: number): PreparedCard {
+  const card = new PreparedCard(); card.data = buildCard(filesDir, size);
+  for (const hero of card.data.heroes) {
+    if (hero.classIndex < 0 || hero.classIndex >= CLASSES_ZH.length) { continue; }
+    const key = `class${hero.classIndex}`;
+    if (card.data.formImages[key] !== undefined) { hero.img = `memory://${key}`; continue; }
+    for (const base of ['/dm/ui-art/', '/dm/overlay/touchart/', '/touch-overlay/touchart/']) {
+      try {
+        const path = `${filesDir}${base}class_${hero.classIndex}.png`;
+        if (!fileIo.accessSync(path)) { continue; }
+        const file = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
+        card.opened.push(file); card.data.formImages[key] = file.fd; hero.img = `memory://${key}`;
+        break;
+      } catch (e) { /* Missing artwork keeps the class initial. */ }
+    }
+  }
+  return card;
+}
+function updateCard(filesDir: string, size: number, id: string): void {
+  const card = prepareCard(filesDir, size);
+  // Keep descriptors open until FormKit finishes copying them to the card host.
+  formProvider.updateForm(id, formBindingData.createFormBindingData(card.data))
+    .then(() => { releaseInitialImages(id); })
+    .catch(() => {})
+    .finally(() => { closeImages(card.opened); });
 }
 
 // 卡片 id → 尺寸，一行一个「id 尺寸」| Card id → size, one "id size" per line
@@ -68,7 +109,7 @@ function writeForms(filesDir: string, m: Map<string, number>): void {
 // 刷新全部卡片（应用退到后台时调）| Refresh every card (called when the app goes to the background)
 export function refreshForms(filesDir: string): void {
   readForms(filesDir).forEach((size: number, id: string) => {
-    formProvider.updateForm(id, formBindingData.createFormBindingData(buildCard(filesDir, size))).catch(() => {});
+    updateCard(filesDir, size, id);
   });
 }
 
@@ -81,13 +122,15 @@ export default class EntryFormAbility extends FormExtensionAbility {
   onAddForm(want: Want): formBindingData.FormBindingData {
     const id = want.parameters ? want.parameters[formInfo.FormParam.IDENTITY_KEY] as string : '', size = sizeOf(want);
     if (id) { const m = readForms(this.context.filesDir); m.set(id, size); writeForms(this.context.filesDir, m); }
-    return formBindingData.createFormBindingData(buildCard(this.context.filesDir, size));
+    const card = prepareCard(this.context.filesDir, size);
+    releaseInitialImages(id); initialImages.set(id, card.opened);
+    return formBindingData.createFormBindingData(card.data);
   }
   onUpdateForm(formId: string): void {
     const size = readForms(this.context.filesDir).get(formId) ?? 2;
-    formProvider.updateForm(formId, formBindingData.createFormBindingData(buildCard(this.context.filesDir, size))).catch(() => {});
+    updateCard(this.context.filesDir, size, formId);
   }
-  onRemoveForm(formId: string): void { const m = readForms(this.context.filesDir); m.delete(formId); writeForms(this.context.filesDir, m); }
+  onRemoveForm(formId: string): void { releaseInitialImages(formId); const m = readForms(this.context.filesDir); m.delete(formId); writeForms(this.context.filesDir, m); }
   onFormEvent(formId: string, message: string): void { this.onUpdateForm(formId); }
   onAcquireFormState(want: Want): formInfo.FormState { return formInfo.FormState.READY; }
 }

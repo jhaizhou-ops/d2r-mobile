@@ -385,6 +385,22 @@ static void map_image(module_t *m, const char *dir) {
     remap_at(m, base + m->patch_off, x1, z1, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     m->base = (uint8_t *)base; install_key_page(m);
 }
+#elif defined(__OHOS__) && defined(DM_OHOS_SIGNED_GUEST)
+// AppGallery builds: the system loader maps HAP-signed ELF code segments.
+// Preserve the module's original relative layout; only data/key pages are written.
+#include "../harmony/native/signed_guest_image.h"
+static void map_image(module_t *m, const char *dir) {
+    (void)dir;
+    const dm_signed_guest_descriptor *d = NULL;
+    m->base = dm_signed_guest_image(m->name, &d);
+    if (!m->base || !d || d->text_end != m->text_end || d->patch_off != m->patch_off ||
+        d->key_page_off != m->key_page_off || d->key_page_size != m->key_page_size ||
+        d->ro_off != m->ro_off || d->data_off != m->data_off)
+        die("%s signed image layout mismatch", m->name);
+    m->size = (size_t)d->mapped_size;
+    install_key_page(m);
+    LOG("%s: loaded signed ELF image, size %#zx (no anonymous executable memory)", m->name, m->size);
+}
 #else
 static uint8_t *slurp(const char *path, size_t *n) {
     int fd = open(path, O_RDONLY);

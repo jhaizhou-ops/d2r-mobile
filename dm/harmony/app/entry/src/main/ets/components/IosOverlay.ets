@@ -70,11 +70,19 @@ export struct IosOverlay {
       if (dm.touchTick(this.s) === 1) { this.draw(); }
     }, 16);
   }
-  aboutToDisappear(): void { clearInterval(this.timer); }
+  aboutToDisappear(): void {
+    clearInterval(this.timer); dm.touchCancel();
+    this.images.forEach((p: image.PixelMap | null) => { p?.release(); });
+    this.frames.forEach((p: image.PixelMap | null) => { p?.release(); });
+    this.socket?.release(); this.socket = null;
+    this.images.clear(); this.frames.clear(); this.sizes.clear();
+  }
   onEnabled(): void {
-    this.images.clear(); this.sizes.clear(); this.frames.clear(); this.text.clear();
-    try { this.hudUi = JSON.parse(fileIo.readTextSync(this.overlayRoot + '/hud_v4_ui/ui.json')) as HudUi; } catch (e) { this.hudUi = null; }
-    if (!this.inputEnabled) { this.ctx.clearRect(0, 0, this.cw, this.chh); }
+    this.text.clear(); // Keep decoded art across input dialogs; release when the page is destroyed.
+    if (!this.hudUi) {
+      try { this.hudUi = JSON.parse(fileIo.readTextSync(this.overlayRoot + '/hud_v4_ui/ui.json')) as HudUi; } catch (e) { this.hudUi = null; }
+    }
+    if (!this.inputEnabled) { dm.touchCancel(); this.ctx.clearRect(0, 0, this.cw, this.chh); }
     this.screen();
   }
   private screen(): void { if (this.cw > 0 && this.chh > 0) { dm.touchScreen(this.cw, this.chh, this.safeLeft, this.safeRight, this.safeBottom); } }
@@ -329,8 +337,19 @@ export struct IosOverlay {
   }
 
   // ---- 触点原样交原生（窗口坐标 vp）| Touches go to native unchanged (window coordinates, vp) ----
+  private mouseHeld: boolean = false;   // 指针模式接了这一下按下：拖动 / 抬起也交给它 | pointer mode took this press: drag / release go to it too
   private onTouchEvent(e: TouchEvent): void {
     if (!this.inputEnabled) { return; }
+    // 鼠标左键：手柄版界面在屏时交指针模式（直接点选 / 点地走 / 拖物品，同 Mac App），否则照旧当手指
+    // Mouse left button: in the controller layout it goes to pointer mode (pick / walk / drag items, as the Mac App), otherwise it stays a finger
+    if (e.source === SourceType.Mouse && e.changedTouches.length > 0) {
+      const t = e.changedTouches[0];
+      if (e.type === TouchType.Down) { this.mouseHeld = dm.pointer(0, t.x, t.y) === 1; if (this.mouseHeld) { return; } }
+      else if (this.mouseHeld) {
+        if (e.type === TouchType.Move) { dm.pointer(1, t.x, t.y); } else { dm.pointer(2, t.x, t.y); this.mouseHeld = false; }
+        return;
+      }
+    }
     if (e.type === TouchType.Move) { for (const t of e.touches) { dm.touchEvent(1, t.id, t.x, t.y); } return; }
     const phase = e.type === TouchType.Down ? 0 : e.type === TouchType.Up ? 2 : e.type === TouchType.Cancel ? 3 : -1;
     if (phase < 0) { return; }
@@ -342,5 +361,16 @@ export struct IosOverlay {
       .width('100%').height('100%')
       .onAreaChange((_: Area, now: Area) => { this.cw = Number(now.width); this.chh = Number(now.height); this.screen(); })
       .onTouch((e: TouchEvent) => this.onTouchEvent(e))
+      // 鼠标（电脑 / 平板接鼠标）：左键照常当触点；右键 = B（返回 / 关面板），滚轮 = 右摇杆上下（手柄版滚列表），同 Mac App
+      // Mouse (PC / tablet with a mouse): the left button stays a touch; right button = B (back / close panel), wheel = right stick (lists in the controller UI), as the Mac App
+      .onMouse((e: MouseEvent) => {
+        if (this.inputEnabled && e.action === MouseAction.Move && !this.mouseHeld) { dm.pointer(3, e.x, e.y); return; }   // 悬停：物品说明等（指针模式） | hover: item tooltips etc. (pointer mode)
+        if (!this.inputEnabled || e.button !== MouseButton.Right) { return; }
+        if (e.action === MouseAction.Press) { dm.mouse(0, 1); } else if (e.action === MouseAction.Release) { dm.mouse(0, 0); }
+      })
+      .onAxisEvent((e: AxisEvent) => {
+        const v = e.getVerticalAxisValue();
+        if (this.inputEnabled && v !== 0) { dm.mouse(1, v < 0 ? 1 : -1); }
+      })
   }
 }

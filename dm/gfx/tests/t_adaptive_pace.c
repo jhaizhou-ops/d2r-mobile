@@ -21,6 +21,13 @@ int adaptive_pace_test(void) {
     CHECK(nvn_adaptive_divisor(90, 2, 120) == 2, "120 to 90 caps faster tier");
     CHECK(nvn_adaptive_divisor(60, 6, 120) == 3, "20 fps floor survives refresh change");
     CHECK(nvn_pace_hz(90, 60) == 90, "legacy Apple floor remains unchanged");
+    struct { double hz, want; } refs[] = {{60,60},{59.94,59.94},{90,60},{75,60},{100,60},{120,120},{119.88,119.88},{144,144},{50,50},{30,30},{0,0}};
+    for (unsigned i = 0; i < sizeof(refs)/sizeof(refs[0]); ++i) CHECK(nvn_pace_reference_hz(refs[i].hz) == refs[i].want, "pacing reference refresh");
+    CHECK(nvn_adaptive_divisor(nvn_pace_reference_hz(90), 0, 0) == 1, "touch-boost 90 Hz keeps the 60 fps tier");
+    CHECK(nvn_adaptive_divisor(nvn_pace_reference_hz(90), 1, 60) == 1, "60 to boosted 90 Hz does not drop to 45");
+    CHECK(nvn_adaptive_divisor(nvn_pace_reference_hz(90), 2, 60) == 2, "60 to boosted 90 Hz keeps the 30 fps tier");
+    CHECK(nvn_pace_hz(nvn_pace_reference_hz(90), 60) == 60, "dynamic 3D scale period stays 60 at boosted 90 Hz");
+    CHECK(nvn_adaptive_divisor(90, 1, 60) == 2, "negative control: raw 90 Hz drops the 60 tier to 45");
     CHECK(90.0 / (int)(90.0 / 60.0 + 0.02) > 60, "negative control detects old floor bug");
 
     nvn_frame_cpu_window cpu = {0}, wall = {0}; double cm = -1, wm = -1;
@@ -80,8 +87,20 @@ static int real_cpu_clock_test(void) {
     CHECK(cpu_ms < wall_ms * 0.5, "sleep is excluded; wall-clock negative control would fail");
     return 0;
 }
+static int ladder_test(void) {
+    // 45 档：90 / 45 / 135 Hz 都整除，60 / 120 不整除；40 档：120 / 80 / 40 整除，60 / 90 不整除 | 45 tier: 90 / 45 / 135 Hz divide evenly, 60 / 120 do not; 40 tier: 120 / 80 / 40 do, 60 / 90 do not
+    CHECK(nvn_ladder_hz_ok(45, 90) && nvn_ladder_hz_ok(45, 45) && nvn_ladder_hz_ok(45, 135), "45 tier on 90 / 45 / 135 Hz");
+    CHECK(!nvn_ladder_hz_ok(45, 60) && !nvn_ladder_hz_ok(45, 120) && !nvn_ladder_hz_ok(45, 30), "45 tier not on 60 / 120 / 30 Hz");
+    CHECK(nvn_ladder_hz_ok(40, 120) && nvn_ladder_hz_ok(40, 80) && !nvn_ladder_hz_ok(40, 60) && !nvn_ladder_hz_ok(40, 90), "40 tier on 120 / 80 only");
+    CHECK(nvn_ladder_hz_ok(30, 90) && nvn_ladder_hz_ok(30, 60) && nvn_ladder_hz_ok(60, 119.88) && !nvn_ladder_hz_ok(60, 0), "30 on 60 / 90, 60 on NTSC 120, no refresh");
+    int bad[5] = {0, 1, 0, 0, 0};
+    CHECK(nvn_ladder_next(0, +1, 5, bad) == 2 && nvn_ladder_next(3, -1, 5, bad) == 2 && nvn_ladder_next(2, -1, 5, bad) == 0, "skip unavailable tiers");
+    CHECK(nvn_ladder_next(0, -1, 5, bad) == -1 && nvn_ladder_next(4, +1, 5, bad) == -1, "ends of the ladder");
+    return 0;
+}
 int main(void) {
     int r = adaptive_pace_test();
+    if (!r) r = ladder_test();
     if (!r) r = real_cpu_clock_test();
     printf("adaptive pace: %s%s\n", r ? "FAIL " : "PASS", r ? failure : "");
     return r;

@@ -227,6 +227,7 @@ extern void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp);   // ent
 uint32_t (*dm_thread_tick_fn)(void);   // 取当前游戏拍；diag.c 初始化时登记（单测不登记，拍号记 0） | Gets the current game tick; registered when diag.c initializes (unit tests do not register it, the tick number is recorded as 0)
 void crash_thread_init(void);
 void guest_thread_init(void);   // thread.c：每线程 TSD 槽（门、x18、TLS、TLR）唯一设置点 | thread.c: the single place that sets the per-thread TSD slots (gate, x18, TLS, TLR)
+static const char *thr_name(thr_t *t, char *buf, size_t n);
 static void *thread_main(void *p) {
     thr_t *t = p;
     pthread_setspecific(g_keythr, t);
@@ -240,6 +241,9 @@ static void *thread_main(void *p) {
     // 记下回宿主栈的跳回点再进客体栈；ExitThread（thread_exit）收尾后 siglongjmp 回到这里，在本栈上退出线程（见 g_keyhome）
     // Record the jump point back to the host stack before entering the guest stack; after ExitThread (thread_exit) finishes its bookkeeping it
     // siglongjmps back here, and the thread exits on this stack (see g_keyhome)
+#ifndef __APPLE__
+    { char nb[32], nm[16]; snprintf(nm, sizeof nm, "%s", thr_name(t, nb, sizeof nb)); if (strcmp(nm, "?")) pthread_setname_np(pthread_self(), nm); }   // 系统剖析器里按游戏线程名区分 | so system profilers can tell guest threads apart by the game's names
+#endif
     sigjmp_buf home;
     pthread_setspecific(g_keyhome, &home);
     if (sigsetjmp(home, 0) == 0) {
