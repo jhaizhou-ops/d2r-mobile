@@ -81,6 +81,12 @@ out = layout._custom_page('"name": "VideoOptionsPanel", "name": "OptionsTable"')
 assert 'TouchCustom_scale3d' not in out and 'dmCustomScale3d' not in out and 'TouchCustom_icloud' in out
 assert [k for k, _ in layout._CUSTOM_ALL] == all_keys
 os.environ.pop('DM_OVERLAY_MAC'); layout = importlib.reload(layout)
+# 鸿蒙（DM_OVERLAY_KBD）：只多键盘键帽，3D 清晰度那一行照样有（11-27 0.20.8 曾用 DM_OVERLAY_MAC 出包把它藏掉了）
+# HarmonyOS (DM_OVERLAY_KBD): key caps only; the 3D resolution row stays (0.20.8 on 11-27 was packed with DM_OVERLAY_MAC and lost it)
+os.environ['DM_OVERLAY_KBD'] = '1'; layout = importlib.reload(layout)
+out = layout._custom_page('"name": "VideoOptionsPanel", "name": "OptionsTable"')[0]
+assert 'TouchCustom_scale3d_full' in out and [k for k, _ in layout._CUSTOM_ALL] == all_keys
+os.environ.pop('DM_OVERLAY_KBD'); layout = importlib.reload(layout)
 host = host_src
 assert 'TouchCustom_touch_swap_above_near' in host
-print('PASS touch layout options: generated radio pair, brightness radio, labels, defaults, host order (default and MOVIE_FFMPEG=1), no iCloud row for Android, 3D resolution radio (not on the Mac App) and scrolling row extent')
+print('PASS touch layout options: generated radio pair, brightness radio, labels, defaults, host order (default and MOVIE_FFMPEG=1), no iCloud row for Android, 3D resolution radio (not on the Mac App, kept with DM_OVERLAY_KBD) and scrolling row extent')

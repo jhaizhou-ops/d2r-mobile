@@ -195,7 +195,7 @@ def pad_bliss(s):   # 手柄版建角模式页（原版布局原样）+ 「极�
     s, n = re.subn(r'\{\s*"action"\s*:\s*"option2"\s*,\s*"description"\s*:\s*"@LegacyGameVersionSwitch"\s*\}\s*,?', '', s); assert n == 1, n
     at, add = INSERT['controller/console/characteroptionspanelhd.json']; ms = list(re.finditer(at, s)); assert len(ms) == 1
     key = '        { "type": "ImageWidget", "name": "TouchBlissKey", "fields": { "rect": { "x": -1665, "y": 1330, "scale": 1.5 }, "filename": "Controller/ControllerButtons/Switch/ButtonLeft" } },\n'
-    if os.environ.get('DM_OVERLAY_MAC'):   # Mac App：同位再带一个键盘键帽（缺省在屏外，玩家用键盘时宿主把两个对调，dm_padmode.c） | Mac App: one more keyboard key cap at the same position (off screen by default; when the player uses the keyboard the host swaps the two, dm_padmode.c)
+    if (os.environ.get('DM_OVERLAY_MAC') or os.environ.get('DM_OVERLAY_KBD')):   # Mac App / 鸿蒙（DM_OVERLAY_KBD）：同位再带一个键盘键帽（缺省在屏外，玩家用键盘时宿主把两个对调，dm_padmode.c） | Mac App: one more keyboard key cap at the same position (off screen by default; when the player uses the keyboard the host swaps the two, dm_padmode.c)
         key += '        { "type": "ImageWidget", "name": "TouchBlissKeyK", "fields": { "rect": { "x": 99999, "y": 1330, "scale": 1.5 }, "filename": "Ztouch_controller_buttons_ui/switchKButtonLeft" } },\n'
     return s[:ms[0].start()] + add.lstrip() + key + '        ' + s[ms[0].start():]
 def set_rect(s, name, x, y, w, h):
@@ -816,7 +816,7 @@ def _rf_div(name, x, y, w=500):   # 分隔金线按所在栏宽缩放 | The gold
 def _rf_key(name, cap, by):   # 手柄模式下贴在按钮左端的原版键帽（Switch 手柄：右 = A、上 = X；48×45 原图放大 1.5）。缺省在屏外，宿主在手柄模式挪进来（dm_rift_ui.c）；这一页原版底部提示条不在屏上 | The original button glyph placed at the left end of the button in controller mode (Switch controller: right = A, top = X; the 48x45 source image scaled by 1.5). Off screen by default, moved in by the host in controller mode (dm_rift_ui.c); on this page the original bottom button legend is not on screen
     return {'type': 'ImageWidget', 'name': name, 'fields': {'rect': {'x': 99999, 'y': by + 26, 'scale': 1.5}, 'filename': 'Controller/ControllerButtons/Switch/' + cap}}
 def _rf_keys(name, cap, by):   # Mac App 的覆盖层（DM_OVERLAY_MAC）再带一个同位的键盘键帽（名字加 K，图在 kbd_glyphs.py 那一套里）：玩家用键盘时宿主显示它、藏手柄那个。iOS 的覆盖层不带 | the Mac App's overlay (DM_OVERLAY_MAC) additionally carries a keyboard key cap at the same position (name with K appended, images from the kbd_glyphs.py set): when the player uses the keyboard the host shows it and hides the gamepad one. The iOS overlay does not carry it
-    k = _rf_key(name, cap, by); return [k] + ([dict(k, name=name + 'K', fields=dict(k['fields'], filename='Ztouch_controller_buttons_ui/switchK' + cap))] if os.environ.get('DM_OVERLAY_MAC') else [])
+    k = _rf_key(name, cap, by); return [k] + ([dict(k, name=name + 'K', fields=dict(k['fields'], filename='Ztouch_controller_buttons_ui/switchK' + cap))] if (os.environ.get('DM_OVERLAY_MAC') or os.environ.get('DM_OVERLAY_KBD')) else [])
 def _rift_board():
     # 左栏：标题 0–65 → 箭头组 80–188（大厅大箭头 94×108 原尺寸，层数大字在两箭头正中）→ ±10 两个等宽钮 212–267（前端小按钮 366×92 × 0.596 = 218×55，间隔 24，左右与箭头组对齐）
     #   → 本层信息 5 行（行距 64）307–627 → 组间 40 → 安亚赌博 667–851 → 「开始」贴底：底边 = 右列列表底边 1280，宽 460（前端中按钮 470×118 × 0.979）

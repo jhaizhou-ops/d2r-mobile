@@ -5,6 +5,8 @@ export const refresh: (hz: number) => void;
 export const touchEvent: (phase: number, id: number, x: number, y: number) => void;
 // 0 right button (value 1 down / 0 up) = B; 1 wheel (value +1 up / -1 down) = right stick briefly
 export const mouse: (kind: number, value: number) => void;
+// pointer mode: op 0 down 1 drag 2 up 3 hover, window vp; returns 1 when taken (not a touch then)
+export const pointer: (op: number, x: number, y: number) => number;
 export const touchScreen: (width: number, height: number, left: number, right: number, bottom: number) => void;
 export const touchTick: (out: Float32Array) => number;
 export const uiText: (key: string) => string;

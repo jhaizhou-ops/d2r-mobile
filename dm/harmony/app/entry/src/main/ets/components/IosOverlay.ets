@@ -337,8 +337,21 @@ export struct IosOverlay {
   }
 
   // ---- 触点原样交原生（窗口坐标 vp）| Touches go to native unchanged (window coordinates, vp) ----
+  private mouseHeld: boolean = false;
+  private mouseLogged: boolean = false;   // 指针模式接了这一下按下：拖动 / 抬起也交给它 | pointer mode took this press: drag / release go to it too
   private onTouchEvent(e: TouchEvent): void {
     if (!this.inputEnabled) { return; }
+    // 鼠标左键：手柄版界面在屏时交指针模式（直接点选 / 点地走 / 拖物品，同 Mac App），否则照旧当手指
+    // Mouse left button: in the controller layout it goes to pointer mode (pick / walk / drag items, as the Mac App), otherwise it stays a finger
+    if (e.source === SourceType.Mouse && e.changedTouches.length > 0) {
+      const t = e.changedTouches[0];
+      if (!this.mouseLogged) { this.mouseLogged = true; hilog.info(0xD2E0, 'dm', 'mouse touch type=%{public}d', e.type); }
+      if (e.type === TouchType.Down) { this.mouseHeld = dm.pointer(0, t.x, t.y) === 1; if (this.mouseHeld) { return; } }
+      else if (this.mouseHeld) {
+        if (e.type === TouchType.Move) { dm.pointer(1, t.x, t.y); } else { dm.pointer(2, t.x, t.y); this.mouseHeld = false; }
+        return;
+      }
+    }
     if (e.type === TouchType.Move) { for (const t of e.touches) { dm.touchEvent(1, t.id, t.x, t.y); } return; }
     const phase = e.type === TouchType.Down ? 0 : e.type === TouchType.Up ? 2 : e.type === TouchType.Cancel ? 3 : -1;
     if (phase < 0) { return; }
@@ -353,6 +366,7 @@ export struct IosOverlay {
       // 鼠标（电脑 / 平板接鼠标）：左键照常当触点；右键 = B（返回 / 关面板），滚轮 = 右摇杆上下（手柄版滚列表），同 Mac App
       // Mouse (PC / tablet with a mouse): the left button stays a touch; right button = B (back / close panel), wheel = right stick (lists in the controller UI), as the Mac App
       .onMouse((e: MouseEvent) => {
+        if (this.inputEnabled && e.action === MouseAction.Move && !this.mouseHeld) { dm.pointer(3, e.x, e.y); return; }   // 悬停：物品说明等（指针模式） | hover: item tooltips etc. (pointer mode)
         if (!this.inputEnabled || e.button !== MouseButton.Right) { return; }
         if (e.action === MouseAction.Press) { dm.mouse(0, 1); } else if (e.action === MouseAction.Release) { dm.mouse(0, 0); }
       })

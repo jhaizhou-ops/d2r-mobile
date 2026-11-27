@@ -454,6 +454,9 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
         // (as the Mac App), touching / clicking switches to the touch layout. DM_PAD_BOOT=0/1 overrides
         int cls = dm_ohos_device_class(); const char *pb = getenv("DM_PAD_BOOT"); const char *sys = OH_GetDeviceType();
         if (pb ? *pb == '1' : cls == 2) { setenv("DM_PAD_BOOT", "1", 1); dm_ohos_gamepad_boot_pad(); }
+        // 指针模式（同 Mac App）：平板 / 电脑缺省开，DM_POINTER=0/1 可改；手柄版界面在屏时鼠标直接点选，触屏版时鼠标照旧当手指
+        // Pointer mode (as the Mac App): on by default for tablets / PCs, DM_POINTER=0/1 overrides; the mouse picks directly in the controller layout and stays a finger in the touch layout
+        { const char *pm = getenv("DM_POINTER"); if (pm ? *pm == '1' : cls > 0) { setenv("DM_POINTER_LIVE", "1", 1); dm_ohos_gamepad_live_keys(1); LOG("boot: 鼠标指针模式开（装载后在 front_run 接上）"); } }
         LOG("boot: 设备类别 %s（系统报 %s），开机布局 %s", cls == 2 ? "电脑" : cls == 1 ? "平板" : "手机", sys ? sys : "?", getenv("DM_PAD_BOOT") && *getenv("DM_PAD_BOOT") == '1' ? "手柄版 + 键盘键帽" : cls == 1 ? "触屏版（平板档）" : "触屏版");
     }
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8u << 20);
@@ -487,6 +490,11 @@ static napi_value js_touch_event(napi_env env, napi_callback_info info) {
     napi_get_value_int32(env, argv[0], &phase); napi_get_value_int32(env, argv[1], &id); napi_get_value_double(env, argv[2], &x); napi_get_value_double(env, argv[3], &y);
     if (phase == 0) dm_ohos_gamepad_touched();
     dm_ohos_touch_event(phase, id, (float)x, (float)y); return undefined(env);
+}
+// pointer(op, x, y)：指针模式，0 按下 1 拖动 2 抬起 3 悬停，窗口坐标（vp）；返回 1 = 已接（ArkTS 不再当触点）| pointer mode, window vp; 1 = taken
+static napi_value js_pointer(napi_env env, napi_callback_info info) {
+    ARGS(3); int32_t op = 0; double x = 0, y = 0; napi_get_value_int32(env, argv[0], &op); napi_get_value_double(env, argv[1], &x); napi_get_value_double(env, argv[2], &y);
+    return ret_int(env, dm_ohos_pointer(op, (float)x, (float)y));
 }
 // mouse(kind, value)：0 右键（1 按下 / 0 抬起）、1 滚轮（+1 上 / -1 下）| 0 right button (1 down / 0 up), 1 wheel (+1 up / -1 down)
 static napi_value js_mouse(napi_env env, napi_callback_info info) {
@@ -580,6 +588,7 @@ static napi_value init(napi_env env, napi_value exports) {
         {"touchCancel", NULL, js_touch_cancel, NULL, NULL, NULL, napi_default, NULL},
         {"touchEvent", NULL, js_touch_event, NULL, NULL, NULL, napi_default, NULL},
         {"mouse", NULL, js_mouse, NULL, NULL, NULL, napi_default, NULL},
+        {"pointer", NULL, js_pointer, NULL, NULL, NULL, napi_default, NULL},
         {"touchScreen", NULL, js_touch_screen, NULL, NULL, NULL, napi_default, NULL},
         {"touchTick", NULL, js_touch_tick, NULL, NULL, NULL, napi_default, NULL},
         {"uiText", NULL, js_ui_text, NULL, NULL, NULL, napi_default, NULL},

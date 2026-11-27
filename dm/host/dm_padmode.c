@@ -548,7 +548,7 @@ void dm_padmode_step(uint8_t *b, uint64_t frame) {   // 游戏主线程每帧（
           for (int i = 0; i < g_nstr && i < 3; i++) { struct { const char *s; uint64_t n; } q = { g_str[i].key, g_str[i].klen }; const char *r = ((const char *(*)(void *))(b + 0x7f5630))(&q);
               L += (size_t)snprintf(o + L, L < sizeof o ? sizeof o - L : 0, "%s%s=「%s」", i ? "、" : "", g_str[i].key, r ? r : "(空)"); }
           LOG("DM_TEST_PADMODE：帧 %llu 模式 %s，原版取串 %s", (unsigned long long)frame, g_cur ? "手柄" : "触屏", o); } }
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX || defined(__OHOS__)   // 鸿蒙覆盖层（DM_OVERLAY_KBD）同样带 TouchBlissKeyK | the HarmonyOS overlay (DM_OVERLAY_KBD) carries TouchBlissKeyK too
     // 建角模式页「极乐世界」那行左边写死的手柄键帽（布局 touch_layout.py 的 TouchBlissKey，原位 x −1665）：Mac 的覆盖层同位带了一个键盘键帽 TouchBlissKeyK，按当前键帽对调
     // The hard-coded gamepad key cap to the left of the "Elysium" row on the character-creation mode page (TouchBlissKey in the layout touch_layout.py, original position x -1665): the Mac overlay carries a keyboard key cap TouchBlissKeyK at the same position, and the two are swapped according to the current key caps
     if (g_glyph_have[DM_GLYPH_KBD] && frame % 10 == 0) { int kb = g_glyph == DM_GLYPH_KBD; uint64_t root = rd8((uint64_t)(uintptr_t)(b + 0x2f05458)), a = root ? pm_find(root, "TouchBlissKey", 0) : 0, k = a ? pm_find(root, "TouchBlissKeyK", 0) : 0;

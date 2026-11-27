@@ -2916,7 +2916,7 @@ static int ui_touch_mode(void) { int dm_padmode_current(void), dm_padmode_busy(v
 // 只把物品手势的四个执行泵（长按 / 双击使用 / 买 / 拖放）在真鼠标模式下补跑一遍；绑定框、技能页签对调、佣兵页这些改触屏布局的泵不跑。没有请求时这四个什么都不做，手柄玩家不受影响
 // Mac App: the interface is the gamepad layout (the answer above is "not touch mode"), but the real mouse uses the touch layout's item gestures (touch_mac.c feeds mouse events to the touch state machine).
 // Only the four execution pumps of the item gestures (long press / double-click use / buy / drag and drop) are additionally run in real-mouse mode; the pumps that change the touch layout - binding box, skill tab swap, mercenary page - are not run. With no request these four do nothing, so gamepad players are unaffected
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX || defined(__OHOS__)   // 鸿蒙指针模式同 Mac App | HarmonyOS pointer mode as the Mac App
 #define UI_MOUSE_ITEM_PUMPS(pm, proot, pw, phh) do { int dm_touch_host_is_live(void), dm_padmode_busy(void); if (!tm && dm_touch_host_is_live() && !dm_padmode_busy()) { ui_long_pump(); ui_use_pump(); ui_buy_pump(pw, phh); ui_drag_pump(pm, proot, pw, phh); } } while (0)
 #else
 #define UI_MOUSE_ITEM_PUMPS(pm, proot, pw, phh) do { } while (0)

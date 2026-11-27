@@ -31,6 +31,10 @@ static int button_regs, axis_regs, device_reg;
 /* Mouse extras (as the Mac app front_mac.m): right button = B (back / close panel), wheel = right stick up / down for 0.12 s (the controller
    UI scrolls lists with the right stick). Neither switches layouts: they are merged after the "new input -> controller mode" check. */
 static uint64_t mouse_buttons; static int wheel_dir, wheel_gen;
+/* Pointer mode on (tablet / PC): Return and Esc go as the Mac App's two high bits (40 / 41); touch_mac.c turns them into A or + / B or +
+   by the current page (naming page, hint bar, in game). Off: Return = +, Esc = B as before. */
+static int live_keys;
+void dm_ohos_gamepad_live_keys(int on) { pthread_mutex_lock(&lock); live_keys = !!on; pthread_mutex_unlock(&lock); }
 
 static int slot(const char *id, int create) {
     int empty = -1;
@@ -193,12 +197,14 @@ int dm_ohos_keyboard_key(int code, int down) {
     uint64_t bit = 0; int *stick = NULL;
     switch (code) {
     case 2026: case 2050: bit = DM_BTN_A; break;            /* J, Space */
-    case 2027: case 2070: bit = DM_BTN_B; break;            /* K, Esc */
+    case 2027: bit = DM_BTN_B; break;                       /* K */
+    case 2070: bit = live_keys ? 1ull << 41 : DM_BTN_B; break;   /* Esc */
     case 2037: bit = DM_BTN_X; break; case 2025: bit = DM_BTN_Y; break;   /* U, I */
     case 2022: bit = DM_BTN_LS; break; case 2023: bit = DM_BTN_RS; break; /* F, G */
     case 2033: bit = DM_BTN_L; break; case 2021: bit = DM_BTN_R; break;   /* Q, E */
     case 2042: bit = DM_BTN_ZL; break; case 2019: bit = DM_BTN_ZR; break; /* Z, C */
-    case 2054: case 2058: case 2116: bit = DM_BTN_PLUS; break;  /* Enter, =, keypad + */
+    case 2054: bit = live_keys ? 1ull << 40 : DM_BTN_PLUS; break;   /* Enter */
+    case 2058: case 2116: bit = DM_BTN_PLUS; break;          /* =, keypad + */
     case 2049: bit = DM_BTN_MINUS; break;                   /* Tab */
     case 2014: bit = DM_BTN_LEFT; break; case 2012: bit = DM_BTN_UP; break; case 2015: bit = DM_BTN_RIGHT; break; case 2013: bit = DM_BTN_DOWN; break;
     case 2039: stick = &kb_w; break; case 2017: stick = &kb_a; break; case 2035: stick = &kb_s; break; case 2020: stick = &kb_d; break;  /* W A S D */

@@ -75,7 +75,8 @@ with tempfile.TemporaryDirectory() as t:
     for nm in sorted(p[len(cb)+7:] for p in have if p.startswith(cb+'switch/')):
         src=face.get(nm[:-7],nm[:-7])+'.sprite'; q=next(p for p in (cb+'ps5/'+src, cb+'ps5/'+src.replace('rectangle',''), cb+'switch/'+nm) if p in have)
         o=os.path.join(t,'ps_'+nm); open(o,'wb').write(romfs_art.read(romfs,q)); REPL['data/hd/global/ui/ztouch_controller_buttons_ui/switchp'+nm]=o
-    if os.environ.get('DM_OVERLAY_MAC'):   # Mac App：再出一套键盘键帽，放在触屏键帽同一个目录、文件名「<平台>k<名字>」（宿主 dm_padmode.c 的键盘键帽路径 Ztouch_controller_buttons_ui/%sK%s） | Mac App: additionally produce a set of keyboard key caps, placed in the same directory as the touch key caps with file names "<platform>k<name>" (the keyboard key-cap path of the host's dm_padmode.c is Ztouch_controller_buttons_ui/%sK%s)
+    if (os.environ.get('DM_OVERLAY_MAC') or os.environ.get('DM_OVERLAY_KBD')):   # 鸿蒙同样带（DM_OVERLAY_KBD：只要键帽，不带 Mac 专属的界面取舍） | HarmonyOS too (DM_OVERLAY_KBD: key caps only, without the Mac-only UI choices)
+    # Mac App：再出一套键盘键帽，放在触屏键帽同一个目录、文件名「<平台>k<名字>」（宿主 dm_padmode.c 的键盘键帽路径 Ztouch_controller_buttons_ui/%sK%s） | Mac App: additionally produce a set of keyboard key caps, placed in the same directory as the touch key caps with file names "<platform>k<name>" (the keyboard key-cap path of the host's dm_padmode.c is Ztouch_controller_buttons_ui/%sK%s)
         import kbd_glyphs; REPL.update({'data/hd/global/ui/ztouch_controller_buttons_ui/switchk'+os.path.basename(k):v for k,v in kbd_glyphs.build(romfs,t).items()})
     REPL.update(touch_layout.build_profile(romfs,t))   # 大字号 | Large font size
     import touch_strings; ts,nts=touch_strings.build(romfs,t); REPL.update(ts)   # 排版用的串（大字号）；手柄说法 → 触摸说法改由宿主按模式换（旁路表 touch_strings.tsv，见 emit） | Strings used for typesetting (large font size); controller wording → touch wording is now switched by the host according to mode (sidecar table touch_strings.tsv, see emit)
@@ -230,7 +231,7 @@ with tempfile.TemporaryDirectory() as t:
             for k,o,v in TS: f.write('%s\t%s\t%s\n' % (k,o,v.replace('\\','\\\\').replace('\n','\\n').replace('\t','\\t')))
         open(os.path.join(dst,'xbox_glyphs'),'w').write('ztouch_controller_buttons_ui/switchx*.sprite\n')   # 标记文件：覆盖层带 Xbox 键帽，宿主 dm_padmode.c 见到它才在 Xbox 手柄输入时换 | Marker file: the overlay carries Xbox glyphs; the host dm_padmode.c switches to them on Xbox controller input only when it sees this file
         open(os.path.join(dst,'ps_glyphs'),'w').write('ztouch_controller_buttons_ui/switchp*.sprite\n')   # 标记文件：覆盖层带 PlayStation 键帽，宿主 dm_padmode.c 见到它才在 PS 手柄输入时换
-        if os.environ.get('DM_OVERLAY_MAC'): open(os.path.join(dst,'kbd_glyphs'),'w').write('ztouch_controller_buttons_ui/switchk*.sprite\n')   # 标记文件：覆盖层带键盘键帽，宿主 dm_padmode.c 见到它才用 | marker file: the overlay carries keyboard key caps; the host's dm_padmode.c uses them only when it sees this
+        if (os.environ.get('DM_OVERLAY_MAC') or os.environ.get('DM_OVERLAY_KBD')): open(os.path.join(dst,'kbd_glyphs'),'w').write('ztouch_controller_buttons_ui/switchk*.sprite\n')   # 标记文件：覆盖层带键盘键帽，宿主 dm_padmode.c 见到它才用 | marker file: the overlay carries keyboard key caps; the host's dm_padmode.c uses them only when it sees this
         open(os.path.join(dst,'ctrl_touch'),'w').write('触屏版布局在 layouts/xtouch_lay、ztouch_console_lay、0touch_console_switch_lay（dm_padmode.c 见到本文件才改写前缀）\n')
         GENERATED_OVERLAYS.append(dst)
         return new[0], os.path.getsize(os.path.join(dst,'data',new[0]))

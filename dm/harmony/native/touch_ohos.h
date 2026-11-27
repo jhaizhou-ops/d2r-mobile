@@ -26,6 +26,8 @@ enum {
     DM_OS_FLOATS = DM_OS_HUD + 16
 };
 void dm_ohos_touch_cancel(void);
+/* Pointer mode: mouse left button / drag / hover while the controller layout is up (op 0 down 1 drag 2 up 3 hover; window vp). 1 = taken. */
+int dm_ohos_pointer(int op, float x, float y);
 #ifdef __cplusplus
 }
 #endif

@@ -141,6 +141,10 @@ void front_run(void (*guest)(void)) {
         void uimsg_subscribe(void (*)(const char *, const char *, const char *));
         front_refresh_start();
         uimsg_subscribe(dm_ohos_touch_uimsg);
+        // 指针模式（napi 按设备类别定，DM_POINTER_LIVE）：要订阅 UI 消息，只能在产物装载后、客体起跑前接（同 Mac front_mac.m 开窗后）
+        // Pointer mode (decided in napi by device class, DM_POINTER_LIVE): it subscribes to UI messages, so it can only attach after the modules
+        // are loaded and before the guest starts (as front_mac.m after opening the window)
+        if (getenv("DM_POINTER_LIVE")) { void dm_touch_host_live_enable(void); dm_touch_host_live_enable(); }
         dm_touch_game_live_check(1);
         front_pin_fast("游戏主线程");
         { void dm_gameperf_start(void); dm_gameperf_start(); }   // Game Service 温控 / GPU 负载监测 | Game Service thermal / GPU load monitoring

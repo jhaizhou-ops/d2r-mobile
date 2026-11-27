@@ -57,6 +57,8 @@ if(NOT EXISTS ${DM_GEN_DIR}/dm_touch_native_art.c)
   message(FATAL_ERROR "Generate native_art/generate.py <romfs> --output-dir <DM_GEN_DIR> first")
 endif()
 list(APPEND COMPAT_SRCS ${DM}/ios/Sources/dm_touch_game_state.c ${DM}/ios/Sources/dm_touch_game_identity.c ${DM}/ios/Sources/dm_touch_game_bridge.c ${DM_GEN_DIR}/dm_touch_native_art.c)
+# 指针模式（平板 / 电脑的鼠标，同 Mac App）：host_sources.py 不收 *_mac.c，这一个单独加 | pointer mode (tablet / PC mouse, as the Mac App): host_sources.py skips *_mac.c, so add this one
+list(APPEND COMPAT_SRCS ${HOST}/touch_mac.c)
 add_library(dmcore STATIC ${HOST_SRCS} ${HLE_SRCS} ${GFX_SRCS} ${LIBDEFLATE_SRCS} ${ASM_SRCS} ${COMPAT_SRCS})
 # The private AppGallery package carries pre-generated modules as signed ELF libraries.
 # Empty public shells keep their existing import/debug-signing workflow.

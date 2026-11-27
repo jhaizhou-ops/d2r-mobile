@@ -89,7 +89,10 @@ static void touch_uimsg(const char *cat, const char *act, const char *arg) {
     // The gesture layer's own navigation state (dm_tc_set_navigation_mode below) still follows navigation, and mouse click routing is unchanged
     { int dm_hud_stack_msg(const char *, const char *); static int blocked;
       if (!strcmp(cat, "PanelManager")) blocked = dm_hud_stack_msg(act, arg ? arg : "");
-      dm_uiscreen_set_panel(dm_tc_panel_mode(navigation || (scene.game && blocked > 0), &scene, blocked) == 1); }
+#ifndef __OHOS__   // 鸿蒙：面板居中由 touch_ohos.c 判（同一个量只留一个写入者） | HarmonyOS: touch_ohos.c decides panel centering (one writer)
+      dm_uiscreen_set_panel(dm_tc_panel_mode(navigation || (scene.game && blocked > 0), &scene, blocked) == 1);
+#endif
+    }
     if (g_touch.enabled) {
         dm_tc_set_navigation_mode(&g_touch.state, navigation);
         static int pad = -1; if (pad < 0) { const char *e = getenv("DM_TOUCH_NAV_PAD"); pad = e && e[0] == '1'; }   // 缺省不给圆钮（同 front_ios.m） | no round button by default (same as front_ios.m)
@@ -198,6 +201,10 @@ void dm_touch_host_game_start(uint64_t now) {
 }
 
 void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
+#ifdef __OHOS__   // 鸿蒙：触屏版界面由 touch_ohos.c 管（光标、手势都在那边），指针模式只在手柄版时跑；回车 / Esc 的高位不进游戏 | HarmonyOS: the touch layout belongs
+    // to touch_ohos.c (cursor and gestures there); pointer mode runs only in the controller layout; the Return / Esc high bits never reach the game
+    { int dm_padmode_current(void); if (g_live_on && !dm_padmode_current()) { *buttons &= ~((1ull << 40) | (1ull << 41)); return; } }
+#endif
     if (!g_touch.ready) touch_init(now);
     if (g_live_on) {   // Mac 键盘的回车与 Esc（front_mac.m 用两个游戏不认的高位送来）：按下那一刻按当前页定成哪个手柄键，按住期间不变 | Return and Esc on a Mac keyboard (sent by front_mac.m as two high bits the game does not recognise): decided as a gamepad key by the current page at the moment of pressing, unchanged while held
         static uint64_t ent, esc; int dm_padmode_legend_has(uint32_t glyph), dm_game_paused(void), dm_uiscreen_ingame(void); uint64_t kb = *buttons; *buttons &= ~((1ull << 40) | (1ull << 41));
@@ -285,6 +292,9 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
     if (!g_touch.enabled || !g_touch.started) return;
     uint32_t tick = touch_cur_tick();
     if (!g_touch.prefix && !g_touch.tick_set) { g_touch.to_game_tick = tick; g_touch.tick_set = 1; }
+    // 真鼠标、没带触点脚本：没有脚本时间线，进局时（上面 g_live_based）才起算；加载期间不按脚本的读取画面时限报红 | real mouse without a touch script: no script timeline,
+    // it starts when the game is entered (g_live_based above); no loading-screen deadline warning during loading
+    if (!g_touch.based && g_live_on && !dm_touch_host_enabled()) return;
     if (!g_touch.based) {
         uint32_t elapsed = tick - g_touch.to_game_tick;
         if (g_touch.prefix) {   // 前缀局：回放结束（ReplayDone）且读取画面已撤才起局——快进（DM_DETCLOCK）时服务端拍跑在客户端加载前面，回放末拍时读取画面还在，按键不生效 | prefix run: start the run only when the replay has ended (ReplayDone) and the loading screen is down -- in fast-forward (DM_DETCLOCK) server ticks run ahead of client loading, the loading screen is still up at the replay's last tick, and key presses have no effect

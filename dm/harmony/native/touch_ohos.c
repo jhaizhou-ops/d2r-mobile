@@ -17,6 +17,7 @@
 #include "../../host/dm_hud.h"
 #include "../../host/dm_world.h"
 #include "../../host/dm_uiscreen.h"
+#include "../../host/touch_mac.h"
 #include "../../ios/Sources/dm_touch_controls.h"
 #include "../../ios/Sources/dm_touch_game_state.h"
 #include "../../ios/Sources/dm_touch_native_art.h"
@@ -381,6 +382,23 @@ void dm_ohos_touch_event(int phase, int id, float x, float y) {
     t->ended = 1;
     finish_touch(id, phase == 2 ? "ended" : "cancelled");
     if (_pendEnd != id) t->live = 0;
+}
+// 指针模式（平板 / 电脑接鼠标，同 Mac App front_mac.m）：手柄版界面在屏时，鼠标左键 / 拖动 / 悬停交宿主 dm_touch_host_live（界面归一化坐标，
+// 局内界面矩形外带符号 = 3D 世界）。返回 0 = 没接（触屏版、没开指针模式），ArkTS 照旧当触点。op 0 按下 1 拖动 2 抬起 3 悬停；窗口坐标（vp）
+// Pointer mode (tablet / PC with a mouse, as the Mac App front_mac.m): while the controller layout is up, left button / drag / hover go to the host
+// dm_touch_host_live (UI-normalised; outside the UI rectangle in game, signed = 3D world). Returns 0 when not taken (touch layout, pointer mode off):
+// ArkTS then treats it as a touch. op 0 down 1 drag 2 up 3 hover; window coordinates (vp)
+int dm_ohos_pointer(int op, float x, float y) {
+    static int nlog; int lg = op == 0 && nlog < 6;
+    if (op < 0 || op > 3 || !dm_touch_host_is_live() || !dm_ohos_gamepad_mode() || dm_padmode_busy()) {
+        if (lg) { nlog++; LOG("鼠标：按下不走指针模式（指针 %d、手柄版 %d、切换中 %d）→ 当手指", dm_touch_host_is_live(), dm_ohos_gamepad_mode(), dm_padmode_busy()); } return 0; }
+    if (atomic_load(&g_cover) || !atomic_load(&g_focused)) { if (lg) { nlog++; LOG("鼠标：按下被吞（遮罩 %d、焦点 %d）", atomic_load(&g_cover), atomic_load(&g_focused)); } return 1; }
+    ensure_init(); float vr[4]; front_ohos_view_rect(g_win_w, g_win_h, vr); if (!(vr[2] > 0 && vr[3] > 0)) return 0;
+    float nx = (x - vr[0]) / vr[2], ny = (y - vr[1]) / vr[3];
+    if (lg) { nlog++; LOG("鼠标：按下 窗口 (%.0f,%.0f) → 界面 (%.3f,%.3f)%s", x, y, nx, ny, !dm_uiscreen_ingame() && (nx < 0 || nx > 1 || ny < 0 || ny > 1) ? "，在黑边上不算点" : ""); }
+    if (op == 0 && !dm_uiscreen_ingame() && (nx < 0 || nx > 1 || ny < 0 || ny > 1)) return 1;   // 按在黑边上：不算点 | pressed on the black bars: not a click
+    dm_touch_host_live(op, nx, ny);
+    return 1;
 }
 void dm_ohos_touch_cancel(void) {
     if (g_ready) { for (int i = 0; i < 32; i++) g_t[i].live = 0; _nswallow = 0; _uiFinger = NOT; _uiFeDrag = 0; cancel_controls(); }

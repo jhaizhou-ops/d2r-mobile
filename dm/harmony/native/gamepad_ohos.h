@@ -15,6 +15,8 @@ int dm_ohos_keyboard_key(int code, int down);
 void dm_ohos_gamepad_boot_pad(void);
 /* Mouse extras: kind 0 = right button (value 1 down / 0 up) = B; kind 1 = wheel (value +1 up / -1 down) = right stick for 0.12 s. */
 void dm_ohos_mouse(int kind, int value);
+/* Pointer mode: Return / Esc as the Mac App (context-dependent A or + / B or +). */
+void dm_ohos_gamepad_live_keys(int on);
 #ifdef __cplusplus
 }
 #endif
