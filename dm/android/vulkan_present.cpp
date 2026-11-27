@@ -151,6 +151,12 @@ int create_surface(){
     {std::lock_guard<std::mutex> lock(window_mutex);if(!desired)return VK_NOT_READY;active=desired;ANativeWindow_acquire(active);active_generation=generation;}
 #ifdef __OHOS__
     __android_log_print(ANDROID_LOG_INFO,"dm-vulkan","OHOS frame-rate requests use native XComponent lifecycle; Android window vote is not applicable");
+    // DM_SURFACE_GAME=1：把出图表面标成游戏来源（OH_SURFACE_SOURCE_GAME），系统按游戏图层的出帧节奏定刷新率（出图档阶梯的 45 档要 90 Hz 时试）；
+    // DM_SURFACE_FRAMEWORK=<名字> 另设应用框架类型。实验开关，缺省不设
+    // DM_SURFACE_GAME=1: mark the present surface as a game source (OH_SURFACE_SOURCE_GAME) so the system picks the refresh from the game layer's
+    // frame cadence (tried for the ladder's 45 tier that wants 90 Hz); DM_SURFACE_FRAMEWORK=<name> also sets the app framework type. Experiment, off by default
+    {const char *g=getenv("DM_SURFACE_GAME");if(g&&*g=='1'){int r=OH_NativeWindow_NativeWindowHandleOpt(active,SET_SOURCE_TYPE,int32_t(OH_SURFACE_SOURCE_GAME));vlog("Surface source type GAME result=%d (DM_SURFACE_GAME)",r);}
+     const char *fw=getenv("DM_SURFACE_FRAMEWORK");if(fw&&*fw){int r=OH_NativeWindow_NativeWindowHandleOpt(active,SET_APP_FRAMEWORK_TYPE,fw);vlog("Surface app framework type %s result=%d",fw,r);}}
 #else
     if(frame_rate_vote>0){
         // 运行时查询API，系统拒绝投票不会中止Vulkan初始化。 | Resolve the API at runtime; a refused vote does not abort Vulkan initialization.
