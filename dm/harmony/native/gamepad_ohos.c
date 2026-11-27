@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <unistd.h>
 
 extern void dm_padmode_request(int pad);
 extern int dm_front_navigation(void), dm_freetp_zr_free(int zl);
@@ -25,6 +28,9 @@ static uint64_t previous_buttons, previous_zr;
    J/Space A, K/Esc B, U X, I Y, F/G stick clicks, Q/E L/R, Z/C ZL/ZR, Enter/=/keypad+ Plus, Tab Minus, arrows d-pad, WASD left stick. */
 static uint64_t kb_buttons; static int kb_w, kb_a, kb_s, kb_d;
 static int button_regs, axis_regs, device_reg;
+/* Mouse extras (as the Mac app front_mac.m): right button = B (back / close panel), wheel = right stick up / down for 0.12 s (the controller
+   UI scrolls lists with the right stick). Neither switches layouts: they are merged after the "new input -> controller mode" check. */
+static uint64_t mouse_buttons; static int wheel_dir, wheel_gen;
 
 static int slot(const char *id, int create) {
     int empty = -1;
@@ -68,6 +74,8 @@ static void apply(void) {
     }
     previous_buttons = b;
     for (int k = 0; k < 2; ++k) if (!pad_mode || !stick_on[k]) a[2*k] = a[2*k+1] = 0;
+    b |= mouse_buttons;
+    if (wheel_dir && pad_mode) { a[2] = 0; a[3] = wheel_dir * DM_STICK_MAX; }
     if ((b & DM_BTN_ZR) && !(previous_zr & DM_BTN_ZR)) {
         zr_mine = !dm_front_navigation() && dm_freetp_zr_free((b & DM_BTN_ZL) != 0);
         if (zr_mine) dm_tp_request();
@@ -201,6 +209,20 @@ int dm_ohos_keyboard_key(int code, int down) {
     if (stick) *stick = !!down; else kb_buttons = down ? (kb_buttons | bit) : (kb_buttons & ~bit);
     apply(); pthread_mutex_unlock(&lock);
     return 1;
+}
+/* PC (2in1): the host boots in the controller layout (DM_PAD_BOOT); the front end starts there too, with keyboard key caps. */
+void dm_ohos_gamepad_boot_pad(void) { pthread_mutex_lock(&lock); pad_mode = 1; glyph = DM_GLYPH_KBD; pthread_mutex_unlock(&lock); }
+static void *wheel_off(void *p) {
+    int g = (int)(intptr_t)p; usleep(120000);
+    pthread_mutex_lock(&lock); if (g == wheel_gen) { wheel_dir = 0; apply(); } pthread_mutex_unlock(&lock); return NULL;
+}
+void dm_ohos_mouse(int kind, int value) {
+    pthread_mutex_lock(&lock);
+    if (kind == 0) mouse_buttons = value ? DM_BTN_B : 0;
+    else if (kind == 1 && value) { wheel_dir = value > 0 ? 1 : -1; int g = ++wheel_gen; pthread_t t;
+        if (!pthread_create(&t, NULL, wheel_off, (void *)(intptr_t)g)) pthread_detach(t); else wheel_dir = 0; }
+    apply(); pthread_mutex_unlock(&lock);
+    static int told; if (!told) { told = 1; PAD_LOG("mouse kind=%{public}d value=%{public}d", kind, value); fprintf(stderr, "鼠标：%s\n", kind ? "滚轮 = 右摇杆上下" : "右键 = B（返回）"); }
 }
 int dm_ohos_gamepad_mode(void) { pthread_mutex_lock(&lock); int m = pad_mode; pthread_mutex_unlock(&lock); return m; }
 int dm_ohos_gamepad_count(void) { pthread_mutex_lock(&lock); int n = 0; for (int i = 0; i < SLOTS; ++i) n += pads[i].id != NULL; pthread_mutex_unlock(&lock); return n; }

@@ -114,7 +114,7 @@ static void restart_cover_hook(int mode) { atomic_store(&g_cover, mode); }
 static void ensure_init(void) {
     if (g_ready) return;
     for (int i = 0; i < 16; i++) _slot[i] = NOT;
-    dm_tc_set_tall_scale(0);
+    { int dm_ohos_device_class(void); dm_tc_set_tall_scale(dm_ohos_device_class() > 0); }   // 平板 / 电脑：同 iPad 的平板档（控件最多放大 15%，矮窗口另排）；手机照旧 | tablet / PC: the iPad tablet profile (controls up to 15% larger, short windows rearranged); phones unchanged
     dm_tc_init(&_controls, BW > 0 ? BW : 800, BH > 0 ? BH : 450); _controls.mouse_click_mode = 1;
     g_dm_restart_cover_hook = restart_cover_hook;
     g_ready = 1;
@@ -457,6 +457,9 @@ int dm_ohos_touch_tick(float *o, int cap) {
     dm_ohos_haptics_tick();
     if (!o || cap < DM_OS_FLOATS) return -1;
     ensure_init();
+    {   // dm/env 的 DM_DEVICE_CLASS 在 start 时才读到（触控可能更早初始化）：类别变了就按新档重排 | DM_DEVICE_CLASS from dm/env is read only at start (touch may initialise earlier): re-lay out when the class changes
+        static int tall = -1; int dm_ohos_device_class(void), t = dm_ohos_device_class() > 0;
+        if (t != tall) { if (tall >= 0) LOG("前端：触控布局改%s档", t ? "平板" : "手机"); tall = t; dm_tc_set_tall_scale(t); if (BW > 0 && BH > 0) { cancel_controls(); dm_tc_resize(&_controls, BW, BH); g_dirty = 1; } } }
     { float vr[4]; front_ohos_view_rect(g_win_w, g_win_h, vr); if (memcmp(vr, g_vr, sizeof vr)) layout_view(); }
     apply_async();
     double now = media_time();

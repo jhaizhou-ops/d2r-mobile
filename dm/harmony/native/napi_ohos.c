@@ -28,11 +28,13 @@
 #include <hilog/log.h>
 #include <napi/native_api.h>
 #include <dirent.h>
+#include <deviceinfo.h>
 #include <errno.h>
 #include <time.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <signal.h>
 
 void front_android_set_window(void *win, int w, int h);
 void front_android_set_refresh(float hz);
@@ -305,6 +307,13 @@ static napi_value js_set_experiment_flags(napi_env env, napi_callback_info info)
     return ret_int(env, 0);
 }
 
+// 设备类别：0 手机、1 平板、2 电脑（2in1）。dm/env 的 DM_DEVICE_CLASS=phone|tablet|2in1 可改（在手机上验平板 / 电脑布局）
+// Device class: 0 phone, 1 tablet, 2 PC (2in1). DM_DEVICE_CLASS=phone|tablet|2in1 in dm/env overrides it (to check the tablet / PC layouts on a phone)
+int dm_ohos_device_class(void) {
+    const char *e = getenv("DM_DEVICE_CLASS"), *t = e && *e ? e : OH_GetDeviceType();
+    return t && !strcmp(t, "2in1") ? 2 : t && !strcmp(t, "tablet") ? 1 : 0;
+}
+static void *test_crash_main(void *p) { sleep((unsigned)*(int *)p); raise(SIGSEGV); return NULL; }
 static napi_value js_start(napi_env env, napi_callback_info info) {
     ARGS(4); if (g_started) return ret_int(env, 0);
     char lg[64] = {0};
@@ -314,6 +323,7 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     { void front_ohos_early_scale_default(int performance_res); front_ohos_early_scale_default((experiment_flags() & 32768) != 0); }
     dm_custom_init(g_files);
     snprintf(g_runtime, sizeof g_runtime, "%s/dm", g_files); mkdirs(g_runtime);
+    { extern char g_crash_marker[1100]; snprintf(g_crash_marker, sizeof g_crash_marker, "%s/last-crash.txt", g_runtime); }   // 崩溃记号（host/crash.c），前端下次启动提示分享日志 | crash marker (host/crash.c): the front end offers the log on the next launch
     log_init();
     LOG("boot: 鸿蒙 内部目录 %s，资源 %s，系统语言 %s", g_files, g_src, lg);
     {   // 诊断：各核最高主频（找大核，供翻译线程绑核用）| Diagnostics: max frequency of each core (to find the big cores for pinning the translation thread)
@@ -434,6 +444,18 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
     setenv("DM_DERIVED", required, 1);
     if (dm_derived_reload && dm_derived_reload()) { LOG("boot: derived tables incomplete (%s)", required); return ret_int(env, -12); }
     if (!lifecycle_ready()) return ret_int(env, -8);
+    {   // 测试：DM_TEST_CRASH=<秒>，到点在一条线程里触发 SIGSEGV（验闪退记号与「分享日志」入口；产品没有环境变量，不触发）
+        // Test: DM_TEST_CRASH=<seconds> raises SIGSEGV on a thread when due (checks the crash marker and the "Share log" entry; the product has no env, never fires)
+        const char *tc = getenv("DM_TEST_CRASH"); static int secs; secs = tc ? atoi(tc) : 0;
+        if (secs > 0) { pthread_t ct; if (!pthread_create(&ct, NULL, test_crash_main, &secs)) pthread_detach(ct); LOG("boot: DM_TEST_CRASH：%d 秒后触发 SIGSEGV", secs); }
+    }
+    {   // 布局缺省：手机 = 触屏版（原样）；平板 = 触屏版 + 平板档（touch_ohos.c）；电脑 = 手柄版 + 键盘键帽（同 Mac App），碰屏 / 点鼠标切触屏版。DM_PAD_BOOT=0/1 可改
+        // Layout defaults: phone = touch layout (unchanged); tablet = touch layout + tablet profile (touch_ohos.c); PC = controller layout + keyboard key caps
+        // (as the Mac App), touching / clicking switches to the touch layout. DM_PAD_BOOT=0/1 overrides
+        int cls = dm_ohos_device_class(); const char *pb = getenv("DM_PAD_BOOT"); const char *sys = OH_GetDeviceType();
+        if (pb ? *pb == '1' : cls == 2) { setenv("DM_PAD_BOOT", "1", 1); dm_ohos_gamepad_boot_pad(); }
+        LOG("boot: 设备类别 %s（系统报 %s），开机布局 %s", cls == 2 ? "电脑" : cls == 1 ? "平板" : "手机", sys ? sys : "?", getenv("DM_PAD_BOOT") && *getenv("DM_PAD_BOOT") == '1' ? "手柄版 + 键盘键帽" : cls == 1 ? "触屏版（平板档）" : "触屏版");
+    }
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8u << 20);
     pthread_t th; int rc = pthread_create(&th, &a, host_thread, NULL); pthread_attr_destroy(&a);
     if (!rc) { g_started = 1; pthread_detach(th); dm_ohos_gamepad_start(); dm_ohos_frame_rate_running(1); }
@@ -465,6 +487,11 @@ static napi_value js_touch_event(napi_env env, napi_callback_info info) {
     napi_get_value_int32(env, argv[0], &phase); napi_get_value_int32(env, argv[1], &id); napi_get_value_double(env, argv[2], &x); napi_get_value_double(env, argv[3], &y);
     if (phase == 0) dm_ohos_gamepad_touched();
     dm_ohos_touch_event(phase, id, (float)x, (float)y); return undefined(env);
+}
+// mouse(kind, value)：0 右键（1 按下 / 0 抬起）、1 滚轮（+1 上 / -1 下）| 0 right button (1 down / 0 up), 1 wheel (+1 up / -1 down)
+static napi_value js_mouse(napi_env env, napi_callback_info info) {
+    ARGS(2); int32_t kind = 0, value = 0; napi_get_value_int32(env, argv[0], &kind); napi_get_value_int32(env, argv[1], &value);
+    dm_ohos_mouse(kind, value); return undefined(env);
 }
 // touchScreen(w, h, safeLeft, safeRight, safeBottom)：整个窗口（vp）| whole window (vp)
 static napi_value js_touch_screen(napi_env env, napi_callback_info info) {
@@ -552,6 +579,7 @@ static napi_value init(napi_env env, napi_value exports) {
         {"refresh", NULL, js_refresh, NULL, NULL, NULL, napi_default, NULL},
         {"touchCancel", NULL, js_touch_cancel, NULL, NULL, NULL, napi_default, NULL},
         {"touchEvent", NULL, js_touch_event, NULL, NULL, NULL, napi_default, NULL},
+        {"mouse", NULL, js_mouse, NULL, NULL, NULL, napi_default, NULL},
         {"touchScreen", NULL, js_touch_screen, NULL, NULL, NULL, napi_default, NULL},
         {"touchTick", NULL, js_touch_tick, NULL, NULL, NULL, napi_default, NULL},
         {"uiText", NULL, js_ui_text, NULL, NULL, NULL, napi_default, NULL},

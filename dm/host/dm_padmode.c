@@ -161,10 +161,16 @@ void dm_padmode_boot(void) {   // 开机：游戏建面板之前（main.c，nnMa
 #if TARGET_OS_OSX
     g_app = pad;
 #endif
-    g_glyph_have[DM_GLYPH_KBD] = pad && dm_overlay_file(k_glyph_mark[DM_GLYPH_KBD], mk, sizeof mk);   // 键盘键帽只有 Mac App 用 | Keyboard glyphs are used only by the Mac App
+#ifdef __OHOS__   // 鸿蒙：手机 / 平板 / 电脑接实体键盘都换键盘键帽；电脑（前端设 DM_PAD_BOOT=1）同 Mac App 开机用手柄版，碰屏 / 点鼠标照常切触屏版 | HarmonyOS: phones / tablets / PCs
+    // all switch to keyboard key caps on physical keyboard input; a PC (front end sets DM_PAD_BOOT=1) boots in the controller layout like the Mac App, and touching / clicking switches to the touch layout as usual
+    const char *pb = getenv("DM_PAD_BOOT"); int kbd_ok = 1; if (pb && *pb == '1') pad = 1;
+#else
+    int kbd_ok = pad;
+#endif
+    g_glyph_have[DM_GLYPH_KBD] = kbd_ok && dm_overlay_file(k_glyph_mark[DM_GLYPH_KBD], mk, sizeof mk);   // 键盘键帽：Mac App 与鸿蒙 | Keyboard glyphs: the Mac App and HarmonyOS
     g_glyph_have[DM_GLYPH_XBOX] = dm_overlay_file(k_glyph_mark[DM_GLYPH_XBOX], mk, sizeof mk);
     g_glyph_have[DM_GLYPH_PS] = dm_overlay_file(k_glyph_mark[DM_GLYPH_PS], mk, sizeof mk);
-    g_glyph = g_glyph_next = g_glyph_have[DM_GLYPH_KBD] ? DM_GLYPH_KBD : DM_GLYPH_PAD; atomic_store(&g_glyph_want, g_glyph);   // Mac App 开机先用键盘键帽（多数人没接手柄）；实体手柄一有输入就按它的类型换 | The Mac App starts with keyboard glyphs (most people have no controller connected); as soon as a physical controller gives input, switch by its type
+    g_glyph = g_glyph_next = pad && g_glyph_have[DM_GLYPH_KBD] ? DM_GLYPH_KBD : DM_GLYPH_PAD; atomic_store(&g_glyph_want, g_glyph);   // Mac App 开机先用键盘键帽（多数人没接手柄）；实体手柄一有输入就按它的类型换 | The Mac App starts with keyboard glyphs (most people have no controller connected); as soon as a physical controller gives input, switch by its type
     g_glyph_have[DM_GLYPH_PS] = dm_overlay_file(k_glyph_mark[DM_GLYPH_PS], mk, sizeof mk);
     LOG("手柄 / 触屏布局：键帽 键盘 %d、Xbox %d、PlayStation %d", g_glyph_have[DM_GLYPH_KBD], g_glyph_have[DM_GLYPH_XBOX], g_glyph_have[DM_GLYPH_PS]);
     if (pfx_write((uint8_t *)m->base, pad)) { g_have = 1; g_cur = pad; atomic_store(&g_want, pad); g_b = (uint8_t *)m->base; str_load(); LOG("手柄 / 触屏布局：开机用%s", pad ? "原版手柄版（Mac App）" : "触屏版（layouts/xtouch_lay 等三个目录）"); }

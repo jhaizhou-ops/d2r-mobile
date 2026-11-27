@@ -39,6 +39,11 @@ struct Index {
   @State importing: string = '';
   @State packBusy: boolean = false;
   @State folderBusy: boolean = false;
+  // 上次闪退的报告（EntryAbility 的 hiAppEvent 监听写 files/dm/last-crash.txt）：有就先停在开机前，让玩家选「分享日志」或「继续」
+  // Previous crash report (written to files/dm/last-crash.txt by EntryAbility's hiAppEvent watcher): if present, wait before booting so
+  // the player can choose "Share log" or "Continue" (a crash right at startup would otherwise leave no way to send it)
+  @StorageLink('crashReport') crashReport: string = '';
+  private bootHeld: boolean = false;
   private packCancel: boolean = false;
   private bundledRuntime: boolean = false;
   private fpsTimer: number = -1;
@@ -73,6 +78,43 @@ struct Index {
         .catch((e: BusinessError) => { hilog.warn(0xD2E0, 'dm', 'share log failed %{public}s', JSON.stringify(e)); });
       hilog.info(0xD2E0, 'dm', 'share log %{public}d bytes', keep);
     } catch (e) { hilog.warn(0xD2E0, 'dm', 'share log failed %{public}s', JSON.stringify(e)); }
+  }
+  private crashFile(): string { return this.files + '/dm/last-crash.txt'; }
+  private bootUnlessCrashed(): void {
+    try { if (!this.crashReport && fileIo.accessSync(this.crashFile())) { this.crashReport = this.crashFile(); } } catch (e) { }
+    if (this.crashReport) { this.bootHeld = true; hilog.warn(0xD2E0, 'dm', 'previous crash report present, boot held'); return; }
+    this.boot();
+  }
+  // 分享：闪退报告 + boot.log 最后 2 MB 拼成一个文件弹系统分享。继续 / 关闭：报告改名留底（不删），不再提示，被拦下的开机接着走
+  // Share: crash report + the last 2 MB of boot.log as one file in the share sheet. Continue / Close: the report is renamed (kept, not deleted), not offered again, and a held boot proceeds
+  private crashDone(share: boolean): void {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    if (share) {
+      try {
+        const dst = ctx.cacheDir + '/D2R-Mobile-crash.txt';
+        const to = fileIo.openSync(dst, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+        for (const src of [this.crashFile(), this.files + '/dm/boot.log']) {
+          try {
+            const size = fileIo.statSync(src).size, keep = Math.min(size, 2 * 1024 * 1024), buf = new ArrayBuffer(keep);
+            const from = fileIo.openSync(src, fileIo.OpenMode.READ_ONLY);
+            fileIo.readSync(from.fd, buf, { offset: size - keep, length: keep }); fileIo.closeSync(from);
+            fileIo.writeSync(to.fd, `
+===== ${src} (${size} bytes, last ${keep})
+`); fileIo.writeSync(to.fd, buf);
+          } catch (e) { fileIo.writeSync(to.fd, `
+===== ${src}: ${JSON.stringify(e)}
+`); }
+        }
+        fileIo.closeSync(to);
+        const data = new systemShare.SharedData({ utd: utd.UniformDataType.PLAIN_TEXT, uri: fileUri.getUriFromPath(dst), title: 'D2R Mobile crash log' });
+        new systemShare.ShareController(data).show(ctx, { selectionMode: systemShare.SelectionMode.SINGLE, previewMode: systemShare.SharePreviewMode.DEFAULT })
+          .catch((e: BusinessError) => { hilog.warn(0xD2E0, 'dm', 'share crash failed %{public}s', JSON.stringify(e)); });
+      } catch (e) { hilog.warn(0xD2E0, 'dm', 'share crash failed %{public}s', JSON.stringify(e)); }
+    }
+    if (share) { return; }   // 分享面板在上面；回来后点「继续启动 / 关闭」才收起 | the share sheet is on top; the banner goes away on Continue / Close
+    try { fileIo.renameSync(this.crashFile(), this.files + '/dm/last-crash-seen.txt'); } catch (e) { }
+    this.crashReport = '';
+    if (this.bootHeld) { this.bootHeld = false; this.boot(); }
   }
   private boot(): void {
     dm.setCallbacks(
@@ -325,7 +367,7 @@ struct Index {
       XComponent({ id: 'dm', type: XComponentType.SURFACE, libraryname: 'dm' })
         .width('100%').height('100%')
         .focusable(true).defaultFocus(true).focusOnTouch(true)   // physical keyboard: key events reach the native callback (on_key)
-        .onLoad(() => { this.preparePack().then((ready: boolean) => { if (ready) { this.boot(); } }); })
+        .onLoad(() => { this.preparePack().then((ready: boolean) => { if (ready) { this.bootUnlessCrashed(); } }); })
       IosOverlay({
         inputEnabled: this.started && this.request === null && !this.toolsOpen,
         overlayRoot: this.files + '/dm/overlay',
@@ -335,6 +377,20 @@ struct Index {
       if (this.showFps && this.fps && !this.toolsOpen && !this.request) {
         Text(this.fps).fontColor('#ff66dd66').fontSize(14).backgroundColor('#66000000').padding({ left: 8, right: 8, top: 2, bottom: 2 })
           .borderRadius(6).position({ x: '50%', y: 6 }).translate({ x: '-50%' }).hitTestBehavior(HitTestMode.Transparent)
+      }
+      if (this.crashReport && !this.request) {
+        Column({ space: 10 }) {
+          Text(this.lang.startsWith('zh') ? '上次没有正常退出（闪退）。可以把诊断日志发给开发者。' : 'The game did not exit normally last time (crash). You can send the diagnostic log to the developer.')
+            .fontColor('#F1F3F5').fontSize(15).textAlign(TextAlign.Center)
+          Row({ space: 12 }) {
+            Button(this.lang.startsWith('zh') ? '分享日志' : 'Share log').onClick(() => { this.crashDone(true); })
+            Button(this.bootHeld ? (this.lang.startsWith('zh') ? '继续启动' : 'Continue') : (this.lang.startsWith('zh') ? '关闭' : 'Close'))
+              .backgroundColor('#5021262D').onClick(() => { this.crashDone(false); })
+          }
+          if (this.bootHeld) {
+            Text(this.lang.startsWith('zh') ? '分享完回到这里，再点「继续启动」。' : 'After sharing, come back and tap Continue.').fontColor('#AAB2BD').fontSize(13)
+          }
+        }.padding(16).backgroundColor('#E0121418').borderRadius(12).width('80%').position({ x: '10%', y: '30%' })
       }
       if (!this.request) {
         Button('···', { type: ButtonType.Circle }).width(36).height(36)

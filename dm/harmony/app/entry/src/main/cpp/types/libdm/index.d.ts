@@ -3,6 +3,8 @@ export const start: (files: string, ext: string, src: string, lang: string) => n
 export const focus: (ev: number) => void;
 export const refresh: (hz: number) => void;
 export const touchEvent: (phase: number, id: number, x: number, y: number) => void;
+// 0 right button (value 1 down / 0 up) = B; 1 wheel (value +1 up / -1 down) = right stick briefly
+export const mouse: (kind: number, value: number) => void;
 export const touchScreen: (width: number, height: number, left: number, right: number, bottom: number) => void;
 export const touchTick: (out: Float32Array) => number;
 export const uiText: (key: string) => string;

@@ -130,7 +130,7 @@ target_compile_options(dm PRIVATE $<$<COMPILE_LANGUAGE:C>:${DM_CFLAGS} -std=gnu1
 file(STRINGS ${DM}/PRODUCT DM_PRODUCT_LINE LIMIT_COUNT 1)
 target_compile_definitions(dm PRIVATE DM_PRODUCT="${DM_PRODUCT_LINE}")
 target_link_libraries(dm PRIVATE -Wl,--whole-archive dmplatform dmcore -Wl,--no-whole-archive dm_vulkan_engine
-  ace_napi.z ace_ndk.z hilog_ndk.z hitrace_ndk.z native_window native_display_manager ohaudio qos ohgame_controller.z ohvibrator.z vulkan m dl)
+  ace_napi.z ace_ndk.z hilog_ndk.z hitrace_ndk.z native_window native_display_manager ohaudio qos ohgame_controller.z ohvibrator.z deviceinfo_ndk.z vulkan m dl)
 target_link_options(dm PRIVATE -Wl,--no-undefined -Wl,-z,nostart-stop-gc -Wl,-Bsymbolic)
 
 # Diagnostic packages only. Keep the distribution configuration and its hot

@@ -226,6 +226,12 @@ static void crash_deadman(int sig) {
     ssize_t k = write(2, msg, sizeof msg - 1); (void)k;
     _exit(128 + g_crash_sig);
 }
+// 崩溃记号文件（鸿蒙前端设，空串不写）：崩溃处理最后是 _exit，系统不会记成闪退，前端下次启动看不到系统的闪退事件；
+// 所以第一段写完现场就在这里落一个记号，前端据此提示「分享日志」（详情在 boot.log）。只用 open / write / close，信号安全
+// Crash marker file (set by the HarmonyOS front end; empty = none): the crash handler ends in _exit, so the system does not record a crash and
+// the front end sees no system crash event on the next launch; so right after the first part a marker is dropped here, and the front end offers
+// "Share log" (details in boot.log). Only open / write / close: signal-safe
+char g_crash_marker[1100];
 static void on_crash(int sig, siginfo_t *si, void *uc_) {
     ucontext_t *uc = uc_;
     if (sig == SIGTRAP && g_trap_hook && g_trap_hook(uc)) return;
@@ -255,6 +261,8 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
       cw_s(&w, "\n"); cw_flush(&w); }
     // 第二段：dladdr 符号名与各线程现场，3 秒闹钟看着（crash_deadman）
     // Second part: dladdr symbol names and every thread's state, watched by a 3-second alarm (crash_deadman)
+    if (g_crash_marker[0]) { int fd = open(g_crash_marker, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) { static const char m[] = "native crash (host/crash.c handler); registers and backtrace are in boot.log\n"; ssize_t k = write(fd, m, sizeof m - 1); (void)k; close(fd); } }
     g_crash_sig = sig;
     struct sigaction da = {.sa_handler = crash_deadman}; sigemptyset(&da.sa_mask); sigaction(SIGALRM, &da, 0); alarm(3);
     fprintf(stderr, "[dm] CRASH 符号 | symbols:");

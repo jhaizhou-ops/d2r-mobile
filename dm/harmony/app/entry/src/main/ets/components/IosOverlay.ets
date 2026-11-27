@@ -350,5 +350,15 @@ export struct IosOverlay {
       .width('100%').height('100%')
       .onAreaChange((_: Area, now: Area) => { this.cw = Number(now.width); this.chh = Number(now.height); this.screen(); })
       .onTouch((e: TouchEvent) => this.onTouchEvent(e))
+      // 鼠标（电脑 / 平板接鼠标）：左键照常当触点；右键 = B（返回 / 关面板），滚轮 = 右摇杆上下（手柄版滚列表），同 Mac App
+      // Mouse (PC / tablet with a mouse): the left button stays a touch; right button = B (back / close panel), wheel = right stick (lists in the controller UI), as the Mac App
+      .onMouse((e: MouseEvent) => {
+        if (!this.inputEnabled || e.button !== MouseButton.Right) { return; }
+        if (e.action === MouseAction.Press) { dm.mouse(0, 1); } else if (e.action === MouseAction.Release) { dm.mouse(0, 0); }
+      })
+      .onAxisEvent((e: AxisEvent) => {
+        const v = e.getVerticalAxisValue();
+        if (this.inputEnabled && v !== 0) { dm.mouse(1, v < 0 ? 1 : -1); }
+      })
   }
 }
