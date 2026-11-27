@@ -3,6 +3,8 @@
 #   python agc_upload.py --cred <凭据.json> check                      只取令牌、查应用 ID（不上传）
 #   python agc_upload.py --cred <凭据.json> upload <包.app>            上传并绑定到草稿版本（不提交审核）
 #   python agc_upload.py --cred <凭据.json> upload <包.app> --submit   上传、绑定，等解析后提交审核
+#   python agc_upload.py --cred <凭据.json> groups                     只读：列出测试群组（外部 / 内部）和上一个邀请测试版本挂的群组
+#   python agc_upload.py --cred <凭据.json> test <包.app> --desc 说明 [--submit]   邀请测试：传包、建测试版本、挂全部群组（并集），可选提交
 # 凭据文件放在 Git 之外，两种都行：
 #   Service Account（AGC 推荐）：创建时下载的 *private.json 原样给 --cred（要 cryptography 包）；
 #   API 客户端（旧）：自己写 {"client_id": "...", "client_secret": "..."}。
@@ -47,9 +49,9 @@ class Agc:
         self.sa = cred if 'private_key' in cred and 'sub_account' in cred else None   # private.json of a Service Account
         if not self.sa: self.cid = cred['client_id']; self.secret = cred['client_secret']   # legacy API client
 
-    def call(self, method, path, query=None, body=None, auth=True):
+    def call(self, method, path, query=None, body=None, auth=True, headers=None):
         url = 'https://%s%s' % (self.host, path) + ('?' + urllib.parse.urlencode(query) if query else '')
-        h = {'Content-Type': 'application/json'}
+        h = {'Content-Type': 'application/json'}; h.update(headers or {})
         if auth and self.sa:
             if time.time() - self.made > 3000: self.token = service_jwt(self.sa); self.made = time.time()   # valid 3600 s
             h['Authorization'] = 'Bearer ' + self.token
@@ -62,6 +64,8 @@ class Agc:
         ret = d.get('ret')
         if ret and ret.get('code') not in (0, None):
             sys.exit('[x] %s %s -> ret %s' % (method, path, json.dumps(ret, ensure_ascii=False)))
+        if d.get('rtnCode') not in (0, None, '0'):   # /api/app-test/v1/...: rtnCode instead of ret
+            sys.exit('[x] %s %s -> rtnCode %s %s' % (method, path, d.get('rtnCode'), d.get('rtnDesc', '')))
         return d
 
     def login(self):
@@ -88,25 +92,99 @@ def put_file(info, path, size):
     log('[ok] uploaded %.1f MB in %.0f s' % (size / 1048576, time.time() - t))
 
 
-def main():
-    ap = argparse.ArgumentParser(); ap.add_argument('--cred', required=True); ap.add_argument('--package'); ap.add_argument('--host')
-    sp = ap.add_subparsers(dest='cmd', required=True); sp.add_parser('check')
-    u = sp.add_parser('upload'); u.add_argument('app'); u.add_argument('--submit', action='store_true'); u.add_argument('--remark', default='')
-    u.add_argument('--release-type', type=int, default=1, help='1 = 全网发布 | full release')
-    o = ap.parse_args()
-    cred = json.load(open(o.cred, encoding='utf-8')); package = o.package or cred.get('package', 'com.xiao.boluo')
-    if o.host: cred['host'] = o.host
-    a = Agc(cred); a.login(); appid = a.app_id(package); log('[ok] %s app id %s' % (package, appid))
-    if o.cmd == 'check': return
-    path = o.app; name = os.path.basename(path); size = os.path.getsize(path)
+def upload(a, appid, path, release_type):
+    """Upload-URL + PUT; returns (fileName, objectId)."""
+    name = os.path.basename(path); size = os.path.getsize(path)
     if not name.endswith('.app'): sys.exit('[x] AGC 只收 .app 包 | AGC accepts .app packages only')
     if size > 4 << 30: sys.exit('[x] 超过 4 GB 上限 | over the 4 GB limit')
     h = hashlib.sha256()
     with open(path, 'rb') as f:
         for b in iter(lambda: f.read(1 << 20), b''): h.update(b)
-    d = a.call('GET', '/api/publish/v2/upload-url/for-obs', {'appId': appid, 'fileName': name, 'contentLength': size, 'sha256': h.hexdigest()})
+    q = {'appId': appid, 'fileName': name, 'contentLength': size, 'sha256': h.hexdigest()}
+    if release_type is not None: q['releaseType'] = release_type
+    d = a.call('GET', '/api/publish/v2/upload-url/for-obs', q)
     info = d.get('urlInfo') or sys.exit('[x] no urlInfo: %s' % d)
     put_file(info, path, size)
+    return name, info['objectId']
+
+
+# ---- 邀请测试（Testing API；字段按官方数据结构页 2026-11-27 核对，首次真跑前没验过）| Invitation test (Testing API; fields checked against the
+# official data-structure pages 2026-11-27, not yet run against AGC) ----
+# 测试群组属于应用、一直在；但新测试版本只发给它列出的群组。所以每次取「全部现有群组 ∪ 上一个邀请测试版本挂的群组」全部挂上：测试名单不会变少。
+# Test groups belong to the app and persist, but a new test version only reaches the groups it lists: every run attaches the union of all
+# existing groups and the previous invitation-test version's groups, so the tester list never shrinks.
+def test_groups(a, appid):
+    """GET /api/app-test/v1/test-group/list (appId in a header; external 0 and internal 1, every page)."""
+    out = []
+    for gtype in (0, 1):
+        page = 1
+        while True:
+            d = a.call('GET', '/api/app-test/v1/test-group/list', {'groupType': gtype, 'current': page, 'pageSize': 50}, headers={'appId': str(appid)})
+            out += [g for g in d.get('groups') or [] if g.get('groupId')]
+            if page >= int((d.get('pageInfo') or {}).get('totalPage') or 1): break
+            page += 1
+    return out
+
+
+def previous_groups(a, appid):
+    """Groups bound to the latest invitation-test version: POST /api/publish/v3/version/brief-info/list, then GET /api/publish/v3/app-info."""
+    d = a.call('POST', '/api/publish/v3/version/brief-info/list', None, {}, headers={'appId': str(appid)})
+    tests = [v for v in d.get('versionList') or [] if str(v.get('testType')) == '3' and v.get('versionId')]
+    if not tests: return []
+    v = tests[0]
+    info = a.call('GET', '/api/publish/v3/app-info', {'appId': appid, 'releaseType': 6, 'versionId': v['versionId']})
+    gi = (((info.get('openTestInfo') or {}).get('testTaskInfo') or {}).get('groupInfos')) or []
+    return [g for g in gi if g.get('groupId') and str(g.get('bind', 1)) == '1']
+
+
+def test_flow(a, appid, o):
+    if len(o.desc) > 50: sys.exit('[x] --desc 最长 50 字 | --desc is at most 50 characters')
+    groups = {g['groupId']: g for g in test_groups(a, appid)}
+    for g in previous_groups(a, appid): groups.setdefault(g['groupId'], g)
+    if not groups: sys.exit('[x] 没查到测试群组：不建空名单的版本 | no test groups found: refusing to create a version without testers')
+    log('[ok] %d test groups: %s' % (len(groups), ', '.join('%s(%s)' % (g.get('groupName', ''), g.get('addedTestersNum', g.get('addedTesterNum', '?'))) for g in groups.values())))
+    name, oid = upload(a, appid, o.app, 6)   # 6 = HarmonyOS 测试发布 | HarmonyOS test release (API >= 10)
+    d = a.call('POST', '/api/publish/v2/test/version/pkg', {'appId': appid}, {'file': {'fileName': name, 'objectId': oid}})
+    pkg = (d.get('pkgVersion') or [None])[0] or sys.exit('[x] no pkgVersion: %s' % d)
+    log('[ok] test package %s, waiting for AGC to parse it' % pkg)
+    for _ in range(60):
+        time.sleep(10)
+        st = (a.call('GET', '/api/publish/v3/package/compile/status', {'appId': appid, 'pkgIds': pkg}).get('pkgStateList') or [{}])[0]
+        state = str(st.get('successStatus'))
+        if state == '0': break                      # 0 正常 | parsed
+        if state == '2': sys.exit('[x] package parse failed: %s' % st)
+    else: sys.exit('[x] package still not parsed after 10 min')
+    d = a.call('POST', '/api/publish/v2/test/app/version', {'appId': appid}, {'releaseType': 6, 'testType': 3, 'testDesc': o.desc})
+    ver = d.get('versionId') or sys.exit('[x] no versionId: %s' % d)
+    now = int(time.time() * 1000); end = now + o.days * 86400 * 1000
+    body = {'versionId': ver, 'pkgId': pkg, 'openTestInfo': {'startTime': now, 'endTime': end, 'testDesc': o.desc,
+            'testTaskInfo': {'groupInfos': [{'groupId': gid, 'bind': 1} for gid in groups], 'displayArea': '1', 'needNotify': 1}}}
+    a.call('PUT', '/api/publish/v2/test/app/version', {'appId': appid}, body)
+    log('[ok] test version %s with %d groups (until %s)' % (ver, len(groups), time.strftime('%Y-%m-%d', time.localtime(end / 1000))))
+    if not o.submit: log('没有提交（加 --submit 提交，或在 AGC 网页上提交）| not submitted (add --submit or submit in the console)'); return
+    a.call('POST', '/api/publish/v2/test/app/version/submit', {'appId': appid}, {'versionId': ver}); log('[ok] test version submitted')
+
+
+def main():
+    ap = argparse.ArgumentParser(); ap.add_argument('--cred', required=True); ap.add_argument('--package'); ap.add_argument('--host')
+    sp = ap.add_subparsers(dest='cmd', required=True); sp.add_parser('check'); sp.add_parser('groups')
+    u = sp.add_parser('upload'); u.add_argument('app'); u.add_argument('--submit', action='store_true'); u.add_argument('--remark', default='')
+    u.add_argument('--release-type', type=int, default=1, help='1 = 全网发布 | full release')
+    t = sp.add_parser('test', help='邀请测试 | invitation test'); t.add_argument('app'); t.add_argument('--desc', required=True, help='测试说明 | test notes')
+    t.add_argument('--days', type=int, default=90, help='测试期（天，最长 90）| test period in days (max 90)'); t.add_argument('--submit', action='store_true')
+    o = ap.parse_args()
+    cred = json.load(open(o.cred, encoding='utf-8')); package = o.package or cred.get('package', 'com.xiao.boluo')
+    if o.host: cred['host'] = o.host
+    a = Agc(cred); a.login(); appid = a.app_id(package); log('[ok] %s app id %s' % (package, appid))
+    if o.cmd == 'check': return
+    if o.cmd == 'groups':
+        for g in test_groups(a, appid): log('  %s  %s  type=%s testers=%s' % (g.get('groupId'), g.get('groupName', ''), g.get('groupType', ''), g.get('addedTestersNum', '?')))
+        for g in previous_groups(a, appid): log('  上一个邀请测试版本挂着 | bound to the previous test version: %s %s' % (g.get('groupId'), g.get('groupName', '')))
+        return
+    if o.cmd == 'test':
+        if not 1 <= o.days <= 90: sys.exit('[x] --days 1..90')
+        test_flow(a, appid, o); return
+    path = o.app; name, oid = upload(a, appid, path, None); info = {'objectId': oid}
     d = a.call('PUT', '/api/publish/v3/app-package-info', {'appId': appid, 'releaseType': o.release_type}, {'fileName': name, 'objectId': info['objectId']})
     log('[ok] bound to the draft version: %s' % json.dumps({k: v for k, v in d.items() if k != 'ret'}, ensure_ascii=False))
     if not o.submit:
