@@ -87,8 +87,20 @@ static int real_cpu_clock_test(void) {
     CHECK(cpu_ms < wall_ms * 0.5, "sleep is excluded; wall-clock negative control would fail");
     return 0;
 }
+static int ladder_test(void) {
+    // 45 档：90 / 45 / 135 Hz 都整除，60 / 120 不整除；40 档：120 / 80 / 40 整除，60 / 90 不整除 | 45 tier: 90 / 45 / 135 Hz divide evenly, 60 / 120 do not; 40 tier: 120 / 80 / 40 do, 60 / 90 do not
+    CHECK(nvn_ladder_hz_ok(45, 90) && nvn_ladder_hz_ok(45, 45) && nvn_ladder_hz_ok(45, 135), "45 tier on 90 / 45 / 135 Hz");
+    CHECK(!nvn_ladder_hz_ok(45, 60) && !nvn_ladder_hz_ok(45, 120) && !nvn_ladder_hz_ok(45, 30), "45 tier not on 60 / 120 / 30 Hz");
+    CHECK(nvn_ladder_hz_ok(40, 120) && nvn_ladder_hz_ok(40, 80) && !nvn_ladder_hz_ok(40, 60) && !nvn_ladder_hz_ok(40, 90), "40 tier on 120 / 80 only");
+    CHECK(nvn_ladder_hz_ok(30, 90) && nvn_ladder_hz_ok(30, 60) && nvn_ladder_hz_ok(60, 119.88) && !nvn_ladder_hz_ok(60, 0), "30 on 60 / 90, 60 on NTSC 120, no refresh");
+    int bad[5] = {0, 1, 0, 0, 0};
+    CHECK(nvn_ladder_next(0, +1, 5, bad) == 2 && nvn_ladder_next(3, -1, 5, bad) == 2 && nvn_ladder_next(2, -1, 5, bad) == 0, "skip unavailable tiers");
+    CHECK(nvn_ladder_next(0, -1, 5, bad) == -1 && nvn_ladder_next(4, +1, 5, bad) == -1, "ends of the ladder");
+    return 0;
+}
 int main(void) {
     int r = adaptive_pace_test();
+    if (!r) r = ladder_test();
     if (!r) r = real_cpu_clock_test();
     printf("adaptive pace: %s%s\n", r ? "FAIL " : "PASS", r ? failure : "");
     return r;

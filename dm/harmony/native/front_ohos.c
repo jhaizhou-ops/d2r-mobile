@@ -93,7 +93,7 @@ static void front_refresh_update(void) {
     }
     int previous = atomic_load(&g_refresh_millihz);
     front_android_set_refresh((float)hz);
-    if (previous != (int)hz * 1000 && atomic_fetch_add(&g_refresh_change_logs, 1) < 8)
+    if (previous != (int)hz * 1000 && atomic_fetch_add(&g_refresh_change_logs, 1) < (getenv("DM_PACE_LADDER") ? 400u : 8u))
         LOG("Display refresh updated: %.3f -> %u Hz", previous / 1000.0, hz);
 }
 
@@ -235,6 +235,8 @@ static void gtx_try_activate(void) {   // 主线程和渲染线程都登记了�
 static void gtx_config_fill(OpenGTX_ConfigDescription *cp) {
     OpenGTX_ConfigDescription c; memset(&c, 0, sizeof c);
     c.mode = SCENE_MODE; c.targetFPS = 60;
+    { const char *t = getenv("DM_GTX_TARGET"); if (t && atoi(t) >= 30 && atoi(t) <= 144) c.targetFPS = atoi(t); }   // 实验：目标帧率（出图档阶梯的 45 / 40 档要 90 / 120 Hz 时试） | experiment: target frame rate (for the ladder's 45 / 40 tiers that want 90 / 120 Hz)
+    { const char *m = getenv("DM_GTX_MODE"); if (m && *m) c.mode = (OpenGTX_LTPO_Mode)strtol(m, NULL, 0); }   // 实验：LTPO 模式 1 场景 / 0x10 触控 / 0x100 自适应 | experiment: LTPO mode 1 scene / 0x10 touch / 0x100 adaptive
     const char *bundle = getenv("DM_BUNDLE_NAME"), *version = getenv("DM_APP_VERSION");
     c.packageName = (char *)(bundle && *bundle ? bundle : "com.xiao.boluo");
     c.appVersion = (char *)(version && *version ? version : "0");
@@ -374,6 +376,31 @@ static void *h8_sampler(void *arg){(void)arg;pthread_setname_np(pthread_self(),"
     }return NULL;
 }
 
+// 出图档阶梯（hle_nvn.c）当前档：局内场景的推荐帧率跟着它报给 OpenGTX（系统据此定刷新率）。DM_LADDER_GTX：1（缺省）推荐 = 本档、最低 30、最高 60；
+// 2 推荐 = 最低 = 最高 = 本档；3 推荐 = 本档、最低 30、最高 = 本档要的刷新率（要 DM_GTX_TARGET ≥ 它）；0 不改。
+// The present ladder's (hle_nvn.c) current tier: the in-run scene's recommended frame rate follows it to OpenGTX (the system picks the refresh from it). DM_LADDER_GTX:
+// 1 (default) recommend = tier, min 30, max 60; 2 recommend = min = max = tier; 3 recommend = tier, min 30, max = the tier's refresh (needs DM_GTX_TARGET >= it); 0 unchanged.
+static _Atomic int g_ld_fps, g_ld_hz;
+static void gtx_scene_fps(OpenGTX_GameSceneInfo *si) {
+    int f = atomic_load(&g_ld_fps), h = atomic_load(&g_ld_hz); const char *m = getenv("DM_LADDER_GTX"); int mode = m && *m ? atoi(m) : 1;
+    if (!f || !mode || si->sceneID != PLAYING) return;
+    if (mode == 1) { si->recommendFPS = f; si->minFPS = 30; si->maxFPS = 60; }
+    else if (mode == 2) { si->recommendFPS = si->minFPS = si->maxFPS = f; }
+    else if (mode == 3) { si->recommendFPS = f; si->minFPS = 30; si->maxFPS = h > f ? h : f; }
+}
+void front_gtx_rate(int fps, int hz) {
+    atomic_store(&g_ld_fps, fps); atomic_store(&g_ld_hz, hz);
+    pthread_mutex_lock(&g_gtx_mu);
+    if (g_gtx.active == 1 && g_gtx.scene_info && g_gtx.scene == 1) {
+        OpenGTX_GameSceneInfo si; memset(&si, 0, sizeof si); si.sceneID = PLAYING; si.description = (char *)"in run";
+        si.recommendFPS = 60; si.minFPS = 30; si.maxFPS = 60; gtx_scene_fps(&si);
+        int dm = atomic_load(&g_screen_w), sh = atomic_load(&g_screen_h);
+        si.resolutionCurValue.height = sh > dm ? dm : sh; si.resolutionCurValue.width = sh > dm ? sh : dm;
+        OpenGTX_ErrorCode r = g_gtx.scene_info(g_gtx.ctx, &si);
+        LOG("OpenGTX：出图档 %d（%d Hz）→ 场景帧率 推荐 %d 最低 %d 最高 %d，结果 %d", fps, hz, si.recommendFPS, si.minFPS, si.maxFPS, (int)r);
+    }
+    pthread_mutex_unlock(&g_gtx_mu);
+}
 void front_gtx_scene(int scene) {
     atomic_store(&h8_scene,scene);
     if(scene==1 && dm_h8_enabled()){static int started;if(!started){pthread_t t;if(!pthread_create(&t,NULL,h8_sampler,NULL)){started=1;pthread_detach(t);}}}
@@ -391,6 +418,7 @@ void front_gtx_scene(int scene) {
         si.sceneID = scene == 1 ? PLAYING : scene == 2 ? LOADING : GAME_INTERFACE;
         si.description = (char *)(scene == 1 ? "in run" : scene == 2 ? "loading" : "menus");
         si.recommendFPS = 60; si.minFPS = 30; si.maxFPS = 60;
+        gtx_scene_fps(&si);
         int dm = atomic_load(&g_screen_w), sh = atomic_load(&g_screen_h);
         si.resolutionCurValue.height = sh > dm ? dm : sh; si.resolutionCurValue.width = sh > dm ? sh : dm;
         OpenGTX_ErrorCode r = g_gtx.scene_info(g_gtx.ctx, &si);

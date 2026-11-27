@@ -1460,7 +1460,13 @@ static int pace_adapt_enabled(void) {
     if (g_pa < 0) { const char *e = getenv("DM_PACE_ADAPT"); g_pa = e && *e == '1'; }
     return g_pa;
 }
+#ifdef __OHOS__
+static double ladder_fps(void);   // 出图档阶梯（见 ladder_tick）；0 = 没开 | present tier ladder (see ladder_tick); 0 = off
+#endif
 static double present_auto_hz(double screen_hz) {
+#ifdef __OHOS__
+    { double f = ladder_fps(); if (f > 0) return f; }
+#endif
 #ifdef __ANDROID__
     // Android has no Metal display-link pacer, so apply the power-saving target here.
     if (mtl_fps_target() == 30) return dm_pace_hz(screen_hz, 30);
@@ -1610,6 +1616,76 @@ static void pace_adapt_tick(double screen_hz) {
 #endif
     (void)need; (void)per;
 }
+#ifdef __OHOS__
+// ---- 出图档阶梯（DM_PACE_LADDER=1，鸿蒙）----
+// 60 Hz 屏的整除档只有 60 / 30 / 20：营地翻译线程每帧约 18 ms、野外 GPU 15–18 ms，撑不住 60 就整档掉到 30（玩家反馈的「卡 30 帧」），野外还在
+// 60 / 30 之间来回跳。阶梯在中间插 45 档（屏幕 90 Hz，每帧停整 2 个刷新周期）和 40 档（120 Hz，3 个周期），都不抖。
+// 换档时经 dm_ohos_rate_want 请系统换刷新率（XComponent 帧率范围 + OpenGTX 场景帧率，见 front_ohos.c）。屏幕 3 秒内没到能整除这一档的刷新率
+// （系统不批），这一档在本机记为不可用 5 分钟，换下一档。降档 / 试升判据同 pace_adapt_tick：60 帧错过 ≥ 6 帧降；试升先放 20 帧，60 帧错过 ≥ 4 帧
+// 退回、退避翻倍；试升要 CPU 余量（nvn_pace_probe_allowed），换区域退避回 3 s。DM_PACE_LADDER_START=<档号> 钉起始档（实验用）。
+// ---- Present tier ladder (DM_PACE_LADDER=1, HarmonyOS) ----
+// A 60 Hz screen only has the divisor tiers 60 / 30 / 20: the camp's translation thread takes ~18 ms a frame and the field's GPU 15-18 ms, so whenever 60 does
+// not hold the game falls a whole tier to 30 (the "stuck at 30 fps" players report), and in the field it flips between 60 and 30. The ladder adds a 45 tier
+// (screen at 90 Hz, every frame exactly 2 refresh cycles) and a 40 tier (120 Hz, 3 cycles) in between, both without judder.
+// On a tier change dm_ohos_rate_want asks the system for the refresh rate (XComponent frame-rate range + OpenGTX scene frame rate, see front_ohos.c). If the
+// screen does not reach a refresh that the tier divides within 3 s (the system declined), the tier is marked unavailable on this device for 5 minutes and the
+// next one is used. Step-down / probe rules as pace_adapt_tick: >= 6 of 60 frames missed steps down; a probe skips 20 frames, then >= 4 misses in 60 frames
+// reverts and doubles the backoff; a probe needs CPU headroom (nvn_pace_probe_allowed); an area change resets the backoff to 3 s.
+// DM_PACE_LADDER_START=<tier index> pins the starting tier (experiments).
+static const struct { double fps; int hz; } k_ladder[] = {{60, 60}, {45, 90}, {40, 120}, {30, 60}, {20, 60}};
+enum { LADDER_N = 5 };
+static int g_ld = -1, g_ld_t, g_ld_bad[LADDER_N]; static uint64_t g_ld_bad_until[LADDER_N];
+__attribute__((weak)) void dm_ohos_rate_want(double fps, int hz);
+static int ladder_enabled(void) {
+    if (g_ld < 0) { const char *e = getenv("DM_PACE_LADDER"), *s = getenv("DM_PACE_LADDER_START"); g_ld = e && *e == '1';
+        if (g_ld && s && *s) { int t = atoi(s); if (t >= 0 && t < LADDER_N) g_ld_t = t; }
+        if (g_ld) LOG("[nvn] 出图档阶梯开（60 / 45@90Hz / 40@120Hz / 30 / 20），起始 %.0f 档 | present tier ladder on, starting at %.0f fps", k_ladder[g_ld_t].fps, k_ladder[g_ld_t].fps); }
+    return g_ld;
+}
+static double ladder_fps(void) { return ladder_enabled() && pace_adapt_enabled() && mtl_fps_target() != 30 ? k_ladder[g_ld_t].fps : 0; }
+static void ladder_want(void) { if (dm_ohos_rate_want) dm_ohos_rate_want(k_ladder[g_ld_t].fps, k_ladder[g_ld_t].hz); }
+static void ladder_tick(void) {
+    static unsigned wn, skip, wrong; static int probing, from, started; static uint64_t late0, stable_since, backoff = 3000000000ull, last, pcpu, log_at, gate_log;
+    uint64_t now = now_ns(), cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), lc = dm_present_late_count ? dm_present_late_count() : 0;
+    double raw = front_display_refresh(NULL, 0);   // 不经 ref60 换算的真实刷新率 | the real refresh, not mapped by ref60
+    if (!started) { started = 1; ladder_want(); }
+    for (int i = 0; i < LADDER_N; i++) if (g_ld_bad[i] && now >= g_ld_bad_until[i]) g_ld_bad[i] = 0;
+    if (!last || !pcpu || !cpu || cpu < pcpu) { last = now; pcpu = cpu; late0 = lc; return; }
+    double iv = (now - last) / 1e6, busy = (cpu - pcpu) / 1e6; last = now; pcpu = cpu;
+    if (backoff != 3000000000ull && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { backoff = 3000000000ull; LOG("[nvn] 出图档阶梯 换区域，试升退避重置为 3 s"); }
+    if (iv > 250) { wn = 0; late0 = lc; if (probing) skip = 20; return; }   // 读取画面 / 卡住：这段的迟到不算 | loading / stall: its late presents do not count
+    g_pa_ema += (busy - g_pa_ema) / 16;
+    double gm = xbg_recent_gpu_ms ? xbg_recent_gpu_ms() : -1, cm = g_x_sync ? -1 : atomic_load(&g_pa_xcpu_ms);
+    int t = g_ld_t;
+    if (k_ladder[t].hz != 60 && !nvn_ladder_hz_ok(k_ladder[t].fps, raw)) {
+        if (++wrong > (unsigned)(k_ladder[t].fps * 3)) {   // 约 3 秒 | about 3 s
+            g_ld_bad[t] = 1; g_ld_bad_until[t] = now + 300000000000ull;
+            int s = probing ? from : nvn_ladder_next(t, +1, LADDER_N, g_ld_bad); if (s < 0) s = LADDER_N - 1;
+            LOG("[nvn] 出图档阶梯：%.0f 档要 %d Hz，屏幕 3 秒仍是 %.0f Hz（系统没批），本机 5 分钟内不用这一档 → %.0f 档", k_ladder[t].fps, k_ladder[t].hz, raw, k_ladder[s].fps);
+            g_ld_t = s; probing = 0; stable_since = now; skip = 20; wrong = 0; ladder_want(); return;
+        }
+    } else wrong = 0;
+    if (now - log_at > 10000000000ull) { log_at = now; LOG("[nvn] 出图档阶梯：%.0f 档，屏幕 %.0f Hz（游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", k_ladder[t].fps, raw, g_pa_ema, cm, gm); }
+    if (!stable_since) { stable_since = now; late0 = lc; }
+    if (skip) { skip--; late0 = lc; wn = 0; return; }
+    if (++wn < 60) return;
+    unsigned misses = (unsigned)(lc - late0); wn = 0; late0 = lc;
+    int faster = nvn_ladder_next(t, -1, LADDER_N, g_ld_bad), slower = nvn_ladder_next(t, +1, LADDER_N, g_ld_bad);
+    if (probing) {
+        probing = 0; stable_since = now;
+        if (misses >= 4) { g_ld_t = from; skip = 20; backoff = nvn_pace_backoff_next(backoff, NVN_PACE_PROBE_CAP_NS); LOG("[nvn] 出图档阶梯 试升失败，退回 %.0f 档（60 帧错过 %u 帧；下次 %.0f s 后再试）", k_ladder[g_ld_t].fps, misses, backoff / 1e9); }
+        else { backoff = 3000000000ull; LOG("[nvn] 出图档阶梯 ↑ %.0f 档站稳（60 帧错过 %u 帧；屏幕 %.0f Hz；游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", k_ladder[t].fps, misses, raw, g_pa_ema, cm, gm); }
+    } else if (misses >= 6 && slower >= 0) {
+        g_ld_t = slower; stable_since = now; skip = 20;
+        LOG("[nvn] 出图档阶梯 ↓ %.0f 档（60 帧错过 %u 帧；屏幕 %.0f Hz；游戏 %.1f / 翻译 %.1f / GPU %.1f ms）", k_ladder[g_ld_t].fps, misses, raw, g_pa_ema, cm, gm);
+    } else if (faster >= 0 && now - stable_since > backoff) {
+        if (nvn_pace_probe_allowed(1000.0 / k_ladder[faster].fps, g_pa_ema, cm, now - stable_since, NVN_PACE_PROBE_CAP_NS)) {
+            from = t; g_ld_t = faster; probing = 1; skip = 20; LOG("[nvn] 出图档阶梯 试升 %.0f 档", k_ladder[faster].fps); }
+        else if (now - gate_log > 30000000000ull) { gate_log = now; LOG("[nvn] 出图档阶梯 暂不试升 %.0f 档：CPU 余量不够（游戏 %.1f / 翻译 %.1f ms，限 %.1f ms）", k_ladder[faster].fps, g_pa_ema, cm, 870.0 / k_ladder[faster].fps); }
+    }
+    if (g_ld_t != t) ladder_want();
+}
+#endif
 static uint64_t present_period(const win_t *o) {
     present_cfg(o);
     int itv = g_display_mode ? 1 : o->interval > 0 ? o->interval : 1; double hz = g_hz_auto ? present_auto_hz(mtl_display_refresh()) : g_hz;
@@ -1730,6 +1806,9 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     { xjob j = {XJ_FRAME}; j.frame = g_frame; j.period = present_period(o) / 1e9; x_push(&j); }   // 帧号随队列生效（见翻译队列说明） | The frame number takes effect in queue order (see the translation queue notes)
     // 真机语义：出图只入队、立即返回；本帧显示时刻按节拍器排，该贴图到「显示时刻 + 一个周期」才可再获取（阻塞在 AcquireTexture）
     // Real-device semantics: present only enqueues and returns immediately; this frame's display time is scheduled by the pacer, and the texture can be acquired again only at "display time + one period" (blocking in AcquireTexture)
+#ifdef __OHOS__
+    if (g_hz_auto && !dm_detclock_enabled() && ladder_fps() > 0) ladder_tick(); else
+#endif
     if (g_hz_auto && !dm_detclock_enabled()) pace_adapt_tick(mtl_display_refresh());
     uint64_t period = present_period(o), now = dm_detclock_enabled() ? guest_ns() : now_ns();
     nvn_pacer pc = {o->pace};
